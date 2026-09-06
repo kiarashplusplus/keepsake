@@ -7,7 +7,7 @@ import { useWindowDimensions, View } from "react-native";
 import { Link, useLocalSearchParams } from "expo-router";
 import { CATEGORY_LABELS } from "@keepsake/contracts/listing";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
-import { ReadableWidth } from "@/ui/ReadableWidth";
+import { Page } from "@/ui/Page";
 import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
@@ -88,7 +88,7 @@ export default function Item(): React.ReactElement {
 
   if (notFound) {
     return (
-      <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
         <EmptyState
           ornament={<Stamp state="idle" label="Not found" />}
           eyebrow="Not found"
@@ -100,34 +100,34 @@ export default function Item(): React.ReactElement {
             </Link>
           }
         />
-      </ReadableWidth>
+      </Page>
     );
   }
 
   if (error !== null) {
     return (
-      <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
         <EmptyState eyebrow="Keepsake" title="Couldn't load this keepsake" line={error} />
-      </ReadableWidth>
+      </Page>
     );
   }
 
   if (listing === null) {
     return (
-      <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal, gap: space.lg }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: space.lg }}>
         <Skeleton height={320} />
         <Card style={{ gap: space.md }}>
           <Skeleton height={40} width="70%" />
           <Skeleton height={100} />
         </Card>
-      </ReadableWidth>
+      </Page>
     );
   }
 
   const given = listing.status === "given";
 
   return (
-    <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
+    <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
       <PhotoCarousel photos={listing.photos} />
 
       {given ? (
@@ -174,6 +174,6 @@ export default function Item(): React.ReactElement {
 
       <RequestSheet visible={requestOpen} onClose={() => setRequestOpen(false)} listingId={listing.id} />
       <ReportSheet visible={reportOpen} onClose={() => setReportOpen(false)} listingId={listing.id} />
-    </ReadableWidth>
+    </Page>
   );
 }

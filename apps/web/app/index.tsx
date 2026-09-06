@@ -6,7 +6,7 @@ import { useWindowDimensions, View } from "react-native";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import type { Category } from "@keepsake/contracts/listing";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
-import { ReadableWidth } from "@/ui/ReadableWidth";
+import { Page } from "@/ui/Page";
 import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
@@ -136,7 +136,10 @@ export default function Feed(): React.ReactElement {
   }, [location]);
 
   return (
-    <ReadableWidth variant="grid" style={{ paddingTop: narrow ? sectionRhythm.normal : sectionRhythm.loose, paddingBottom: sectionRhythm.bookend, gap: sectionRhythm.tight }}>
+    <Page
+      variant="grid"
+      contentContainerStyle={{ paddingTop: narrow ? sectionRhythm.normal : sectionRhythm.loose, paddingBottom: sectionRhythm.bookend, gap: sectionRhythm.tight }}
+    >
       {/* A note pinned to the table announcing the site — the one place body
           copy sits inside a paper card, so it reads regardless of the room's
           lighting; the results below sit right on the visible table. */}
@@ -204,6 +207,6 @@ export default function Feed(): React.ReactElement {
           </>
         )}
       </View>
-    </ReadableWidth>
+    </Page>
   );
 }

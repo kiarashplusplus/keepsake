@@ -23,7 +23,7 @@ import {
   type AdminStats,
 } from "@keepsake/contracts/admin";
 import { MODERATION_REASONS } from "@keepsake/contracts/listing";
-import { ReadableWidth } from "@/ui/ReadableWidth";
+import { Page } from "@/ui/Page";
 import { Text } from "@/ui/Text";
 import { Chip } from "@/ui/Chip";
 import { Button } from "@/ui/Button";
@@ -276,9 +276,9 @@ export default function AdminPage(): React.ReactElement {
 
   if (token === null) {
     return (
-      <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.loose }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.loose }}>
         <AdminTokenGate onVerified={handleVerified} />
-      </ReadableWidth>
+      </Page>
     );
   }
 
@@ -286,7 +286,7 @@ export default function AdminPage(): React.ReactElement {
   const actions = ACTIONS_BY_STATUS[activeTab];
 
   return (
-    <ReadableWidth variant="grid" style={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
+    <Page variant="grid" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md }}>
         <Text variant="displayLg">Admin</Text>
         <Button label="Forget" variant="ghost" onPress={handleForget} />
@@ -366,6 +366,6 @@ export default function AdminPage(): React.ReactElement {
         error={sheetError}
         onConfirm={(reason) => void handleSheetConfirm(reason)}
       />
-    </ReadableWidth>
+    </Page>
   );
 }

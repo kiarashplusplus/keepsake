@@ -13,6 +13,7 @@ import { Eyebrow } from "@/ui/Eyebrow";
 import { Input } from "@/ui/Input";
 import { Chip } from "@/ui/Chip";
 import { Button } from "@/ui/Button";
+import { Page } from "@/ui/Page";
 import { Card } from "@/ui/Surface";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { lookupPostalCode } from "@/api/geo";
@@ -79,65 +80,69 @@ export default function GiveDetails(): React.ReactElement {
         : "We don't know that postcode yet.";
 
   return (
-    <Card style={{ gap: space.xl }}>
-      <View style={{ gap: space.sm }}>
-        <Eyebrow>Details</Eyebrow>
-        <Text variant="displayLg">A few details.</Text>
-      </View>
-
-      <Input
-        label="Title"
-        value={draft.title}
-        onChangeText={(title) => dispatch({ type: "set_title", title })}
-        onBlur={() => setTitleTouched(true)}
-        maxLength={TITLE_MAX}
-        error={titleError}
-        placeholder="A hand-thrown mug"
-      />
-
-      <View style={{ gap: space.sm }}>
-        <Text variant="eyebrow" color="accent2Text">
-          Category
-        </Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
-          {CATEGORIES.map((category) => (
-            <Chip
-              key={category}
-              label={CATEGORY_LABELS[category]}
-              selected={draft.category === category}
-              onPress={() => dispatch({ type: "set_category", category })}
-            />
-          ))}
+    // See app/give/index.tsx's comment on why this step wraps itself in a
+    // `Page` rather than the shell doing it once.
+    <Page>
+      <Card style={{ gap: space.xl }}>
+        <View style={{ gap: space.sm }}>
+          <Eyebrow>Details</Eyebrow>
+          <Text variant="displayLg">A few details.</Text>
         </View>
-      </View>
 
-      <View style={{ gap: space.sm }}>
-        <Text variant="eyebrow" color="accent2Text">
-          Country
-        </Text>
-        <View style={{ flexDirection: "row", gap: space.sm }}>
-          {COUNTRIES.map((country) => (
-            <Chip
-              key={country}
-              label={COUNTRY_LABELS[country]}
-              selected={draft.country === country}
-              onPress={() => dispatch({ type: "set_country", country })}
-            />
-          ))}
+        <Input
+          label="Title"
+          value={draft.title}
+          onChangeText={(title) => dispatch({ type: "set_title", title })}
+          onBlur={() => setTitleTouched(true)}
+          maxLength={TITLE_MAX}
+          error={titleError}
+          placeholder="A hand-thrown mug"
+        />
+
+        <View style={{ gap: space.sm }}>
+          <Text variant="eyebrow" color="accent2Text">
+            Category
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+            {CATEGORIES.map((category) => (
+              <Chip
+                key={category}
+                label={CATEGORY_LABELS[category]}
+                selected={draft.category === category}
+                onPress={() => dispatch({ type: "set_category", category })}
+              />
+            ))}
+          </View>
         </View>
-      </View>
 
-      <Input
-        label="Postcode"
-        value={draft.postalCode}
-        onChangeText={(postalCode) => dispatch({ type: "set_postal_code", postalCode })}
-        placeholder={COUNTRY_POSTCODE_HINTS[draft.country]}
-        helper={postcodeHelper}
-      />
+        <View style={{ gap: space.sm }}>
+          <Text variant="eyebrow" color="accent2Text">
+            Country
+          </Text>
+          <View style={{ flexDirection: "row", gap: space.sm }}>
+            {COUNTRIES.map((country) => (
+              <Chip
+                key={country}
+                label={COUNTRY_LABELS[country]}
+                selected={draft.country === country}
+                onPress={() => dispatch({ type: "set_country", country })}
+              />
+            ))}
+          </View>
+        </View>
 
-      <View style={{ flexDirection: "row" }}>
-        <Button label="Continue" disabled={!canContinue} onPress={handleContinue} />
-      </View>
-    </Card>
+        <Input
+          label="Postcode"
+          value={draft.postalCode}
+          onChangeText={(postalCode) => dispatch({ type: "set_postal_code", postalCode })}
+          placeholder={COUNTRY_POSTCODE_HINTS[draft.country]}
+          helper={postcodeHelper}
+        />
+
+        <View style={{ flexDirection: "row" }}>
+          <Button label="Continue" disabled={!canContinue} onPress={handleContinue} />
+        </View>
+      </Card>
+    </Page>
   );
 }

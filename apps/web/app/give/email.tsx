@@ -10,6 +10,7 @@ import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Input } from "@/ui/Input";
 import { Button } from "@/ui/Button";
+import { Page } from "@/ui/Page";
 import { Card } from "@/ui/Surface";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 
@@ -44,31 +45,35 @@ export default function GiveEmail(): React.ReactElement {
   }
 
   return (
-    <Card style={{ gap: space.xl }}>
-      <View style={{ gap: space.sm }}>
-        <Eyebrow>A way back</Eyebrow>
-        <Text variant="displayLg">Want a way back?</Text>
-        <Text variant="bodyLg" color="textSecondary">
-          Get a note when someone asks, and a way back if you lose this device. Totally optional.
-        </Text>
-      </View>
+    // See app/give/index.tsx's comment on why this step wraps itself in a
+    // `Page` rather than the shell doing it once.
+    <Page>
+      <Card style={{ gap: space.xl }}>
+        <View style={{ gap: space.sm }}>
+          <Eyebrow>A way back</Eyebrow>
+          <Text variant="displayLg">Want a way back?</Text>
+          <Text variant="bodyLg" color="textSecondary">
+            Get a note when someone asks, and a way back if you lose this device. Totally optional.
+          </Text>
+        </View>
 
-      <Input
-        label="Email"
-        value={draft.email}
-        onChangeText={(email) => dispatch({ type: "set_email", email })}
-        onBlur={() => setTouched(true)}
-        error={error}
-        keyboardType="email-address"
-        autoCapitalize="none"
-        placeholder="you@example.com"
-      />
+        <Input
+          label="Email"
+          value={draft.email}
+          onChangeText={(email) => dispatch({ type: "set_email", email })}
+          onBlur={() => setTouched(true)}
+          error={error}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          placeholder="you@example.com"
+        />
 
-      {/* Primary + the underlined second action, never two pills. */}
-      <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: space.xl }}>
-        <Button label="Continue" onPress={handleContinue} />
-        <Button label="Skip" variant="link" onPress={handleSkip} />
-      </View>
-    </Card>
+        {/* Primary + the underlined second action, never two pills. */}
+        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: space.xl }}>
+          <Button label="Continue" onPress={handleContinue} />
+          <Button label="Skip" variant="link" onPress={handleSkip} />
+        </View>
+      </Card>
+    </Page>
   );
 }

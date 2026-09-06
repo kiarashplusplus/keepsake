@@ -8,7 +8,7 @@ import { Image as ExpoImage } from "expo-image";
 import { motion } from "@keepsake/tokens/motion";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
 import { MODERATION_REASONS, type ListingStatus } from "@keepsake/contracts/listing";
-import { ReadableWidth } from "@/ui/ReadableWidth";
+import { Page } from "@/ui/Page";
 import { Text, type TextColor } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
@@ -98,18 +98,18 @@ export default function MineDetail(): React.ReactElement {
 
   if (error !== null && listing === null) {
     return (
-      <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
         <EmptyState eyebrow="Mine" title="Couldn't load this listing" line={error} />
-      </ReadableWidth>
+      </Page>
     );
   }
 
   if (listing === null) {
     return (
-      <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal, gap: space.md }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: space.md }}>
         <Skeleton height={200} />
         <Skeleton height={80} />
-      </ReadableWidth>
+      </Page>
     );
   }
 
@@ -118,7 +118,7 @@ export default function MineDetail(): React.ReactElement {
   const rule = { borderBottomWidth: 2, borderBottomColor: colors.ink, paddingBottom: space.sm };
 
   return (
-    <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
+    <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
       {/* Photos as small prints, each leaning its own deterministic way. */}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.lg, paddingTop: space.sm }}>
         {listing.photos.map((photo) => (
@@ -224,6 +224,6 @@ export default function MineDetail(): React.ReactElement {
         busy={choosing}
         error={chooseError}
       />
-    </ReadableWidth>
+    </Page>
   );
 }

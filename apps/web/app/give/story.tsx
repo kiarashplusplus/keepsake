@@ -10,6 +10,7 @@ import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { TextArea } from "@/ui/TextArea";
 import { Button } from "@/ui/Button";
+import { Page } from "@/ui/Page";
 import { Card } from "@/ui/Surface";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { STORY_PROMPTS, STORY_PROMPT_ROTATE_MS } from "@/features/give/storyPrompts";
@@ -43,29 +44,33 @@ export default function GiveStory(): React.ReactElement {
   }
 
   return (
-    <Card style={{ gap: space.xl }}>
-      <View style={{ gap: space.sm }}>
-        <Eyebrow>The story</Eyebrow>
-        <Text variant="displayLg">Tell its story.</Text>
-        <Text variant="storyExcerpt" color="textSecondary">
-          {STORY_PROMPTS[promptIndex]}
-        </Text>
-      </View>
+    // See app/give/index.tsx's comment on why this step wraps itself in a
+    // `Page` rather than the shell doing it once.
+    <Page>
+      <Card style={{ gap: space.xl }}>
+        <View style={{ gap: space.sm }}>
+          <Eyebrow>The story</Eyebrow>
+          <Text variant="displayLg">Tell its story.</Text>
+          <Text variant="storyExcerpt" color="textSecondary">
+            {STORY_PROMPTS[promptIndex]}
+          </Text>
+        </View>
 
-      <TextArea
-        label="Story"
-        value={draft.story}
-        onChangeText={(story) => dispatch({ type: "set_story", story })}
-        onBlur={() => setTouched(true)}
-        maxLength={STORY_MAX}
-        minHeight={220}
-        error={error}
-        placeholder="My grandmother's hands made this cup every morning for forty years…"
-      />
+        <TextArea
+          label="Story"
+          value={draft.story}
+          onChangeText={(story) => dispatch({ type: "set_story", story })}
+          onBlur={() => setTouched(true)}
+          maxLength={STORY_MAX}
+          minHeight={220}
+          error={error}
+          placeholder="My grandmother's hands made this cup every morning for forty years…"
+        />
 
-      <View style={{ flexDirection: "row" }}>
-        <Button label="Continue" onPress={handleContinue} />
-      </View>
-    </Card>
+        <View style={{ flexDirection: "row" }}>
+          <Button label="Continue" onPress={handleContinue} />
+        </View>
+      </Card>
+    </Page>
   );
 }

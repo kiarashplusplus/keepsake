@@ -2,6 +2,7 @@
 // `GiveDraftProvider` every step reads/writes via `useGiveDraft()`. See the
 // build plan's "Web app" section for the five steps.
 import * as React from "react";
+import { View } from "react-native";
 import { Link, Stack, usePathname } from "expo-router";
 import { space } from "@keepsake/tokens/spacing";
 import { GiveDraftProvider } from "@/features/give/GiveDraftContext";
@@ -22,6 +23,17 @@ const STEP_PATHS = ["/give", "/give/story", "/give/details", "/give/email", "/gi
  * around the `<Stack>` itself never grows past its in-flow children (the
  * card would visually clip to the header row alone). Each step file wraps
  * its *own* content in a `Card` instead — see e.g. `app/give/index.tsx`.
+ *
+ * `flex: 1` on the outer `ReadableWidth` plus the `View` around `{children}`
+ * is the other half of that same fact: an absolutely-positioned screen sizes
+ * itself against the nearest ancestor with a *definite* height, and without
+ * these two, `ReadableWidth` only ever grows to its in-flow content (the
+ * header `Card` — a few dozen pixels), so the nested `<Stack>`'s screens (and
+ * every `Page`/`ScrollView` each step renders inside itself) inherit a
+ * height of exactly 0. Confirmed empirically: without this, the step
+ * content still *paints* (nothing here clips it), but a 0-height
+ * `overflow-y: auto` ancestor makes it un-hit-testable — clicks land on
+ * whatever's underneath instead, which is what broke `e2e/give.spec.ts`.
  */
 function StepShell({ children }: { children: React.ReactNode }): React.ReactElement {
   const pathname = usePathname();
@@ -29,7 +41,7 @@ function StepShell({ children }: { children: React.ReactNode }): React.ReactElem
   const current = stepIndex === -1 ? 0 : stepIndex;
 
   return (
-    <ReadableWidth variant="prose" style={{ paddingVertical: space.xxl, gap: space.xl }}>
+    <ReadableWidth variant="prose" style={{ flex: 1, paddingVertical: space.xxl, gap: space.xl }}>
       <Card
         style={{
           flexDirection: "row",
@@ -45,7 +57,7 @@ function StepShell({ children }: { children: React.ReactNode }): React.ReactElem
         </Link>
         <StepNumerals total={STEP_PATHS.length} current={current} />
       </Card>
-      {children}
+      <View style={{ flex: 1 }}>{children}</View>
     </ReadableWidth>
   );
 }

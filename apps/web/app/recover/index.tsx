@@ -6,7 +6,7 @@ import * as React from "react";
 import { View } from "react-native";
 import { MailableEmailSchema, RESERVED_EMAIL_DOMAIN_MESSAGE } from "@keepsake/contracts/common";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
-import { ReadableWidth } from "@/ui/ReadableWidth";
+import { Page } from "@/ui/Page";
 import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Input } from "@/ui/Input";
@@ -51,7 +51,7 @@ export default function Recover(): React.ReactElement {
   }
 
   return (
-    <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+    <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
       <Card style={{ gap: space.xl, transform: [{ rotate: "0.3deg" }] }}>
         <View style={{ gap: space.sm }}>
           <Eyebrow tick>Lost your listings?</Eyebrow>
@@ -92,6 +92,6 @@ export default function Recover(): React.ReactElement {
           </View>
         )}
       </Card>
-    </ReadableWidth>
+    </Page>
   );
 }

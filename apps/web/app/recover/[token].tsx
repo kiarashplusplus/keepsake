@@ -4,7 +4,7 @@
 import * as React from "react";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import { sectionRhythm } from "@keepsake/tokens/spacing";
-import { ReadableWidth } from "@/ui/ReadableWidth";
+import { Page } from "@/ui/Page";
 import { EmptyState } from "@/ui/EmptyState";
 import { Button } from "@/ui/Button";
 import { Stamp } from "@/ui/Stamp";
@@ -41,7 +41,7 @@ export default function RecoverToken(): React.ReactElement {
 
   if (error !== null) {
     return (
-      <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
         <EmptyState
           eyebrow="Recovery"
           title="That link didn’t work"
@@ -52,13 +52,13 @@ export default function RecoverToken(): React.ReactElement {
             </Link>
           }
         />
-      </ReadableWidth>
+      </Page>
     );
   }
 
   return (
-    <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+    <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
       <EmptyState ornament={<Stamp state="breathing" label="Checking" />} eyebrow="Recovery" title="Getting you back in…" />
-    </ReadableWidth>
+    </Page>
   );
 }

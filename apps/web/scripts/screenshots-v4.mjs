@@ -6,7 +6,14 @@
 //     baseUrl default http://127.0.0.1:8787
 //     itemId  default 01LISTINGB7AAAAAAAAAAAAA (a v4-seeded local listing)
 //
-// Writes apps/web/screenshots/v4-<route>-<width>-<scheme>.png. Assumes a
+// Writes apps/web/screenshots/v4-<route>-<width>-<scheme>.png (the real,
+// viewport-bounded screenshot — what a visitor actually sees before
+// scrolling) and, separately, a v4-<route>-<width>-<scheme>-full.png (the
+// whole scrollable page, via `captureBeyondViewport`). Only the `-full` shot
+// resizes the emulated device to the page's full content height; the plain
+// one does not, on purpose — see screenshots-v3.mjs's header comment for why
+// (a screenshot rendered "as if scrolled" can't ever show a scroll failure,
+// which is exactly how M0's "no page scrolls" bug went unnoticed). Assumes a
 // server is already serving apps/web/dist at baseUrl (e.g. `pnpm --filter
 // @keepsake/api dev`) and a Chrome binary at the path below.
 import { Buffer } from "node:buffer";
@@ -132,12 +139,20 @@ async function shoot({ route, name, width, scheme }) {
   });
   const info = probe.result.value;
 
+  // The viewport-only shot, at the fixed device height set above — captured
+  // *before* the full-page resize below, so this is genuinely what's on
+  // screen without scrolling. This is the one that would have caught the
+  // "no page scrolls" bug: a page whose content never made it past the fold
+  // now visibly cuts off here instead of always looking complete.
+  const viewportShot = await cdp.send("Page.captureScreenshot", { format: "png" });
+  writeFileSync(join(OUT, `v4-${name}-${width}-${scheme}.png`), Buffer.from(viewportShot.data, "base64"));
+
   const height = Math.min(Math.max(info.height, 700), 9000);
   await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile: width < 700 });
   await sleep(300);
 
   const shot = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true });
-  const file = join(OUT, `v4-${name}-${width}-${scheme}.png`);
+  const file = join(OUT, `v4-${name}-${width}-${scheme}-full.png`);
   writeFileSync(file, Buffer.from(shot.data, "base64"));
   console.log(`${file}  theme=${info.theme} bodyBg=${info.bodyBg} height=${height}`);
   cdp.close();

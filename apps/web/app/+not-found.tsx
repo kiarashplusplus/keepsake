@@ -1,14 +1,14 @@
 import * as React from "react";
 import { Link } from "expo-router";
 import { sectionRhythm } from "@keepsake/tokens/spacing";
-import { ReadableWidth } from "@/ui/ReadableWidth";
+import { Page } from "@/ui/Page";
 import { EmptyState } from "@/ui/EmptyState";
 import { Button } from "@/ui/Button";
 import { Stamp } from "@/ui/Stamp";
 
 export default function NotFound(): React.ReactElement {
   return (
-    <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+    <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
       <EmptyState
         ornament={<Stamp state="idle" label="Not found" />}
         eyebrow="Not found"
@@ -20,6 +20,6 @@ export default function NotFound(): React.ReactElement {
           </Link>
         }
       />
-    </ReadableWidth>
+    </Page>
   );
 }

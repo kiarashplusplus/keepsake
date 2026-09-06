@@ -13,6 +13,7 @@ import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
 import { IconButton } from "@/ui/IconButton";
 import { Print } from "@/ui/Print";
+import { Page } from "@/ui/Page";
 import { Card } from "@/ui/Surface";
 import { useColors } from "@/ui/theme";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
@@ -217,56 +218,65 @@ export default function GivePhotos(): React.ReactElement {
   const canContinue = doneCount >= 1 && !isUploading;
 
   return (
-    <Card style={{ gap: space.xl }}>
-      <View style={{ gap: space.sm }}>
-        <Eyebrow>Photos</Eyebrow>
-        <Text variant="displayLg">Show us the keepsake.</Text>
-        <Text variant="bodyLg" color="textSecondary">
-          One to five photos. The first one is what people see first.
-        </Text>
-      </View>
+    // `Page`, not a bare `Card`: this step is rendered by the give flow's
+    // nested `<Stack>` (`app/give/_layout.tsx`), whose screens are
+    // `position: absolute` and so size against a distant definite-height
+    // ancestor rather than the in-flow `StepShell` around them — a `Page`
+    // has to live *here*, per step, not once in the shell. No `variant`:
+    // `StepShell` already wraps every step in one `ReadableWidth`, so a
+    // second one here would double the horizontal gutter.
+    <Page>
+      <Card style={{ gap: space.xl }}>
+        <View style={{ gap: space.sm }}>
+          <Eyebrow>Photos</Eyebrow>
+          <Text variant="displayLg">Show us the keepsake.</Text>
+          <Text variant="bodyLg" color="textSecondary">
+            One to five photos. The first one is what people see first.
+          </Text>
+        </View>
 
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
-        {draft.photos.map((photo, index) => (
-          <PhotoTile
-            key={photo.clientId}
-            photo={photo}
-            index={index}
-            total={draft.photos.length}
-            onRemove={() => handleRemove(photo)}
-            onMove={(direction) => dispatch({ type: "move_photo", clientId: photo.clientId, direction })}
-          />
-        ))}
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
+          {draft.photos.map((photo, index) => (
+            <PhotoTile
+              key={photo.clientId}
+              photo={photo}
+              index={index}
+              total={draft.photos.length}
+              onRemove={() => handleRemove(photo)}
+              onMove={(direction) => dispatch({ type: "move_photo", clientId: photo.clientId, direction })}
+            />
+          ))}
 
-        {remainingSlots > 0 ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Add photos"
-            onPress={() => void handleAddPhoto()}
-            style={{
-              width: TILE,
-              height: TILE,
-              borderWidth: 2,
-              borderColor: colors.ink,
-              borderStyle: "dashed",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: space.xs,
-            }}
-          >
-            <Text variant="label" color="ink" style={{ fontSize: 12 }}>
-              + Add
-            </Text>
-            <Text variant="caption" color="textTertiary">
-              {remainingSlots} left
-            </Text>
-          </Pressable>
-        ) : null}
-      </View>
+          {remainingSlots > 0 ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Add photos"
+              onPress={() => void handleAddPhoto()}
+              style={{
+                width: TILE,
+                height: TILE,
+                borderWidth: 2,
+                borderColor: colors.ink,
+                borderStyle: "dashed",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: space.xs,
+              }}
+            >
+              <Text variant="label" color="ink" style={{ fontSize: 12 }}>
+                + Add
+              </Text>
+              <Text variant="caption" color="textTertiary">
+                {remainingSlots} left
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
 
-      <View style={{ flexDirection: "row" }}>
-        <Button label="Continue" disabled={!canContinue} onPress={() => router.push("/give/story")} />
-      </View>
-    </Card>
+        <View style={{ flexDirection: "row" }}>
+          <Button label="Continue" disabled={!canContinue} onPress={() => router.push("/give/story")} />
+        </View>
+      </Card>
+    </Page>
   );
 }

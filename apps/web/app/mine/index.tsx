@@ -7,7 +7,7 @@ import { Image as ExpoImage } from "expo-image";
 import { motion } from "@keepsake/tokens/motion";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
 import { MODERATION_REASONS, type ListingStatus, type OwnerListing } from "@keepsake/contracts/listing";
-import { ReadableWidth } from "@/ui/ReadableWidth";
+import { Page } from "@/ui/Page";
 import { EmptyState } from "@/ui/EmptyState";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
@@ -132,7 +132,7 @@ export default function Mine(): React.ReactElement {
 
   if (!hasOwnerToken) {
     return (
-      <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
         <EmptyState
           ornament={<Stamp state="idle" label="Mine" />}
           eyebrow="Mine"
@@ -149,31 +149,31 @@ export default function Mine(): React.ReactElement {
             </View>
           }
         />
-      </ReadableWidth>
+      </Page>
     );
   }
 
   if (error !== null) {
     return (
-      <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
         <EmptyState eyebrow="Mine" title="Couldn't load your listings" line={error} />
-      </ReadableWidth>
+      </Page>
     );
   }
 
   if (listings === null) {
     return (
-      <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal, gap: space.md }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: space.md }}>
         <Skeleton height={88} />
         <Skeleton height={88} />
         <Skeleton height={88} />
-      </ReadableWidth>
+      </Page>
     );
   }
 
   if (listings.length === 0) {
     return (
-      <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
         <EmptyState
           ornament={<Stamp state="idle" label="Mine" />}
           eyebrow="Mine"
@@ -185,14 +185,14 @@ export default function Mine(): React.ReactElement {
             </Link>
           }
         />
-      </ReadableWidth>
+      </Page>
     );
   }
 
   const groups = groupListings(listings);
 
   return (
-    <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+    <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
       <Card style={{ gap: sectionRhythm.tight, transform: [{ rotate: "0.2deg" }] }}>
         <View style={{ flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: space.md }}>
           <View style={{ gap: space.sm }}>
@@ -223,6 +223,6 @@ export default function Mine(): React.ReactElement {
           );
         })}
       </View>
-    </ReadableWidth>
+    </Page>
   );
 }

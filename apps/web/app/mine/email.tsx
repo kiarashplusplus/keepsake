@@ -7,7 +7,7 @@ import { View } from "react-native";
 import { MailableEmailSchema, RESERVED_EMAIL_DOMAIN_MESSAGE } from "@keepsake/contracts/common";
 import type { OwnerMe } from "@keepsake/contracts/owner";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
-import { ReadableWidth } from "@/ui/ReadableWidth";
+import { Page } from "@/ui/Page";
 import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Input } from "@/ui/Input";
@@ -104,21 +104,21 @@ export default function MineEmail(): React.ReactElement {
 
   if (!hasOwnerToken) {
     return (
-      <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
         <EmptyState
           ornament={<Stamp state="idle" label="Email" />}
           eyebrow="Email"
           title="Nothing to show yet"
           line="Give something first — your device gets an owner identity the moment you do, and an email can attach to it then."
         />
-      </ReadableWidth>
+      </Page>
     );
   }
 
   const hasEmail = me !== null && me.email !== undefined;
 
   return (
-    <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+    <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
       <Card style={{ gap: space.xl, transform: [{ rotate: "-0.2deg" }] }}>
         <View style={{ gap: space.sm }}>
           <Eyebrow tick>A way back</Eyebrow>
@@ -161,6 +161,6 @@ export default function MineEmail(): React.ReactElement {
           {hasEmail ? <Button label="Remove" variant="ghost" disabled={busy} onPress={() => void handleRemove()} /> : null}
         </View>
       </Card>
-    </ReadableWidth>
+    </Page>
   );
 }

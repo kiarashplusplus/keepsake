@@ -18,6 +18,7 @@ import { Print } from "@/ui/Print";
 import { Card } from "@/ui/Surface";
 import { Stamp, type StampState } from "@/ui/Stamp";
 import { Turnstile } from "@/ui/Turnstile";
+import { Page } from "@/ui/Page";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { makeClientId } from "@/features/give/giveDraft";
 import { editStepForReason, resolveReviewOutcome } from "@/features/give/reviewOutcome";
@@ -140,130 +141,138 @@ export default function GiveReview(): React.ReactElement {
     // The reviewing state: centred, the stamp on top, an eyebrow naming the
     // moment and the outcome in display type — same shape for every outcome.
     return (
-      <Card style={{ gap: space.xl, alignItems: "center", paddingVertical: space.xxl }}>
-        <Stamp state={stampState} label={stampLabel} />
+      // See app/give/index.tsx's comment on why this step wraps itself in a
+      // `Page` rather than the shell doing it once.
+      <Page>
+        <Card style={{ gap: space.xl, alignItems: "center", paddingVertical: space.xxl }}>
+          <Stamp state={stampState} label={stampLabel} />
 
-        {outcome.kind === "waiting" ? (
-          <View style={{ gap: space.sm, alignItems: "center" }}>
-            <Eyebrow align="center">Taking a look</Eyebrow>
-            <Text variant="displayLg" style={{ textAlign: "center" }}>
-              Your keepsake is being looked over.
-            </Text>
-            <Text variant="bodyLg" color="textSecondary" style={{ textAlign: "center" }}>
-              Usually less than a minute.
-            </Text>
-          </View>
-        ) : null}
-
-        {outcome.kind === "approved" ? (
-          <View style={{ gap: space.lg, alignItems: "center" }}>
+          {outcome.kind === "waiting" ? (
             <View style={{ gap: space.sm, alignItems: "center" }}>
-              <Eyebrow align="center">Stamped</Eyebrow>
+              <Eyebrow align="center">Taking a look</Eyebrow>
               <Text variant="displayLg" style={{ textAlign: "center" }}>
-                {"It's live."}
-              </Text>
-            </View>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: space.xl, flexWrap: "wrap", justifyContent: "center" }}>
-              <Button label="Share" onPress={() => void handleShare()} />
-              <Button
-                label="See it"
-                variant="link"
-                onPress={() => {
-                  if (typeof window !== "undefined") window.location.assign(`/item/${listing.id}`);
-                }}
-              />
-            </View>
-            <Button label="Give another" variant="ghost" onPress={handleGiveAnother} />
-          </View>
-        ) : null}
-
-        {outcome.kind === "rejected" ? (
-          <View style={{ gap: space.lg, alignItems: "center" }}>
-            <View style={{ gap: space.sm, alignItems: "center" }}>
-              <Eyebrow align="center">Not quite</Eyebrow>
-              <Text variant="displayLg" style={{ textAlign: "center" }}>
-                Not this time.
-              </Text>
-              <Text variant="bodyLg" color="textSecondary" style={{ textAlign: "center", maxWidth: 480 }}>
-                {outcome.reason !== null ? MODERATION_REASONS[outcome.reason] : "Something about this listing needs a change."}
-              </Text>
-            </View>
-            <Button label="Edit" onPress={() => handleEdit(editStepForReason(outcome.reason))} />
-          </View>
-        ) : null}
-
-        {outcome.kind === "needs_review" ? (
-          <View style={{ gap: space.lg, alignItems: "center" }}>
-            <View style={{ gap: space.sm, alignItems: "center" }}>
-              <Eyebrow align="center">Held</Eyebrow>
-              <Text variant="displayLg" style={{ textAlign: "center" }}>
-                Taking a closer look.
+                Your keepsake is being looked over.
               </Text>
               <Text variant="bodyLg" color="textSecondary" style={{ textAlign: "center" }}>
-                Usually within a day.
+                Usually less than a minute.
               </Text>
             </View>
-            <Button label="See it in Mine" variant="link" onPress={() => router.push("/mine")} />
-          </View>
-        ) : null}
+          ) : null}
 
-        {outcome.kind === "timeout" ? (
-          <View style={{ gap: space.lg, alignItems: "center" }}>
-            <View style={{ gap: space.sm, alignItems: "center" }}>
-              <Eyebrow align="center">Still checking</Eyebrow>
-              <Text variant="bodyLg" color="textSecondary" style={{ textAlign: "center", maxWidth: 480 }}>
-                {"You can leave this page; it'll show up under Mine."}
-              </Text>
+          {outcome.kind === "approved" ? (
+            <View style={{ gap: space.lg, alignItems: "center" }}>
+              <View style={{ gap: space.sm, alignItems: "center" }}>
+                <Eyebrow align="center">Stamped</Eyebrow>
+                <Text variant="displayLg" style={{ textAlign: "center" }}>
+                  {"It's live."}
+                </Text>
+              </View>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: space.xl, flexWrap: "wrap", justifyContent: "center" }}>
+                <Button label="Share" onPress={() => void handleShare()} />
+                <Button
+                  label="See it"
+                  variant="link"
+                  onPress={() => {
+                    if (typeof window !== "undefined") window.location.assign(`/item/${listing.id}`);
+                  }}
+                />
+              </View>
+              <Button label="Give another" variant="ghost" onPress={handleGiveAnother} />
             </View>
-            <Button label="Go to Mine" variant="link" onPress={() => router.push("/mine")} />
-          </View>
-        ) : null}
-      </Card>
+          ) : null}
+
+          {outcome.kind === "rejected" ? (
+            <View style={{ gap: space.lg, alignItems: "center" }}>
+              <View style={{ gap: space.sm, alignItems: "center" }}>
+                <Eyebrow align="center">Not quite</Eyebrow>
+                <Text variant="displayLg" style={{ textAlign: "center" }}>
+                  Not this time.
+                </Text>
+                <Text variant="bodyLg" color="textSecondary" style={{ textAlign: "center", maxWidth: 480 }}>
+                  {outcome.reason !== null ? MODERATION_REASONS[outcome.reason] : "Something about this listing needs a change."}
+                </Text>
+              </View>
+              <Button label="Edit" onPress={() => handleEdit(editStepForReason(outcome.reason))} />
+            </View>
+          ) : null}
+
+          {outcome.kind === "needs_review" ? (
+            <View style={{ gap: space.lg, alignItems: "center" }}>
+              <View style={{ gap: space.sm, alignItems: "center" }}>
+                <Eyebrow align="center">Held</Eyebrow>
+                <Text variant="displayLg" style={{ textAlign: "center" }}>
+                  Taking a closer look.
+                </Text>
+                <Text variant="bodyLg" color="textSecondary" style={{ textAlign: "center" }}>
+                  Usually within a day.
+                </Text>
+              </View>
+              <Button label="See it in Mine" variant="link" onPress={() => router.push("/mine")} />
+            </View>
+          ) : null}
+
+          {outcome.kind === "timeout" ? (
+            <View style={{ gap: space.lg, alignItems: "center" }}>
+              <View style={{ gap: space.sm, alignItems: "center" }}>
+                <Eyebrow align="center">Still checking</Eyebrow>
+                <Text variant="bodyLg" color="textSecondary" style={{ textAlign: "center", maxWidth: 480 }}>
+                  {"You can leave this page; it'll show up under Mine."}
+                </Text>
+              </View>
+              <Button label="Go to Mine" variant="link" onPress={() => router.push("/mine")} />
+            </View>
+          ) : null}
+        </Card>
+      </Page>
     );
   }
 
   return (
-    <Card style={{ gap: space.xl }}>
-      <View style={{ gap: space.sm }}>
-        <Eyebrow>Last look</Eyebrow>
-        <Text variant="displayLg">Take a last look.</Text>
-      </View>
-
-      {/* The listing as it will lie on the table: an actual print. */}
-      <Print tiltDeg={-1.5} style={{ alignSelf: "stretch", padding: space.sm }}>
-        <View style={{ paddingTop: space.xl, paddingHorizontal: space.md, paddingBottom: space.md, gap: space.sm }}>
-          <Text variant="storyExcerpt" color="textSecondary" hangingPunctuation>
-            “{draft.story.slice(0, 140)}
-            {draft.story.length > 140 ? "…" : ""}”
-          </Text>
-          <Text variant="title">{draft.title || "Untitled"}</Text>
-          <View style={{ paddingTop: space.sm, gap: space.xxs }}>
-            <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
-              {draft.category !== null ? CATEGORY_LABELS[draft.category] : ""} · {COUNTRY_LABELS[draft.country]} {draft.postalCode}
-            </Text>
-            <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
-              {photoIds.length} photo{photoIds.length === 1 ? "" : "s"}
-            </Text>
-          </View>
+    // See app/give/index.tsx's comment on why this step wraps itself in a
+    // `Page` rather than the shell doing it once.
+    <Page>
+      <Card style={{ gap: space.xl }}>
+        <View style={{ gap: space.sm }}>
+          <Eyebrow>Last look</Eyebrow>
+          <Text variant="displayLg">Take a last look.</Text>
         </View>
-      </Print>
 
-      <Turnstile onToken={setTurnstileToken} />
+        {/* The listing as it will lie on the table: an actual print. */}
+        <Print tiltDeg={-1.5} style={{ alignSelf: "stretch", padding: space.sm }}>
+          <View style={{ paddingTop: space.xl, paddingHorizontal: space.md, paddingBottom: space.md, gap: space.sm }}>
+            <Text variant="storyExcerpt" color="textSecondary" hangingPunctuation>
+              “{draft.story.slice(0, 140)}
+              {draft.story.length > 140 ? "…" : ""}”
+            </Text>
+            <Text variant="title">{draft.title || "Untitled"}</Text>
+            <View style={{ paddingTop: space.sm, gap: space.xxs }}>
+              <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
+                {draft.category !== null ? CATEGORY_LABELS[draft.category] : ""} · {COUNTRY_LABELS[draft.country]} {draft.postalCode}
+              </Text>
+              <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
+                {photoIds.length} photo{photoIds.length === 1 ? "" : "s"}
+              </Text>
+            </View>
+          </View>
+        </Print>
 
-      {submitError !== null ? (
-        <Text variant="body" color="dangerText">
-          {submitError}
-        </Text>
-      ) : null}
+        <Turnstile onToken={setTurnstileToken} />
 
-      <View style={{ flexDirection: "row" }}>
-        <Button
-          label="Give it"
-          loading={phase === "submitting"}
-          disabled={phase === "submitting" || turnstileToken === null || photoIds.length === 0}
-          onPress={() => void handleSubmit()}
-        />
-      </View>
-    </Card>
+        {submitError !== null ? (
+          <Text variant="body" color="dangerText">
+            {submitError}
+          </Text>
+        ) : null}
+
+        <View style={{ flexDirection: "row" }}>
+          <Button
+            label="Give it"
+            loading={phase === "submitting"}
+            disabled={phase === "submitting" || turnstileToken === null || photoIds.length === 0}
+            onPress={() => void handleSubmit()}
+          />
+        </View>
+      </Card>
+    </Page>
   );
 }
