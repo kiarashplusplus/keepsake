@@ -68,9 +68,7 @@ export default defineConfig({
             UPLOAD_IP_DAILY_BUDGET: "60",
             SUGGEST_IP_DAILY_BUDGET: "30",
             REPORT_AUTOHIDE_THRESHOLD: "3",
-            MAX_PHOTOS: "5",
             MAX_PHOTO_BYTES: "5242880",
-            IMAGE_TRANSFORMS_ENABLED: "0",
             EMAIL_PROVIDER: "cf",
             EMAIL_FROM: "Keepsake <hello@keepsake.ing>",
             SITE_URL: "http://localhost:8787",
@@ -91,7 +89,7 @@ export default defineConfig({
             directory: path.join(__dirname, "test/fixtures/public"),
             binding: "ASSETS",
             notFoundHandling: "single-page-application",
-            runWorkerFirst: ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml"],
+            runWorkerFirst: ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt"],
           },
         },
       };

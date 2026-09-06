@@ -69,3 +69,30 @@ helper that returns `undefined` (no client, no network) whenever `SENTRY_DSN` is
 `owner`/`report_count`/`events`/`reports`; the old bare-`OwnerListing` shape had no callers to
 break). Web-side Sentry, the `/admin` page itself, and Playwright `e2e` are not part of this
 slice.
+
+## Launch-audit fixes (2026-09-06)
+
+Four things in this document's territory changed after the launch audit
+([`docs/runbooks/launch-audit.md`](../runbooks/launch-audit.md)):
+
+- **Crons are awaited, not detached.** `scheduled` used to hand both jobs to `ctx.waitUntil(...)`
+  and return, so `withSentry`'s scheduled instrumentation had already resolved — and disposed its
+  client — before the job did any work. A rejection was a detached unhandled rejection nothing
+  caught, and Cloudflare recorded the invocation as a success because the handler it was watching
+  resolved. `runCron()` in `src/index.ts` now awaits, captures with a `cron` tag, and rethrows.
+  `moderationRetry` additionally catches per listing, so one poisoned row no longer aborts the
+  batch, skips the heartbeat and repeats identically every five minutes forever.
+- **`GET /api/admin/health` reads its own heartbeats.** `cron:last:<name>` was written correctly
+  and returned correctly, and then ignored: `ok` came from `postal_codes_count > 0` alone. It is
+  now false when either heartbeat is stale (30 min for `moderationRetry`, 26 h for `orphanSweep`).
+- **There is an uptime check.** `.github/workflows/uptime.yml` — every 15 minutes, `/health` on
+  preview and (once `PRODUCTION_LIVE` is set) production, with a JSON assertion on `ok`, an error
+  annotation, and a deduplicated issue on failure. Before this, `.github/workflows/` held two
+  files and neither had a `schedule:` trigger.
+- **There is a documented restore path.** [`docs/runbooks/restore.md`](../runbooks/restore.md).
+  Note the finding buried in it: `wrangler d1 export` **fails on this database** — `cannot export
+  databases with Virtual Tables (fts5)` — so any backup has to name its tables with `--table`.
+
+None of the Sentry-side work means anything until `SENTRY_DSN` is actually set on the Worker.
+`buildSentryOptions` returns `undefined` without it, and every `captureException` above is then a
+no-op.

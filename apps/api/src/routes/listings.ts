@@ -36,12 +36,19 @@ const DEFAULT_REPORT_AUTOHIDE_THRESHOLD = 3;
 // ---------------------------------------------------------------------------
 // POST /api/listings
 // ---------------------------------------------------------------------------
+// `burst("RL_CREATE")` first, for the reason spelled out on `PUT /api/photos`
+// (launch audit finding 11): `ownerAuth({ createIfMissing: true })` mints an
+// `owners` row on sight of any well-formed token, so it must not be the first
+// thing a stranger's request reaches. Everything after it keeps its original
+// order — `idempotency()` scopes its KV key by `owner.id` when an owner is
+// present, and `turnstile()` stays in front of the daily budget so a failed
+// challenge doesn't spend a real giver's 20-listings-a-day allowance.
 listingRoutes.post(
   "/",
+  burst("RL_CREATE"),
   ownerAuth({ createIfMissing: true }),
   idempotency(),
   turnstile(),
-  burst("RL_CREATE"),
   dailyBudget({ kind: "listing", ipDailyLimitVar: "LISTING_IP_DAILY_BUDGET", fallbackIpDailyLimit: DEFAULT_LISTING_IP_DAILY_BUDGET }),
   validateBody(CreateListingInput),
   async (c) => {
@@ -312,7 +319,7 @@ listingRoutes.post("/:id/relist", ownerAuth(), async (c) => {
 // ---------------------------------------------------------------------------
 // GET /api/listings/:id — public, approved/given only
 // ---------------------------------------------------------------------------
-listingRoutes.get("/:id", async (c) => {
+listingRoutes.get("/:id", burst("RL_READ"), async (c) => {
   const id = requireParam(c, "id");
   const row = await fetchListingRow(c.env, id);
   if (!row || (row.status !== "approved" && row.status !== "given")) {

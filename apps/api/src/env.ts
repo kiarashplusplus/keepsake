@@ -71,6 +71,24 @@ export function emailProviderName(env: Env): EmailProviderName | undefined {
 }
 
 /**
+ * The one place `ENVIRONMENT === "production"` is decided. Same widening
+ * trick as `isMockAi`: `wrangler types` narrows `ENVIRONMENT` to the literal
+ * currently in `wrangler.toml`'s top-level `[vars]` (`"development"`), so a
+ * bare comparison against `"production"` doesn't typecheck even though the
+ * deployed value obviously can be that.
+ *
+ * Centralized because more than one thing now branches on it and they must
+ * never disagree: `/robots.txt` (production serves the static allow-list,
+ * everything else a blanket disallow), `/sitemap.xml` (404 off production),
+ * the `X-Robots-Tag` response header, and `/health`'s `degraded` verdict.
+ * Getting one of those right and another wrong is exactly the shape of
+ * launch audit finding 2.
+ */
+export function isProduction(env: Env): boolean {
+  return (env.ENVIRONMENT as string) === "production";
+}
+
+/**
  * Parse an integer-shaped [vars] entry (all Worker vars are strings), falling
  * back when the value is missing or not a valid integer rather than throwing
  * — a malformed budget var should degrade to a safe default, not 500 the

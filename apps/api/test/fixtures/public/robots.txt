@@ -1,0 +1,13 @@
+# Production only. This file is the *production* copy of record: the Worker
+# answers /robots.txt itself (apps/api/src/routes/robots.ts, reached via
+# `run_worker_first` in wrangler.toml) and delegates back to this static asset
+# only when ENVIRONMENT === "production". Preview and every other environment
+# get "User-agent: * / Disallow: /" generated in the Worker, plus an
+# `X-Robots-Tag: noindex, nofollow` header on every response — otherwise
+# preview.keepsake.ing is a crawlable, brand-named clone of the product whose
+# notification email is silently dropped (launch audit finding 2).
+User-agent: *
+Allow: /
+Disallow: /admin
+
+Sitemap: https://keepsake.ing/sitemap.xml

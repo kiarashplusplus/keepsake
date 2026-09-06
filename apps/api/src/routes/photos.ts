@@ -46,10 +46,23 @@ interface OrphanOrOwnedPhotoRow {
   listing_status: string | null;
 }
 
+// Launch audit finding 11: the burst limiter comes *before* `ownerAuth`, and
+// the order is the point. `ownerAuth({ createIfMissing: true })` inserts an
+// `owners` row for whatever random `ks_…` token the caller presented, and with
+// it running first that insert had already happened by the time the request
+// was 429'd or 400'd — unbounded, permanent junk in the table every owner
+// lookup queries, at (combined with finding 10's measured limiter leakage) on
+// the order of tens of thousands of rows a day from one address. Nothing swept
+// them, and there is no delete-account path anywhere.
+//
+// Nothing between here and the handler needs the owner, so this costs nothing:
+// `burst` keys on the caller's IP digest, not on identity. The daily KV budget
+// stays behind `ownerAuth` — it is a write, and there is no reason to spend it
+// before the token is even syntactically valid.
 photoRoutes.put(
   "/",
-  ownerAuth({ createIfMissing: true }),
   burst("RL_UPLOAD"),
+  ownerAuth({ createIfMissing: true }),
   dailyBudget({ kind: "upload", ipDailyLimitVar: "UPLOAD_IP_DAILY_BUDGET", fallbackIpDailyLimit: DEFAULT_UPLOAD_IP_DAILY_BUDGET }),
   async (c) => {
     const owner = c.get("owner");

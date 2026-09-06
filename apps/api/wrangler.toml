@@ -14,7 +14,7 @@ compatibility_flags = ["nodejs_compat"]
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml"]
+run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt"]
 
 [ai]
 binding = "AI"
@@ -70,13 +70,19 @@ SUGGEST_IP_DAILY_BUDGET = "30"
 # Three independent reporters is enough signal to pull a listing from public
 # view pending Kiarash's review; it is not a ban, just a hide.
 REPORT_AUTOHIDE_THRESHOLD = "3"
-MAX_PHOTOS = "5"
 # 5 MiB matches the client-side resize ceiling in apps/web; this is the
-# server-side backstop in case a client is old, broken, or hostile.
+# server-side backstop in case a client is old, broken, or hostile. Read by
+# `src/routes/photos.ts` via `parseIntVar` — unlike the two vars removed
+# below, this one does something.
 MAX_PHOTO_BYTES = "5242880"
-# Cloudflare Images transforms cost per-transform once past the free tier;
-# keep serving originals through `/i/:id/:variant` until traffic justifies it.
-IMAGE_TRANSFORMS_ENABLED = "0"
+# Removed 2026-09-06 (launch audit): `MAX_PHOTOS` and `IMAGE_TRANSFORMS_ENABLED`
+# were declared in all three environment blocks and referenced nowhere in
+# `apps/api/src`. The real photo limit is a hardcoded `.max(5)` in
+# `CreateListingInput` (packages/contracts), shared with the client, so turning
+# `MAX_PHOTOS` down in production would have done exactly nothing while reading
+# like a control someone could pull in an incident. `IMAGE_TRANSFORMS_ENABLED`
+# had no code path at all. Configuration that cannot change behavior is worse
+# than no configuration: add them back the same commit that reads them.
 # `cf` uses the `[[send_email]]` binding; `resend` is the fallback behind the
 # same `sendMail()` interface if Email Service enablement or domain
 # onboarding (see plan Risks #1) doesn't land in time.
@@ -180,7 +186,7 @@ compatibility_flags = ["nodejs_compat"]
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml"]
+run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt"]
 
 [env.preview.ai]
 binding = "AI"
@@ -199,9 +205,7 @@ REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
 SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
-MAX_PHOTOS = "5"
 MAX_PHOTO_BYTES = "5242880"
-IMAGE_TRANSFORMS_ENABLED = "0"
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 # Preview shares the verified keepsake.ing sender with production, so it is
@@ -277,7 +281,7 @@ compatibility_flags = ["nodejs_compat"]
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml"]
+run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt"]
 
 [env.production.ai]
 binding = "AI"
@@ -296,9 +300,7 @@ REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
 SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
-MAX_PHOTOS = "5"
 MAX_PHOTO_BYTES = "5242880"
-IMAGE_TRANSFORMS_ENABLED = "0"
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 # Real users. Reserved domains (example.com, .test, .invalid) are still

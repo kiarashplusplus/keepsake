@@ -62,6 +62,15 @@ all because `wrangler.toml`'s `run_worker_first` (and the vitest fixture's mirro
 `vitest.config.ts`) list `/item/*` and `/sitemap.xml` explicitly — otherwise the static-assets
 system's SPA fallback would answer first.
 
+**Production only, since the launch audit (finding 2).** `/sitemap.xml` 404s on every environment
+that is not production, `/robots.txt` is served by the Worker (`src/routes/robots.ts`, also listed
+in `run_worker_first`) and returns a blanket `Disallow: /` off production, and every
+non-production response carries `X-Robots-Tag: noindex, nofollow`. Preview used to build every
+`<loc>` from its own `SITE_URL` and serve the production `Allow: /` file, which made
+`preview.keepsake.ing` a crawlable, brand-named clone of the product whose notification email is
+silently dropped. Production still serves `apps/web/public/robots.txt` — the Worker delegates to
+the `ASSETS` binding — so that file remains the one place the production rules are edited.
+
 Tests: `apps/api/test/feed.test.ts` (30-listing keyset pagination to the end with no duplicates,
 category filter, given/hidden/pending exclusion, FTS "grandmother" → "grandmother's", 25 mi from
 02144 includes 02139/Cambridge and excludes 01608/Worcester, lat/lng direct mode, bad-postcode

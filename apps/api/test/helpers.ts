@@ -300,3 +300,30 @@ export function installFakeEmail(): CapturedEmail[] {
 export function removeFakeEmail(): void {
   delete (env as unknown as Record<string, unknown>).EMAIL;
 }
+
+// ---------------------------------------------------------------------------
+// Rate-limit binding fakes.
+//
+// The real `[[ratelimits]]` bindings do work under vitest-pool-workers, so a
+// test *can* prove a limiter fires by making limit+1 requests — and
+// `adminAuth.test.ts` does exactly that for `RL_ADMIN`, because the count is
+// the whole point of that finding. But a limiter's *position in the
+// middleware chain* is a different property, and proving it by exhausting a
+// 300/60s binding would be slow and would leak counted requests into every
+// other test sharing the isolate. Swapping the binding for one that denies
+// immediately isolates the ordering question: if the limiter runs first, the
+// very first request is a 429 and nothing behind it (auth, an `owners`
+// insert) ever executes.
+// ---------------------------------------------------------------------------
+
+/** Replaces a `[[ratelimits]]` binding with one that denies every call, and
+ * returns a restore function. Same `env`-mutation seam as `installFakeEmail`:
+ * `SELF` and this test share one `env` object. */
+export function installDenyingRateLimiter(name: "RL_READ" | "RL_UPLOAD" | "RL_CREATE" | "RL_ADMIN"): () => void {
+  const bindings = env as unknown as Record<string, unknown>;
+  const original = bindings[name];
+  bindings[name] = { limit: async () => ({ success: false }) };
+  return () => {
+    bindings[name] = original;
+  };
+}

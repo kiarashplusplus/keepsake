@@ -15,6 +15,7 @@ import { OwnerTokenSchema } from "@keepsake/contracts/owner";
 import type { Env } from "../env.js";
 import { fail } from "../lib/respond.js";
 import { sha256Hex } from "../lib/digest.js";
+import { burst } from "../middleware/rateLimit.js";
 
 type ImageCtx = Context<{ Bindings: Env }>;
 
@@ -41,7 +42,7 @@ async function isOwnerToken(c: ImageCtx, ownerId: string): Promise<boolean> {
   return owner?.id === ownerId;
 }
 
-imageRoutes.get("/:id/:variant", async (c) => {
+imageRoutes.get("/:id/:variant", burst("RL_READ"), async (c) => {
   const id = c.req.param("id");
   const variant = c.req.param("variant");
   if (variant !== "full" && variant !== "thumb") {

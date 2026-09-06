@@ -334,6 +334,7 @@ describe("admin routes", () => {
       setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
       await seedStandardPostalCodes();
       await env.KV.put("cron:last:orphanSweep", String(Date.now()));
+      await env.KV.put("cron:last:moderationRetry", String(Date.now()));
 
       const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
       expect(res.status).toBe(200);
@@ -341,7 +342,43 @@ describe("admin routes", () => {
       expect(health.ok).toBe(true);
       expect(health.postal_codes_count).toBeGreaterThan(0);
       expect(typeof health.cron_last_run.orphanSweep).toBe("number");
-      expect(health.cron_last_run.moderationRetry).toBeNull();
+      expect(typeof health.cron_last_run.moderationRetry).toBe("number");
+    });
+
+    // Launch audit finding 12: the heartbeats were written correctly, read
+    // correctly, and then ignored — `ok` came from `postal_codes_count > 0`
+    // alone, so a cron that stopped a month ago still reported `ok: true`
+    // with a month-old timestamp sitting right next to it. The test above is
+    // the control: same seeded postal codes, same endpoint, fresh heartbeats,
+    // `ok: true`. Only the age of one KV value differs here.
+    it("is not ok when a cron heartbeat has gone stale", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      await seedStandardPostalCodes();
+      await env.KV.put("cron:last:moderationRetry", String(Date.now()));
+      // orphanSweep is nightly and allowed 26 hours; three days is dead.
+      const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+      await env.KV.put("cron:last:orphanSweep", String(threeDaysAgo));
+
+      const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
+      const health = await readOk<AdminHealth>(res);
+      expect(health.postal_codes_count).toBeGreaterThan(0);
+      expect(health.ok).toBe(false);
+      // The stale timestamp is still reported, not hidden — the admin page
+      // needs to show *when* it stopped, not just that something is wrong.
+      expect(health.cron_last_run.orphanSweep).toBe(threeDaysAgo);
+    });
+
+    it("is not ok when moderationRetry has gone quiet, even with a fresh nightly sweep", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      await seedStandardPostalCodes();
+      await env.KV.put("cron:last:orphanSweep", String(Date.now()));
+      // Every 5 minutes, allowed 30. An hour of silence means listings are
+      // stranded in `pending` and nothing is going public.
+      await env.KV.put("cron:last:moderationRetry", String(Date.now() - 60 * 60 * 1000));
+
+      const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
+      const health = await readOk<AdminHealth>(res);
+      expect(health.ok).toBe(false);
     });
   });
 });

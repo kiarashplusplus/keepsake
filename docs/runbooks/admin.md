@@ -24,8 +24,17 @@ wrangler secret put ADMIN_TOKEN --env production
 Rotating invalidates every open admin session immediately (no server-side session to migrate) —
 expected, not a bug, if rotation follows a suspected leak (see `docs/runbooks/incident.md`).
 
-All `/api/admin/*` routes are also behind the `RL_ADMIN` rate-limit binding
-(120/60s, `wrangler.toml`), same as every other write surface.
+All `/api/admin/*` routes are behind the `RL_ADMIN` rate-limit binding (120/60s, `wrangler.toml`)
+**before** `adminAuth()` runs — `adminRoutes.use("*", burst("RL_ADMIN"), adminAuth())`. The order
+is the whole point and it is worth stating plainly, because this file used to assert the
+protection while the code did the opposite: with `adminAuth()` first, a wrong token was answered
+by `fail(...)` and never reached the limiter, so token guessing was unmetered (the 2026-09-06
+launch audit measured 150 wrong tokens from one IP inside 60s returning 150x401 and 0x429). With
+the limiter in front, the 401 path costs an attacker exactly what the 200 path costs. Both halves
+— the count and the ordering — are pinned by tests in `apps/api/test/adminAuth.test.ts`.
+
+Every 401 from `/api/admin/*` carries the same body (`"Invalid admin token."`) whether the token
+is wrong or `ADMIN_TOKEN` is unset, so the response never reveals whether admin is configured.
 
 ## Queue
 
