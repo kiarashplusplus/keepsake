@@ -75,3 +75,31 @@ until then. Feed/requests/admin/recovery are out of scope for this session (M2�
 - Llama Guard 3 judges *descriptions of objects* leniently: a story describing explicit adult magazines came back `safe`. Text-side `review` will rarely fire; the vision pass and the report button carry borderline cases. This is consistent with the minimal-list decision. Revisit if reports show text-only abuse.
 - Phone number in a story → `rejected` / `contact_in_story` before any model call, as designed.
 - Cron retry (`*/5`) re-ran listings left `pending` by the earlier failure and approved them once the fix deployed.
+
+## The vision model was copying our example (found and fixed 2026-09-06)
+
+The image prompt used to show a filled-in JSON object as the "shape" to match:
+`{"is_physical_object":true,"nsfw":0,...}`. The model copied those values instead of
+classifying. Proof, all against `@cf/meta/llama-3.2-11b-vision-instruct` on the same
+synthetic bar-chart image:
+
+| Prompt | Answer |
+|---|---|
+| "In one sentence, what is in this image?" | "a horizontal bar chart … on a white background" |
+| Filled-in example (what we shipped) | `{"is_physical_object":true,"notes":"not a person"}` |
+| Placeholders + `subject` first | `{"subject":"a horizontal bar chart","is_photo_of_tangible_object":false}` |
+
+So the model could see the image perfectly well; the prompt was handing it a safe answer to
+copy. Every score was decorative, and the two image auto-reject rules (`drugs >= 0.7`,
+`is_physical_object === false`) could never fire. Unit tests stayed green throughout because
+they mock `env.AI.run` — the mock returns whatever verdict the test wants, so it can never
+catch a prompt that stops the real model from thinking.
+
+Fix in `apps/api/src/moderation/prompts.ts`: placeholders (`<true|false>`, `<0.0-1.0>`) instead
+of values, and a `subject` field the model must fill in first, because generation is left to
+right and naming the thing forces a look. Verified live afterwards: the same bar chart returns
+`subject: "Gray horizontal bars on white background"`, `is_physical_object: false` → listing
+`rejected` / `not_an_object`; a real photograph returns an accurate subject and passes.
+
+**When editing this prompt, re-run both cases against preview.** Green unit tests mean nothing
+here.
