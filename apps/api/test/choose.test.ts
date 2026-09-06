@@ -27,13 +27,13 @@ describe("POST /api/me/listings/:id/choose", () => {
     const ownerId = crypto.randomUUID();
     const now = Date.now();
     await env.DB.prepare("INSERT INTO owners (id, token_hash, email, email_verified_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .bind(ownerId, tokenHash, "giver@example.com", now, now, now)
+      .bind(ownerId, tokenHash, "giver@keepsake.ing", now, now, now)
       .run();
 
     const listingId = await insertApprovedListing({ ownerId, title: "A quiet teacup" });
 
-    const chosenRequestId = await insertRequest(listingId, "chosen-me@example.com");
-    const otherRequestId = await insertRequest(listingId, "not-me@example.com");
+    const chosenRequestId = await insertRequest(listingId, "chosen-me@keepsake.ing");
+    const otherRequestId = await insertRequest(listingId, "not-me@keepsake.ing");
 
     const res = await SELF.fetch(`http://x/api/me/listings/${listingId}/choose`, {
       method: "POST",
@@ -43,7 +43,7 @@ describe("POST /api/me/listings/:id/choose", () => {
     expect(res.status).toBe(200);
     const revealed = await readOk<OwnerViewRequest>(res);
     expect(revealed.status).toBe("chosen");
-    expect(revealed.email).toBe("chosen-me@example.com");
+    expect(revealed.email).toBe("chosen-me@keepsake.ing");
 
     const listingRow = await env.DB.prepare("SELECT chosen_request_id FROM listings WHERE id = ?").bind(listingId).first<{ chosen_request_id: string }>();
     expect(listingRow?.chosen_request_id).toBe(chosenRequestId);
@@ -52,8 +52,8 @@ describe("POST /api/me/listings/:id/choose", () => {
     expect(otherRow?.status).toBe("not_chosen");
 
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.to).toBe("chosen-me@example.com");
-    expect(sent[0]?.replyTo).toBe("giver@example.com");
+    expect(sent[0]?.to).toBe("chosen-me@keepsake.ing");
+    expect(sent[0]?.replyTo).toBe("giver@keepsake.ing");
   });
 
   it("409s choosing a request that's already been decided", async () => {
@@ -63,7 +63,7 @@ describe("POST /api/me/listings/:id/choose", () => {
     const now = Date.now();
     await env.DB.prepare("INSERT INTO owners (id, token_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?)").bind(ownerId, tokenHash, now, now).run();
     const listingId = await insertApprovedListing({ ownerId });
-    const requestId = await insertRequest(listingId, "someone@example.com");
+    const requestId = await insertRequest(listingId, "someone@keepsake.ing");
 
     const first = await SELF.fetch(`http://x/api/me/listings/${listingId}/choose`, {
       method: "POST",

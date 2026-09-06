@@ -19,7 +19,7 @@ async function requestListing(listingId: string, body: Record<string, unknown>, 
   });
 }
 
-const VALID_REQUEST_BODY = { note: "This would mean so much to my family, thank you for considering us.", email: "requester@example.com" };
+const VALID_REQUEST_BODY = { note: "This would mean so much to my family, thank you for considering us.", email: "requester@keepsake.ing" };
 
 describe("POST /api/listings/:id/requests", () => {
   afterEach(() => removeFakeEmail());
@@ -41,7 +41,7 @@ describe("POST /api/listings/:id/requests", () => {
       .bind(body.id)
       .first<{ status: string; email: string }>();
     expect(requestRow?.status).toBe("open");
-    expect(requestRow?.email).toBe("requester@example.com");
+    expect(requestRow?.email).toBe("requester@keepsake.ing");
   });
 
   it("409s a duplicate request (same listing, same email)", async () => {
@@ -70,7 +70,7 @@ describe("POST /api/listings/:id/requests", () => {
     const sent = installFakeEmail();
     const ownerId = await insertOwner();
     const now = Date.now();
-    await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE id = ?").bind("giver@example.com", now, ownerId).run();
+    await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE id = ?").bind("giver@keepsake.ing", now, ownerId).run();
     const listingId = await insertApprovedListing({ ownerId, title: "A quiet teacup" });
 
     const res = await requestListing(listingId, VALID_REQUEST_BODY);
@@ -78,7 +78,7 @@ describe("POST /api/listings/:id/requests", () => {
     const body = await readOk<CreateRequestResult>(res);
 
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.to).toBe("giver@example.com");
+    expect(sent[0]?.to).toBe("giver@keepsake.ing");
     expect(sent[0]?.subject).toContain("A quiet teacup");
 
     const requestRow = await env.DB.prepare("SELECT notified_at FROM requests WHERE id = ?").bind(body.id).first<{ notified_at: number | null }>();
@@ -113,11 +113,11 @@ describe("POST /api/listings/:id/requests", () => {
   it("400s when the requester's email is the giver's own (verified) email", async () => {
     const ownerId = await insertOwner();
     await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE id = ?")
-      .bind("giver@example.com", Date.now(), ownerId)
+      .bind("giver@keepsake.ing", Date.now(), ownerId)
       .run();
     const listingId = await insertApprovedListing({ ownerId });
 
-    const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, email: "giver@example.com" });
+    const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, email: "giver@keepsake.ing" });
     expect(res.status).toBe(400);
     const error = await readErr(res);
     expect(error.code).toBe("bad_request");
@@ -127,11 +127,11 @@ describe("POST /api/listings/:id/requests", () => {
   it("matches the giver's own email case-insensitively", async () => {
     const ownerId = await insertOwner();
     await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE id = ?")
-      .bind("giver@example.com", Date.now(), ownerId)
+      .bind("giver@keepsake.ing", Date.now(), ownerId)
       .run();
     const listingId = await insertApprovedListing({ ownerId });
 
-    const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, email: "GIVER@Example.com" });
+    const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, email: "GIVER@Keepsake.ING" });
     expect(res.status).toBe(400);
   });
 });

@@ -6,7 +6,7 @@ import * as React from "react";
 import { View } from "react-native";
 import { z } from "zod";
 import { NOTE_MAX, NOTE_MIN, PhoneSchema } from "@keepsake/contracts/request";
-import { EmailSchema } from "@keepsake/contracts/common";
+import { MailableEmailSchema, RESERVED_EMAIL_DOMAIN_MESSAGE } from "@keepsake/contracts/common";
 import { space } from "@keepsake/tokens/spacing";
 import { Sheet } from "@/ui/Sheet";
 import { Text } from "@/ui/Text";
@@ -60,11 +60,16 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
   }
 
   const noteValidation = NoteSchema.safeParse(note);
-  const emailValidation = EmailSchema.safeParse(email);
+  const emailValidation = MailableEmailSchema.safeParse(email);
   const phoneValidation = phone.trim() === "" ? { success: true as const } : PhoneSchema.safeParse(phone);
 
   const noteError = touched && !noteValidation.success ? noteValidation.error.issues[0]?.message : undefined;
-  const emailError = touched && !emailValidation.success ? "That doesn't look like an email address." : undefined;
+  const emailError =
+    touched && !emailValidation.success
+      ? (emailValidation.error.issues[0]?.message === RESERVED_EMAIL_DOMAIN_MESSAGE
+          ? RESERVED_EMAIL_DOMAIN_MESSAGE
+          : "That doesn't look like an email address.")
+      : undefined;
   const phoneError = touched && !phoneValidation.success ? "Digits, spaces, and a leading + only." : undefined;
 
   async function handleSubmit(): Promise<void> {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { RESERVED_EMAIL_DOMAIN_MESSAGE } from "../src/common";
 import { CreateListingInput, MODERATION_REASONS } from "../src/listing";
 
 const validPhotoIds = ["01ARZ3NDEKTSV4RRFFQ69G5FAV"];
@@ -34,6 +35,18 @@ describe("CreateListingInput", () => {
   it("rejects a story under 20 chars", () => {
     const result = CreateListingInput.safeParse(validInput({ story: "too short" }));
     expect(result.success).toBe(false);
+  });
+
+  it("accepts an optional, well-formed email", () => {
+    expect(CreateListingInput.safeParse(validInput({ email: "owner@keepsake.ing" })).success).toBe(true);
+  });
+
+  it.each(["me@example.com", "x@foo.test"])("rejects a reserved-domain email (%s) with a friendly message", (email) => {
+    const result = CreateListingInput.safeParse(validInput({ email }));
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toBe(RESERVED_EMAIL_DOMAIN_MESSAGE);
+    }
   });
 });
 

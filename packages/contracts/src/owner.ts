@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { EmailSchema, UlidSchema } from "./common";
+import { EmailSchema, MailableEmailSchema, UlidSchema } from "./common";
 
 export const OWNER_TOKEN_PREFIX = "ks_";
 
@@ -21,12 +21,12 @@ export const OwnerMe = z.object({
 export type OwnerMe = z.infer<typeof OwnerMe>;
 
 export const SetEmailInput = z.object({
-  email: EmailSchema,
+  email: MailableEmailSchema,
 });
 export type SetEmailInput = z.infer<typeof SetEmailInput>;
 
 export const RecoverInput = z.object({
-  email: EmailSchema,
+  email: MailableEmailSchema,
 });
 export type RecoverInput = z.infer<typeof RecoverInput>;
 

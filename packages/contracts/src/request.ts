@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { EmailSchema, TimestampMs, UlidSchema } from "./common";
+import { EmailSchema, MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
 
 export const NOTE_MIN = 10;
 export const NOTE_MAX = 500;
@@ -14,7 +14,7 @@ export const PhoneSchema = z
 
 export const CreateRequestInput = z.object({
   note: z.string().trim().min(NOTE_MIN).max(NOTE_MAX),
-  email: EmailSchema,
+  email: MailableEmailSchema,
   phone: PhoneSchema.optional(),
 });
 export type CreateRequestInput = z.infer<typeof CreateRequestInput>;

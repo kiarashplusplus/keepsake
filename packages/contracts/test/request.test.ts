@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { RESERVED_EMAIL_DOMAIN_MESSAGE } from "../src/common";
 import { CreateRequestInput, maskEmail, maskPhone } from "../src/request";
 
 describe("maskEmail", () => {
@@ -22,21 +23,32 @@ describe("CreateRequestInput", () => {
   it("accepts a well-formed request", () => {
     const result = CreateRequestInput.safeParse({
       note: "I would love to give this a new home.",
-      email: "friend@example.com",
+      email: "friend@keepsake.ing",
     });
     expect(result.success).toBe(true);
   });
 
   it("rejects a note under 10 chars", () => {
-    expect(CreateRequestInput.safeParse({ note: "hi", email: "friend@example.com" }).success).toBe(false);
+    expect(CreateRequestInput.safeParse({ note: "hi", email: "friend@keepsake.ing" }).success).toBe(false);
   });
 
   it("rejects a malformed phone", () => {
     const result = CreateRequestInput.safeParse({
       note: "I would love to give this a new home.",
-      email: "friend@example.com",
+      email: "friend@keepsake.ing",
       phone: "call-me-maybe",
     });
     expect(result.success).toBe(false);
+  });
+
+  it.each(["me@example.com", "x@foo.test"])("rejects a reserved-domain email (%s) with a friendly message", (email) => {
+    const result = CreateRequestInput.safeParse({
+      note: "I would love to give this a new home.",
+      email,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toBe(RESERVED_EMAIL_DOMAIN_MESSAGE);
+    }
   });
 });

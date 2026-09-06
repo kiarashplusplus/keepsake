@@ -4,7 +4,7 @@
 // who has an account.
 import * as React from "react";
 import { View } from "react-native";
-import { EmailSchema } from "@keepsake/contracts/common";
+import { MailableEmailSchema, RESERVED_EMAIL_DOMAIN_MESSAGE } from "@keepsake/contracts/common";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
 import { ReadableWidth } from "@/ui/ReadableWidth";
 import { Text } from "@/ui/Text";
@@ -27,8 +27,13 @@ export default function Recover(): React.ReactElement {
   const [phase, setPhase] = React.useState<Phase>("form");
   const [error, setError] = React.useState<string | null>(null);
 
-  const validation = EmailSchema.safeParse(email);
-  const emailError = touched && !validation.success ? "That doesn't look like an email address." : undefined;
+  const validation = MailableEmailSchema.safeParse(email);
+  const emailError =
+    touched && !validation.success
+      ? (validation.error.issues[0]?.message === RESERVED_EMAIL_DOMAIN_MESSAGE
+          ? RESERVED_EMAIL_DOMAIN_MESSAGE
+          : "That doesn't look like an email address.")
+      : undefined;
 
   async function handleSubmit(): Promise<void> {
     setTouched(true);

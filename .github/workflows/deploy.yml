@@ -79,17 +79,29 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: pnpm --filter @keepsake/api exec wrangler deploy --env ${{ env.DEPLOY_ENV }} --var COMMIT_SHA:${{ github.sha }}
 
+      # Polls rather than asking once: `wrangler deploy` returns as soon as the
+      # upload is accepted, and the new version reaches every edge a few
+      # seconds later. The first run of this workflow checked one second after
+      # upload, got the previous commit from a stale colo, and failed a deploy
+      # that had actually worked.
       - name: Verify /health reports this commit
         run: |
-          set -euo pipefail
+          set -uo pipefail
           url="${{ vars.EXPO_PUBLIC_SITE_URL }}/health"
-          body="$(curl -fsS "$url")"
-          echo "$body"
-          commit="$(echo "$body" | jq -r '.commit')"
-          if [ "$commit" != "${{ github.sha }}" ]; then
-            echo "::error::/health commit '$commit' does not match deployed sha '${{ github.sha }}'"
-            exit 1
-          fi
+          expected="${{ github.sha }}"
+          for attempt in $(seq 1 20); do
+            body="$(curl -fsS --max-time 10 "$url" || true)"
+            commit="$(echo "$body" | jq -r '.commit // empty')"
+            if [ "$commit" = "$expected" ]; then
+              echo "$body"
+              echo "matched on attempt $attempt"
+              exit 0
+            fi
+            echo "attempt $attempt: serving '${commit:-<no response>}', want '$expected'"
+            sleep 6
+          done
+          echo "::error::/health never reported '$expected' after 20 attempts (~2 min)"
+          exit 1
 
       - name: Comment preview URL
         if: github.event_name == 'pull_request'

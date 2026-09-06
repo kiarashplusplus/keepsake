@@ -39,7 +39,7 @@ test("a giver with an identity gets the email form, not the empty state", async 
 // has the same mismatch).
 test.fixme("adding an email leaves the giver in the unverified state", async ({ page, context, request }) => {
   await seedOwnerToken(context, await giverToken(request));
-  const email = `giver.${Math.random().toString(36).slice(2, 8)}@example.com`;
+  const email = `giver.${Math.random().toString(36).slice(2, 8)}@keepsake.ing`;
 
   await page.goto("/mine/email");
   await expect(page.getByText("Your email")).toBeVisible();
@@ -55,7 +55,7 @@ test("asking for a recovery link never says whether the address is known", async
   await page.goto("/recover");
   await expect(page.getByText("Get back in.")).toBeVisible();
 
-  await page.getByLabel("Email", { exact: true }).fill("someone@example.com");
+  await page.getByLabel("Email", { exact: true }).fill("someone@keepsake.ing");
   await page.getByLabel("Send the link").click();
 
   await expect(page.getByText("If we know that address, a link is on its way.")).toBeVisible();

@@ -13,7 +13,7 @@ test("a stranger asks, and the giver chooses them and gets their contact", async
     title: uniqueTitle("Enamel brooch"),
     ownerToken,
   });
-  const requesterEmail = `asker.${Math.random().toString(36).slice(2, 8)}@example.com`;
+  const requesterEmail = `asker.${Math.random().toString(36).slice(2, 8)}@keepsake.ing`;
   const note = "My mother wore one exactly like this and I would keep it going for another lifetime.";
 
   // --- The stranger: a fresh browser, no owner token, its own address ------

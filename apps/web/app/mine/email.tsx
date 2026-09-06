@@ -4,7 +4,7 @@
 // same address, which the API treats the same as a fresh save.
 import * as React from "react";
 import { View } from "react-native";
-import { EmailSchema } from "@keepsake/contracts/common";
+import { MailableEmailSchema, RESERVED_EMAIL_DOMAIN_MESSAGE } from "@keepsake/contracts/common";
 import type { OwnerMe } from "@keepsake/contracts/owner";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
 import { ReadableWidth } from "@/ui/ReadableWidth";
@@ -48,8 +48,13 @@ export default function MineEmail(): React.ReactElement {
       .catch((err: unknown) => setError(err instanceof ApiError ? err.message : "Couldn't load your account."));
   }, [hasOwnerToken]);
 
-  const validation = EmailSchema.safeParse(emailInput);
-  const emailError = touched && !validation.success ? "That doesn't look like an email address." : undefined;
+  const validation = MailableEmailSchema.safeParse(emailInput);
+  const emailError =
+    touched && !validation.success
+      ? (validation.error.issues[0]?.message === RESERVED_EMAIL_DOMAIN_MESSAGE
+          ? RESERVED_EMAIL_DOMAIN_MESSAGE
+          : "That doesn't look like an email address.")
+      : undefined;
 
   async function handleSave(): Promise<void> {
     setTouched(true);

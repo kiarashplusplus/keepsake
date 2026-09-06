@@ -59,7 +59,7 @@ function detailWithOpenRequest(): OwnerListingDetail {
         note: "I'd give this a wonderful home on my own kitchen counter.",
         created_at: Date.now() - 60_000,
         status: "open",
-        email_masked: "p•••@example.com",
+        email_masked: "p•••@keepsake.ing",
       },
     ],
     moderation: { status: "approved", held: false },
@@ -77,8 +77,8 @@ function detailWithChosenRequest(): OwnerListingDetail {
         note: base.requests[0]?.note ?? "",
         created_at: base.requests[0]?.created_at ?? 0,
         status: "chosen",
-        email_masked: "p•••@example.com",
-        email: "person@example.com",
+        email_masked: "p•••@keepsake.ing",
+        email: "person@keepsake.ing",
         phone: "+1 555 0100",
       },
     ],
@@ -110,8 +110,8 @@ describe("mine/[id] choose flow", () => {
       await flush();
     });
 
-    expect(JSON.stringify(instance.toJSON())).toContain("p•••@example.com");
-    expect(JSON.stringify(instance.toJSON())).not.toContain("person@example.com");
+    expect(JSON.stringify(instance.toJSON())).toContain("p•••@keepsake.ing");
+    expect(JSON.stringify(instance.toJSON())).not.toContain("person@keepsake.ing");
 
     const chooseButton = instance.UNSAFE_getByProps({ accessibilityLabel: "Choose" });
     await act(async () => {
@@ -125,8 +125,8 @@ describe("mine/[id] choose flow", () => {
       note: "I'd give this a wonderful home on my own kitchen counter.",
       created_at: Date.now() - 60_000,
       status: "chosen",
-      email_masked: "p•••@example.com",
-      email: "person@example.com",
+      email_masked: "p•••@keepsake.ing",
+      email: "person@keepsake.ing",
       phone: "+1 555 0100",
     });
     jest.mocked(getMyListing).mockResolvedValueOnce(detailWithChosenRequest());
@@ -138,6 +138,6 @@ describe("mine/[id] choose flow", () => {
     });
 
     expect(jest.mocked(chooseRequest)).toHaveBeenCalledWith("listing-1", { request_id: "req-1", handoff_note: "" });
-    expect(JSON.stringify(instance.toJSON())).toContain("person@example.com");
+    expect(JSON.stringify(instance.toJSON())).toContain("person@keepsake.ing");
   });
 });

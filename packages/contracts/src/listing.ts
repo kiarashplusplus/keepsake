@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { EmailSchema, TimestampMs, UlidSchema } from "./common";
+import { MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
 import { CountrySchema } from "./geo";
 import { PublicPhoto } from "./photo";
 
@@ -55,7 +55,7 @@ export const CreateListingInput = z.object({
   country: CountrySchema,
   postal_code: PostalCodeSchema,
   photo_ids: z.array(UlidSchema).min(1).max(5),
-  email: EmailSchema.optional(),
+  email: MailableEmailSchema.optional(),
 });
 export type CreateListingInput = z.infer<typeof CreateListingInput>;
 

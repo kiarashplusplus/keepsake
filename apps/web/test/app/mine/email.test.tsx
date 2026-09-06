@@ -21,7 +21,7 @@ describe("mine/email", () => {
 
   it("shows the unverified state and a Resend action", async () => {
     getOrCreateOwnerToken();
-    jest.mocked(getMe).mockResolvedValue({ id: "01OWNERAAAAAAAAAAAAAAAAAA", email: "person@example.com", email_verified: false, banned: false });
+    jest.mocked(getMe).mockResolvedValue({ id: "01OWNERAAAAAAAAAAAAAAAAAA", email: "person@keepsake.ing", email_verified: false, banned: false });
 
     const { toJSON, UNSAFE_queryAllByProps } = render(
       <ToastProvider>
@@ -39,7 +39,7 @@ describe("mine/email", () => {
 
   it("shows the verified state without a Resend action", async () => {
     getOrCreateOwnerToken();
-    jest.mocked(getMe).mockResolvedValue({ id: "01OWNERAAAAAAAAAAAAAAAAAA", email: "person@example.com", email_verified: true, banned: false });
+    jest.mocked(getMe).mockResolvedValue({ id: "01OWNERAAAAAAAAAAAAAAAAAA", email: "person@keepsake.ing", email_verified: true, banned: false });
 
     const { toJSON, UNSAFE_queryAllByProps } = render(
       <ToastProvider>

@@ -4,7 +4,7 @@
 import * as React from "react";
 import { View } from "react-native";
 import { useRouter } from "expo-router";
-import { EmailSchema } from "@keepsake/contracts/common";
+import { MailableEmailSchema, RESERVED_EMAIL_DOMAIN_MESSAGE } from "@keepsake/contracts/common";
 import { space } from "@keepsake/tokens/spacing";
 import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
@@ -19,8 +19,14 @@ export default function GiveEmail(): React.ReactElement {
   const [touched, setTouched] = React.useState(false);
 
   const trimmed = draft.email.trim();
-  const isValid = trimmed === "" || EmailSchema.safeParse(trimmed).success;
-  const error = touched && !isValid ? "That doesn't look like an email address." : undefined;
+  const validation = trimmed === "" ? null : MailableEmailSchema.safeParse(trimmed);
+  const isValid = validation === null || validation.success;
+  const error =
+    touched && validation !== null && !validation.success
+      ? (validation.error.issues[0]?.message === RESERVED_EMAIL_DOMAIN_MESSAGE
+          ? RESERVED_EMAIL_DOMAIN_MESSAGE
+          : "That doesn't look like an email address.")
+      : undefined;
 
   function goNext(): void {
     router.push("/give/review");

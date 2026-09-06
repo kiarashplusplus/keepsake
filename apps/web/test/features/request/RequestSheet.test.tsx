@@ -57,17 +57,30 @@ describe("RequestSheet", () => {
   it("shows a validation message and does not submit when the note is too short", async () => {
     const instance = render(<RequestSheet visible onClose={jest.fn()} listingId="listing-1" />);
 
-    await fillAndSubmit(instance, "too short", "person@example.com");
+    await fillAndSubmit(instance, "too short", "person@keepsake.ing");
 
     expect(jest.mocked(createRequest)).not.toHaveBeenCalled();
     expect(JSON.stringify(instance.toJSON())).toContain("At least 10 characters");
+  });
+
+  it("shows the reserved-domain message inline and does not submit", async () => {
+    const instance = render(<RequestSheet visible onClose={jest.fn()} listingId="listing-1" />);
+
+    await fillAndSubmit(
+      instance,
+      "Tell them why it should be mine, please and thank you.",
+      "me@example.com",
+    );
+
+    expect(jest.mocked(createRequest)).not.toHaveBeenCalled();
+    expect(JSON.stringify(instance.toJSON())).toContain("That address can't receive mail — try another.");
   });
 
   it("submits and shows the sent state on success", async () => {
     jest.mocked(createRequest).mockResolvedValue({ id: "req-1", created_at: Date.now() });
     const instance = render(<RequestSheet visible onClose={jest.fn()} listingId="listing-1" />);
 
-    await fillAndSubmit(instance, "Tell them why it should be mine, please and thank you.", "person@example.com");
+    await fillAndSubmit(instance, "Tell them why it should be mine, please and thank you.", "person@keepsake.ing");
 
     expect(jest.mocked(createRequest)).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(instance.toJSON())).toContain("Sent. The giver will choose in their own time.");
@@ -77,7 +90,7 @@ describe("RequestSheet", () => {
     jest.mocked(createRequest).mockRejectedValue(new ApiError("conflict", "Already asked", 409));
     const instance = render(<RequestSheet visible onClose={jest.fn()} listingId="listing-1" />);
 
-    await fillAndSubmit(instance, "Tell them why it should be mine, please and thank you.", "person@example.com");
+    await fillAndSubmit(instance, "Tell them why it should be mine, please and thank you.", "person@keepsake.ing");
 
     expect(JSON.stringify(instance.toJSON())).toContain("You've already asked for this one.");
   });

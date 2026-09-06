@@ -42,7 +42,7 @@ describe("admin routes", () => {
       setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
       const ownerId = await insertOwner();
       await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE id = ?")
-        .bind("giver@example.com", Date.now(), ownerId)
+        .bind("giver@keepsake.ing", Date.now(), ownerId)
         .run();
       const listingId = await insertApprovedListing({ ownerId, title: "Held for review" });
       await setListingStatus(listingId, "needs_review");
@@ -56,7 +56,7 @@ describe("admin routes", () => {
       const item = page.items[0];
       expect(item?.id).toBe(listingId);
       expect(item?.status).toBe("needs_review");
-      expect(item?.owner.email_masked).toBe("g•••@example.com");
+      expect(item?.owner.email_masked).toBe("g•••@keepsake.ing");
       expect(item?.owner.email_verified).toBe(true);
       expect(item?.owner.banned).toBe(false);
       expect(item?.report_count).toBe(1);
@@ -293,7 +293,7 @@ describe("admin routes", () => {
       await setListingStatus(heldId, "needs_review");
 
       await env.DB.prepare("INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at) VALUES (?, ?, ?, ?, ?, 'open', ?)")
-        .bind(ulid(), heldId, "I would love this, thank you.", "someone@example.com", "digest", Date.now())
+        .bind(ulid(), heldId, "I would love this, thank you.", "someone@keepsake.ing", "digest", Date.now())
         .run();
       await env.DB.prepare("INSERT INTO email_events (id, kind, to_hash, provider, ok, error, created_at) VALUES (?, 'new_request', 'hash', 'cf', 0, 'send_failed', ?)")
         .bind(ulid(), Date.now())

@@ -75,6 +75,41 @@ export const EmailSchema = z
   .toLowerCase()
   .pipe(z.string().email("Invalid email"));
 
+/**
+ * Domains reserved by standard (RFC 2606 / RFC 6761) precisely so they can
+ * never resolve. Mail to any of them is guaranteed to bounce — shared here
+ * so both the web form that first sees the address and the API's send-time
+ * guard (`apps/api/src/email/sendMail.ts`) refuse it for the same reason
+ * instead of keeping two lists that can drift.
+ */
+export const RESERVED_EMAIL_DOMAINS = new Set(["example.com", "example.net", "example.org", "example.edu"]);
+export const RESERVED_EMAIL_DOMAIN_SUFFIXES = [".test", ".invalid", ".localhost", ".local", ".example"];
+
+/** Reserved-by-standard domains that can never accept mail. */
+export function isReservedEmailDomain(address: string): boolean {
+  const trimmed = address.trim().toLowerCase();
+  const at = trimmed.lastIndexOf("@");
+  const domain = at === -1 ? "" : trimmed.slice(at + 1);
+  if (domain.length === 0) return true;
+  if (RESERVED_EMAIL_DOMAINS.has(domain)) return true;
+  return RESERVED_EMAIL_DOMAIN_SUFFIXES.some((suffix) => domain === suffix.slice(1) || domain.endsWith(suffix));
+}
+
+export const RESERVED_EMAIL_DOMAIN_MESSAGE = "That address can't receive mail — try another.";
+
+/**
+ * `EmailSchema` plus the reserved-domain check, for the fields that name a
+ * real person we intend to mail (a signup address, a request contact, a
+ * recovery address) rather than a value that merely needs to look like an
+ * email. `EmailSchema` itself stays permissive — `@example.com` fixtures
+ * elsewhere in the schema surface (e.g. `OwnerMe.email`, `OwnerViewRequest.email`)
+ * describe addresses the API is echoing back, not ones this layer is about
+ * to send to, and loosening those wasn't asked for.
+ */
+export const MailableEmailSchema = EmailSchema.refine((email) => !isReservedEmailDomain(email), {
+  message: RESERVED_EMAIL_DOMAIN_MESSAGE,
+});
+
 /** Unix epoch milliseconds. */
 export const TimestampMs = z.number().int().nonnegative();
 

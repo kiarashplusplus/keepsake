@@ -18,6 +18,7 @@
  * (`0004_email_events.sql`) keyed by `sha256(lowercased address)` — never
  * the raw address — so "did this actually send" is answerable from the DB.
  */
+import { isReservedEmailDomain } from "@keepsake/contracts/common";
 import type { Env } from "../env.js";
 import { emailProviderName } from "../env.js";
 import { sha256Hex } from "../lib/digest.js";
@@ -51,24 +52,15 @@ import { ulid } from "../lib/ids.js";
  * Fails closed: an unset or unrecognised `EMAIL_MODE` sends nothing.
  * Blocked attempts are still written to `email_events` (`ok = 0`) so a
  * silently-dropped notification is visible rather than mysterious.
+ *
+ * The reserved-domain list itself lives in `@keepsake/contracts/common`
+ * (`isReservedEmailDomain`) so the web form that first sees the address and
+ * this last-line-of-defence check can never drift apart.
  */
-const RESERVED_DOMAINS = new Set(["example.com", "example.net", "example.org", "example.edu"]);
-const RESERVED_SUFFIXES = [".test", ".invalid", ".localhost", ".local", ".example"];
-
 export type GuardDecision = { allowed: true } | { allowed: false; reason: string };
 
-export function domainOf(address: string): string {
-  const at = address.lastIndexOf("@");
-  return at === -1 ? "" : address.slice(at + 1).trim().toLowerCase();
-}
-
 /** Reserved-by-standard domains that can never accept mail. */
-export function isReservedDomain(address: string): boolean {
-  const domain = domainOf(address);
-  if (domain.length === 0) return true;
-  if (RESERVED_DOMAINS.has(domain)) return true;
-  return RESERVED_SUFFIXES.some((suffix) => domain === suffix.slice(1) || domain.endsWith(suffix));
-}
+export const isReservedDomain = isReservedEmailDomain;
 
 function parseAllowlist(raw: string | undefined): string[] {
   return (raw ?? "")
