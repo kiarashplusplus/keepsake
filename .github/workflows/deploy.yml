@@ -1,32 +1,42 @@
 name: Deploy
 
-# Gated by `vars.DEPLOY_ENABLED` on the whole job (see below): this workflow
-# is inert — checks out, does nothing else — until the Cloudflare resources
-# (D1/R2/KV/Worker, DNS) actually exist. Flip the repo/environment variable
-# to "true" once M0's `wrangler dev --remote` has proven the account is
-# wired up; until then, every PR and every push to main can safely trigger
-# this workflow without it trying to deploy anything.
+# Gated by `vars.DEPLOY_ENABLED` on the whole job, so the workflow is inert
+# until the account is wired up.
+#
+# Preview deploys itself on every PR and every push to main. **Production is
+# manual only** (`workflow_dispatch`): GitHub's required-reviewers gate is a
+# paid feature on private repos, so "merge to main ships to the public site"
+# would have had nothing standing in front of it. Ship production by running
+# this workflow from the Actions tab and choosing `production`.
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which tier to deploy
+        type: choice
+        options: [preview, production]
+        default: preview
+        required: true
 
 concurrency:
-  group: deploy-${{ github.event_name == 'push' && 'production' || 'preview' }}
+  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'preview' }}
   cancel-in-progress: false
 
 env:
   NODE_VERSION: 22
   # Preview is one shared Worker with its own D1/R2/KV (see wrangler.toml
   # [env.preview]); production is the keepsake.ing Worker.
-  DEPLOY_ENV: ${{ github.event_name == 'push' && 'production' || 'preview' }}
+  DEPLOY_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'preview' }}
 
 jobs:
   deploy:
-    name: deploy (${{ github.event_name == 'push' && 'production' || 'preview' }})
+    name: deploy (${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'preview' }})
     runs-on: ubuntu-latest
     if: ${{ vars.DEPLOY_ENABLED == 'true' }}
-    environment: ${{ github.event_name == 'push' && 'production' || 'preview' }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'preview' }}
     permissions:
       contents: read
       pull-requests: write
