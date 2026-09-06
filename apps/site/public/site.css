@@ -65,8 +65,14 @@
   --border: #b89d74;
   --ink: #1b1815;
   --ink-soft: #3a332b;
-  --text2: #5a524a;
-  --text3: #6c6150;
+  /* Dark enough to clear 4.5:1 on the kraft table (4.95:1), not just on paper.
+     The previous #5a524a was 4.15:1 on kraft — fine on a card, failing wherever
+     text sits straight on the table, which is where the deck and the why-grid
+     actually are. Caught by the axe check in the Playwright suite. */
+  --text2: #4e4740;
+  /* Same reasoning: 4.73:1 on kraft, was 3.29:1. Used by the footer and the
+     page-header timestamp, both directly on the table. */
+  --text3: #524a3c;
   --accent: #c4341c;
   --accent-text: #8a2113;
   --on-accent: #fbf9f4;
@@ -639,12 +645,16 @@ h2 {
 .step-number {
   font-family: "Fraunces", serif;
   font-variation-settings: "opsz" 144, "SOFT" 30, "WONK" 0;
-  font-weight: 500;
+  /* Weight, not opacity, makes these recede. They used to be `--foil-text` at
+     `opacity: 0.42`, which composites to 1.78:1 on the kraft table — under
+     even the 3:1 large-text threshold. Full-strength foil at 4.77:1 passes at
+     any size, so the numerals stay legible when the type shrinks to 32px on a
+     phone. Caught by the axe check in the Playwright suite. */
+  font-weight: 400;
   font-size: 56px;
   line-height: 1;
   letter-spacing: -0.03em;
   color: var(--foil-text);
-  opacity: 0.42;
   margin: 0;
 }
 

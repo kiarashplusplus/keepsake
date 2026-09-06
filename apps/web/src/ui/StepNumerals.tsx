@@ -30,10 +30,12 @@ export function StepNumerals({ total, current }: StepNumeralsProps): React.React
           <Text
             key={index}
             variant="label"
-            color="ink"
+            // Steps you have not reached recede by colour, not by opacity:
+            // ink at 40% composites to 2.4:1 on the card, which axe flagged.
+            // `textTertiary` is a real token, verified at 4.5:1 on both papers.
+            color={ahead ? "textTertiary" : "ink"}
             style={{
               fontSize: 12,
-              opacity: ahead ? 0.4 : 1,
               paddingBottom: 2,
               borderBottomWidth: active ? 2 : 0,
               borderBottomColor: colors.accent,

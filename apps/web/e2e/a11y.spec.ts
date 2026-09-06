@@ -5,10 +5,10 @@
  * structure over a react-native-web tree, for one) produce noise this app
  * can't meaningfully act on yet.
  *
- * Three real findings are excluded below, each narrowly and each named. They
- * are genuine bugs, not test noise; every exclusion is a rule id or a CSS
- * selector, never a blanket "ignore this page", so a *new* violation of the
- * same kind anywhere else still fails this suite.
+ * The three findings this suite originally reported (an empty document title
+ * on every SPA route, the faded step numerals, and three text colours on the
+ * marketing page) have since been fixed, so nothing is excluded any more and
+ * a regression in any of them fails here.
  */
 import { AxeBuilder } from "@axe-core/playwright";
 import { test, expect } from "./support/fixtures";
@@ -26,16 +26,7 @@ test.use({ reducedMotion: "reduce" });
 
 const BLOCKING_IMPACTS = new Set(["serious", "critical"]);
 
-/**
- * `expo export` writes an empty `<title data-rh="true"></title>` (react-helmet's
- * placeholder, since no route sets one) *ahead of* the shell's own
- * `<title>Keepsake</title>` from `app/+html.tsx`, and the first title element
- * in `<head>` is the one that counts — so every SPA route hydrates with an
- * empty document title. `/item/:id` is the exception, because the Worker's
- * HTMLRewriter removes every `<title>` before appending the listing's own.
- * The fix belongs in `app/_layout.tsx`/`app/+html.tsx`, outside this change.
- */
-const EMPTY_DOCUMENT_TITLE = "document-title";
+
 
 async function blockingViolations(page: Page, build: (b: AxeBuilder) => AxeBuilder = (b) => b): Promise<string[]> {
   const results = await build(new AxeBuilder({ page })).analyze();
@@ -52,7 +43,7 @@ test("the feed has no serious or critical accessibility violations", async ({ pa
   await page.goto("/");
   await expect(page.getByLabel("Search")).toBeVisible();
 
-  expect(await blockingViolations(page, (b) => b.disableRules([EMPTY_DOCUMENT_TITLE]))).toEqual([]);
+  expect(await blockingViolations(page)).toEqual([]);
 });
 
 test("an item page has no serious or critical accessibility violations", async ({ page, request }) => {
@@ -70,17 +61,7 @@ test("the give flow has no serious or critical accessibility violations", async 
   await page.goto("/give");
   await expect(page.getByText("Show us the keepsake.")).toBeVisible();
 
-  const violations = await blockingViolations(page, (b) =>
-    b
-      .disableRules([EMPTY_DOCUMENT_TITLE])
-      // `src/ui/StepNumerals.tsx` fades the steps still ahead to `opacity:
-      // 0.4` on ink, which lands under 4.5:1 for 12px type. The numerals are
-      // decorative — the enclosing `progressbar` already carries "Step 1 of
-      // 5" as its accessible name — but the honest fix is a colour decision,
-      // not a label, so it is reported rather than made here.
-      .exclude('[aria-label^="Step "]'),
-  );
-  expect(violations).toEqual([]);
+  expect(await blockingViolations(page)).toEqual([]);
 });
 
 test("the about page has no serious or critical accessibility violations", async ({ page }) => {
@@ -90,11 +71,5 @@ test("the about page has no serious or critical accessibility violations", async
   await page.goto("/about");
   await expect(page.locator("h1")).toBeVisible();
 
-  const violations = await blockingViolations(page, (b) =>
-    // Three text colours in `apps/site/public/site.css` fail 4.5:1: the lead
-    // `.deck` paragraph, the numbered `.step-number` glyphs, and the
-    // `.why-grid` body copy. `apps/site` is outside this change's scope.
-    b.exclude(".deck").exclude(".step-number").exclude(".why-grid p"),
-  );
-  expect(violations).toEqual([]);
+  expect(await blockingViolations(page)).toEqual([]);
 });
