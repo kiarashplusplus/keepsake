@@ -30,11 +30,11 @@ describe("POST /api/me/email + GET /api/me/email/verify", () => {
     const res = await SELF.fetch("http://x/api/me/email", {
       method: "POST",
       headers: { ...authHeaders(token), "Content-Type": "application/json" },
-      body: JSON.stringify({ email: "owner@example.com" }),
+      body: JSON.stringify({ email: "owner@keepsake.ing" }),
     });
     expect(res.status).toBe(200);
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.to).toBe("owner@example.com");
+    expect(sent[0]?.to).toBe("owner@keepsake.ing");
 
     const link = sent[0]?.text.match(/https?:\/\/\S+/)?.[0];
     expect(link).toBeTruthy();
@@ -86,12 +86,12 @@ describe("POST /api/me/email + GET /api/me/email/verify", () => {
         country: "US",
         postal_code: "02144",
         photo_ids: [photo.id],
-        email: "on-create@example.com",
+        email: "on-create@keepsake.ing",
       }),
     });
     expect(res.status).toBe(201);
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.to).toBe("on-create@example.com");
+    expect(sent[0]?.to).toBe("on-create@keepsake.ing");
     expect(sent[0]?.subject).toBe("Confirm your email — Keepsake");
 
     const link = sent[0]?.text.match(/https?:\/\/\S+/)?.[0];
@@ -107,7 +107,7 @@ describe("POST /api/recover + POST /api/recover/:token", () => {
     const res = await SELF.fetch("http://x/api/recover", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: "nobody-here@example.com" }),
+      body: JSON.stringify({ email: "nobody-here@keepsake.ing" }),
     });
     expect(res.status).toBe(200);
     const body = await readOk<{ sent: boolean }>(res);
@@ -120,13 +120,13 @@ describe("POST /api/recover + POST /api/recover/:token", () => {
     await registerOwner(oldToken);
     const now = Date.now();
     await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE token_hash = ?")
-      .bind("recover-me@example.com", now, await sha256Hex(oldToken))
+      .bind("recover-me@keepsake.ing", now, await sha256Hex(oldToken))
       .run();
 
     const recoverRes = await SELF.fetch("http://x/api/recover", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: "recover-me@example.com" }),
+      body: JSON.stringify({ email: "recover-me@keepsake.ing" }),
     });
     expect(recoverRes.status).toBe(200);
     expect(sent).toHaveLength(1);
@@ -157,8 +157,8 @@ describe("POST /api/recover + POST /api/recover/:token", () => {
 
 // ---------------------------------------------------------------------------
 // Recipient guard. Cloudflare scores the sending domain on bounce rate (safe
-// under 2%), and this repo carries 80 `@example.com` fixtures, so the guard is
-// the thing that keeps a stray test run from burning keepsake.ing.
+// under 2%), and this repo carries plenty of `@keepsake.ing` test fixtures, so
+// the guard is the thing that keeps a stray test run from burning keepsake.ing.
 // ---------------------------------------------------------------------------
 describe("guardRecipient", () => {
   const env = (mode: string, allowlist = "") =>
@@ -238,5 +238,37 @@ describe("owner identity responses conform to OwnerMe", () => {
     const delBody = OwnerMe.safeParse((await del.json<{ data: unknown }>()).data);
     expect(delBody.success, JSON.stringify(delBody.error?.issues)).toBe(true);
     expect(delBody.data?.email).toBeUndefined();
+  });
+});
+
+describe("re-submitting an already verified address", () => {
+  it("stays verified and sends nothing", async () => {
+    const mail = installFakeEmail();
+    try {
+      const token = freshOwnerToken();
+      await uploadPhoto({ token });
+      const auth = authHeaders(token);
+      const body = (email: string) => ({
+        method: "POST",
+        headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+
+      await SELF.fetch("https://x/api/me/email", body("owner@keepsake.ing"));
+      const tokenHash = await sha256Hex(token);
+      await env.DB.prepare("UPDATE owners SET email_verified_at = ? WHERE token_hash = ?")
+        .bind(Date.now(), tokenHash)
+        .run();
+
+      const sentBefore = mail.length;
+      const again = await SELF.fetch("https://x/api/me/email", body("owner@keepsake.ing"));
+      const parsed = OwnerMe.safeParse((await again.json<{ data: unknown }>()).data);
+
+      expect(parsed.success).toBe(true);
+      expect(parsed.data?.email_verified, "must not drop back to unverified").toBe(true);
+      expect(mail.length, "must not send a second verification").toBe(sentBefore);
+    } finally {
+      removeFakeEmail();
+    }
   });
 });

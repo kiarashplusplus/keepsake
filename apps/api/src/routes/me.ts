@@ -183,6 +183,14 @@ meRoutes.post("/email", ownerAuth(), turnstile(), burst("RL_EMAIL"), validateBod
   const input = c.get("validatedBody") as import("@keepsake/contracts/owner").SetEmailInput;
   const now = Date.now();
 
+  // Re-submitting the address you already confirmed is a no-op, not a reset.
+  // Otherwise a double-tap on "Save", or re-opening the form and pressing it
+  // again, silently drops you back to unverified and mails you another link —
+  // which is exactly what happened during preview testing.
+  if (owner.email === input.email && owner.email_verified_at !== null) {
+    return ok(c, ownerMe(owner));
+  }
+
   await c.env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = NULL WHERE id = ?").bind(input.email, owner.id).run();
 
   const rawToken = randomTokenRaw();
