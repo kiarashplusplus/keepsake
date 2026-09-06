@@ -30,14 +30,11 @@ test("a giver with an identity gets the email form, not the empty state", async 
   await expect(page.getByText("Nothing to show yet")).toBeHidden();
 });
 
-// FIXME: `POST /api/me/email` answers `{ email, email_verified }`, but
-// `src/api/me.ts` parses that with `OwnerMe` (which also requires `id` and
-// `banned`) — so the zod parse throws, the catch shows "That didn't go
-// through. Try again.", and the unverified state never renders even though
-// the address was saved and the verify mail sent. Un-fixme once the route
-// returns a full `OwnerMe` (`DELETE /api/me/email`, which returns `{ id }`,
-// has the same mismatch).
-test.fixme("adding an email leaves the giver in the unverified state", async ({ page, context, request }) => {
+// This was disabled while `POST /api/me/email` answered with an ad-hoc shape
+// that `OwnerMe` could not parse, so saving an address showed "That didn't go
+// through" even though it had worked. Both that route and `DELETE` now go
+// through one `ownerMe()` builder, so the real behaviour is asserted here.
+test("adding an email leaves the giver in the unverified state", async ({ page, context, request }) => {
   await seedOwnerToken(context, await giverToken(request));
   const email = `giver.${Math.random().toString(36).slice(2, 8)}@keepsake.ing`;
 

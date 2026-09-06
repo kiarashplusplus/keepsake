@@ -43,9 +43,9 @@ condensed to what actually earns its keep on a solo-agent-driven repo:
 | M0 Scaffold | `[DONE]` | Repo + pnpm workspaces, tokens (with contrast test), contracts `/common`, observability, api `/health` + assets serving, web `_layout`/`+html`/theme/fonts/PaperGrain/placeholder feed, preflight, `ci.yml`, `deploy.yml` to preview. |
 | M1 Give + moderation | `[DONE]` | Migrations 0001–0003, geodata seed loaded on preview, owner token middleware, photo upload, create listing, moderation pipeline + cron retry + budgets, web give flow (5 steps), breathing seal, reviewing states, read-only dashboard. |
 | M2 Browse + share | `[DONE]` | Feed (keyset/category/FTS/geo), item page, `/i/:id/:variant` edge cache, `/item/:id` OG injection, masonry feed, location bar, share, `+not-found`. |
-| M3 Requests, email, recovery | `[QA]` | Turnstile, requests, giver email add/verify, `sendMail()` (cf + resend fallback), choose flow + contact reveal, given/withdraw/relist/edit/delete, recovery. |
-| M4 Trust and operations | `[IN PROGRESS]` | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Sentry both sides, Web Analytics, version skew guard, Playwright in CI, runbooks. |
-| M5 Polish and launch | `[BLOCKED]` | About/Privacy/Terms, empty states, motion + reduce-motion pass, keyboard/focus audit, robots/sitemap, cache-header audit, production secrets, `keepsake.ing` cutover. |
+| M3 Requests, email, recovery | `[DONE]` | Turnstile, requests, giver email add/verify, `sendMail()` (cf + resend fallback), choose flow + contact reveal, given/withdraw/relist/edit/delete, recovery. |
+| M4 Trust and operations | `[DONE]` | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Sentry both sides, Web Analytics, version skew guard, Playwright in CI, runbooks. |
+| M5 Polish and launch | `[IN PROGRESS]` | About/Privacy/Terms, empty states, motion + reduce-motion pass, keyboard/focus audit, robots/sitemap, cache-header audit, production secrets, `keepsake.ing` cutover. |
 
 Definition of done per milestone lives with the plan (`M0`–`M5` DoD bullets); the short version:
 
@@ -99,22 +99,24 @@ Runbooks: [deploy](../runbooks/deploy.md) · [incident](../runbooks/incident.md)
 
 Cross-platform notes: [platform-differences.md](../platform-differences.md).
 
-## Status notes (2026-09-06)
+## Status notes (2026-09-06, end of day)
 
-Preview runs the whole product at <https://keepsake-preview.leapkg.workers.dev>: give → real Workers AI
-moderation → feed → item page with OG unfurl → requests → choose → admin queue. Verified against the
-live stack, not just tests.
+M0–M4 are done and verified against the live stack, not just against tests, at
+<https://preview.keepsake.ing>: give → real Workers AI moderation → feed with search and
+postcode radius → item page with a working link unfurl → request → choose → admin queue, plus
+bans and the nightly sweep. Email sending is proven end to end (delivered, clicked, verified,
+token consumed once). Turnstile is enforcing. Deploys are continuous, and the browser suite
+runs on a GitHub runner (38 passing, nothing skipped).
 
-- **M3 is `[QA]`, not done**: every code path ships and is tested, but no email has actually been
-  delivered. Preview logs `send_failed: could not find domain config of sending domain` because
-  `keepsake.ing` is not onboarded to Cloudflare Email Service yet. Verify + recovery links cannot be
-  exercised end to end until then.
-- **M4 is `[IN PROGRESS]`**: admin API, admin page, bans, orphan sweep and Sentry are in; the
-  Playwright suite and its CI job are the remaining piece.
-- **M5 is `[BLOCKED]`** on account-side work only Kiarash can do (Email Service onboarding, Turnstile
-  widget + secret, DNS for `preview.keepsake.ing` and the apex, GitHub Environment secrets/vars).
-  See `docs/runbooks/deploy.md`. Turnstile currently soft-passes on preview, which is fine there and
-  must not be true in production.
+**M5 remaining**: a keyboard and focus pass, an LCP/font-weight look, and the production
+cutover (migrate + seed the production database, set its secrets, deploy, attach the apex
+domain — the last step needs Kiarash).
+
+Five things looked green today while protecting nothing: the vision prompt was copying a
+pre-filled example instead of classifying, Llama Guard's self-harm category fell through
+unhandled, the Metro cache shipped an empty Turnstile site key, three axe exclusions made real
+contrast bugs unfailable, and the e2e job had never once executed. Each is fixed and each now
+has something that fails on regression. When adding a check here, confirm it can fail.
 
 The identity is **v3 "Polaroids on a table"** (`design-system.md`); v1 and v2 were rejected as
 generic. Do not drift back toward cream-and-serif cards.
