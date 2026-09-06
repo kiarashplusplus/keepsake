@@ -10,6 +10,7 @@ import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Input } from "@/ui/Input";
 import { Button } from "@/ui/Button";
+import { Card } from "@/ui/Surface";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 
 export default function GiveEmail(): React.ReactElement {
@@ -37,7 +38,7 @@ export default function GiveEmail(): React.ReactElement {
   }
 
   return (
-    <View style={{ gap: space.xl }}>
+    <Card style={{ gap: space.xl }}>
       <View style={{ gap: space.sm }}>
         <Eyebrow>A way back</Eyebrow>
         <Text variant="displayLg">Want a way back?</Text>
@@ -62,6 +63,6 @@ export default function GiveEmail(): React.ReactElement {
         <Button label="Continue" onPress={handleContinue} />
         <Button label="Skip" variant="link" onPress={handleSkip} />
       </View>
-    </View>
+    </Card>
   );
 }

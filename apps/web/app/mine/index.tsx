@@ -1,26 +1,28 @@
 // Dashboard: every listing this device's owner token has ever created,
 // grouped into Reviewing / Live / Needs attention / Given / Withdrawn.
 import * as React from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, View } from "react-native";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import { Image as ExpoImage } from "expo-image";
+import { motion } from "@keepsake/tokens/motion";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
-import { radii } from "@keepsake/tokens/radii";
 import { MODERATION_REASONS, type ListingStatus, type OwnerListing } from "@keepsake/contracts/listing";
 import { ReadableWidth } from "@/ui/ReadableWidth";
 import { EmptyState } from "@/ui/EmptyState";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
-import { TagCard } from "@/ui/TagCard";
-import { DeckleRule } from "@/ui/DeckleRule";
+import { Print } from "@/ui/Print";
+import { Card } from "@/ui/Surface";
+import { PencilRule } from "@/ui/PencilRule";
 import { Text, type TextColor } from "@/ui/Text";
 import { Skeleton } from "@/ui/Skeleton";
-import { Seal } from "@/ui/Seal";
+import { Stamp } from "@/ui/Stamp";
 import { useColors } from "@/ui/theme";
 import { useToast } from "@/ui/Toast";
 import { getOwnerToken } from "@/lib/ownerToken";
 import { getMyListings } from "@/api/me";
 import { ApiError } from "@/api/client";
+import { tiltDegForId } from "@/lib/masonry";
 import { LISTING_GROUP_LABELS, LISTING_GROUP_ORDER, groupListings } from "@/features/mine/groupListings";
 
 /** The `/mine?verified=1|0&reason=` toast the email-verify link redirects
@@ -59,17 +61,22 @@ const STATUS_LABELS: Record<ListingStatus, { label: string; color: TextColor }> 
   hidden: { label: "Hidden", color: "dangerText" },
 };
 
-function ListingRow({ listing, index }: { listing: OwnerListing; index: number }): React.ReactElement {
+function ListingRow({ listing }: { listing: OwnerListing }): React.ReactElement {
   const colors = useColors();
   const cover = listing.photos[0];
   const canShowFull = listing.status === "approved" || listing.status === "given";
   const status = STATUS_LABELS[listing.status];
+  const tiltDeg = tiltDegForId(listing.id, motion.tiltRangeDeg / 2);
 
   return (
     <Link href={{ pathname: "/mine/[id]", params: { id: listing.id } }} asChild>
       <Pressable accessibilityRole="button" accessibilityLabel={`Open ${listing.title}`}>
-        <TagCard interactive tilt={index % 2 === 0 ? 1 : -1} style={{ flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.md, paddingRight: space.lg, paddingLeft: space.xxxl }}>
-          <View style={{ width: 64, height: 64, borderRadius: radii.sm, overflow: "hidden", backgroundColor: colors.surfaceSunken }}>
+        <Print
+          interactive
+          tiltDeg={tiltDeg}
+          style={{ flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md }}
+        >
+          <View style={{ width: 64, height: 64, overflow: "hidden", backgroundColor: colors.tableEdge }}>
             <ExpoImage
               source={canShowFull && cover !== undefined ? `/i/${cover.id}/thumb` : null}
               placeholder={cover !== undefined ? { blurhash: cover.blurhash } : null}
@@ -91,10 +98,10 @@ function ListingRow({ listing, index }: { listing: OwnerListing; index: number }
               </Text>
             ) : null}
           </View>
-          <Text variant="eyebrow" color={status.color} style={{ fontSize: 11, lineHeight: 14 }}>
+          <Text variant="label" color={status.color} style={{ fontSize: 10 }}>
             {status.label}
           </Text>
-        </TagCard>
+        </Print>
       </Pressable>
     </Link>
   );
@@ -127,7 +134,7 @@ export default function Mine(): React.ReactElement {
     return (
       <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
         <EmptyState
-          ornament={<Seal state="idle" />}
+          ornament={<Stamp state="idle" label="Mine" />}
           eyebrow="Mine"
           title="You haven't given anything yet."
           line="Once you give something, it'll show up here so you can follow along."
@@ -157,9 +164,9 @@ export default function Mine(): React.ReactElement {
   if (listings === null) {
     return (
       <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal, gap: space.md }}>
-        <Skeleton height={88} style={{ borderRadius: radii.tag }} />
-        <Skeleton height={88} style={{ borderRadius: radii.tag }} />
-        <Skeleton height={88} style={{ borderRadius: radii.tag }} />
+        <Skeleton height={88} />
+        <Skeleton height={88} />
+        <Skeleton height={88} />
       </ReadableWidth>
     );
   }
@@ -168,7 +175,7 @@ export default function Mine(): React.ReactElement {
     return (
       <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
         <EmptyState
-          ornament={<Seal state="idle" />}
+          ornament={<Stamp state="idle" label="Mine" />}
           eyebrow="Mine"
           title="You haven't given anything yet."
           line="Once you give something, it'll show up here so you can follow along."
@@ -186,28 +193,30 @@ export default function Mine(): React.ReactElement {
 
   return (
     <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
-      <View style={{ flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: space.md }}>
-        <View style={{ gap: space.sm }}>
-          <Eyebrow tick>Your keepsakes</Eyebrow>
-          <Text variant="displayLg">Mine</Text>
+      <Card style={{ gap: sectionRhythm.tight, transform: [{ rotate: "0.2deg" }] }}>
+        <View style={{ flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: space.md }}>
+          <View style={{ gap: space.sm }}>
+            <Eyebrow tick>Your keepsakes</Eyebrow>
+            <Text variant="displayLg">Mine</Text>
+          </View>
+          <Link href="/mine/email" asChild>
+            <Button label="Email" variant="link" arrow={false} />
+          </Link>
         </View>
-        <Link href="/mine/email" asChild>
-          <Button label="Email" variant="link" arrow={false} />
-        </Link>
-      </View>
-      <DeckleRule style={{ marginTop: sectionRhythm.tight, marginBottom: sectionRhythm.tight }} />
-      <View style={{ gap: sectionRhythm.normal }}>
+        <PencilRule />
+      </Card>
+      <View style={{ gap: sectionRhythm.normal, marginTop: sectionRhythm.tight }}>
         {LISTING_GROUP_ORDER.map((key) => {
           const group = groups[key];
           if (group.length === 0) return null;
           return (
             <View key={key} style={{ gap: space.lg }}>
-              <View style={{ paddingBottom: space.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.rule }}>
+              <View style={{ paddingBottom: space.sm, borderBottomWidth: 2, borderBottomColor: colors.ink }}>
                 <Eyebrow>{LISTING_GROUP_LABELS[key]}</Eyebrow>
               </View>
               <View style={{ gap: space.lg }}>
-                {group.map((listing, index) => (
-                  <ListingRow key={listing.id} listing={listing} index={index} />
+                {group.map((listing) => (
+                  <ListingRow key={listing.id} listing={listing} />
                 ))}
               </View>
             </View>

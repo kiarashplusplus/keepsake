@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Keepsake default Open Graph image, source of truth (v2 identity, 2026-09-05).
+  Keepsake default Open Graph image, source of truth (v3 identity,
+  "Polaroids on a table", 2026-09-06).
 
   Rendered to ../public/og-default.png at 1200x630 with resvg-js-cli
-  (fonts passed via font file flags, see apps/site/README.md), falling back
-  to qlmanage or Chrome headless against an HTML wrapper if unavailable.
+  (fonts passed via font file flags, see apps/site/README.md).
 
-  Colors are the packages/tokens/src/colors.ts light-mode v2 values:
-  bg #F6EFE1, ink #241C12, accent (terracotta) #AB4726, foil (gold) #B8862E,
-  accent2 (bottle green) #1E4D3F, onFoil #241C12, textSecondary #5C4F3B.
+  Colors are the packages/tokens/src/colors.ts values — table kraft
+  #D2BC97, print #FBF9F4, ink #1B1815, pencil #5A524A, stamp red #C4341C /
+  stampText #8A2113, tape rgba(255,236,160,.55).
 -->
 <svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -26,95 +26,58 @@
         font-style: normal;
       }
       @font-face {
-        font-family: "Inter";
-        src: url("file:///tmp/keepsake-fonts/inter/InterVariable.ttf");
-        font-weight: 100 900;
+        font-family: "Courier Prime";
+        src: url("file:///tmp/keepsake-fonts/CourierPrime-Bold.ttf");
+        font-weight: 700;
         font-style: normal;
       }
     </style>
+    <filter id="fibre" x="-20%" y="-20%" width="140%" height="140%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.012 0.9" numOctaves="2" seed="7" stitchTiles="stitch" result="noise" />
+      <feColorMatrix in="noise" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.06 0" />
+    </filter>
   </defs>
 
-  <!-- ground: deep paper cream -->
-  <rect width="1200" height="630" fill="#F6EFE1" />
+  <!-- the table: kraft, with a faint fibre texture and a darker edge -->
+  <rect width="1200" height="630" fill="#D2BC97" />
+  <rect width="1200" height="630" fill="#B89D74" filter="url(#fibre)" />
 
-  <!-- a torn/deckled band of a deeper parchment along the bottom, like a card stock swatch -->
-  <path d="M0 520 L60 512 L130 524 L200 514 L270 522 L340 510 L410 520 L480 512 L550 522
-           L620 514 L690 522 L760 512 L830 520 L900 512 L970 522 L1040 512 L1110 522 L1200 514
-           L1200 630 L0 630 Z" fill="#ECE0C8" />
-
-  <!-- bottle-green rule under the wordmark -->
-  <rect x="122" y="284" width="220" height="3" fill="#1E4D3F" />
-
-  <!-- wax seal, upper right: foil ring + terracotta disc + pressed mark -->
-  <circle cx="1046" cy="140" r="86" fill="none" stroke="#B8862E" stroke-width="2" opacity="0.55" />
-  <circle cx="1046" cy="140" r="62" fill="#AB4726" />
-  <circle cx="1046" cy="140" r="62" fill="none" stroke="#8C3A1E" stroke-width="2" />
-  <text x="1046" y="156" font-family="Fraunces" font-style="italic" font-weight="600"
-        font-variation-settings="'opsz' 144, 'SOFT' 100, 'WONK' 1"
-        font-size="52" fill="#FFF7EC" text-anchor="middle">K</text>
-
-  <!-- small fleuron ornament (hedera leaf: three lobes + stem) -->
-  <g transform="translate(140,238) scale(0.85)">
-    <path d="M0,-6 C -6,-20 -26,-20 -30,-4 C -33,8 -20,18 -4,14 C -14,20 -14,32 0,32
-             C 14,32 14,20 4,14 C 20,18 33,8 30,-4 C 26,-20 6,-20 0,-6 Z"
-          fill="none" stroke="#7A5710" stroke-width="2.5" stroke-linejoin="round" />
-    <line x1="0" y1="14" x2="0" y2="-6" stroke="#7A5710" stroke-width="2" />
+  <!-- a second, smaller print peeking out from behind, taped and tilted -->
+  <g transform="translate(838,150) rotate(6)">
+    <rect x="-190" y="-140" width="380" height="330" fill="#FBF9F4" />
+    <rect x="-175" y="-125" width="350" height="255" fill="#B89D74" />
   </g>
 
-  <!-- wordmark -->
-  <text
-    x="120"
-    y="200"
-    font-family="Fraunces"
-    font-style="italic"
-    font-weight="600"
-    font-variation-settings="'opsz' 144, 'SOFT' 100, 'WONK' 1"
-    font-size="96"
-    fill="#241C12"
-  >Keepsake</text>
+  <!-- the front print: wordmark + headline written on its frame -->
+  <g transform="translate(600,315) rotate(-1.6)">
+    <rect x="-490" y="-255" width="980" height="510" fill="#FBF9F4" />
+    <rect x="-490" y="-255" width="980" height="510" fill="none" stroke="rgba(0,0,0,0.08)" stroke-width="2" />
 
-  <!-- headline, dense + tight -->
-  <text
-    x="120"
-    y="380"
-    font-family="Fraunces"
-    font-weight="600"
-    font-variation-settings="'opsz' 100, 'SOFT' 30, 'WONK' 1"
-    font-size="46"
-    letter-spacing="-1"
-    fill="#241C12"
-  >Give a keepsake</text>
-  <text
-    x="120"
-    y="436"
-    font-family="Fraunces"
-    font-weight="600"
-    font-variation-settings="'opsz' 100, 'SOFT' 30, 'WONK' 1"
-    font-size="46"
-    letter-spacing="-1"
-    fill="#241C12"
-  >a second life.</text>
+    <!-- tape corners -->
+    <rect x="-470" y="-275" width="90" height="40" fill="rgba(255,236,160,0.65)" transform="rotate(-14 -425 -255)" />
+    <rect x="380" y="-275" width="90" height="40" fill="rgba(255,236,160,0.65)" transform="rotate(11 425 -255)" />
 
-  <!-- deck line -->
-  <text
-    x="122"
-    y="486"
-    font-family="Fraunces"
-    font-style="italic"
-    font-variation-settings="'opsz' 9, 'SOFT' 20, 'WONK' 1"
-    font-size="24"
-    fill="#5C4F3B"
-  >No accounts. No money. Just the story, and someone who'll love it.</text>
+    <!-- wordmark -->
+    <text x="-450" y="-150" font-family="Fraunces" font-style="italic" font-weight="600"
+          font-variation-settings="'opsz' 144, 'SOFT' 60, 'WONK' 1" font-size="88" fill="#1B1815">Keepsake</text>
 
-  <!-- footer line -->
-  <text
-    x="122"
-    y="578"
-    font-family="Inter"
-    font-weight="600"
-    font-variation-settings="'wght' 600"
-    font-size="20"
-    letter-spacing="2"
-    fill="#7A5710"
-  >KEEPSAKE.ING</text>
+    <!-- headline -->
+    <text x="-452" y="-40" font-family="Fraunces" font-weight="600"
+          font-variation-settings="'opsz' 144, 'SOFT' 20, 'WONK' 1" font-size="58" letter-spacing="-1.6" fill="#1B1815">Give a keepsake</text>
+    <text x="-452" y="30" font-family="Fraunces" font-weight="600"
+          font-variation-settings="'opsz' 144, 'SOFT' 20, 'WONK' 1" font-size="58" letter-spacing="-1.6" fill="#1B1815">a second life.</text>
+
+    <!-- deck line -->
+    <text x="-450" y="90" font-family="Fraunces" font-style="italic"
+          font-variation-settings="'opsz' 12, 'SOFT' 20, 'WONK' 1" font-size="26" fill="#5A524A">No accounts. No money. Just the story, and someone who'll love it.</text>
+
+    <!-- the rubber stamp -->
+    <g transform="translate(300,160) rotate(-7)">
+      <rect x="-110" y="-34" width="220" height="70" fill="none" stroke="#C4341C" stroke-width="5" />
+      <text x="0" y="14" font-family="Courier Prime" font-weight="700" font-size="30" letter-spacing="6" fill="#8A2113" text-anchor="middle">NEW</text>
+    </g>
+
+    <!-- footer line, typewritten -->
+    <text x="-450" y="215" font-family="Courier Prime" font-weight="700" font-size="20" letter-spacing="3" fill="#5C4726">KEEPSAKE.ING</text>
+  </g>
 </svg>

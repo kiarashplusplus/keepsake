@@ -15,11 +15,11 @@ export type InputProps = Omit<TextInputProps, "style"> & {
 
 const MIN_HEIGHT = 44;
 
-/** Single-line text field: serif eyebrow label, helper/error line, and an
- * optional live character counter. 44px minimum height, a hairline `rule`
- * border that thickens to the `focus` colour when focused (the browser's
- * own focus ring is suppressed here because the border IS the ring), and
- * the error colour takes over the border when present. */
+/** A single-line field styled as a lined index card: kraft-tinted paper,
+ * mono type (this is the one place the product allows a typewritten field
+ * instead of a stamp/label), and a 2px ink baseline instead of a boxed
+ * border — the baseline thickens and turns stamp-red when focused (the
+ * baseline IS the focus ring), and the error colour takes it over. */
 export function Input({ label, helper, error, maxLength, value, style, onFocus, onBlur, ...rest }: InputProps): React.ReactElement {
   const colors = useColors();
   const border = useContainerBorder();
@@ -62,11 +62,11 @@ export function Input({ label, helper, error, maxLength, value, style, onFocus, 
           borderRadius: radii.tag,
           backgroundColor: colors.surface,
           color: colors.ink,
-          fontFamily: "Inter",
-          fontSize: 16,
-          borderWidth: focused ? 2 : border.borderWidth,
-          borderColor: error !== undefined ? colors.danger : focused ? colors.focus : border.borderColor,
-          // The border above is the focus ring; drop the browser's own outline (web-only CSS).
+          fontFamily: "CourierPrime",
+          fontSize: 15,
+          borderBottomWidth: focused ? 3 : border.borderBottomWidth,
+          borderBottomColor: error !== undefined ? colors.danger : focused ? colors.focus : border.borderBottomColor,
+          // The baseline above is the focus ring; drop the browser's own outline (web-only CSS).
           ...({ outlineStyle: "none" } as unknown as TextStyle),
         }}
         {...rest}

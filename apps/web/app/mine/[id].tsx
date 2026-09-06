@@ -2,21 +2,23 @@
 // actions (Edit, Mark given, Withdraw/Relist, Delete). Requests are M3 —
 // this always shows the "share the link" empty state for now.
 import * as React from "react";
-import { StyleSheet, View } from "react-native";
+import { View } from "react-native";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import { Image as ExpoImage } from "expo-image";
+import { motion } from "@keepsake/tokens/motion";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
-import { radii } from "@keepsake/tokens/radii";
 import { MODERATION_REASONS, type ListingStatus } from "@keepsake/contracts/listing";
 import { ReadableWidth } from "@/ui/ReadableWidth";
 import { Text, type TextColor } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
-import { TagCard } from "@/ui/TagCard";
+import { Print } from "@/ui/Print";
+import { Card } from "@/ui/Surface";
 import { Sheet } from "@/ui/Sheet";
 import { Skeleton } from "@/ui/Skeleton";
 import { EmptyState } from "@/ui/EmptyState";
 import { useColors } from "@/ui/theme";
+import { tiltDegForId } from "@/lib/masonry";
 import { chooseRequest, getMyListing, type OwnerListingDetail } from "@/api/me";
 import { deleteListing, markGiven, relistListing, withdrawListing } from "@/api/listings";
 import { ApiError } from "@/api/client";
@@ -105,31 +107,28 @@ export default function MineDetail(): React.ReactElement {
   if (listing === null) {
     return (
       <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal, gap: space.md }}>
-        <Skeleton height={200} style={{ borderRadius: radii.tag }} />
-        <Skeleton height={80} style={{ borderRadius: radii.tag }} />
+        <Skeleton height={200} />
+        <Skeleton height={80} />
       </ReadableWidth>
     );
   }
 
   const canShowFull = listing.status === "approved" || listing.status === "given";
   const status = STATUS_LABELS[listing.status];
-  const rule = { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.rule, paddingBottom: space.sm };
+  const rule = { borderBottomWidth: 2, borderBottomColor: colors.ink, paddingBottom: space.sm };
 
   return (
     <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
-      {/* Photos as small tags, alternating lean. */}
+      {/* Photos as small prints, each leaning its own deterministic way. */}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.lg, paddingTop: space.sm }}>
-        {listing.photos.map((photo, index) => (
-          <TagCard key={photo.id} tilt={index % 2 === 0 ? 1 : -1} style={{ width: THUMB, height: THUMB }}>
+        {listing.photos.map((photo) => (
+          <Print key={photo.id} tiltDeg={tiltDegForId(photo.id, motion.tiltRangeDeg)} style={{ width: THUMB, height: THUMB, padding: 6 }}>
             <View
               style={{
                 width: "100%",
                 height: "100%",
                 overflow: "hidden",
-                borderTopRightRadius: radii.tag,
-                borderBottomRightRadius: radii.tag,
-                borderBottomLeftRadius: radii.tag,
-                backgroundColor: colors.surfaceSunken,
+                backgroundColor: colors.tableEdge,
               }}
             >
               <ExpoImage
@@ -140,68 +139,70 @@ export default function MineDetail(): React.ReactElement {
                 accessibilityLabel=""
               />
             </View>
-          </TagCard>
+          </Print>
         ))}
       </View>
 
-      <View style={{ gap: space.sm }}>
-        <Eyebrow color={status.color}>{status.label}</Eyebrow>
-        <Text variant="displayLg">{listing.title}</Text>
-        <Text variant="bodyLg" color="inkSoft">
-          {listing.story}
-        </Text>
-      </View>
-
-      <View style={{ gap: space.sm }}>
-        <View style={rule}>
-          <Eyebrow>Status</Eyebrow>
+      <Card style={{ gap: space.xl }}>
+        <View style={{ gap: space.sm }}>
+          <Eyebrow color={status.color}>{status.label}</Eyebrow>
+          <Text variant="displayLg">{listing.title}</Text>
+          <Text variant="bodyLg" color="inkSoft">
+            {listing.story}
+          </Text>
         </View>
-        <Text variant="title">{status.label}</Text>
-        {listing.status === "rejected" && listing.moderation_reason !== null ? (
-          <Text variant="body" color="dangerText">
-            {MODERATION_REASONS[listing.moderation_reason]}
-          </Text>
-        ) : null}
-        {listing.status === "needs_review" ? (
-          <Text variant="body" color="textSecondary">
-            Taking a closer look. Usually within a day.
-          </Text>
-        ) : null}
-        {error !== null ? (
-          <Text variant="body" color="dangerText">
-            {error}
-          </Text>
-        ) : null}
-      </View>
 
-      <View style={{ gap: space.sm }}>
-        <View style={rule}>
-          <Eyebrow>Requests</Eyebrow>
+        <View style={{ gap: space.sm }}>
+          <View style={rule}>
+            <Eyebrow>Status</Eyebrow>
+          </View>
+          <Text variant="title">{status.label}</Text>
+          {listing.status === "rejected" && listing.moderation_reason !== null ? (
+            <Text variant="body" color="dangerText">
+              {MODERATION_REASONS[listing.moderation_reason]}
+            </Text>
+          ) : null}
+          {listing.status === "needs_review" ? (
+            <Text variant="body" color="textSecondary">
+              Taking a closer look. Usually within a day.
+            </Text>
+          ) : null}
+          {error !== null ? (
+            <Text variant="body" color="dangerText">
+              {error}
+            </Text>
+          ) : null}
         </View>
-        <RequestList
-          requests={listing.requests}
-          canChoose={listing.chosen_request_id === null && listing.status === "approved"}
-          busy={busy || choosing}
-          onChoose={setChooseTarget}
-        />
-      </View>
 
-      {/* One pill at most; the rest are bordered, the destructive one bare. */}
-      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.md }}>
-        {listing.status === "approved" ? (
-          <Button label="Mark given" disabled={busy} onPress={() => runAction(() => markGiven(listing.id))} />
-        ) : null}
-        {listing.status === "withdrawn" ? (
-          <Button label="Relist" disabled={busy} onPress={() => runAction(() => relistListing(listing.id))} />
-        ) : null}
-        <Link href={{ pathname: "/give", params: { edit: listing.id } }} asChild>
-          <Button label="Edit" variant="secondary" disabled={busy} />
-        </Link>
-        {listing.status !== "withdrawn" && listing.status !== "given" ? (
-          <Button label="Withdraw" variant="secondary" disabled={busy} onPress={() => runAction(() => withdrawListing(listing.id))} />
-        ) : null}
-        <Button label="Delete" variant="ghost" disabled={busy} onPress={() => setConfirmDelete(true)} />
-      </View>
+        <View style={{ gap: space.sm }}>
+          <View style={rule}>
+            <Eyebrow>Requests</Eyebrow>
+          </View>
+          <RequestList
+            requests={listing.requests}
+            canChoose={listing.chosen_request_id === null && listing.status === "approved"}
+            busy={busy || choosing}
+            onChoose={setChooseTarget}
+          />
+        </View>
+
+        {/* One stamp-red primary at most; the rest are ink-outlined, the destructive one bare. */}
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.md }}>
+          {listing.status === "approved" ? (
+            <Button label="Mark given" disabled={busy} onPress={() => runAction(() => markGiven(listing.id))} />
+          ) : null}
+          {listing.status === "withdrawn" ? (
+            <Button label="Relist" disabled={busy} onPress={() => runAction(() => relistListing(listing.id))} />
+          ) : null}
+          <Link href={{ pathname: "/give", params: { edit: listing.id } }} asChild>
+            <Button label="Edit" variant="secondary" disabled={busy} />
+          </Link>
+          {listing.status !== "withdrawn" && listing.status !== "given" ? (
+            <Button label="Withdraw" variant="secondary" disabled={busy} onPress={() => runAction(() => withdrawListing(listing.id))} />
+          ) : null}
+          <Button label="Delete" variant="ghost" disabled={busy} onPress={() => setConfirmDelete(true)} />
+        </View>
+      </Card>
 
       <Sheet visible={confirmDelete} onClose={() => setConfirmDelete(false)} title="Delete this listing?">
         <Text variant="body" color="textSecondary">

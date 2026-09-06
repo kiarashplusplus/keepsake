@@ -6,7 +6,7 @@
 import * as React from "react";
 import { View, type LayoutChangeEvent } from "react-native";
 import { space } from "@keepsake/tokens/spacing";
-import { groupIntoColumns, masonryColumnCount, type MasonryInput } from "@/lib/masonry";
+import { groupIntoColumns, masonryColumnCount, verticalOffsetForId, type MasonryInput } from "@/lib/masonry";
 
 export type MasonryGridProps<T> = {
   items: readonly T[];
@@ -37,9 +37,19 @@ export function MasonryGrid<T>({ items, keyOf, sizeOf, renderItem, gap = space.x
     <View onLayout={handleLayout} style={{ flexDirection: "row", gap, alignItems: "flex-start" }} testID="masonry-grid">
       {groups.map((column, columnIndex) => (
         <View key={columnIndex} style={{ flex: 1, gap, minWidth: 0 }}>
-          {column.map((item) => (
-            <React.Fragment key={keyOf(item)}>{renderItem(item)}</React.Fragment>
-          ))}
+          {column.map((item, indexInColumn) => {
+            const key = keyOf(item);
+            // A loose tabletop, not a grid: the first print in each column
+            // gets a small deterministic vertical nudge (a print set down a
+            // little higher or lower than its neighbour), derived from its
+            // own id so it's stable across renders.
+            const offset = indexInColumn === 0 ? verticalOffsetForId(key, 28) : 0;
+            return (
+              <View key={key} style={offset > 0 ? { marginTop: offset } : undefined}>
+                {renderItem(item)}
+              </View>
+            );
+          })}
         </View>
       ))}
     </View>

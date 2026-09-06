@@ -7,15 +7,17 @@ import { useRouter } from "expo-router";
 import { Image as ExpoImage } from "expo-image";
 import { FULL_EDGE_PX, MAX_PHOTOS, THUMB_EDGE_PX } from "@keepsake/contracts/photo";
 import { space } from "@keepsake/tokens/spacing";
-import { radii } from "@keepsake/tokens/radii";
+import { motion } from "@keepsake/tokens/motion";
 import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
 import { IconButton } from "@/ui/IconButton";
-import { TagCard } from "@/ui/TagCard";
+import { Print } from "@/ui/Print";
+import { Card } from "@/ui/Surface";
 import { useColors } from "@/ui/theme";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { makeClientId, type GiveDraftPhoto } from "@/features/give/giveDraft";
+import { tiltDegForId } from "@/lib/masonry";
 import { pickImages } from "@/lib/images/pickImages";
 import { readImageDimensions, resizeImage } from "@/lib/images/resizeImage";
 import { IMAGE_VALIDATION_MESSAGES, validateImageDimensions, validateImageFile } from "@/lib/images/validateImage";
@@ -54,17 +56,13 @@ function PhotoTile({ photo, index, total, onRemove, onMove }: PhotoTileProps): R
 
   return (
     <View style={{ width: TILE, gap: space.xs }}>
-      {/* Each photo is a small tag: square top-left corner with the punched hole, the image clipped inside. */}
-      <TagCard tilt={index % 2 === 0 ? 1 : -1} style={{ width: TILE, height: TILE }}>
+      <Print tiltDeg={tiltDegForId(photo.clientId, motion.tiltRangeDeg)} style={{ width: TILE, height: TILE, padding: 6 }}>
         <View
           style={{
             width: "100%",
             height: "100%",
             overflow: "hidden",
-            borderTopRightRadius: radii.tag,
-            borderBottomRightRadius: radii.tag,
-            borderBottomLeftRadius: radii.tag,
-            backgroundColor: colors.surfaceSunken,
+            backgroundColor: colors.tableEdge,
           }}
         >
           <ExpoImage
@@ -76,8 +74,8 @@ function PhotoTile({ photo, index, total, onRemove, onMove }: PhotoTileProps): R
           />
           {photo.status === "uploading" ? (
             <View style={overlayStyle}>
-              <Text variant="caption" style={{ color: colors.onAccent }}>
-                Uploading…
+              <Text variant="caption" style={{ color: colors.print }}>
+                uploading…
               </Text>
             </View>
           ) : null}
@@ -85,21 +83,20 @@ function PhotoTile({ photo, index, total, onRemove, onMove }: PhotoTileProps): R
             <View
               style={{
                 position: "absolute",
-                bottom: space.sm,
-                left: space.sm,
-                backgroundColor: colors.surface,
-                borderRadius: radii.sm,
-                paddingHorizontal: space.sm,
-                paddingVertical: space.xxs,
+                bottom: space.xs,
+                left: space.xs,
+                backgroundColor: colors.print,
+                paddingHorizontal: space.xs,
+                paddingVertical: 1,
               }}
             >
-              <Text variant="eyebrow" color="foilText" style={{ fontSize: 11, lineHeight: 14 }}>
+              <Text variant="label" color="ink" style={{ fontSize: 9 }}>
                 Cover
               </Text>
             </View>
           ) : null}
         </View>
-      </TagCard>
+      </Print>
 
       {photo.status === "error" ? (
         <Text variant="caption" color="dangerText">
@@ -220,7 +217,7 @@ export default function GivePhotos(): React.ReactElement {
   const canContinue = doneCount >= 1 && !isUploading;
 
   return (
-    <View style={{ gap: space.xl }}>
+    <Card style={{ gap: space.xl }}>
       <View style={{ gap: space.sm }}>
         <Eyebrow>Photos</Eyebrow>
         <Text variant="displayLg">Show us the keepsake.</Text>
@@ -249,18 +246,15 @@ export default function GivePhotos(): React.ReactElement {
             style={{
               width: TILE,
               height: TILE,
-              borderTopRightRadius: radii.tag,
-              borderBottomRightRadius: radii.tag,
-              borderBottomLeftRadius: radii.tag,
-              borderWidth: 1,
-              borderColor: colors.rule,
+              borderWidth: 2,
+              borderColor: colors.ink,
               borderStyle: "dashed",
               alignItems: "center",
               justifyContent: "center",
               gap: space.xs,
             }}
           >
-            <Text variant="body" color="accent2Text" style={{ fontWeight: "600" }}>
+            <Text variant="label" color="ink" style={{ fontSize: 12 }}>
               + Add
             </Text>
             <Text variant="caption" color="textTertiary">
@@ -273,6 +267,6 @@ export default function GivePhotos(): React.ReactElement {
       <View style={{ flexDirection: "row" }}>
         <Button label="Continue" disabled={!canContinue} onPress={() => router.push("/give/story")} />
       </View>
-    </View>
+    </Card>
   );
 }

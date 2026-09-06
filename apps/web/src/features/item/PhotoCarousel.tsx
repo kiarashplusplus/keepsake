@@ -6,9 +6,9 @@ import { ScrollView, View, type LayoutChangeEvent, type NativeScrollEvent, type 
 import { Image as ExpoImage } from "expo-image";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
 import { space } from "@keepsake/tokens/spacing";
-import { radii } from "@keepsake/tokens/radii";
 import { useColors } from "@/ui/theme";
 import { useMotion } from "@/ui/MotionProvider";
+import { Print } from "@/ui/Print";
 
 export function PhotoCarousel({ photos }: { photos: readonly PublicPhoto[] }): React.ReactElement {
   const colors = useColors();
@@ -28,10 +28,10 @@ export function PhotoCarousel({ photos }: { photos: readonly PublicPhoto[] }): R
   const cover = photos[0];
 
   return (
-    <View style={{ gap: space.sm }}>
+    <Print tiltDeg={-1.2} style={{ padding: 12, alignSelf: "center", width: "100%", maxWidth: 560, gap: space.sm }}>
       <View
         onLayout={handleLayout}
-        style={{ width: "100%", aspectRatio: 4 / 3, borderRadius: radii.lg, overflow: "hidden", backgroundColor: colors.surfaceSunken }}
+        style={{ width: "100%", aspectRatio: 4 / 3, overflow: "hidden", backgroundColor: colors.tableEdge }}
       >
         {width > 0 ? (
           <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} onScroll={handleScroll} scrollEventThrottle={16}>
@@ -60,7 +60,7 @@ export function PhotoCarousel({ photos }: { photos: readonly PublicPhoto[] }): R
       </View>
 
       {photos.length > 1 ? (
-        <View accessibilityRole="tablist" style={{ flexDirection: "row", justifyContent: "center", gap: space.xs }}>
+        <View accessibilityRole="tablist" style={{ flexDirection: "row", justifyContent: "center", gap: space.xs, paddingTop: space.xxs }}>
           {photos.map((photo, photoIndex) => (
             <View
               key={photo.id}
@@ -68,13 +68,13 @@ export function PhotoCarousel({ photos }: { photos: readonly PublicPhoto[] }): R
               style={{
                 width: 6,
                 height: 6,
-                borderRadius: radii.pill,
-                backgroundColor: photoIndex === index ? colors.accent : colors.rule,
+                backgroundColor: photoIndex === index ? colors.accent : colors.ink,
+                opacity: photoIndex === index ? 1 : 0.25,
               }}
             />
           ))}
         </View>
       ) : null}
-    </View>
+    </Print>
   );
 }

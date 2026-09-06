@@ -35,13 +35,13 @@ html {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
-body { margin: 0; background: #F6EFE1; }
-[data-theme="dark"] body { background: #1B1512; }
+body { margin: 0; background: #D2BC97; }
+[data-theme="dark"] body { background: #2B2119; }
 
 /* Focus ring: the \`focus\` token, 2px, offset 3px — the same treatment the
    marketing site uses. Inputs suppress this (their border is the ring). */
-:focus-visible { outline: 2px solid #8C3A1E; outline-offset: 3px; }
-[data-theme="dark"] :focus-visible { outline-color: #F3A97E; }
+:focus-visible { outline: 2px solid #7A2515; outline-offset: 3px; }
+[data-theme="dark"] :focus-visible { outline-color: #F0A38C; }
 
 @media (prefers-reduced-motion: reduce) {
   :root { --ks-reduce: 1; }
@@ -64,16 +64,30 @@ body { margin: 0; background: #F6EFE1; }
   font-optical-sizing: auto;
 }
 @font-face {
-  font-family: "Inter";
-  src: url("/fonts/InterVariable.ttf") format("truetype-variations");
-  font-weight: 100 900;
+  font-family: "CourierPrime";
+  src: url("/fonts/CourierPrime-Regular.ttf") format("truetype");
+  font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: "Inter";
-  src: url("/fonts/InterVariable-Italic.ttf") format("truetype-variations");
-  font-weight: 100 900;
+  font-family: "CourierPrime";
+  src: url("/fonts/CourierPrime-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "CourierPrime";
+  src: url("/fonts/CourierPrime-Italic.ttf") format("truetype");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "CourierPrime";
+  src: url("/fonts/CourierPrime-BoldItalic.ttf") format("truetype");
+  font-weight: 700;
   font-style: italic;
   font-display: swap;
 }
@@ -86,8 +100,8 @@ export default function Root({ children }: { children: React.ReactNode }): React
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <meta name="color-scheme" content="light dark" />
-        <meta name="theme-color" content="#F6EFE1" media="(prefers-color-scheme: light)" />
-        <meta name="theme-color" content="#1B1512" media="(prefers-color-scheme: dark)" />
+        <meta name="theme-color" content="#D2BC97" media="(prefers-color-scheme: light)" />
+        <meta name="theme-color" content="#2B2119" media="(prefers-color-scheme: dark)" />
 
         <title>Keepsake</title>
         <meta name="description" content="Give a keepsake a second life." />
@@ -126,7 +140,7 @@ export default function Root({ children }: { children: React.ReactNode }): React
         />
         <link
           rel="preload"
-          href="/fonts/InterVariable.ttf"
+          href="/fonts/CourierPrime-Regular.ttf"
           as="font"
           type="font/ttf"
           crossOrigin="anonymous"

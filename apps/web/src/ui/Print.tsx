@@ -1,82 +1,76 @@
+// The v3 identity's one recurring object: an instant-film print. White
+// frame, thick bottom border baked into the caller's own padding, square
+// corners, a warm shadow cast down-and-right, and two translucent tape
+// corners holding it to the table. Drops onto the table on first render and
+// straightens by a degree on hover — see packages/tokens/src/motion.ts.
 import * as React from "react";
 import { View, type ViewProps, type ViewStyle } from "react-native";
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { radii, shadow } from "@keepsake/tokens/radii";
 import { useColors } from "@/ui/theme";
 import { useMotion } from "@/ui/MotionProvider";
 
-export type TagCardProps = Omit<ViewProps, "style"> & {
-  /** Lifts 2px and tilts `tagTiltDeg` on hover — picked up like a tag. Off
-   * under reduce-motion (`useMotion()` folds it to zero). */
+export type PrintProps = Omit<ViewProps, "style"> & {
+  /** Lifts 2px and straightens by 1° on hover. Off under reduce-motion. */
   interactive?: boolean;
-  /** Which way the tag leans on hover; alternate across a grid so the row
-   * doesn't all lean the same way. */
-  tilt?: 1 | -1;
-  /** The punched hole + knotted string at the square top-left corner. */
-  hole?: boolean;
+  /** The print's resting tilt in degrees, e.g. from `tiltDegForId`. */
+  tiltDeg?: number;
+  /** Two translucent masking-tape corners holding it to the table. */
+  tape?: boolean;
   style?: ViewStyle | ViewStyle[] | undefined;
 };
 
-const LIFT_PX = 2;
-
-/** The punched hole and its bit of string, drawn with Views (no SVG dependency):
- * a small ring, then two quarter-arcs that read as a knotted loop. */
-function TagHole(): React.ReactElement {
+/** A short strip of masking tape, rotated, at one corner. */
+function TapeCorner({ corner }: { corner: "left" | "right" }): React.ReactElement {
   const colors = useColors();
-  const stroke = colors.textTertiary;
+  const rotate = corner === "left" ? -18 : 14;
   return (
     <View
       pointerEvents="none"
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
-      style={{ position: "absolute", top: 7, left: 16, width: 32, height: 32 }}
+      style={{
+        position: "absolute",
+        top: -10,
+        [corner]: 14,
+        width: 44,
+        height: 22,
+        backgroundColor: colors.tape,
+        transform: [{ rotate: `${rotate}deg` }],
+        ...({ boxShadow: "0px 1px 2px rgba(0,0,0,0.12)" } as ViewStyle),
+      }}
     >
-      <View style={{ position: "absolute", top: 0, left: 0, width: 11, height: 11, borderRadius: 6, borderWidth: 2, borderColor: stroke }} />
-      <View
-        style={{
-          position: "absolute",
-          top: 10,
-          left: 3,
-          width: 13,
-          height: 15,
-          borderLeftWidth: 1.5,
-          borderBottomWidth: 1.5,
-          borderBottomLeftRadius: 13,
-          borderColor: stroke,
-        }}
-      />
-      <View
-        style={{
-          position: "absolute",
-          top: 17,
-          left: 13,
-          width: 9,
-          height: 8,
-          borderRightWidth: 1.5,
-          borderTopWidth: 1.5,
-          borderTopRightRadius: 9,
-          borderColor: stroke,
-        }}
-      />
+      <View style={{ position: "absolute", top: 7, left: 0, right: 0, height: 1, backgroundColor: colors.tapeStripe }} />
+      <View style={{ position: "absolute", top: 14, left: 0, right: 0, height: 1, backgroundColor: colors.tapeStripe }} />
     </View>
   );
 }
 
-/**
- * A card as a luggage tag: square top-left corner (where the hole is punched),
- * `radii.tag` elsewhere, no border — the paper-on-paper shadow does the
- * separating. `overflow` stays visible so the hole can sit over a photo.
- */
-export function TagCard({ interactive = false, tilt = 1, hole = true, style, children, ...rest }: TagCardProps): React.ReactElement {
+export function Print({ interactive = false, tiltDeg = 0, tape = true, style, children, ...rest }: PrintProps): React.ReactElement {
   const colors = useColors();
   const motion = useMotion();
   const lift = useSharedValue(0);
+  const drop = useSharedValue(motion.reduce ? 1 : 0);
   const [hovered, setHovered] = React.useState(false);
-  const tiltDeg = tilt * motion.tagTiltDeg;
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: -LIFT_PX * lift.value }, { rotate: `${tiltDeg * lift.value}deg` }],
-  }));
+  React.useEffect(() => {
+    drop.value = withSpring(1, motion.dropSpring);
+    // Runs once on mount; `motion.dropSpring` is stable per render of the
+    // provider, not per print, so it's intentionally left out of deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const straighten = interactive ? Math.sign(tiltDeg) * Math.min(Math.abs(tiltDeg), motion.tiltDeg) : 0;
+
+  const animatedStyle = useAnimatedStyle(() => {
+    const scale = 1.03 - 0.03 * drop.value;
+    const settledTilt = tiltDeg * drop.value;
+    const straightenedTilt = settledTilt - straighten * lift.value;
+    return {
+      opacity: drop.value,
+      transform: [{ translateY: -2 * lift.value }, { rotate: `${straightenedTilt}deg` }, { scale }],
+    };
+  });
 
   const setLifted = (up: boolean): void => {
     if (!interactive || motion.reduce) return;
@@ -90,13 +84,10 @@ export function TagCard({ interactive = false, tilt = 1, hole = true, style, chi
   const hoverProps = interactive ? ({ onMouseEnter: () => setLifted(true), onMouseLeave: () => setLifted(false) } as object) : null;
 
   const base: ViewStyle = {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: 0,
-    borderTopRightRadius: radii.tag,
-    borderBottomRightRadius: radii.tag,
-    borderBottomLeftRadius: radii.tag,
+    backgroundColor: colors.print,
+    borderRadius: radii.print,
     ...({
-      boxShadow: hovered ? shadow.cardHover(colors.shadowStrong) : shadow.card(colors.shadow),
+      boxShadow: `inset 0px 0px 0px 1px rgba(0,0,0,0.08), ${hovered ? shadow.cardHover(colors.shadow) : shadow.card(colors.shadow)}`,
       transitionProperty: "box-shadow",
       transitionDuration: `${motion.liftMs}ms`,
     } as ViewStyle),
@@ -105,7 +96,16 @@ export function TagCard({ interactive = false, tilt = 1, hole = true, style, chi
   return (
     <Animated.View style={[base, animatedStyle, ...(Array.isArray(style) ? style : [style ?? {}])]} {...hoverProps} {...rest}>
       {children}
-      {hole ? <TagHole /> : null}
+      {tape ? (
+        <>
+          <TapeCorner corner="left" />
+          <TapeCorner corner="right" />
+        </>
+      ) : null}
     </Animated.View>
   );
 }
+
+/** Kept as an alias of `Print` for anything still written against the v2
+ * "tag" name. */
+export const TagCard = Print;

@@ -7,15 +7,15 @@ import { useWindowDimensions, View } from "react-native";
 import { Link, useLocalSearchParams } from "expo-router";
 import { CATEGORY_LABELS } from "@keepsake/contracts/listing";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
-import { radii } from "@keepsake/tokens/radii";
 import { ReadableWidth } from "@/ui/ReadableWidth";
 import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
-import { DeckleRule } from "@/ui/DeckleRule";
+import { Card } from "@/ui/Surface";
+import { PencilRule } from "@/ui/PencilRule";
 import { Skeleton } from "@/ui/Skeleton";
 import { EmptyState } from "@/ui/EmptyState";
-import { Seal } from "@/ui/Seal";
+import { Stamp } from "@/ui/Stamp";
 import { useColors } from "@/ui/theme";
 import { useToast } from "@/ui/Toast";
 import { PhotoCarousel } from "@/features/item/PhotoCarousel";
@@ -90,7 +90,7 @@ export default function Item(): React.ReactElement {
     return (
       <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
         <EmptyState
-          ornament={<Seal state="idle" />}
+          ornament={<Stamp state="idle" label="Not found" />}
           eyebrow="Not found"
           title="That keepsake isn’t here"
           line="It may have already found a home, or the link might be off."
@@ -115,9 +115,11 @@ export default function Item(): React.ReactElement {
   if (listing === null) {
     return (
       <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal, gap: space.lg }}>
-        <Skeleton height={320} style={{ borderRadius: radii.lg }} />
-        <Skeleton height={40} width="70%" />
-        <Skeleton height={100} />
+        <Skeleton height={320} />
+        <Card style={{ gap: space.md }}>
+          <Skeleton height={40} width="70%" />
+          <Skeleton height={100} />
+        </Card>
       </ReadableWidth>
     );
   }
@@ -129,33 +131,46 @@ export default function Item(): React.ReactElement {
       <PhotoCarousel photos={listing.photos} />
 
       {given ? (
-        <View style={{ alignSelf: "flex-start", backgroundColor: colors.foil, borderRadius: radii.sm, paddingHorizontal: space.md, paddingVertical: space.xs }}>
-          <Text variant="eyebrow" color="onFoil">
+        <View
+          style={{
+            alignSelf: "flex-start",
+            borderWidth: 2,
+            borderColor: colors.accent,
+            paddingHorizontal: space.md,
+            paddingVertical: space.xs,
+            transform: [{ rotate: "-3deg" }],
+          }}
+        >
+          <Text variant="stamp" color="stampText">
             Given
           </Text>
         </View>
       ) : null}
 
-      <View style={{ gap: space.sm }}>
-        <Eyebrow>{CATEGORY_LABELS[listing.category]}</Eyebrow>
-        <Text variant={wide ? "displayXl" : "displayLg"}>{listing.title}</Text>
-      </View>
+      {/* The story lives on an index card below the print — a display case,
+          not a bare page of text on the table. */}
+      <Card style={{ gap: space.lg }}>
+        <View style={{ gap: space.sm }}>
+          <Eyebrow>{CATEGORY_LABELS[listing.category]}</Eyebrow>
+          <Text variant={wide ? "displayXl" : "displayLg"}>{listing.title}</Text>
+        </View>
 
-      <DeckleRule />
+        <PencilRule />
 
-      <Text variant="bodyLg" color="inkSoft">
-        {listing.story}
-      </Text>
+        <Text variant="bodyLg" color="inkSoft">
+          {listing.story}
+        </Text>
 
-      <Text variant="caption" color="textTertiary">
-        {metaLine(listing)}
-      </Text>
+        <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
+          {metaLine(listing)}
+        </Text>
 
-      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.xl }}>
-        {!given ? <Button label="I'd love this" onPress={() => setRequestOpen(true)} /> : null}
-        <Button label="Share" variant="link" onPress={() => void handleShare()} />
-        <Button label="Report" variant="ghost" onPress={() => setReportOpen(true)} />
-      </View>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.xl }}>
+          {!given ? <Button label="I'd love this" onPress={() => setRequestOpen(true)} /> : null}
+          <Button label="Share" variant="link" onPress={() => void handleShare()} />
+          <Button label="Report" variant="ghost" onPress={() => setReportOpen(true)} />
+        </View>
+      </Card>
 
       <RequestSheet visible={requestOpen} onClose={() => setRequestOpen(false)} listingId={listing.id} />
       <ReportSheet visible={reportOpen} onClose={() => setReportOpen(false)} listingId={listing.id} />

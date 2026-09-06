@@ -14,9 +14,9 @@ import { space } from "@keepsake/tokens/spacing";
 import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
-import { TagCard } from "@/ui/TagCard";
-import { Seal } from "@/ui/Seal";
-import { useColors } from "@/ui/theme";
+import { Print } from "@/ui/Print";
+import { Card } from "@/ui/Surface";
+import { Stamp, type StampState } from "@/ui/Stamp";
 import { Turnstile } from "@/ui/Turnstile";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { makeClientId } from "@/features/give/giveDraft";
@@ -37,7 +37,6 @@ type Phase = "review" | "submitting" | "polling";
 export default function GiveReview(): React.ReactElement {
   const router = useRouter();
   const toast = useToast();
-  const colors = useColors();
   const { draft, dispatch } = useGiveDraft();
   const [phase, setPhase] = React.useState<Phase>("review");
   const [turnstileToken, setTurnstileToken] = React.useState<string | null>(null);
@@ -128,12 +127,21 @@ export default function GiveReview(): React.ReactElement {
 
   if (phase === "polling" && listing !== null) {
     const outcome = resolveReviewOutcome(listing.status, listing.moderation_reason, timedOut);
+    const stampState: StampState = outcome.kind === "approved" ? "settled" : "breathing";
+    const stampLabel =
+      outcome.kind === "approved"
+        ? "Live"
+        : outcome.kind === "rejected"
+          ? "Not approved"
+          : outcome.kind === "needs_review"
+            ? "Held"
+            : "On review";
 
-    // The reviewing state: centred, the seal on top, an eyebrow naming the
+    // The reviewing state: centred, the stamp on top, an eyebrow naming the
     // moment and the outcome in display type — same shape for every outcome.
     return (
-      <View style={{ gap: space.xl, alignItems: "center", paddingVertical: space.xxl }}>
-        <Seal state={outcome.kind === "approved" ? "settled" : "breathing"} />
+      <Card style={{ gap: space.xl, alignItems: "center", paddingVertical: space.xxl }}>
+        <Stamp state={stampState} label={stampLabel} />
 
         {outcome.kind === "waiting" ? (
           <View style={{ gap: space.sm, alignItems: "center" }}>
@@ -150,7 +158,7 @@ export default function GiveReview(): React.ReactElement {
         {outcome.kind === "approved" ? (
           <View style={{ gap: space.lg, alignItems: "center" }}>
             <View style={{ gap: space.sm, alignItems: "center" }}>
-              <Eyebrow align="center">Sealed</Eyebrow>
+              <Eyebrow align="center">Stamped</Eyebrow>
               <Text variant="displayLg" style={{ textAlign: "center" }}>
                 {"It's live."}
               </Text>
@@ -210,35 +218,35 @@ export default function GiveReview(): React.ReactElement {
             <Button label="Go to Mine" variant="link" onPress={() => router.push("/mine")} />
           </View>
         ) : null}
-      </View>
+      </Card>
     );
   }
 
   return (
-    <View style={{ gap: space.xl }}>
+    <Card style={{ gap: space.xl }}>
       <View style={{ gap: space.sm }}>
         <Eyebrow>Last look</Eyebrow>
         <Text variant="displayLg">Take a last look.</Text>
       </View>
 
-      {/* The listing as it will hang in the feed: a tag, hole and all. */}
-      <TagCard style={{ alignSelf: "stretch" }}>
-        <View style={{ paddingTop: space.xxxl, paddingHorizontal: space.lg, paddingBottom: space.lg, gap: space.sm }}>
+      {/* The listing as it will lie on the table: an actual print. */}
+      <Print tiltDeg={-1.5} style={{ alignSelf: "stretch", padding: space.sm }}>
+        <View style={{ paddingTop: space.xl, paddingHorizontal: space.md, paddingBottom: space.md, gap: space.sm }}>
           <Text variant="storyExcerpt" color="textSecondary" hangingPunctuation>
             “{draft.story.slice(0, 140)}
             {draft.story.length > 140 ? "…" : ""}”
           </Text>
           <Text variant="title">{draft.title || "Untitled"}</Text>
-          <View style={{ borderTopWidth: 1, borderStyle: "dashed", borderTopColor: colors.rule, paddingTop: space.sm, gap: space.xxs }}>
-            <Text variant="caption" color="textTertiary">
+          <View style={{ paddingTop: space.sm, gap: space.xxs }}>
+            <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
               {draft.category !== null ? CATEGORY_LABELS[draft.category] : ""} · {COUNTRY_LABELS[draft.country]} {draft.postalCode}
             </Text>
-            <Text variant="caption" color="textTertiary">
+            <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
               {photoIds.length} photo{photoIds.length === 1 ? "" : "s"}
             </Text>
           </View>
         </View>
-      </TagCard>
+      </Print>
 
       <Turnstile onToken={setTurnstileToken} />
 
@@ -256,6 +264,6 @@ export default function GiveReview(): React.ReactElement {
           onPress={() => void handleSubmit()}
         />
       </View>
-    </View>
+    </Card>
   );
 }

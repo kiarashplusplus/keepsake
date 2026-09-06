@@ -14,7 +14,8 @@ import { Input } from "@/ui/Input";
 import { Button } from "@/ui/Button";
 import { Turnstile } from "@/ui/Turnstile";
 import { EmptyState } from "@/ui/EmptyState";
-import { Seal } from "@/ui/Seal";
+import { Card } from "@/ui/Surface";
+import { Stamp } from "@/ui/Stamp";
 import { useToast } from "@/ui/Toast";
 import { deleteEmail, getMe, setEmail } from "@/api/me";
 import { ApiError } from "@/api/client";
@@ -100,7 +101,7 @@ export default function MineEmail(): React.ReactElement {
     return (
       <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
         <EmptyState
-          ornament={<Seal state="idle" />}
+          ornament={<Stamp state="idle" label="Email" />}
           eyebrow="Email"
           title="Nothing to show yet"
           line="Give something first — your device gets an owner identity the moment you do, and an email can attach to it then."
@@ -112,47 +113,49 @@ export default function MineEmail(): React.ReactElement {
   const hasEmail = me !== null && me.email !== undefined;
 
   return (
-    <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
-      <View style={{ gap: space.sm }}>
-        <Eyebrow tick>A way back</Eyebrow>
-        <Text variant="displayLg">Your email</Text>
-        <Text variant="bodyLg" color="textSecondary">
-          Get a note when someone asks, and a way back if you lose this device.
-        </Text>
-      </View>
+    <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+      <Card style={{ gap: space.xl, transform: [{ rotate: "-0.2deg" }] }}>
+        <View style={{ gap: space.sm }}>
+          <Eyebrow tick>A way back</Eyebrow>
+          <Text variant="displayLg">Your email</Text>
+          <Text variant="bodyLg" color="textSecondary">
+            Get a note when someone asks, and a way back if you lose this device.
+          </Text>
+        </View>
 
-      {hasEmail ? (
-        <Text variant="body" color={me?.email_verified === true ? "successText" : "foilText"}>
-          {me?.email_verified === true ? "Verified." : "Not verified yet — check your inbox, or resend below."}
-        </Text>
-      ) : null}
-
-      <Input
-        label="Email"
-        value={emailInput}
-        onChangeText={setEmailInput}
-        onBlur={() => setTouched(true)}
-        error={emailError}
-        keyboardType="email-address"
-        autoCapitalize="none"
-        placeholder="you@example.com"
-      />
-
-      <Turnstile onToken={setTurnstileToken} />
-
-      {error !== null ? (
-        <Text variant="body" color="dangerText">
-          {error}
-        </Text>
-      ) : null}
-
-      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.md }}>
-        <Button label="Save" loading={busy} disabled={busy || turnstileToken === null} onPress={() => void handleSave()} />
-        {hasEmail && me?.email_verified === false ? (
-          <Button label="Resend" variant="secondary" disabled={busy || turnstileToken === null} onPress={() => void handleResend()} />
+        {hasEmail ? (
+          <Text variant="body" color={me?.email_verified === true ? "successText" : "foilText"}>
+            {me?.email_verified === true ? "Verified." : "Not verified yet — check your inbox, or resend below."}
+          </Text>
         ) : null}
-        {hasEmail ? <Button label="Remove" variant="ghost" disabled={busy} onPress={() => void handleRemove()} /> : null}
-      </View>
+
+        <Input
+          label="Email"
+          value={emailInput}
+          onChangeText={setEmailInput}
+          onBlur={() => setTouched(true)}
+          error={emailError}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          placeholder="you@example.com"
+        />
+
+        <Turnstile onToken={setTurnstileToken} />
+
+        {error !== null ? (
+          <Text variant="body" color="dangerText">
+            {error}
+          </Text>
+        ) : null}
+
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.md }}>
+          <Button label="Save" loading={busy} disabled={busy || turnstileToken === null} onPress={() => void handleSave()} />
+          {hasEmail && me?.email_verified === false ? (
+            <Button label="Resend" variant="secondary" disabled={busy || turnstileToken === null} onPress={() => void handleResend()} />
+          ) : null}
+          {hasEmail ? <Button label="Remove" variant="ghost" disabled={busy} onPress={() => void handleRemove()} /> : null}
+        </View>
+      </Card>
     </ReadableWidth>
   );
 }

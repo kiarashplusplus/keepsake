@@ -52,10 +52,11 @@ export function ToastProvider({ children }: { children: React.ReactNode }): Reac
               paddingHorizontal: space.lg,
               paddingVertical: space.sm,
               maxWidth: 360,
+              transform: [{ rotate: "-0.6deg" }],
               ...({ boxShadow: shadow.sheet(colors.shadowStrong) } as ViewStyle),
             }}
           >
-            <Text variant="body" style={{ color: colors.bg }}>
+            <Text variant="caption" style={{ color: colors.print, fontSize: 13 }}>
               {item.message}
             </Text>
           </View>

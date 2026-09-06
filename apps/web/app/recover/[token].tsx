@@ -7,7 +7,7 @@ import { sectionRhythm } from "@keepsake/tokens/spacing";
 import { ReadableWidth } from "@/ui/ReadableWidth";
 import { EmptyState } from "@/ui/EmptyState";
 import { Button } from "@/ui/Button";
-import { Seal } from "@/ui/Seal";
+import { Stamp } from "@/ui/Stamp";
 import { useToast } from "@/ui/Toast";
 import { recoverWithToken } from "@/api/recover";
 import { setOwnerToken } from "@/lib/ownerToken";
@@ -58,7 +58,7 @@ export default function RecoverToken(): React.ReactElement {
 
   return (
     <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
-      <EmptyState ornament={<Seal state="breathing" />} eyebrow="Recovery" title="Getting you back in…" />
+      <EmptyState ornament={<Stamp state="breathing" label="Checking" />} eyebrow="Recovery" title="Getting you back in…" />
     </ReadableWidth>
   );
 }

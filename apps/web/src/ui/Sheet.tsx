@@ -2,7 +2,7 @@ import * as React from "react";
 import { Modal, Pressable, useWindowDimensions, View, type ViewStyle } from "react-native";
 import { radii, shadow } from "@keepsake/tokens/radii";
 import { space } from "@keepsake/tokens/spacing";
-import { useColors, useContainerBorder } from "@/ui/theme";
+import { useColors } from "@/ui/theme";
 import { useMotion } from "@/ui/MotionProvider";
 import { Text } from "@/ui/Text";
 
@@ -16,12 +16,15 @@ export type SheetProps = {
   children: React.ReactNode;
 };
 
-/** Bottom sheet under 720px, centered dialog at/above it. Escape closes;
+/**
+ * An index card sliding up off the bottom of the table (or dropped onto the
+ * middle of it above the sheet breakpoint): the constant `surface` paper,
+ * square corners, a shadow instead of a hairline border. Escape closes;
  * focus is trapped inside the panel while open and restored to whatever was
- * focused before it opened. */
+ * focused before it opened.
+ */
 export function Sheet({ visible, onClose, title, children }: SheetProps): React.ReactElement | null {
   const colors = useColors();
-  const border = useContainerBorder();
   const motion = useMotion();
   const { width } = useWindowDimensions();
   const isBottomSheet = width < BOTTOM_SHEET_BREAKPOINT;
@@ -66,18 +69,18 @@ export function Sheet({ visible, onClose, title, children }: SheetProps): React.
 
   const panelStyle: ViewStyle = {
     backgroundColor: colors.surface,
-    borderWidth: border.borderWidth,
-    borderColor: border.borderColor,
     padding: space.lg,
     gap: space.md,
     ...(isBottomSheet
-      ? ({ borderTopLeftRadius: radii.lg, borderTopRightRadius: radii.lg, width: "100%" } as ViewStyle)
-      : ({ borderRadius: radii.lg, maxWidth: 480, width: "90%" } as ViewStyle)),
-    ...({ boxShadow: shadow.sheet(colors.shadowStrong) } as ViewStyle),
+      ? ({ borderTopLeftRadius: radii.md, borderTopRightRadius: radii.md, width: "100%" } as ViewStyle)
+      : ({ borderRadius: radii.md, maxWidth: 480, width: "90%" } as ViewStyle)),
+    ...({ boxShadow: `inset 0px 0px 0px 1px rgba(0,0,0,0.08), ${shadow.sheet(colors.shadowStrong)}` } as ViewStyle),
   };
 
+  const animationType = motion.reduce ? "none" : isBottomSheet ? "slide" : "fade";
+
   return (
-    <Modal visible={visible} transparent animationType={motion.reduce ? "none" : "fade"} onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType={animationType} onRequestClose={onClose}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Close"
@@ -96,7 +99,7 @@ export function Sheet({ visible, onClose, title, children }: SheetProps): React.
           style={panelStyle}
         >
           {title !== undefined ? (
-            <Text variant="title" accessibilityRole="header">
+            <Text variant="title" color="ink" accessibilityRole="header">
               {title}
             </Text>
           ) : null}

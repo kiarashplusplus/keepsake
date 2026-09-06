@@ -6,17 +6,15 @@ import { useWindowDimensions, View } from "react-native";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import type { Category } from "@keepsake/contracts/listing";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
-import { radii } from "@keepsake/tokens/radii";
 import { ReadableWidth } from "@/ui/ReadableWidth";
 import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
-import { DeckleRule } from "@/ui/DeckleRule";
+import { Card } from "@/ui/Surface";
 import { Skeleton } from "@/ui/Skeleton";
 import { EmptyState } from "@/ui/EmptyState";
-import { TagCard } from "@/ui/TagCard";
-import { Seal } from "@/ui/Seal";
-import { useColors } from "@/ui/theme";
+import { Print } from "@/ui/Print";
+import { Stamp } from "@/ui/Stamp";
 import { CategoryChips } from "@/features/feed/CategoryChips";
 import { SearchBar } from "@/features/feed/SearchBar";
 import { LocationBar } from "@/features/feed/LocationBar";
@@ -35,19 +33,18 @@ const NARROW_BREAKPOINT = 640;
 type RawParams = { q?: string; category?: string; country?: string; postal?: string; radius_mi?: string };
 
 function SkeletonCards(): React.ReactElement {
-  const colors = useColors();
-  const photoGround = { aspectRatio: 4 / 5, width: "100%", borderRadius: 0, borderTopRightRadius: radii.tag } as const;
+  const photoGround = { aspectRatio: 4 / 5, width: "100%" } as const;
   return (
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.xxl }}>
       {[0, 1, 2, 3].map((index) => (
-        <TagCard key={index} style={{ flexGrow: 1, flexBasis: 260, maxWidth: 360 }}>
+        <Print key={index} tiltDeg={((index % 2 === 0 ? 1 : -1) * (1 + index)) / 2} style={{ flexGrow: 1, flexBasis: 260, maxWidth: 360, padding: 10 }}>
           <Skeleton style={photoGround as never} />
-          <View style={{ padding: space.lg, gap: space.sm, borderTopWidth: 1, borderStyle: "dashed", borderTopColor: colors.rule }}>
+          <View style={{ paddingTop: space.md, gap: space.sm }}>
             <Skeleton height={16} />
             <Skeleton height={20} width="70%" />
             <Skeleton height={14} width="50%" />
           </View>
-        </TagCard>
+        </Print>
       ))}
     </View>
   );
@@ -140,7 +137,10 @@ export default function Feed(): React.ReactElement {
 
   return (
     <ReadableWidth variant="grid" style={{ paddingTop: narrow ? sectionRhythm.normal : sectionRhythm.loose, paddingBottom: sectionRhythm.bookend, gap: sectionRhythm.tight }}>
-      <View style={{ maxWidth: 680, gap: space.lg }}>
+      {/* A note pinned to the table announcing the site — the one place body
+          copy sits inside a paper card, so it reads regardless of the room's
+          lighting; the results below sit right on the visible table. */}
+      <Card style={{ maxWidth: 680, gap: space.lg, transform: [{ rotate: "-0.4deg" }] }}>
         <Eyebrow tick>A free gifting marketplace</Eyebrow>
         <Text variant={narrow ? "displayLg" : "displayXl"}>Give a keepsake a second life.</Text>
         <Text variant="bodyLg" color="textSecondary">
@@ -152,33 +152,29 @@ export default function Feed(): React.ReactElement {
             <Button label="Give something" />
           </Link>
         </View>
-      </View>
+      </Card>
 
-      <DeckleRule style={{ marginTop: sectionRhythm.tight }} />
-
-      <View style={{ gap: space.lg }}>
+      <Card style={{ gap: space.lg }}>
         <SearchBar value={q} onChange={setQ} />
         <CategoryChips value={category} onChange={setCategory} />
         <LocationBar value={location} onChange={setLocation} />
-      </View>
-
-      <DeckleRule />
+      </Card>
 
       <View style={{ gap: space.xl }}>
         {error !== null ? (
-          <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, flexWrap: "wrap" }}>
+          <Card style={{ flexDirection: "row", alignItems: "center", gap: space.md, flexWrap: "wrap" }}>
             <Text variant="body" color="dangerText">
               {error}
             </Text>
             <Button label="Try again" variant="link" onPress={() => setReloadToken((n) => n + 1)} />
-          </View>
+          </Card>
         ) : null}
 
         {loading ? (
           <SkeletonCards />
         ) : items.length === 0 ? (
           <EmptyState
-            ornament={<Seal state="idle" />}
+            ornament={<Stamp state="idle" label="Empty" />}
             eyebrow="Nearby"
             title={emptyLine}
             action={
@@ -196,9 +192,7 @@ export default function Feed(): React.ReactElement {
                 const cover = listing.photos[0];
                 return cover !== undefined ? { width: cover.width, height: cover.height } : { width: 4, height: 5 };
               }}
-              renderItem={(listing) => (
-                <ListingCard listing={listing} tilt={items.indexOf(listing) % 2 === 0 ? 1 : -1} testID={listing.id === items[0]?.id ? "feed-card-first" : undefined} />
-              )}
+              renderItem={(listing) => <ListingCard listing={listing} testID={listing.id === items[0]?.id ? "feed-card-first" : undefined} />}
             />
 
             {hasMore ? (

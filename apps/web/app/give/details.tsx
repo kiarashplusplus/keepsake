@@ -13,6 +13,7 @@ import { Eyebrow } from "@/ui/Eyebrow";
 import { Input } from "@/ui/Input";
 import { Chip } from "@/ui/Chip";
 import { Button } from "@/ui/Button";
+import { Card } from "@/ui/Surface";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { lookupPostalCode } from "@/api/geo";
 
@@ -78,7 +79,7 @@ export default function GiveDetails(): React.ReactElement {
         : "We don't know that postcode yet.";
 
   return (
-    <View style={{ gap: space.xl }}>
+    <Card style={{ gap: space.xl }}>
       <View style={{ gap: space.sm }}>
         <Eyebrow>Details</Eyebrow>
         <Text variant="displayLg">A few details.</Text>
@@ -137,6 +138,6 @@ export default function GiveDetails(): React.ReactElement {
       <View style={{ flexDirection: "row" }}>
         <Button label="Continue" disabled={!canContinue} onPress={handleContinue} />
       </View>
-    </View>
+    </Card>
   );
 }

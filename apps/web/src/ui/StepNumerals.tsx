@@ -10,10 +10,9 @@ export type StepNumeralsProps = {
   current: number;
 };
 
-/** The give flow's step indicator, set as "01 02 03 04 05" in Fraunces at
- * display optical size: steps done or current in full colour, the current one
- * in ink with a rule under it, the ones ahead in ghosted foil. Same
- * `progressbar` semantics as the dots it replaced. */
+/** The give flow's step indicator, typewritten as "01 02 03 04 05": steps
+ * done or current in full ink, the current one underlined, the ones ahead
+ * faded. Same `progressbar` semantics as the dots it replaced. */
 export function StepNumerals({ total, current }: StepNumeralsProps): React.ReactElement {
   const colors = useColors();
 
@@ -30,17 +29,14 @@ export function StepNumerals({ total, current }: StepNumeralsProps): React.React
         return (
           <Text
             key={index}
-            variant="eyebrow"
-            color={active ? "ink" : "foilText"}
-            fontVariationSettings='"opsz" 144, "SOFT" 30, "WONK" 0'
+            variant="label"
+            color="ink"
             style={{
-              fontSize: 15,
-              lineHeight: 20,
-              letterSpacing: 1,
-              opacity: ahead ? 0.55 : 1,
+              fontSize: 12,
+              opacity: ahead ? 0.4 : 1,
               paddingBottom: 2,
               borderBottomWidth: active ? 2 : 0,
-              borderBottomColor: colors.ink,
+              borderBottomColor: colors.accent,
             }}
           >
             {String(index + 1).padStart(2, "0")}

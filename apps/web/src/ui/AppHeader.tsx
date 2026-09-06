@@ -54,7 +54,7 @@ function navStyle(active: boolean, colors: ReturnType<typeof useColors>): ViewSt
     minHeight: 44,
     justifyContent: "center",
     borderBottomWidth: 2,
-    borderBottomColor: active ? colors.accent2Text : "transparent",
+    borderBottomColor: active ? colors.accent : "transparent",
   };
 }
 
@@ -63,7 +63,7 @@ function NavLink({ href, label, active }: { href: Href; label: string; active: b
   return (
     <Link href={href} asChild>
       <Pressable accessibilityRole="link" accessibilityState={{ selected: active }} style={navStyle(active, colors)}>
-        <Text variant="bodySm" color="accent2Text" style={{ fontSize: 15, fontWeight: "500" }}>
+        <Text variant="label" color="ink" style={{ fontSize: 12 }}>
           {label}
         </Text>
       </Pressable>
@@ -78,7 +78,7 @@ function SiteLink({ href, label }: { href: string; label: string }): React.React
   const colors = useColors();
   return (
     <View accessibilityRole="link" {...({ href } as object)} style={navStyle(false, colors)}>
-      <Text variant="bodySm" color="accent2Text" style={{ fontSize: 15, fontWeight: "500" }}>
+      <Text variant="label" color="ink" style={{ fontSize: 12 }}>
         {label}
       </Text>
     </View>

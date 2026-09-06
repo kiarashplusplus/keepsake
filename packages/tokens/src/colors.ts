@@ -1,96 +1,115 @@
 /**
- * Keepsake colour tokens — "the box, not the brand."
+ * Keepsake colour tokens — v3, "Polaroids on a table."
  *
- * Ground is deep paper cream + brown-black ink (never pure white/black — the
- * dark ground is a warm charcoal, the inside of a lidded box, not an inverted
- * light mode). Three accents do three different jobs instead of one
- * terracotta doing everything:
+ * The whole identity is: objects laid out on a tabletop. A photograph, once
+ * printed, does not change colour when you turn the lights down in the room
+ * — so almost nothing here flips between light and dark. Only the TABLE
+ * itself (`bg`/`tableEdge`, kraft by day, walnut at night) and the shadows
+ * it casts (`shadow`/`shadowStrong`/`overlay`/`lampLight`) respond to the
+ * room's lighting. Every object resting on the table — the print, its ink
+ * caption, the pencil-grey secondary line, the red rubber stamp, the tape,
+ * the kraft-tinted index card an input looks like — stays exactly the same
+ * colour in both modes. `bg`/`tableEdge` are decorative backdrop only: no
+ * component in this app renders text directly on them without a paper
+ * object (a print, an index card, the header's paper strip) underneath it,
+ * so dark mode never asks black ink to sit on a dark table.
  *
- *   accent    warm terracotta — the ONE pill button, the seal ribbon, urgency.
- *   accent2   deep bottle-green ink — links, labels, the "eyebrow" rule, the
- *             secondary voice that keeps accent from being the whole palette.
- *   foil      decorative gold leaf — the wax seal, small ornaments (the ❦
- *             fleuron), hairline flourishes. It is NOT text-safe at full
- *             saturation; use `foilText` for any gold that must carry words.
+ * `surface` is the *chrome* paper — the tint an input, sheet, chip or the
+ * header bar is cut from (a lined index card: warm, kraft-tinted, not
+ * stark). `print` is a slightly brighter, cleaner white reserved for the
+ * photograph's own frame. Both are constant.
  *
- * Every accent still follows the three-way split (borrowed from Bayan):
- *
- *   <name>       decorative — fills, rules, icons. Not guaranteed 4.5:1 on `bg`.
- *   <name>Text   the same hue pushed until it clears WCAG AA as text on `bg`
- *                and `surface`. Use for links, chip labels, counts.
- *   on<Name>     ink drawn *on* the filled `<name>` swatch (button labels,
- *                ribbon text). Flips lightness with the scheme so it's always
- *                readable on its own fill, unlike a fixed ink.
- *
- * `inkSoft` is a text tone between `ink` and `textSecondary` for pull quotes,
- * drop caps and hand-set flourishes that want weight without full ink black.
- * `rule` is ink at partial opacity for hairline dividers (deckled edges,
- * card rules) — decorative only, never used to carry text, so it is not in
- * TEXT_ON_GROUND_TOKENS and is allowed to be an rgba() string.
- *
- * Every `text*`, `*Text`, `inkSoft` and `on<Name>` token is verified at 4.5:1
- * by test/contrast.test.ts. Change a hex, run the test.
+ * `bg`/`tableEdge`/`shadow*`/`overlay`/`lampLight` are the only tokens that
+ * differ between `colorsLight` and `colorsDark` — verified by
+ * `test/contrast.test.ts`'s "never invert" check, which asserts every other
+ * key is byte-identical across the two objects.
  */
 export const colorsLight = {
-  bg: "#F6EFE1",
-  surface: "#FBF5E8",
-  surfaceSunken: "#ECE0C8",
-  border: "#D9C9A3",
-  ink: "#241C12",
-  textSecondary: "#5C4F3B",
-  textTertiary: "#6C5B40",
-  inkSoft: "#3D3122",
-  accent: "#AB4726",
-  accentText: "#8C3A1E",
-  onAccent: "#FFF7EC",
-  accentSoft: "#EFD6C3",
-  accent2: "#1E4D3F",
-  accent2Text: "#1E4D3F",
-  onAccent2: "#F3ECDC",
-  foil: "#B8862E",
-  foilText: "#7A5710",
-  onFoil: "#241C12",
-  rule: "rgba(36,28,18,0.35)",
-  success: "#2F7A4A",
-  successText: "#256A3E",
-  danger: "#A83A2B",
-  dangerText: "#8F2F22",
-  warning: "#8A5A12",
-  focus: "#8C3A1E",
-  overlay: "rgba(36,28,18,0.5)",
-  shadow: "rgba(60,40,20,0.16)",
-  shadowStrong: "rgba(60,40,20,0.28)",
+  // --- the table (the only tokens that flip) ---
+  bg: "#D2BC97",
+  table: "#D2BC97",
+  tableEdge: "#B89D74",
+  surfaceSunken: "#B89D74",
+  overlay: "rgba(27,24,21,0.55)",
+  shadow: "rgba(60,40,20,0.18)",
+  shadowStrong: "rgba(60,40,20,0.32)",
+  /** The lamp's warm pool of light behind the hero, on the dark table only — a pale wash in light mode, where it does nothing. */
+  lampLight: "rgba(255,247,224,0.35)",
+
+  // --- objects on the table (constant in both modes) ---
+  surface: "#F1E6CC",
+  border: "#B89D74",
+  print: "#FBF9F4",
+  ink: "#1B1815",
+  textSecondary: "#5A524A",
+  pencil: "#5A524A",
+  textTertiary: "#6C6150",
+  inkSoft: "#3A332B",
+  accent2: "#1B1815",
+  accent2Text: "#1B1815",
+  onAccent2: "#F1E6CC",
+  accent: "#C4341C",
+  stamp: "#C4341C",
+  accentText: "#8A2113",
+  stampText: "#8A2113",
+  onAccent: "#FBF9F4",
+  accentSoft: "#F0D6C9",
+  foil: "#8A6D3F",
+  foilText: "#5C4726",
+  onFoil: "#FBF9F4",
+  rule: "rgba(27,24,21,0.32)",
+  tape: "rgba(255,236,160,0.55)",
+  tapeStripe: "rgba(180,140,40,0.22)",
+  success: "#3E6B33",
+  successText: "#2E4F26",
+  danger: "#A8351F",
+  dangerText: "#7A2515",
+  warning: "#5E4610",
+  focus: "#7A2515",
 } as const;
 
 export const colorsDark = {
-  bg: "#1B1512",
-  surface: "#221B16",
-  surfaceSunken: "#120E0B",
-  border: "#3A2F26",
-  ink: "#F5ECDC",
-  textSecondary: "#C7B9A0",
-  textTertiary: "#9C8F79",
-  inkSoft: "#D9CBB0",
-  accent: "#E08258",
-  accentText: "#F3A97E",
-  onAccent: "#2A1208",
-  accentSoft: "#3F2A1C",
-  accent2: "#5FA98C",
-  accent2Text: "#7FC4A8",
-  onAccent2: "#0D211B",
-  foil: "#D9B155",
-  foilText: "#E8C97A",
-  onFoil: "#2A1F0A",
-  rule: "rgba(245,236,220,0.28)",
-  success: "#7CC495",
-  successText: "#8FD3A6",
-  danger: "#E8897A",
-  dangerText: "#F09A8C",
-  warning: "#E0B562",
-  focus: "#F3A97E",
+  // --- the table (the only tokens that flip) ---
+  bg: "#2B2119",
+  table: "#2B2119",
+  tableEdge: "#1C140F",
+  surfaceSunken: "#1C140F",
   overlay: "rgba(0,0,0,0.6)",
-  shadow: "rgba(0,0,0,0.35)",
-  shadowStrong: "rgba(0,0,0,0.5)",
+  shadow: "rgba(8,5,2,0.55)",
+  shadowStrong: "rgba(8,5,2,0.7)",
+  /** The lamp's warm pool of light — the whole point of dark mode's ambience. */
+  lampLight: "rgba(255,214,140,0.16)",
+
+  // --- objects on the table (byte-identical to colorsLight — see file header) ---
+  surface: "#F1E6CC",
+  border: "#B89D74",
+  print: "#FBF9F4",
+  ink: "#1B1815",
+  textSecondary: "#5A524A",
+  pencil: "#5A524A",
+  textTertiary: "#6C6150",
+  inkSoft: "#3A332B",
+  accent2: "#1B1815",
+  accent2Text: "#1B1815",
+  onAccent2: "#F1E6CC",
+  accent: "#C4341C",
+  stamp: "#C4341C",
+  accentText: "#8A2113",
+  stampText: "#8A2113",
+  onAccent: "#FBF9F4",
+  accentSoft: "#F0D6C9",
+  foil: "#8A6D3F",
+  foilText: "#5C4726",
+  onFoil: "#FBF9F4",
+  rule: "rgba(27,24,21,0.32)",
+  tape: "rgba(255,236,160,0.55)",
+  tapeStripe: "rgba(180,140,40,0.22)",
+  success: "#3E6B33",
+  successText: "#2E4F26",
+  danger: "#A8351F",
+  dangerText: "#7A2515",
+  warning: "#5E4610",
+  focus: "#7A2515",
 } as const;
 
 export type ColorTokens = { readonly [K in keyof typeof colorsLight]: string };
@@ -99,17 +118,24 @@ export type ColorMode = "light" | "dark";
 export const colorsFor = (mode: ColorMode): ColorTokens =>
   mode === "dark" ? colorsDark : colorsLight;
 
-/** Tokens that must read as text on `bg` and `surface` at WCAG AA. */
+/** Tokens that are objects on the table: constant across `colorsLight`/
+ * `colorsDark`, verified against both the chrome `surface` and the
+ * photograph `print` white. See `test/contrast.test.ts`. */
 export const TEXT_ON_GROUND_TOKENS = [
   "ink",
   "textSecondary",
   "textTertiary",
   "inkSoft",
-  "accentText",
   "accent2Text",
+  "accentText",
   "foilText",
   "successText",
   "dangerText",
   "warning",
   "focus",
 ] as const satisfies readonly (keyof ColorTokens)[];
+
+/** The only tokens allowed to differ between light and dark — the table
+ * itself and the light it's under. Everything else must be byte-identical;
+ * see `test/contrast.test.ts`'s "never invert" check. */
+export const TABLE_TOKENS = ["bg", "table", "tableEdge", "surfaceSunken", "overlay", "shadow", "shadowStrong", "lampLight"] as const satisfies readonly (keyof ColorTokens)[];

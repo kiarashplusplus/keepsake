@@ -5,7 +5,7 @@
 // handles the *pre-JS* flash by setting `data-theme` synchronously; this
 // provider handles the *post-hydration* React-tree render).
 import * as React from "react";
-import { StyleSheet, useColorScheme as useRNColorScheme } from "react-native";
+import { useColorScheme as useRNColorScheme } from "react-native";
 import { colorsFor, type ColorMode, type ColorTokens } from "@keepsake/tokens/colors";
 import { prefStore } from "@/lib/prefStore";
 
@@ -117,12 +117,11 @@ export function useThemeMode(): ThemeContextValue {
 }
 
 /**
- * The canonical hairline border for elevated containers (cards, sheets,
- * inputs) so every surface reads as the same layer. 1 device pixel thin, in
- * `rule` (ink at partial opacity) rather than the pale `border` tint — the
- * v2 identity draws dividers as pencil hairlines, not as boxes.
+ * The lined-index-card rule: a single 2px baseline under a field, in `ink`
+ * — never a full hairline box. The v3 identity draws a form field as a
+ * ruled card, not a bordered rectangle.
  */
-export function useContainerBorder(): { borderWidth: number; borderColor: string } {
+export function useContainerBorder(): { borderBottomWidth: number; borderBottomColor: string } {
   const colors = useColors();
-  return { borderWidth: StyleSheet.hairlineWidth, borderColor: colors.rule };
+  return { borderBottomWidth: 2, borderBottomColor: colors.ink };
 }

@@ -4,13 +4,13 @@ import { sectionRhythm } from "@keepsake/tokens/spacing";
 import { ReadableWidth } from "@/ui/ReadableWidth";
 import { EmptyState } from "@/ui/EmptyState";
 import { Button } from "@/ui/Button";
-import { Seal } from "@/ui/Seal";
+import { Stamp } from "@/ui/Stamp";
 
 export default function NotFound(): React.ReactElement {
   return (
     <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
       <EmptyState
-        ornament={<Seal state="idle" />}
+        ornament={<Stamp state="idle" label="Not found" />}
         eyebrow="Not found"
         title="That keepsake isn’t here"
         line="It may have already found a home, or the link might be off."

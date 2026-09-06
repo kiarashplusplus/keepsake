@@ -11,6 +11,7 @@ import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Input } from "@/ui/Input";
 import { Button } from "@/ui/Button";
+import { Card } from "@/ui/Surface";
 import { Turnstile } from "@/ui/Turnstile";
 import { recover } from "@/api/recover";
 import { ApiError } from "@/api/client";
@@ -45,45 +46,47 @@ export default function Recover(): React.ReactElement {
   }
 
   return (
-    <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
-      <View style={{ gap: space.sm }}>
-        <Eyebrow tick>Lost your listings?</Eyebrow>
-        <Text variant="displayLg">Get back in.</Text>
-        <Text variant="bodyLg" color="textSecondary">
-          If you added an email to a keepsake, we can send a link back to your dashboard on this device.
-        </Text>
-      </View>
-
-      {phase === "sent" ? (
-        <Text variant="body" color="textSecondary">
-          If we know that address, a link is on its way.
-        </Text>
-      ) : (
-        <View style={{ gap: space.lg }}>
-          <Input
-            label="Email"
-            value={email}
-            onChangeText={setEmail}
-            onBlur={() => setTouched(true)}
-            error={emailError}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            placeholder="you@example.com"
-          />
-
-          <Turnstile onToken={setTurnstileToken} />
-
-          {error !== null ? (
-            <Text variant="body" color="dangerText">
-              {error}
-            </Text>
-          ) : null}
-
-          <View style={{ flexDirection: "row" }}>
-            <Button label="Send the link" loading={phase === "submitting"} disabled={phase === "submitting" || turnstileToken === null} onPress={() => void handleSubmit()} />
-          </View>
+    <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+      <Card style={{ gap: space.xl, transform: [{ rotate: "0.3deg" }] }}>
+        <View style={{ gap: space.sm }}>
+          <Eyebrow tick>Lost your listings?</Eyebrow>
+          <Text variant="displayLg">Get back in.</Text>
+          <Text variant="bodyLg" color="textSecondary">
+            If you added an email to a keepsake, we can send a link back to your dashboard on this device.
+          </Text>
         </View>
-      )}
+
+        {phase === "sent" ? (
+          <Text variant="body" color="textSecondary">
+            If we know that address, a link is on its way.
+          </Text>
+        ) : (
+          <View style={{ gap: space.lg }}>
+            <Input
+              label="Email"
+              value={email}
+              onChangeText={setEmail}
+              onBlur={() => setTouched(true)}
+              error={emailError}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              placeholder="you@example.com"
+            />
+
+            <Turnstile onToken={setTurnstileToken} />
+
+            {error !== null ? (
+              <Text variant="body" color="dangerText">
+                {error}
+              </Text>
+            ) : null}
+
+            <View style={{ flexDirection: "row" }}>
+              <Button label="Send the link" loading={phase === "submitting"} disabled={phase === "submitting" || turnstileToken === null} onPress={() => void handleSubmit()} />
+            </View>
+          </View>
+        )}
+      </Card>
     </ReadableWidth>
   );
 }

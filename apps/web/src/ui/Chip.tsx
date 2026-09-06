@@ -11,6 +11,10 @@ export type ChipProps = {
   onPress?: () => void;
 };
 
+/** A small pencil-outlined label, not a pill: a typewritten word boxed in
+ * ink, filled with the tape-red wash when selected. Opaque `surface` fill
+ * always, so the label is safe to read regardless of what it's sitting
+ * over. */
 export function Chip({ label, selected = false, onPress }: ChipProps): React.ReactElement {
   const colors = useColors();
 
@@ -23,14 +27,14 @@ export function Chip({ label, selected = false, onPress }: ChipProps): React.Rea
       style={({ pressed }): ViewStyle => ({
         paddingVertical: space.xs,
         paddingHorizontal: space.md,
-        borderRadius: radii.pill,
-        borderWidth: 1,
-        borderColor: selected ? "transparent" : colors.rule,
+        borderRadius: radii.sm,
+        borderWidth: selected ? 2 : 1,
+        borderColor: colors.ink,
         backgroundColor: selected ? colors.accentSoft : colors.surface,
-        opacity: pressed ? 0.85 : 1,
+        opacity: pressed ? 0.75 : 1,
       })}
     >
-      <Text variant="bodySm" color={selected ? "accentText" : "textSecondary"} style={{ fontWeight: "500" }}>
+      <Text variant="label" color={selected ? "accentText" : "ink"} style={{ fontSize: 11 }}>
         {label}
       </Text>
     </Pressable>

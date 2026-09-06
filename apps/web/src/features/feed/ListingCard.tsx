@@ -1,23 +1,23 @@
-// The v2 tag card wherever a listing appears in the feed: photo, one line of
-// the story in italic with hanging quotes, title, then a caption line.
+// The v3 print wherever a listing appears in the feed: photo behind glass,
+// a thick bottom border carrying the caption in mono, tilted a few degrees
+// (deterministic from the listing id) and taped to the table.
 import * as React from "react";
 import { Pressable, View } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import { Link } from "expo-router";
 import type { PublicListing } from "@keepsake/contracts/listing";
 import { space } from "@keepsake/tokens/spacing";
-import { radii } from "@keepsake/tokens/radii";
+import { motion } from "@keepsake/tokens/motion";
 import { Text } from "@/ui/Text";
-import { TagCard } from "@/ui/TagCard";
+import { Print } from "@/ui/Print";
 import { useColors } from "@/ui/theme";
 import { useMotion } from "@/ui/MotionProvider";
-import { clampCardAspectRatio } from "@/lib/masonry";
+import { clampCardAspectRatio, tiltDegForId } from "@/lib/masonry";
 import { storyExcerpt } from "@/lib/storyExcerpt";
 import { formatDistance } from "@/lib/geo";
 
 export type ListingCardProps = {
   listing: PublicListing;
-  tilt?: 1 | -1;
   testID?: string | undefined;
 };
 
@@ -26,23 +26,23 @@ function caption(listing: PublicListing): string {
   return listing.distance_mi !== undefined ? `${place} · ${formatDistance(listing.distance_mi)}` : place;
 }
 
-export function ListingCard({ listing, tilt = 1, testID }: ListingCardProps): React.ReactElement {
+export function ListingCard({ listing, testID }: ListingCardProps): React.ReactElement {
   const colors = useColors();
-  const motion = useMotion();
+  const rnMotion = useMotion();
   const cover = listing.photos[0];
   const aspectRatio = cover !== undefined ? clampCardAspectRatio(cover.width, cover.height) : 1;
+  const tiltDeg = tiltDegForId(listing.id, motion.tiltRangeDeg);
 
   return (
     <Link href={{ pathname: "/item/[id]", params: { id: listing.id } }} asChild>
       <Pressable accessibilityRole="link" accessibilityLabel={listing.title} testID={testID}>
-        <TagCard interactive tilt={tilt} style={{ width: "100%" }}>
+        <Print interactive tiltDeg={tiltDeg} style={{ width: "100%", padding: 10 }}>
           <View
             style={{
               width: "100%",
               aspectRatio,
               overflow: "hidden",
-              borderTopRightRadius: radii.tag,
-              backgroundColor: colors.surfaceSunken,
+              backgroundColor: colors.tableEdge,
             }}
           >
             <ExpoImage
@@ -50,7 +50,7 @@ export function ListingCard({ listing, tilt = 1, testID }: ListingCardProps): Re
               placeholder={cover !== undefined ? { blurhash: cover.blurhash } : null}
               style={{ width: "100%", height: "100%" }}
               contentFit="cover"
-              transition={motion.imageFadeMs}
+              transition={rnMotion.imageFadeMs}
               accessibilityLabel=""
             />
             {listing.status === "given" ? (
@@ -59,30 +59,32 @@ export function ListingCard({ listing, tilt = 1, testID }: ListingCardProps): Re
                   position: "absolute",
                   top: space.sm,
                   right: space.sm,
-                  backgroundColor: colors.foil,
-                  borderRadius: radii.sm,
+                  borderWidth: 2,
+                  borderColor: colors.accent,
+                  backgroundColor: colors.print,
                   paddingHorizontal: space.sm,
                   paddingVertical: space.xxs,
+                  transform: [{ rotate: "-4deg" }],
                 }}
               >
-                <Text variant="eyebrow" color="onFoil" style={{ fontSize: 11, lineHeight: 14 }}>
+                <Text variant="stamp" color="stampText" style={{ fontSize: 10 }}>
                   Given
                 </Text>
               </View>
             ) : null}
           </View>
-          <View style={{ padding: space.lg, gap: space.xs, borderTopWidth: 1, borderStyle: "dashed", borderTopColor: colors.rule }}>
+          <View style={{ paddingTop: space.md, paddingHorizontal: space.xs, gap: space.xxs }}>
             <Text variant="storyExcerpt" color="textSecondary" numberOfLines={2} hangingPunctuation>
               “{storyExcerpt(listing.story)}”
             </Text>
             <Text variant="title" numberOfLines={1}>
               {listing.title}
             </Text>
-            <Text variant="caption" color="textTertiary">
+            <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
               {caption(listing)}
             </Text>
           </View>
-        </TagCard>
+        </Print>
       </Pressable>
     </Link>
   );

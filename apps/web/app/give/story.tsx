@@ -10,6 +10,7 @@ import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { TextArea } from "@/ui/TextArea";
 import { Button } from "@/ui/Button";
+import { Card } from "@/ui/Surface";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { STORY_PROMPTS, STORY_PROMPT_ROTATE_MS } from "@/features/give/storyPrompts";
 
@@ -42,7 +43,7 @@ export default function GiveStory(): React.ReactElement {
   }
 
   return (
-    <View style={{ gap: space.xl }}>
+    <Card style={{ gap: space.xl }}>
       <View style={{ gap: space.sm }}>
         <Eyebrow>The story</Eyebrow>
         <Text variant="displayLg">Tell its story.</Text>
@@ -65,6 +66,6 @@ export default function GiveStory(): React.ReactElement {
       <View style={{ flexDirection: "row" }}>
         <Button label="Continue" onPress={handleContinue} />
       </View>
-    </View>
+    </Card>
   );
 }

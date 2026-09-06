@@ -81,8 +81,8 @@ export function TextArea({
             borderRadius: radii.tag,
             backgroundColor: colors.surface,
             color: colors.ink,
-            borderWidth: focused ? 2 : border.borderWidth,
-            borderColor: error !== undefined ? colors.danger : focused ? colors.focus : border.borderColor,
+            borderBottomWidth: focused ? 3 : border.borderBottomWidth,
+            borderBottomColor: error !== undefined ? colors.danger : focused ? colors.focus : border.borderBottomColor,
           },
         ]}
         {...rest}

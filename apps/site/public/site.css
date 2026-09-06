@@ -1,11 +1,18 @@
 /*
-  Keepsake marketing site stylesheet — v2 identity ("the box, not the brand").
+  Keepsake marketing site stylesheet — v3 identity ("Polaroids on a table").
   Built from packages/tokens/src/{colors,spacing,radii,typography,motion}.ts —
   do not invent new colors or sizes here; add a token upstream instead.
+
+  Almost every custom property below is CONSTANT between light and dark —
+  see packages/tokens/src/colors.ts's file header: a print, its ink, and the
+  stamp red do not invert when the room's lighting changes. Only the table
+  itself (--bg/--surface-sunken) and the shadow/grain respond to the theme.
 */
 
 /* ---------- Fonts ---------- */
-/* Variable fonts served by the app at these exact paths; this stylesheet only references them. */
+/* Fraunces (variable, serif headlines/story) + CourierPrime (static, mono
+   captions/labels/stamps/buttons) — served by the app at these exact paths;
+   this stylesheet only references them. */
 @font-face {
   font-family: "Fraunces";
   src: url("/fonts/Fraunces-VF.ttf") format("truetype-variations");
@@ -21,44 +28,59 @@
   font-display: swap;
 }
 @font-face {
-  font-family: "Inter";
-  src: url("/fonts/InterVariable.ttf") format("truetype-variations");
-  font-weight: 100 900;
+  font-family: "CourierPrime";
+  src: url("/fonts/CourierPrime-Regular.ttf") format("truetype");
+  font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
-  font-family: "Inter";
-  src: url("/fonts/InterVariable-Italic.ttf") format("truetype-variations");
-  font-weight: 100 900;
+  font-family: "CourierPrime";
+  src: url("/fonts/CourierPrime-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "CourierPrime";
+  src: url("/fonts/CourierPrime-Italic.ttf") format("truetype");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "CourierPrime";
+  src: url("/fonts/CourierPrime-BoldItalic.ttf") format("truetype");
+  font-weight: 700;
   font-style: italic;
   font-display: swap;
 }
 
 /* ---------- Tokens ---------- */
 :root {
-  --bg: #f6efe1;
-  --surface: #fbf5e8;
-  --surface-sunken: #ece0c8;
-  --border: #d9c9a3;
-  --ink: #241c12;
-  --ink-soft: #3d3122;
-  --text2: #5c4f3b;
-  --text3: #6c5b40;
-  --accent: #ab4726;
-  --accent-text: #8c3a1e;
-  --on-accent: #fff7ec;
-  --accent-soft: #efd6c3;
-  --accent2: #1e4d3f;
-  --accent2-text: #1e4d3f;
-  --on-accent2: #f3ecdc;
-  --foil: #b8862e;
-  --foil-text: #7a5710;
-  --on-foil: #241c12;
-  --rule: rgba(36, 28, 18, 0.35);
-  --shadow: rgba(60, 40, 20, 0.16);
-  --shadow-strong: rgba(60, 40, 20, 0.28);
-  --grain-opacity: 0.06;
+  --bg: #d2bc97;
+  --surface: #f1e6cc;
+  --surface-sunken: #b89d74;
+  --print: #fbf9f4;
+  --border: #b89d74;
+  --ink: #1b1815;
+  --ink-soft: #3a332b;
+  --text2: #5a524a;
+  --text3: #6c6150;
+  --accent: #c4341c;
+  --accent-text: #8a2113;
+  --on-accent: #fbf9f4;
+  --accent-soft: #f0d6c9;
+  --accent2: #1b1815;
+  --accent2-text: #1b1815;
+  --on-accent2: #f1e6cc;
+  --foil: #8a6d3f;
+  --foil-text: #5c4726;
+  --on-foil: #fbf9f4;
+  --rule: rgba(27, 24, 21, 0.32);
+  --shadow: rgba(60, 40, 20, 0.18);
+  --shadow-strong: rgba(60, 40, 20, 0.32);
+  --grain-opacity: 0.08;
   --grain-blend: multiply;
 
   --space-xxs: 2px;
@@ -77,11 +99,11 @@
   --rhythm-loose: 96px;
   --rhythm-bookend: 112px;
 
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 14px;
-  --radius-pill: 999px;
-  --radius-tag: 6px;
+  --radius-sm: 2px;
+  --radius-md: 2px;
+  --radius-lg: 2px;
+  --radius-pill: 2px;
+  --radius-tag: 2px;
 
   --measure-prose: 720px;
   --measure-grid: 1100px;
@@ -90,36 +112,36 @@
   --duration-standard: 300ms;
   --duration-quick: 150ms;
   --duration-lift: 150ms;
-  --tag-tilt: 0.4deg;
+  --tag-tilt: 1.4deg;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
 
   color-scheme: light;
 }
 
+/*
+  Dark mode on the marketing site: the table goes dark (walnut, --bg) and the
+  running prose reads in a light ink so it stays legible directly on that
+  table (the site has no literal "print" object framing every paragraph the
+  way the app does — see packages/tokens/src/colors.ts's file header for why
+  the app's `ink`/`pencil`/`print` are constant instead). The stamp red and
+  the print white (--accent/--on-accent/--foil/--print) still never invert.
+*/
 html[data-theme="dark"] {
-  --bg: #1b1512;
-  --surface: #221b16;
-  --surface-sunken: #120e0b;
-  --border: #3a2f26;
-  --ink: #f5ecdc;
-  --ink-soft: #d9cbb0;
-  --text2: #c7b9a0;
-  --text3: #9c8f79;
-  --accent: #e08258;
-  --accent-text: #f3a97e;
-  --on-accent: #2a1208;
-  --accent-soft: #3f2a1c;
-  --accent2: #5fa98c;
-  --accent2-text: #7fc4a8;
-  --on-accent2: #0d211b;
-  --foil: #d9b155;
-  --foil-text: #e8c97a;
-  --on-foil: #2a1f0a;
-  --rule: rgba(245, 236, 220, 0.28);
-  --shadow: rgba(0, 0, 0, 0.35);
-  --shadow-strong: rgba(0, 0, 0, 0.5);
-  --grain-opacity: 0.09;
-  --grain-blend: normal;
+  --bg: #2b2119;
+  --surface: #3a2e23;
+  --surface-sunken: #1c140f;
+  --ink: #f3ecdd;
+  --ink-soft: #e4d9c4;
+  --text2: #cbbba0;
+  --text3: #a99a82;
+  --accent2: #e3d6be;
+  --accent2-text: #e3d6be;
+  --on-accent2: #2b2119;
+  --rule: rgba(243, 236, 221, 0.24);
+  --shadow: rgba(8, 5, 2, 0.55);
+  --shadow-strong: rgba(8, 5, 2, 0.7);
+  --grain-opacity: 0.12;
+  --grain-blend: overlay;
   color-scheme: dark;
 }
 
@@ -129,29 +151,21 @@ html[data-theme="light"] {
 
 @media (prefers-color-scheme: dark) {
   html:not([data-theme="light"]):not([data-theme="dark"]) {
-    --bg: #1b1512;
-    --surface: #221b16;
-    --surface-sunken: #120e0b;
-    --border: #3a2f26;
-    --ink: #f5ecdc;
-    --ink-soft: #d9cbb0;
-    --text2: #c7b9a0;
-    --text3: #9c8f79;
-    --accent: #e08258;
-    --accent-text: #f3a97e;
-    --on-accent: #2a1208;
-    --accent-soft: #3f2a1c;
-    --accent2: #5fa98c;
-    --accent2-text: #7fc4a8;
-    --on-accent2: #0d211b;
-    --foil: #d9b155;
-    --foil-text: #e8c97a;
-    --on-foil: #2a1f0a;
-    --rule: rgba(245, 236, 220, 0.28);
-    --shadow: rgba(0, 0, 0, 0.35);
-    --shadow-strong: rgba(0, 0, 0, 0.5);
-    --grain-opacity: 0.09;
-    --grain-blend: normal;
+    --bg: #2b2119;
+    --surface: #3a2e23;
+    --surface-sunken: #1c140f;
+    --ink: #f3ecdd;
+    --ink-soft: #e4d9c4;
+    --text2: #cbbba0;
+    --text3: #a99a82;
+    --accent2: #e3d6be;
+    --accent2-text: #e3d6be;
+    --on-accent2: #2b2119;
+    --rule: rgba(243, 236, 221, 0.24);
+    --shadow: rgba(8, 5, 2, 0.55);
+    --shadow-strong: rgba(8, 5, 2, 0.7);
+    --grain-opacity: 0.12;
+    --grain-blend: overlay;
     color-scheme: dark;
   }
 }
@@ -176,7 +190,7 @@ html {
 body {
   background: var(--bg);
   color: var(--ink);
-  font-family: "Inter", system-ui, sans-serif;
+  font-family: "CourierPrime", ui-monospace, monospace;
   font-size: 16px;
   line-height: 24px;
   -webkit-font-smoothing: antialiased;
@@ -314,12 +328,15 @@ body::before {
   min-height: 44px;
   padding: 0 var(--space-xl);
   border-radius: var(--radius-pill);
-  font-family: "Inter", sans-serif;
-  font-weight: 600;
-  font-size: 16px;
+  font-family: "CourierPrime", ui-monospace, monospace;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   text-decoration: none;
   border: 1px solid transparent;
   cursor: pointer;
+  transform: rotate(-0.8deg);
   transition:
     transform var(--duration-quick) var(--ease),
     box-shadow var(--duration-quick) var(--ease),
@@ -329,12 +346,12 @@ body::before {
 .btn-primary {
   background: var(--accent);
   color: var(--on-accent);
-  box-shadow: 0px 1px 0px var(--shadow), 0px 8px 20px -10px var(--shadow-strong);
+  box-shadow: 2px 3px 0px rgba(27, 24, 21, 0.3), 3px 10px 16px -8px var(--shadow-strong);
 }
 
 .btn-primary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0px 1px 0px var(--shadow), 0px 14px 26px -10px var(--shadow-strong);
+  transform: rotate(-0.8deg) translateY(-1px);
+  box-shadow: 3px 5px 0px rgba(27, 24, 21, 0.35), 5px 16px 24px -8px var(--shadow-strong);
 }
 
 .link-cta {
@@ -344,9 +361,12 @@ body::before {
   min-height: 44px;
   color: var(--ink);
   text-decoration: none;
-  font-weight: 600;
-  font-size: 16px;
-  border-bottom: 1px solid var(--rule);
+  font-family: "CourierPrime", ui-monospace, monospace;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-bottom: 2px solid var(--ink);
   transition: color var(--duration-quick) var(--ease), border-color var(--duration-quick) var(--ease);
 }
 
@@ -492,24 +512,20 @@ h3 {
   }
 }
 
-/* Signature load moment: the hero seal settles in with a small overshoot. */
-.seal-settle {
-  animation: sealSettle 700ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
-  animation-delay: 200ms;
+/* Signature load moment: the hero's prints drop onto the table. */
+.prints-drop {
+  animation: printsDrop 350ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: 120ms;
 }
 
-@keyframes sealSettle {
+@keyframes printsDrop {
   0% {
     opacity: 0;
-    transform: scale(0.82) rotate(-6deg);
-  }
-  70% {
-    opacity: 1;
-    transform: scale(1.03) rotate(1deg);
+    transform: scale(1.03) translateY(-8px);
   }
   100% {
     opacity: 1;
-    transform: scale(1) rotate(0deg);
+    transform: scale(1) translateY(0);
   }
 }
 
@@ -519,7 +535,7 @@ h3 {
     opacity: 1;
     transform: none;
   }
-  .seal-settle {
+  .prints-drop {
     animation: none;
     opacity: 1;
     transform: none;
@@ -643,30 +659,30 @@ h2 {
   color: var(--ink);
 }
 
-/* ---------- Example cards: tags, not rounded boxes ---------- */
+/* ---------- Example cards: instant-film prints, not rounded boxes ---------- */
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: var(--space-xxl);
+  padding-top: var(--space-lg);
 }
 
 .tag-card {
   position: relative;
-  background: var(--surface);
-  border-radius: 0 var(--radius-tag) var(--radius-tag) var(--radius-tag);
-  overflow: visible;
-  box-shadow: 0px 1px 0px var(--shadow), 0px 8px 20px -10px var(--shadow-strong);
+  background: var(--print);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08), 2px 3px 0px var(--shadow), 3px 10px 16px -8px var(--shadow-strong);
   transition: box-shadow var(--duration-standard) var(--ease), transform var(--duration-lift) var(--ease);
-  transform: rotate(0deg) translateY(0);
+  transform: rotate(var(--tag-tilt)) translateY(0);
+  padding: 10px;
+}
+
+.tag-card:nth-child(even) {
+  transform: rotate(calc(-1 * var(--tag-tilt))) translateY(0);
 }
 
 .tag-card:hover {
-  box-shadow: 0px 1px 0px var(--shadow), 0px 16px 28px -10px var(--shadow-strong);
-  transform: rotate(var(--tag-tilt)) translateY(-2px);
-}
-
-.tag-card:nth-child(even):hover {
-  transform: rotate(calc(-1 * var(--tag-tilt))) translateY(-2px);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08), 3px 5px 0px var(--shadow), 5px 16px 24px -8px var(--shadow-strong);
+  transform: rotate(0deg) translateY(-2px);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -674,29 +690,31 @@ h2 {
     transition: none;
   }
   .tag-card:hover {
-    transform: none;
+    transform: rotate(var(--tag-tilt));
   }
 }
 
-/* the punched hole + knotted string, hung from the top-left corner */
-.tag-hole {
+/* A short strip of masking tape at one corner, holding the print down. */
+.tag-card::before {
+  content: "";
   position: absolute;
-  top: -14px;
-  left: 18px;
-  width: 34px;
-  height: 34px;
-  color: var(--text3);
+  top: -8px;
+  left: 20px;
+  width: 44px;
+  height: 20px;
+  background: rgba(255, 236, 160, 0.55);
+  transform: rotate(-16deg);
+  box-shadow: 0px 1px 2px rgba(0, 0, 0, 0.12);
   z-index: 2;
 }
 
 .card-photo {
   aspect-ratio: 4 / 5;
-  background: linear-gradient(160deg, var(--surface-sunken) 0%, var(--accent-soft) 100%);
+  background: var(--surface-sunken);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: var(--space-xl);
-  border-radius: 0 var(--radius-tag) 0 0;
 }
 
 .card-photo svg {
@@ -707,8 +725,7 @@ h2 {
 }
 
 .card-body {
-  padding: var(--space-lg);
-  border-top: 1px dashed var(--rule);
+  padding: var(--space-md) var(--space-xs) 0;
 }
 
 .card-excerpt {
@@ -718,7 +735,10 @@ h2 {
   font-variation-settings: "opsz" 9, "SOFT" 20, "WONK" 1;
   font-size: 17px;
   line-height: 24px;
-  color: var(--text2);
+  /* Constant, not `--text2`: this sits on `.tag-card`'s `--print` fill,
+     which never inverts (see site.css's file header) — the caption on a
+     print stays pencil-grey regardless of the room's lighting. */
+  color: #5a524a;
   margin: 0 0 var(--space-sm);
   position: relative;
   padding-left: 0.5em;
@@ -726,19 +746,23 @@ h2 {
 }
 
 .card-title {
-  font-family: "Inter", sans-serif;
+  font-family: "Fraunces", serif;
+  font-optical-sizing: auto;
+  font-variation-settings: "opsz" 30, "SOFT" 10, "WONK" 0;
   font-weight: 600;
-  font-size: 20px;
-  line-height: 26px;
+  font-size: 19px;
+  line-height: 23px;
   margin: 0 0 var(--space-xs);
-  color: var(--ink);
+  /* Constant — see `.card-excerpt`'s comment above. */
+  color: #1b1815;
 }
 
 .card-caption {
-  font-family: "Inter", sans-serif;
+  font-family: "CourierPrime", ui-monospace, monospace;
   font-size: 14px;
   line-height: 20px;
-  color: var(--text3);
+  /* Constant — see `.card-excerpt`'s comment above. */
+  color: #6c6150;
   margin: 0;
 }
 
@@ -874,7 +898,7 @@ h2 {
 }
 
 .prose-content h2 {
-  font-family: "Inter", sans-serif;
+  font-family: "CourierPrime", ui-monospace, monospace;
   font-size: 13px;
   line-height: 18px;
   font-weight: 600;

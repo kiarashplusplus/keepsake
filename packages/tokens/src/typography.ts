@@ -1,29 +1,29 @@
 /**
- * Type scale. Fraunces (variable: opsz, wght, SOFT, WONK) carries the display
- * sizes, the wordmark, and the story itself — serif prose is the point of the
- * product. Inter carries UI chrome.
+ * Type scale — v3, "Polaroids on a table." Two faces, doing two different
+ * jobs, and nothing else visible anywhere in the product:
  *
- * Fraunces' axes are used on purpose, not left at defaults:
- *   - `opsz` (optical size) is pushed HIGH (near 144) for display and the
- *     wordmark, so terminals get chunky and idiosyncratic; it is left LOW
- *     (near 9) for the story body and italic excerpts, where it should read
- *     like well-set text, not a poster.
- *   - `SOFT` (softness) rounds the terminals — used on display/wordmark/drop
- *     cap for warmth, left at 0 for small UI type where crispness matters.
- *   - `WONK` (wonky alternates) is 1 on display/wordmark/drop cap — the
- *     tilted, hand-set "a" and "g" are the single most recognisable Fraunces
- *     signature. Left at 0 in running Inter-adjacent UI copy.
+ *   Fraunces (variable: opsz, SOFT, WONK) — headlines and the story itself.
+ *     Pushed to a high `opsz` for display type so terminals get chunky and
+ *     idiosyncratic (a hand-set headline, not a poster font at rest); kept
+ *     low for the story body so it reads like well-set prose.
+ *   CourierPrime (static Regular/Bold, upright + italic) — every caption,
+ *     label, stamp, button and metadata line: the "typewritten on the
+ *     frame" voice. Set with a touch of positive tracking (0.02em-ish) and
+ *     allowed to run lowercase.
  *
- * `fontVariationSettings` is a plain CSS string so the web layer can pass it
- * straight through (`style.fontVariationSettings` on web, ignored elsewhere).
- *
- * Font family names must match the @font-face declarations in apps/web/app/+html.tsx
- * (preflight checks the files exist). Sizes are px; line heights are px.
+ * Font family names must match the @font-face declarations in
+ * apps/web/app/+html.tsx (preflight checks the files exist). Sizes/line
+ * heights are px; `letterSpacing` on the mono faces is expressed in px per
+ * the RN convention already used here, tuned to read as ~0.02em at each
+ * size rather than a fixed number.
  */
 export const fontFamily = {
   display: "Fraunces",
   displayItalic: "Fraunces",
-  ui: "Inter",
+  mono: "CourierPrime",
+  /** Kept as an alias of `mono` — v2 code (and Input/TextArea) referred to
+   * the UI face as `ui`; there is no separate sans anymore. */
+  ui: "CourierPrime",
 } as const;
 
 export type TypeStyle = {
@@ -34,36 +34,37 @@ export type TypeStyle = {
   readonly letterSpacing?: number;
   readonly fontStyle?: "normal" | "italic";
   readonly textTransform?: "uppercase";
-  /** Raw CSS `font-variation-settings` value, e.g. '"opsz" 144, "SOFT" 100, "WONK" 1'. */
+  /** Raw CSS `font-variation-settings` value, e.g. '"opsz" 144, "SOFT" 40, "WONK" 1'. Fraunces only. */
   readonly fontVariationSettings?: string;
 };
 
 export const type = {
   displayXl: {
     fontFamily: "Fraunces",
-    fontSize: 52,
+    fontSize: 56,
     lineHeight: 54,
     fontWeight: "600",
-    letterSpacing: -1.4,
-    fontVariationSettings: '"opsz" 144, "SOFT" 40, "WONK" 1',
+    letterSpacing: -1.6,
+    fontVariationSettings: '"opsz" 144, "SOFT" 20, "WONK" 1',
   },
   displayLg: {
     fontFamily: "Fraunces",
-    fontSize: 38,
+    fontSize: 40,
     lineHeight: 40,
     fontWeight: "600",
-    letterSpacing: -0.9,
-    fontVariationSettings: '"opsz" 100, "SOFT" 30, "WONK" 1',
+    letterSpacing: -1,
+    fontVariationSettings: '"opsz" 100, "SOFT" 14, "WONK" 1',
   },
   displayMd: {
     fontFamily: "Fraunces",
-    fontSize: 26,
+    fontSize: 27,
     lineHeight: 30,
     fontWeight: "600",
-    letterSpacing: -0.3,
-    fontVariationSettings: '"opsz" 60, "SOFT" 20, "WONK" 0',
+    letterSpacing: -0.4,
+    fontVariationSettings: '"opsz" 60, "SOFT" 10, "WONK" 0',
   },
-  /** The wordmark, set italic with the softened, wonky alternates on. */
+  /** The wordmark, set italic with the softened, wonky alternates on — a
+   * hand-lettered word on a print, not a logotype. */
   wordmark: {
     fontFamily: "Fraunces",
     fontSize: 26,
@@ -71,55 +72,77 @@ export const type = {
     fontWeight: "600",
     fontStyle: "italic",
     letterSpacing: -0.3,
-    fontVariationSettings: '"opsz" 144, "SOFT" 100, "WONK" 1',
+    fontVariationSettings: '"opsz" 144, "SOFT" 60, "WONK" 1',
   },
-  /** First letter of the deck/about copy — big, soft, wonky, like a hand-set initial. */
+  /** First letter of the deck/about copy. */
   dropCap: {
     fontFamily: "Fraunces",
     fontSize: 64,
     lineHeight: 56,
     fontWeight: "600",
-    fontVariationSettings: '"opsz" 144, "SOFT" 100, "WONK" 1',
+    fontVariationSettings: '"opsz" 144, "SOFT" 60, "WONK" 1',
   },
-  /** Oversized numerals for step counts / stats — dense, minimal wonk. */
+  /** Oversized numerals for step counts / stats. */
   numeral: {
     fontFamily: "Fraunces",
     fontSize: 96,
     lineHeight: 88,
     fontWeight: "500",
     letterSpacing: -2,
-    fontVariationSettings: '"opsz" 144, "SOFT" 30, "WONK" 0',
+    fontVariationSettings: '"opsz" 144, "SOFT" 10, "WONK" 0',
   },
-  /** Spaced small-caps-style serif eyebrow, replacing an all-caps Inter label. */
-  eyebrow: {
+  /** A handwritten-feel section heading — a step or two down from
+   * `displayMd`, meant to sit above a pencil-underline SVG stroke. */
+  handwritten: {
     fontFamily: "Fraunces",
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 22,
+    lineHeight: 26,
     fontWeight: "600",
-    letterSpacing: 2,
+    fontStyle: "italic",
+    fontVariationSettings: '"opsz" 40, "SOFT" 40, "WONK" 1',
+  },
+  /** The typewritten label above a display heading, and every other
+   * spaced-caps eyebrow in the product. */
+  eyebrow: {
+    fontFamily: "CourierPrime",
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "700",
+    letterSpacing: 1.6,
     textTransform: "uppercase",
-    fontVariationSettings: '"opsz" 9, "SOFT" 0, "WONK" 0',
   },
   storyExcerpt: {
     fontFamily: "Fraunces",
     fontSize: 18,
-    lineHeight: 26,
+    lineHeight: 27,
     fontWeight: "400",
     fontStyle: "italic",
-    fontVariationSettings: '"opsz" 9, "SOFT" 20, "WONK" 1',
+    fontVariationSettings: '"opsz" 12, "SOFT" 20, "WONK" 1',
   },
   bodyLg: {
     fontFamily: "Fraunces",
     fontSize: 18,
-    lineHeight: 28,
+    lineHeight: 29,
     fontWeight: "400",
-    fontVariationSettings: '"opsz" 9, "SOFT" 0, "WONK" 0',
+    fontVariationSettings: '"opsz" 12, "SOFT" 0, "WONK" 0',
   },
-  title: { fontFamily: "Inter", fontSize: 20, lineHeight: 26, fontWeight: "600" },
-  body: { fontFamily: "Inter", fontSize: 16, lineHeight: 24, fontWeight: "400" },
-  bodySm: { fontFamily: "Inter", fontSize: 14, lineHeight: 20, fontWeight: "400" },
-  caption: { fontFamily: "Inter", fontSize: 12, lineHeight: 16, fontWeight: "500" },
-  label: { fontFamily: "Inter", fontSize: 13, lineHeight: 16, fontWeight: "600", letterSpacing: 0.6, textTransform: "uppercase" },
+  /** A listing's title as it reads on the print — a small serif caption,
+   * not a UI heading. */
+  title: {
+    fontFamily: "Fraunces",
+    fontSize: 19,
+    lineHeight: 23,
+    fontWeight: "600",
+    fontVariationSettings: '"opsz" 30, "SOFT" 10, "WONK" 0',
+  },
+  body: { fontFamily: "Fraunces", fontSize: 16, lineHeight: 25, fontWeight: "400", fontVariationSettings: '"opsz" 12, "SOFT" 0, "WONK" 0' },
+  bodySm: { fontFamily: "Fraunces", fontSize: 14, lineHeight: 21, fontWeight: "400", fontVariationSettings: '"opsz" 9, "SOFT" 0, "WONK" 0' },
+  /** Typewritten metadata: distances, dates, counts — lowercase reads fine. */
+  caption: { fontFamily: "CourierPrime", fontSize: 12, lineHeight: 17, fontWeight: "400", letterSpacing: 0.3 },
+  /** A button/chip/badge label: typewritten, spaced, uppercase. */
+  label: { fontFamily: "CourierPrime", fontSize: 12, lineHeight: 16, fontWeight: "700", letterSpacing: 1, textTransform: "uppercase" },
+  /** The rubber-stamp word itself: bigger, heavier tracking, always uppercase. */
+  stamp: { fontFamily: "CourierPrime", fontSize: 13, lineHeight: 16, fontWeight: "700", letterSpacing: 2, textTransform: "uppercase" },
 } as const satisfies Record<string, TypeStyle>;
 
 export type TypeToken = keyof typeof type;

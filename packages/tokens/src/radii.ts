@@ -1,30 +1,29 @@
 /**
- * Radii lean square, like a tag or a card stock box, not a SaaS bubble.
- * `pill` stays reserved for the one intentional round shape: the primary
- * button (and its chip cousins). `tag` is the small punch-corner radius for
- * card-as-tag treatments.
+ * Radii — v3, "Polaroids on a table." Nothing here is a rounded card or a
+ * pill anymore: a print has almost-square corners (`print`, ≤2px, just
+ * enough to stop the corner looking laser-cut), and a stamped button is a
+ * true rectangle (`sm`). `pill`/`tag` are kept (both now equal to `sm`) so
+ * anything still importing them compiles unchanged.
  */
 export const radii = {
-  sm: 4,
-  md: 8,
-  lg: 14,
-  pill: 999,
-  tag: 6,
+  sm: 2,
+  md: 2,
+  lg: 2,
+  pill: 2,
+  tag: 2,
+  print: 2,
 } as const;
 
 /**
- * Shadows are warm-tinted (see colors.shadow/shadowStrong) and layered like
- * paper resting on paper: a hairline contact shadow plus a soft, negative-
- * spread cast shadow, rather than one blurry grey smudge. Expressed as CSS
- * `boxShadow` strings because under the New Architecture that prop renders
- * on iOS, Android and web alike. Each still takes a single color so callers
- * are unchanged; the two-layer look comes from reusing that color at two
- * different offsets/blurs.
+ * Shadows are warm-brown and offset down-and-right, like a print resting
+ * proud of the table rather than a UI card floating over a grey page.
+ * Expressed as CSS `boxShadow` strings (one colour in, two layers out) so
+ * the same call renders on iOS, Android and web under the New Architecture.
  */
 export const shadow = {
-  card: (color: string) => `0px 1px 0px ${color}, 0px 8px 20px -10px ${color}`,
-  cardHover: (color: string) => `0px 1px 0px ${color}, 0px 14px 28px -10px ${color}`,
-  sheet: (color: string) => `0px 2px 0px ${color}, 0px 24px 48px -16px ${color}`,
-  /** A tag lifted an inch off the table: tighter, closer contact shadow. */
-  tag: (color: string) => `0px 1px 0px ${color}, 0px 4px 10px -4px ${color}`,
+  card: (color: string) => `2px 3px 0px ${color}, 3px 10px 16px -8px ${color}`,
+  cardHover: (color: string) => `3px 5px 0px ${color}, 5px 16px 24px -8px ${color}`,
+  sheet: (color: string) => `4px 6px 0px ${color}, 6px 28px 48px -14px ${color}`,
+  /** A print lying flat, barely lifted off the table. */
+  tag: (color: string) => `1px 2px 0px ${color}, 2px 6px 10px -6px ${color}`,
 } as const;

@@ -19,22 +19,17 @@ node apps/site/serve.mjs 5000    # custom port
 ```
 
 The server maps `/fonts/*` to `apps/site/.preview-fonts/` (gitignored local
-copies of the four fonts the app serves in production) and everything else
+copies of the six fonts the app serves in production) and everything else
 to `apps/site/public/`. In production, fonts are served by `apps/web` at
 `/fonts/Fraunces-VF.ttf`, `/fonts/Fraunces-Italic-VF.ttf`,
-`/fonts/InterVariable.ttf`, `/fonts/InterVariable-Italic.ttf` — `site.css`
-references those paths directly and never bundles its own font files.
+`/fonts/CourierPrime-Regular.ttf`, `/fonts/CourierPrime-Bold.ttf`,
+`/fonts/CourierPrime-Italic.ttf`, `/fonts/CourierPrime-BoldItalic.ttf` —
+`site.css` references those paths directly and never bundles its own font
+files.
 
-To populate `.preview-fonts/` locally, copy or symlink from wherever the
-source fonts live, e.g.:
-
-```
-mkdir -p apps/site/.preview-fonts
-ln -s /path/to/Fraunces-VF.ttf apps/site/.preview-fonts/Fraunces-VF.ttf
-ln -s /path/to/Fraunces-Italic-VF.ttf apps/site/.preview-fonts/Fraunces-Italic-VF.ttf
-ln -s /path/to/InterVariable.ttf apps/site/.preview-fonts/InterVariable.ttf
-ln -s /path/to/InterVariable-Italic.ttf apps/site/.preview-fonts/InterVariable-Italic.ttf
-```
+`.preview-fonts/` holds symlinks straight into `apps/web/public/fonts/`
+(the same files, one copy on disk) — see that directory if the symlinks
+ever go stale.
 
 ## How this ships
 

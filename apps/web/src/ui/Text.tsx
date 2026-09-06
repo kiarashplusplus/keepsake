@@ -14,6 +14,7 @@ export type TextColor =
   | "textSecondary"
   | "textTertiary"
   | "accentText"
+  | "stampText"
   | "accent2Text"
   | "foilText"
   | "successText"

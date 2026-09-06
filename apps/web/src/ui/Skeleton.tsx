@@ -12,20 +12,19 @@ export type SkeletonProps = {
 };
 
 /**
- * A sunken placeholder block with an optional shimmer sweep (disabled under
- * reduce-motion). `height` defaults to 120 only when neither an explicit
- * `height` nor an `aspectRatio` (via `style`) is given — a fixed default
- * height would otherwise fight an aspect-ratio block's own height (e.g. the
- * feed's 4:5 image placeholders).
+ * A blank print: the same white frame and inset edge as `Print`, empty,
+ * with a slow shimmer sweep (disabled under reduce-motion) standing in for
+ * the photo that hasn't loaded yet. `height` defaults to 120 only when
+ * neither an explicit `height` nor an `aspectRatio` (via `style`) is given.
  */
 export function Skeleton({ width = "100%", height, style }: SkeletonProps): React.ReactElement {
   const colors = useColors();
   const motion = useMotion();
-  const shimmer = useSharedValue(0.6);
+  const shimmer = useSharedValue(0.7);
 
   React.useEffect(() => {
     if (motion.reduce) {
-      shimmer.value = 0.8;
+      shimmer.value = 0.85;
       return;
     }
     shimmer.value = withRepeat(withTiming(1, { duration: motion.shimmerMs / 2 }), -1, true);
@@ -38,8 +37,9 @@ export function Skeleton({ width = "100%", height, style }: SkeletonProps): Reac
   const baseStyle: ViewStyle = {
     width,
     ...(height !== undefined || !hasAspectRatio ? { height: height ?? 120 } : null),
-    borderRadius: radii.md,
-    backgroundColor: colors.surfaceSunken,
+    borderRadius: radii.print,
+    backgroundColor: colors.print,
+    ...({ boxShadow: "inset 0px 0px 0px 1px rgba(0,0,0,0.08)" } as ViewStyle),
   };
 
   return <Animated.View style={[baseStyle, animatedStyle, style]} />;
