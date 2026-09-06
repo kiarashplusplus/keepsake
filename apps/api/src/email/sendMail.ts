@@ -64,7 +64,9 @@ async function sendViaCloudflare(env: Env, message: MailMessage): Promise<SendMa
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     console.error("sendMail: EMAIL.send failed", { error: errorMessage });
-    return { sent: false, reason: "send_failed" };
+    // Keep the provider's words: "send_failed" alone told us nothing when the
+    // sender domain was not yet onboarded.
+    return { sent: false, reason: `send_failed: ${errorMessage.slice(0, 160)}` };
   }
 }
 
@@ -86,14 +88,15 @@ async function sendViaResend(env: Env, message: MailMessage): Promise<SendMailRe
       }),
     });
     if (!response.ok) {
-      console.error("sendMail: resend request failed", { status: response.status });
-      return { sent: false, reason: "send_failed" };
+      const body = (await response.text().catch(() => "")).slice(0, 120);
+      console.error("sendMail: resend request failed", { status: response.status, body });
+      return { sent: false, reason: `send_failed: resend ${response.status} ${body}` };
     }
     return { sent: true };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     console.error("sendMail: resend request threw", { error: errorMessage });
-    return { sent: false, reason: "send_failed" };
+    return { sent: false, reason: `send_failed: ${errorMessage.slice(0, 160)}` };
   }
 }
 
