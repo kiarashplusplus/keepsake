@@ -30,10 +30,6 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          # LFS bandwidth is metered; only preflight needs the real seed file
-          # (its lfs-pointers check). Every other job seeds its own rows.
-          lfs: true
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -60,6 +56,10 @@ jobs:
     # migration numbering gap).
     steps:
       - uses: actions/checkout@v4
+        with:
+          # LFS bandwidth is metered; only preflight needs the real seed file
+          # (its lfs-pointers check). Every other job seeds its own rows.
+          lfs: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
