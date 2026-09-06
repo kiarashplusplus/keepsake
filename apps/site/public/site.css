@@ -80,7 +80,7 @@
   --rule: rgba(27, 24, 21, 0.32);
   --shadow: rgba(60, 40, 20, 0.18);
   --shadow-strong: rgba(60, 40, 20, 0.32);
-  --grain-opacity: 0.08;
+  --grain-opacity: 1;
   --grain-blend: multiply;
 
   --space-xxs: 2px;
@@ -140,7 +140,7 @@ html[data-theme="dark"] {
   --rule: rgba(243, 236, 221, 0.24);
   --shadow: rgba(8, 5, 2, 0.55);
   --shadow-strong: rgba(8, 5, 2, 0.7);
-  --grain-opacity: 0.12;
+  --grain-opacity: 0.55;
   --grain-blend: overlay;
   color-scheme: dark;
 }
@@ -164,7 +164,7 @@ html[data-theme="light"] {
     --rule: rgba(243, 236, 221, 0.24);
     --shadow: rgba(8, 5, 2, 0.55);
     --shadow-strong: rgba(8, 5, 2, 0.7);
-    --grain-opacity: 0.12;
+    --grain-opacity: 0.55;
     --grain-blend: overlay;
     color-scheme: dark;
   }
@@ -210,7 +210,13 @@ a {
   color: inherit;
 }
 
-/* ---------- Paper grain (stronger, more visible than a template's) ---------- */
+/* ---------- Paper grain ----------
+   Same construction as apps/web/public/kraft-grain.svg (kept in sync by
+   hand — see that file's header comment): isotropic feTurbulence run
+   through luminanceToAlpha + a low-slope feFuncA for a low-contrast fibre
+   fleck, tiled at 480x480 with stitchTiles="stitch" so no seam shows even
+   at 1920px, instead of the old anisotropic/220px pattern that read as
+   striated wood once tiled. */
 body::before {
   content: "";
   position: fixed;
@@ -219,7 +225,8 @@ body::before {
   pointer-events: none;
   opacity: var(--grain-opacity);
   mix-blend-mode: var(--grain-blend);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='480' height='480'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' seed='7' stitchTiles='stitch' result='noise'/%3E%3CfeColorMatrix in='noise' type='luminanceToAlpha' result='alpha'/%3E%3CfeComponentTransfer in='alpha'%3E%3CfeFuncA type='linear' slope='0.16' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 480px 480px;
 }
 
 /* ---------- Skip link ---------- */
