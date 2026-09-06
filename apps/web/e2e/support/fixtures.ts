@@ -7,6 +7,12 @@
  *  - `seedOwnerToken()`, which plants a device identity in `localStorage`
  *    before the app boots, so a context can *be* a giver without walking the
  *    give flow first.
+ *  - a consent decision already on file, so `/consent.js`'s banner is not
+ *    sitting over the bottom of a 390px viewport intercepting the "Continue"
+ *    every other spec is trying to click. It seeds a REFUSAL, so the rest of
+ *    the suite runs against the same nothing-loaded document a privacy-minded
+ *    visitor gets. `consent.spec.ts` and the banner's a11y scan build their own
+ *    contexts precisely so they see the banner.
  */
 /* eslint-disable react-hooks/rules-of-hooks --
  * `eslint-config-expo`'s React rules see Playwright's fixture callback
@@ -14,6 +20,7 @@
  * non-component function. It is neither; there is no React in this file. */
 import { test as base, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { freshClientIp, OWNER_TOKEN_STORAGE_KEY } from "./api";
+import { seedConsent } from "./consent";
 import { BASE_URL } from "./constants";
 
 export const test = base.extend<{ clientIp: string }>({
@@ -24,6 +31,7 @@ export const test = base.extend<{ clientIp: string }>({
 
   context: async ({ context, clientIp }, use) => {
     await context.setExtraHTTPHeaders({ "CF-Connecting-IP": clientIp });
+    await seedConsent(context);
     await use(context);
   },
 });
@@ -50,10 +58,14 @@ export function onScreen(page: Page, label: string): Locator {
  * so `baseURL` has to be handed over explicitly.
  */
 export async function openFreshContext(browser: Browser): Promise<BrowserContext> {
-  return browser.newContext({
+  const context = await browser.newContext({
     baseURL: BASE_URL,
     extraHTTPHeaders: { "CF-Connecting-IP": freshClientIp() },
   });
+  // Same reason as the `context` fixture above: a second browser is still a
+  // browser that has never answered the banner.
+  await seedConsent(context);
+  return context;
 }
 
 /**

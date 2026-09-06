@@ -18,6 +18,7 @@ import { createRequest } from "@/api/requests";
 import { ApiError } from "@/api/client";
 import { hashIdempotencyKey } from "@/lib/hashIdempotencyKey";
 import { track } from "@/lib/analytics";
+import { AdsConversions, trackConversion } from "@/lib/adsEvents";
 import { AnalyticsEvents } from "@/lib/analyticsEvents";
 
 const NoteSchema = z
@@ -89,6 +90,7 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
       );
       setPhase("sent");
       track(AnalyticsEvents.RequestSent);
+      trackConversion(AdsConversions.RequestSent);
     } catch (error) {
       if (error instanceof ApiError && error.code === "conflict") {
         setConflict(true);

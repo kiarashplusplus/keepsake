@@ -15,6 +15,16 @@
     <meta property="og:image" content="https://keepsake.ing/og-default.png" />
     <meta property="og:url" content="https://keepsake.ing/terms" />
     <link rel="stylesheet" href="/site.css" />
+    <!-- Consent. `/consent.js` is the single shared implementation of the
+         store, the banner and every third-party loader — the same file the
+         Expo-web app loads from `apps/web/app/+html.tsx`, so one decision
+         covers these pages and the app. The two ids are substituted at build
+         time by `apps/web/scripts/copy-site.mjs` from `EXPO_PUBLIC_*`; an
+         unsubstituted `%NAME%` placeholder means "not configured" and nothing
+         third-party loads. -->
+    <meta name="ks-google-ads-id" content="%EXPO_PUBLIC_GOOGLE_ADS_ID%" />
+    <meta name="ks-cf-beacon-token" content="%EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN%" />
+    <script src="/consent.js" defer></script>
     <script>
       try {
         var t = localStorage.getItem("keepsake.theme.v1");
@@ -124,6 +134,7 @@
         <nav class="footer-links" aria-label="Footer">
           <a href="/privacy">Privacy</a>
           <a href="/terms" aria-current="page">Terms</a>
+          <button type="button" data-ks-consent>Privacy choices</button>
           <span>Data: postal codes © GeoNames, CC BY 4.0</span>
         </nav>
         <span class="footer-aside">Made in Texas</span>

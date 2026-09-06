@@ -28,6 +28,7 @@ import { ApiError } from "@/api/client";
 import { shareListing } from "@/lib/share";
 import { useToast } from "@/ui/Toast";
 import { track } from "@/lib/analytics";
+import { AdsConversions, trackConversion } from "@/lib/adsEvents";
 import { AnalyticsEvents } from "@/lib/analyticsEvents";
 
 const POLL_INTERVAL_MS = 3000;
@@ -75,7 +76,12 @@ export default function GiveReview(): React.ReactElement {
   React.useEffect(() => {
     if (listing === null || trackedStatusRef.current === listing.status) return;
     trackedStatusRef.current = listing.status;
-    if (listing.status === "approved") track(AnalyticsEvents.GiveLive);
+    if (listing.status === "approved") {
+      track(AnalyticsEvents.GiveLive);
+      // No-op unless the visitor granted advertising AND a Google Ads id and
+      // label are configured for this build — see `lib/adsEvents.ts`.
+      trackConversion(AdsConversions.GiveLive);
+    }
     if (listing.status === "rejected") track(AnalyticsEvents.GiveRejected);
   }, [listing]);
 

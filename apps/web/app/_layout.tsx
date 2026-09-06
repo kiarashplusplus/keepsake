@@ -7,6 +7,7 @@ import { MotionProvider } from "@/ui/MotionProvider";
 import { ToastProvider } from "@/ui/Toast";
 import { KraftTable } from "@/ui/KraftTable";
 import { AppHeader } from "@/ui/AppHeader";
+import { AppFooter } from "@/ui/AppFooter";
 
 // expo-router's Stack renders each screen inside a React Navigation `Screen`
 // container whose own background comes from a *navigation* theme — entirely
@@ -33,6 +34,7 @@ function Shell(): React.ReactElement {
             }}
           />
         </RouterThemeProvider>
+        <AppFooter />
       </View>
     </SafeAreaProvider>
   );
