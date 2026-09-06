@@ -1,16 +1,9 @@
+import { OwnerMe } from "@keepsake/contracts/owner";
 import { guardRecipient } from "../src/email/sendMail.js";
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
-import {
-  authHeaders,
-  freshOwnerToken,
-  installFakeEmail,
-  readOk,
-  removeFakeEmail,
-  seedStandardPostalCodes,
-  uploadPhoto,
-} from "./helpers.js";
+import { authHeaders, freshOwnerToken, installFakeEmail, readOk, removeFakeEmail, seedStandardPostalCodes, uploadPhoto } from "./helpers.js";
 import { randomTokenRaw } from "../src/lib/tokens.js";
 import { sha256Hex } from "../src/lib/digest.js";
 import { ulid } from "../src/lib/ids.js";
@@ -210,5 +203,40 @@ describe("guardRecipient", () => {
   it("rejects malformed addresses", () => {
     expect(guardRecipient(env("live"), "not-an-address").allowed).toBe(false);
     expect(guardRecipient(env("live"), "").allowed).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Every owner-identity response must satisfy OwnerMe. The web client parses
+// all three with that schema; POST/DELETE /email used to answer with ad-hoc
+// shapes, so the parse threw and adding an email surfaced "That didn't go
+// through" even though it had worked. Found by the Playwright suite.
+// ---------------------------------------------------------------------------
+describe("owner identity responses conform to OwnerMe", () => {
+  it("GET, POST and DELETE /api/me/email all return a parseable OwnerMe", async () => {
+    const token = freshOwnerToken();
+    // Registers the owner: GET/POST /api/me have no create-if-missing, but
+    // the photo upload route does upsert on first write.
+    await uploadPhoto({ token });
+    const auth = authHeaders(token);
+
+    const get = await SELF.fetch("https://x/api/me", { headers: auth });
+    expect(OwnerMe.safeParse((await get.json<{ data: unknown }>()).data).success).toBe(true);
+
+    const set = await SELF.fetch("https://x/api/me/email", {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "owner@keepsake.ing" }),
+    });
+    expect(set.status).toBe(200);
+    const setBody = OwnerMe.safeParse((await set.json<{ data: unknown }>()).data);
+    expect(setBody.success, JSON.stringify(setBody.error?.issues)).toBe(true);
+    expect(setBody.data?.email).toBe("owner@keepsake.ing");
+    expect(setBody.data?.email_verified).toBe(false);
+
+    const del = await SELF.fetch("https://x/api/me/email", { method: "DELETE", headers: auth });
+    const delBody = OwnerMe.safeParse((await del.json<{ data: unknown }>()).data);
+    expect(delBody.success, JSON.stringify(delBody.error?.issues)).toBe(true);
+    expect(delBody.data?.email).toBeUndefined();
   });
 });

@@ -47,15 +47,27 @@ function serializeOwnerViewRequest(row: RequestRow): OwnerViewRequest {
 
 const VERIFY_EMAIL_TTL_MS = 24 * 60 * 60 * 1000;
 
-meRoutes.get("/", ownerAuth(), (c) => {
-  const owner = c.get("owner");
-  const me: OwnerMe = {
+/**
+ * Every route that answers with the owner's identity builds it here.
+ *
+ * `POST /email` and `DELETE /email` used to return their own ad-hoc shapes
+ * (`{ email, email_verified }` and `{ id }`), while the web client parses all
+ * three with `OwnerMe`. The parse threw on the missing fields, so adding an
+ * email showed "That didn't go through" even though the address had been saved
+ * and the verification mail sent. Found by the Playwright suite.
+ */
+function ownerMe(owner: OwnerRow, overrides: Partial<OwnerMe> = {}): OwnerMe {
+  return {
     id: owner.id,
     ...(owner.email !== null ? { email: owner.email } : {}),
     email_verified: owner.email_verified_at !== null,
     banned: owner.banned_at !== null,
+    ...overrides,
   };
-  return ok(c, me);
+}
+
+meRoutes.get("/", ownerAuth(), (c) => {
+  return ok(c, ownerMe(c.get("owner")));
 });
 
 meRoutes.get("/listings", ownerAuth(), async (c) => {
@@ -185,13 +197,15 @@ meRoutes.post("/email", ownerAuth(), turnstile(), burst("RL_EMAIL"), validateBod
   const verifyUrl = `${c.env.SITE_URL}/api/me/email/verify?token=${rawToken}`;
   await sendMail(c.env, { kind: "verify_email", to: input.email, ...verifyEmail({ link: verifyUrl }) });
 
-  return ok(c, { email: input.email, email_verified: false });
+  return ok(c, ownerMe(owner, { email: input.email, email_verified: false }));
 });
 
 meRoutes.delete("/email", ownerAuth(), async (c) => {
   const owner = c.get("owner");
   await c.env.DB.prepare("UPDATE owners SET email = NULL, email_verified_at = NULL WHERE id = ?").bind(owner.id).run();
-  return ok(c, { id: owner.id });
+  // Email cleared: report it gone rather than echoing the stale row.
+  const { email: _removed, ...cleared } = ownerMe(owner);
+  return ok(c, { ...cleared, email_verified: false });
 });
 
 // Not `ownerAuth()`-guarded: this is a link clicked from an email, not an
