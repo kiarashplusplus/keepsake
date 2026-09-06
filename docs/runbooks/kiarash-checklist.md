@@ -12,26 +12,10 @@ Paste anything you get back (site keys, tokens) into chat and I'll wire it up an
 
 ---
 
-## 1. Email Service — onboard `keepsake.ing` (~10 min, then DNS wait)
+## 1. ~~Email Service — onboard `keepsake.ing`~~ ✅ DONE 2026-09-06
 
-**Why first:** no Keepsake email has ever actually been delivered. Preview logs
-`send_failed: could not find domain config of sending domain` on every send. Until this is done,
-request notifications, email verification and dashboard recovery are code-complete but unproven,
-and M3 stays at `[QA]`.
-
-1. Cloudflare dashboard → left sidebar **Email** → **Email Service**.
-   (If it's not in the sidebar, it's still in beta on this account — tell me and I'll switch the
-   provider to Resend instead, which is a one-variable change we already built.)
-2. **Sending** → **Add a sending domain** → enter `keepsake.ing`.
-3. Cloudflare will offer to add the DKIM / SPF / DMARC records for you. Accept. Because
-   keepsake.ing is already on Cloudflare DNS, this is a click, not a copy-paste.
-4. Wait for the domain to show **Verified** (usually minutes).
-5. You do **not** need to create a mailbox. We only send, from `hello@keepsake.ing`.
-
-**Then tell me** and I'll run a real send on preview and read the result out of the
-`email_events` table. Expected: `ok=1`, and an email in your inbox.
-
----
+Enabled, DNS configured, sending from `hello@keepsake.ing`, quota 1000/day. First real
+delivery confirmed in `email_events` (`provider=cf, ok=1`).
 
 ## 2. Turnstile — create the widget (~5 min)
 
@@ -118,6 +102,26 @@ When you say go, I will:
 5. Post the first real keepsake from your phone and watch it through moderation.
 
 ---
+
+## Guardrails already in place (so you do not have to worry about this)
+
+`sendMail` refuses to send anywhere that would bounce, because Cloudflare scores the domain on
+bounce rate (safe under 2%, at risk at 5%) and this repo carries 80 `@example.com` fixtures:
+
+| Environment | `EMAIL_MODE` | Effect |
+|---|---|---|
+| local + Playwright e2e | `off` | Nothing is ever sent. CI cannot mail anyone. |
+| preview | `allowlist` | Only `EMAIL_ALLOWLIST` addresses (currently just Kiarash). |
+| production | `live` | Real users. |
+
+Reserved domains (`example.com/net/org`, `.test`, `.invalid`, `.localhost`, `.local`) are refused
+in **every** environment, production included — they are reserved by standard precisely so they
+can never accept mail. The guard fails closed if `EMAIL_MODE` is unset, blocked attempts are still
+written to `email_events` so nothing disappears silently, and a config test reads `wrangler.toml`
+and fails the build if the test-only bypass ever appears there.
+
+Verified live on preview 2026-09-06: `nobody@example.com` → `blocked_reserved_domain`,
+`stranger@gmail.com` → `blocked_not_allowlisted`, `kiarasha@alum.mit.edu` → sent.
 
 ## What is *not* blocked on you
 
