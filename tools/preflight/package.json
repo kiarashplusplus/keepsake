@@ -1,0 +1,10 @@
+{
+  "name": "@keepsake/preflight",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-dependency CI/local preflight checks. See preflight.mjs for the full list.",
+  "scripts": {
+    "test": "node --test *.test.mjs"
+  }
+}

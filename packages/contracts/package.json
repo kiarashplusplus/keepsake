@@ -1,0 +1,29 @@
+{
+  "name": "@keepsake/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Zod schemas shared by the Keepsake Worker and web app. Subpath exports only.",
+  "exports": {
+    "./common": "./src/common.ts",
+    "./listing": "./src/listing.ts",
+    "./photo": "./src/photo.ts",
+    "./request": "./src/request.ts",
+    "./report": "./src/report.ts",
+    "./owner": "./src/owner.ts",
+    "./admin": "./src/admin.ts",
+    "./feed": "./src/feed.ts",
+    "./geo": "./src/geo.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

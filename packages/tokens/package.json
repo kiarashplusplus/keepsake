@@ -1,0 +1,23 @@
+{
+  "name": "@keepsake/tokens",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Design tokens for Keepsake: plain constants, no theme library. Subpath exports only.",
+  "exports": {
+    "./colors": "./src/colors.ts",
+    "./spacing": "./src/spacing.ts",
+    "./radii": "./src/radii.ts",
+    "./typography": "./src/typography.ts",
+    "./motion": "./src/motion.ts",
+    "./contrast": "./src/contrast.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

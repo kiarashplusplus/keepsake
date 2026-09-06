@@ -1,0 +1,188 @@
+name: CI
+
+# Bayan/Finderly lesson carried in: gate expensive jobs behind cheap ones.
+# `preflight` always runs (it costs seconds and catches whole classes of
+# mistake — see tools/preflight/preflight.mjs); `changes` decides what else
+# is worth running; everything downstream is scoped to what actually moved,
+# and GitHub's default "a skipped need skips its dependents" cascades that
+# scoping all the way to build-web and e2e without repeating conditions.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 22
+
+jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      api: ${{ steps.filter.outputs.api }}
+      packages: ${{ steps.filter.outputs.packages }}
+      tools: ${{ steps.filter.outputs.tools }}
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            web:
+              - "apps/web/**"
+            api:
+              - "apps/api/**"
+            packages:
+              - "packages/**"
+            tools:
+              - "tools/**"
+              - ".github/workflows/**"
+            docs:
+              - "docs/**"
+              - "README.md"
+
+  preflight:
+    name: preflight
+    runs-on: ubuntu-latest
+    # Always runs, regardless of `changes` — it's the cheapest check in the
+    # workflow and the one most likely to catch a mistake made in a package
+    # this PR didn't otherwise touch (e.g. a stray "@cf/" model id, or a
+    # migration numbering gap).
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node tools/preflight/preflight.mjs
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    needs: [preflight, changes]
+    # Skip when the change is docs-only — nothing lint checks changed.
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    needs: [preflight, changes]
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r --if-present typecheck
+
+  test-packages:
+    name: test-packages
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, changes]
+    if: needs.changes.outputs.packages == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter "./packages/*" --if-present test
+
+  test-api:
+    name: test-api
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, changes]
+    # A change to a shared package (contracts/observability) can break the
+    # API even though apps/api itself didn't change.
+    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @keepsake/api --if-present test
+
+  test-web:
+    name: test-web
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, changes]
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.packages == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @keepsake/web --if-present test
+
+  build-web:
+    name: build-web
+    runs-on: ubuntu-latest
+    # No extra `if`: GitHub skips this automatically whenever test-web is
+    # skipped (web/packages unchanged), which is exactly the scoping we want.
+    needs: [test-web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @keepsake/web export
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
+          retention-days: 7
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    needs: [build-web, test-api]
+    # M4: enable. Playwright specs (browse, give -> live, request, dashboard,
+    # choose reveals contact, 3 reports hide, recover, dark mode, reduced
+    # motion) don't exist yet — apps/web/e2e/ is a later milestone. The job
+    # is wired up now so turning it on is a one-line diff, not a new job.
+    if: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
+      - run: pnpm --filter @keepsake/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @keepsake/web e2e

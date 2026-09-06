@@ -1,0 +1,335 @@
+name = "keepsake"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The Worker serves the static Expo export directly (no separate Pages
+# project) so there is one deploy, one `/health`, and one place version skew
+# is guarded. `run_worker_first` is the list of paths that must never be
+# answered by a cached static asset even when one happens to exist at that
+# path (an old `/health` snapshot, a stale `/version.json`) — everything else
+# falls through to the SPA shell on a 404, which is what makes client-side
+# routing on `/item/:id` work on a hard refresh.
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json"]
+
+[ai]
+binding = "AI"
+
+[[send_email]]
+name = "EMAIL"
+
+# `moderationRetry` picks up listings whose moderation call errored or never
+# landed (Worker eviction mid-`waitUntil`, AI timeout) so a transient failure
+# doesn't strand a listing in `pending` forever. `orphanSweep` runs once a day,
+# off-peak, to delete photos uploaded but never attached to a listing —
+# abandoned `give` flows and abuse probes both leave these behind.
+[triggers]
+crons = ["*/5 * * * *", "17 3 * * *"]
+
+[vars]
+# Local/dev defaults. Every one of these is repeated verbatim under
+# `[env.preview]` and `[env.production]` below: Wrangler does not inherit
+# `[vars]` (or any binding) into a named environment, only the unscoped keys
+# like `main` and `compatibility_date`. Restating them here is the only way
+# an environment doesn't silently fall back to nothing.
+ENVIRONMENT = "development"
+# Overridden per deploy with `wrangler deploy --var COMMIT_SHA:<sha>`; the
+# checked-in default is what you see running `wrangler dev` locally, where
+# there is no commit to stamp.
+COMMIT_SHA = "dev"
+
+# --- Moderation budgets (KV counters in src/moderation/budget.ts) ---
+# These are runaway protection, not a product tier: Workers AI meters its own
+# allocation regardless of what is set here, and the app has no signed-up
+# users to ration against. The ceilings exist so a scraper or a retry loop
+# can't spend the whole day's AI allocation before a real giver gets to post.
+MOD_TEXT_DAILY_BUDGET = "1000"
+MOD_IMAGE_DAILY_BUDGET = "3000"
+# Per-IP daily ceilings for the write endpoints. An address is not a person —
+# a household or a mobile carrier's CGNAT range sits behind one IP — so these
+# are set loose on purpose; they catch a runaway script, not a family posting
+# a few keepsakes in a day.
+LISTING_IP_DAILY_BUDGET = "20"
+REQUEST_IP_DAILY_BUDGET = "20"
+UPLOAD_IP_DAILY_BUDGET = "60"
+# Three independent reporters is enough signal to pull a listing from public
+# view pending Kiarash's review; it is not a ban, just a hide.
+REPORT_AUTOHIDE_THRESHOLD = "3"
+MAX_PHOTOS = "5"
+# 5 MiB matches the client-side resize ceiling in apps/web; this is the
+# server-side backstop in case a client is old, broken, or hostile.
+MAX_PHOTO_BYTES = "5242880"
+# Cloudflare Images transforms cost per-transform once past the free tier;
+# keep serving originals through `/i/:id/:variant` until traffic justifies it.
+IMAGE_TRANSFORMS_ENABLED = "0"
+# `cf` uses the `[[send_email]]` binding; `resend` is the fallback behind the
+# same `sendMail()` interface if Email Service enablement or domain
+# onboarding (see plan Risks #1) doesn't land in time.
+EMAIL_PROVIDER = "cf"
+EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
+SITE_URL = "http://localhost:8787"
+# M1: flips the moderation pipeline to canned responses for local dev and
+# Playwright, so `give` works without live Workers AI calls.
+MOCK_AI = "0"
+
+# --- D1 ---
+# Local placeholder id: `wrangler dev` (no --remote) creates a local SQLite
+# file keyed by binding name and ignores this value, so it never needs to be
+# a real UUID until `[env.preview]` / `[env.production]` point at real
+# databases created with `wrangler d1 create`.
+[[d1_databases]]
+binding = "DB"
+database_name = "keepsake-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# --- R2 ---
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "keepsake-photos-dev"
+
+# --- KV ---
+# `id = "local"` is a placeholder the same way the D1 id above is: local
+# `wrangler dev` never reads it, it only needs to be a non-empty string.
+[[kv_namespaces]]
+binding = "KV"
+id = "local"
+
+# --- Rate limits (Cloudflare Rate Limiting API bindings) ---
+# These are short-window burst brakes in front of the edge, complementary to
+# the calendar-day KV budgets above: a `[[ratelimits]]` binding only accepts
+# a 10s or 60s period, so it cannot express "20 listings/day" directly — that
+# ceiling lives in src/moderation/budget.ts's per-IP daily counters instead.
+# What the binding buys is protection against a burst within a single minute
+# (a retry loop, a misbehaving client) before that request ever reaches the
+# KV read/increment. Limits below are the daily figure divided down to a
+# per-minute allowance with headroom for a human clicking quickly, not a
+# literal transcription of the plan's hourly numbers — Wrangler rejects any
+# `period` other than 10 or 60 (see apps/api's typecheck report for the
+# rejected `600`/`3600` attempt this replaced).
+[[ratelimits]]
+name = "RL_READ"
+namespace_id = "1001"
+simple = { limit = 300, period = 60 }
+
+[[ratelimits]]
+name = "RL_WRITE"
+namespace_id = "1002"
+simple = { limit = 60, period = 60 }
+
+[[ratelimits]]
+name = "RL_UPLOAD"
+namespace_id = "1003"
+simple = { limit = 10, period = 60 }
+
+[[ratelimits]]
+name = "RL_CREATE"
+namespace_id = "1004"
+simple = { limit = 5, period = 60 }
+
+[[ratelimits]]
+name = "RL_REQUEST"
+namespace_id = "1005"
+simple = { limit = 5, period = 60 }
+
+[[ratelimits]]
+name = "RL_REPORT"
+namespace_id = "1006"
+simple = { limit = 5, period = 60 }
+
+[[ratelimits]]
+name = "RL_EMAIL"
+namespace_id = "1007"
+simple = { limit = 5, period = 60 }
+
+[[ratelimits]]
+name = "RL_ADMIN"
+namespace_id = "1008"
+simple = { limit = 120, period = 60 }
+
+# ============================================================================
+# [env.preview] — one shared Worker per plan, its own D1/R2/KV/rate-limit
+# namespaces so preview traffic (and its abuse) never touches production data.
+# Every binding and every var is restated: Wrangler does not merge an env
+# block with the top-level config for `[vars]` or any `[[...]]` binding.
+# ============================================================================
+[env.preview]
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+[env.preview.assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json"]
+
+[env.preview.ai]
+binding = "AI"
+
+[[env.preview.send_email]]
+name = "EMAIL"
+
+[env.preview.vars]
+ENVIRONMENT = "preview"
+COMMIT_SHA = "dev"
+MOD_TEXT_DAILY_BUDGET = "1000"
+MOD_IMAGE_DAILY_BUDGET = "3000"
+LISTING_IP_DAILY_BUDGET = "20"
+REQUEST_IP_DAILY_BUDGET = "20"
+UPLOAD_IP_DAILY_BUDGET = "60"
+REPORT_AUTOHIDE_THRESHOLD = "3"
+MAX_PHOTOS = "5"
+MAX_PHOTO_BYTES = "5242880"
+IMAGE_TRANSFORMS_ENABLED = "0"
+EMAIL_PROVIDER = "cf"
+EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
+SITE_URL = "https://preview.keepsake.ing"
+MOCK_AI = "0"
+
+[[env.preview.d1_databases]]
+binding = "DB"
+database_name = "keepsake-db-preview"
+database_id = "2cfbc1c8-39b9-4653-814e-9fa737d1689f"
+migrations_dir = "migrations"
+
+[[env.preview.r2_buckets]]
+binding = "BUCKET"
+bucket_name = "keepsake-photos-preview"
+
+[[env.preview.kv_namespaces]]
+binding = "KV"
+id = "42dc992cb79044d0936e0da7e93bcbbb"
+
+[[env.preview.ratelimits]]
+name = "RL_READ"
+namespace_id = "2001"
+simple = { limit = 300, period = 60 }
+
+[[env.preview.ratelimits]]
+name = "RL_WRITE"
+namespace_id = "2002"
+simple = { limit = 60, period = 60 }
+
+[[env.preview.ratelimits]]
+name = "RL_UPLOAD"
+namespace_id = "2003"
+simple = { limit = 10, period = 60 }
+
+[[env.preview.ratelimits]]
+name = "RL_CREATE"
+namespace_id = "2004"
+simple = { limit = 5, period = 60 }
+
+[[env.preview.ratelimits]]
+name = "RL_REQUEST"
+namespace_id = "2005"
+simple = { limit = 5, period = 60 }
+
+[[env.preview.ratelimits]]
+name = "RL_REPORT"
+namespace_id = "2006"
+simple = { limit = 5, period = 60 }
+
+[[env.preview.ratelimits]]
+name = "RL_EMAIL"
+namespace_id = "2007"
+simple = { limit = 5, period = 60 }
+
+[[env.preview.ratelimits]]
+name = "RL_ADMIN"
+namespace_id = "2008"
+simple = { limit = 120, period = 60 }
+
+# ============================================================================
+# [env.production]
+# ============================================================================
+[env.production]
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+[env.production.assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json"]
+
+[env.production.ai]
+binding = "AI"
+
+[[env.production.send_email]]
+name = "EMAIL"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+COMMIT_SHA = "dev"
+MOD_TEXT_DAILY_BUDGET = "1000"
+MOD_IMAGE_DAILY_BUDGET = "3000"
+LISTING_IP_DAILY_BUDGET = "20"
+REQUEST_IP_DAILY_BUDGET = "20"
+UPLOAD_IP_DAILY_BUDGET = "60"
+REPORT_AUTOHIDE_THRESHOLD = "3"
+MAX_PHOTOS = "5"
+MAX_PHOTO_BYTES = "5242880"
+IMAGE_TRANSFORMS_ENABLED = "0"
+EMAIL_PROVIDER = "cf"
+EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
+SITE_URL = "https://keepsake.ing"
+MOCK_AI = "0"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "keepsake-db-production"
+database_id = "ef57b121-265c-4e23-a0d9-c9b2c47cf689"
+migrations_dir = "migrations"
+
+[[env.production.r2_buckets]]
+binding = "BUCKET"
+bucket_name = "keepsake-photos-production"
+
+[[env.production.kv_namespaces]]
+binding = "KV"
+id = "595d0299545644e1b524ab3818eff90f"
+
+[[env.production.ratelimits]]
+name = "RL_READ"
+namespace_id = "3001"
+simple = { limit = 300, period = 60 }
+
+[[env.production.ratelimits]]
+name = "RL_WRITE"
+namespace_id = "3002"
+simple = { limit = 60, period = 60 }
+
+[[env.production.ratelimits]]
+name = "RL_UPLOAD"
+namespace_id = "3003"
+simple = { limit = 10, period = 60 }
+
+[[env.production.ratelimits]]
+name = "RL_CREATE"
+namespace_id = "3004"
+simple = { limit = 5, period = 60 }
+
+[[env.production.ratelimits]]
+name = "RL_REQUEST"
+namespace_id = "3005"
+simple = { limit = 5, period = 60 }
+
+[[env.production.ratelimits]]
+name = "RL_REPORT"
+namespace_id = "3006"
+simple = { limit = 5, period = 60 }
+
+[[env.production.ratelimits]]
+name = "RL_EMAIL"
+namespace_id = "3007"
+simple = { limit = 5, period = 60 }
+
+[[env.production.ratelimits]]
+name = "RL_ADMIN"
+namespace_id = "3008"
+simple = { limit = 120, period = 60 }

@@ -1,0 +1,28 @@
+{
+  "name": "@keepsake/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Keepsake Cloudflare Worker: Hono API, assets serving, moderation pipeline.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:remote": "wrangler dev --remote",
+    "deploy": "wrangler deploy",
+    "typecheck": "wrangler types && tsc --noEmit",
+    "test": "vitest run",
+    "types": "wrangler types",
+    "migrate:local": "wrangler d1 migrations apply keepsake-db --local",
+    "migrate:preview": "wrangler d1 migrations apply keepsake-db-preview --env preview --remote",
+    "migrate:prod": "wrangler d1 migrations apply keepsake-db-production --env production --remote"
+  },
+  "dependencies": {
+    "hono": "^4.13.7"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@types/node": "^22",
+    "typescript": "~5.9.2",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.129.0"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@keepsake/observability",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sentry redaction and init-options helpers shared by the Worker and web app. Dependency-free; subpath exports only.",
+  "exports": {
+    "./redact": "./src/redact.ts",
+    "./init": "./src/init.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

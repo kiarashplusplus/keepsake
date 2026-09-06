@@ -1,0 +1,82 @@
+# Runbook: deploy
+
+Status: current for M0; secrets/DNS steps below are one-time setup, not per-deploy.
+
+## Environments
+
+| Environment | Trigger | Worker | Data |
+|---|---|---|---|
+| preview | every PR (`.github/workflows/deploy.yml`) | one shared Worker | its own D1/R2/KV — never production's |
+| production | push to `main` | `keepsake.ing` | production D1/R2/KV |
+
+Both are gated on the `DEPLOY_ENABLED` repository/environment variable being `"true"`; until the
+Cloudflare resources below exist, leave it unset (or `"false"`) so the workflow is a no-op.
+
+## One-time Cloudflare setup
+
+Run once per environment (`preview`, `production`), from `apps/api/`:
+
+```sh
+# D1
+wrangler d1 create keepsake-db-preview
+wrangler d1 create keepsake-db-production
+# → paste the returned database_id into wrangler.toml [env.<name>.d1_databases]
+
+# R2
+wrangler r2 bucket create keepsake-photos-preview
+wrangler r2 bucket create keepsake-photos-production
+
+# KV
+wrangler kv namespace create KV --env preview
+wrangler kv namespace create KV --env production
+# → paste the returned id into wrangler.toml [env.<name>.kv_namespaces]
+
+# Apply schema, then load the postal-code seed (see docs/runbooks/geodata.md)
+wrangler d1 migrations apply keepsake-db --env preview --remote
+wrangler d1 execute keepsake-db --env preview --remote --file ../api/seeds/postal_codes.sql
+```
+
+Turnstile: create a widget per domain (preview subdomain, `keepsake.ing`) in the Cloudflare
+dashboard; the site key is public (`EXPO_PUBLIC_TURNSTILE_SITE_KEY`), the secret is not
+(`TURNSTILE_SECRET`).
+
+Email Service: onboard `keepsake.ing` as a verified sender domain for Cloudflare Email Service
+(account enablement is unverified as of the build plan — confirm with `wrangler dev --remote`
+against the `[[send_email]]` binding before relying on it; `/health` reports `EMAIL: degraded`
+rather than failing if it isn't working yet).
+
+DNS: point `keepsake.ing` at the Worker via a route/custom domain in the Cloudflare dashboard,
+once `wrangler deploy --env production` has run at least once.
+
+## Secrets
+
+Set per environment, never committed (see root `.env.example`'s `# secrets:` block):
+
+```sh
+wrangler secret put TURNSTILE_SECRET --env preview
+wrangler secret put ADMIN_TOKEN --env preview
+wrangler secret put SENTRY_DSN --env preview
+wrangler secret put RESEND_API_KEY --env preview   # fallback provider only
+# repeat with --env production
+```
+
+`CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` are GitHub Environment secrets (Settings →
+Environments → preview/production), used only by `deploy.yml` to run `wrangler` in CI — they are
+not Worker secrets and are never passed to `wrangler secret put`.
+
+## What a deploy actually does
+
+1. `pnpm install --frozen-lockfile`
+2. `pnpm --filter @keepsake/web export` with that environment's `EXPO_PUBLIC_*` values baked in
+3. `wrangler d1 migrations apply keepsake-db --env <env> --remote`
+4. `wrangler deploy --env <env> --var COMMIT_SHA:<sha>`
+5. `curl <site>/health` and assert `.commit == github.sha` — a deploy that doesn't match its own
+   commit fails the workflow rather than silently serving stale code.
+
+## Rollback
+
+`wrangler deploy --env <env> --var COMMIT_SHA:<previous-sha>` after checking out the previous
+commit — there is no separate rollback command; a rollback is just a deploy of an older ref.
+Migrations are additive and forward-only (per plan), so rolling back code does not roll back
+schema; check a failing migration's compatibility with the previous code before rolling back
+across one.

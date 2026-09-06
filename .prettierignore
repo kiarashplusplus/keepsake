@@ -1,0 +1,6 @@
+dist
+node_modules
+.expo
+.wrangler
+pnpm-lock.yaml
+apps/api/seeds

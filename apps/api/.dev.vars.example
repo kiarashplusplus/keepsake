@@ -1,0 +1,22 @@
+# Copy to `.dev.vars` for local `wrangler dev`. Never committed (see
+# apps/api/.gitignore) — these are secrets, not [vars] in wrangler.toml, which
+# only holds non-sensitive config per plan "Tooling, CI, deploy".
+
+# Turnstile secret key for the domain, paired with the public site key the
+# web app embeds. Verifies `cf-turnstile-response` on listing/request/report
+# submission and email add/recover.
+TURNSTILE_SECRET=
+
+# Kiarash's one admin credential (Bearer <ADMIN_TOKEN>, constant-time
+# compare). Admin is Kiarash alone — there is no admin account system.
+ADMIN_TOKEN=
+
+# Sentry DSN for the Worker side (`@sentry/cloudflare`). Redacted via
+# @keepsake/observability/redact before anything is sent. M1: unused until
+# observability lands.
+SENTRY_DSN=
+
+# Resend API key: fallback email provider behind the same `sendMail()`
+# interface, used only if Cloudflare Email Service enablement or the
+# keepsake.ing sender domain onboarding (plan Risks #1) isn't ready.
+RESEND_API_KEY=
