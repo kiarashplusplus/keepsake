@@ -400,3 +400,14 @@ describe("moderationRetry cron", () => {
     expect(events?.n).toBe(1);
   });
 });
+
+describe("self-harm is held, never auto-rejected", () => {
+  it("routes S11 to needs_review rather than rejected or approved", () => {
+    // Verified live 2026-09-06: llama-guard-3-8b returns "unsafe\nS11" for
+    // self-harm language, and S11 used to fall through decideText to "pass".
+    expect(decideText({ verdict: "unsafe", codes: ["S11"] })).toBe("review");
+    expect(decide({ verdict: "unsafe", codes: ["S11"] }, [])).toEqual({
+      status: "needs_review",
+    });
+  });
+});

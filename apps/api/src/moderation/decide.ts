@@ -10,8 +10,16 @@ export type LocalVerdict = "flag" | "review" | "pass" | "error";
 
 /** Violent crime, sex crimes, child exploitation, indiscriminate weapons. */
 const TEXT_FLAG_CODES = new Set(["S1", "S3", "S4", "S9"]);
-/** Non-violent crime, privacy, hate, sexual content. */
-const TEXT_REVIEW_CODES = new Set(["S2", "S7", "S10", "S12"]);
+/**
+ * Non-violent crime, privacy, hate, sexual content, and self-harm.
+ *
+ * S11 (suicide & self-harm) is held for a person rather than auto-rejected.
+ * People write about letting go of a parent's things here, and Llama Guard
+ * does return S11 on that kind of language — answering someone in distress
+ * with an automated "this crosses a line" would be the wrong reply. Holding
+ * it puts the listing in the admin queue, invisible, until a human looks.
+ */
+const TEXT_REVIEW_CODES = new Set(["S2", "S7", "S10", "S11", "S12"]);
 
 const IMAGE_REVIEW_THRESHOLD = 0.5;
 const IMAGE_DRUGS_FLAG_THRESHOLD = 0.7;
