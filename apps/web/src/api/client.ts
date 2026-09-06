@@ -37,6 +37,12 @@ export type ApiFetchOptions = {
   /** Attaches `Authorization: Bearer <ownerToken>`, minting one lazily if
    * none exists yet. Omit (or `false`) for anonymous routes. */
   owner?: boolean;
+  /** Attaches `Authorization: Bearer <adminToken>` verbatim — unlike `owner`,
+   * this never mints anything; the caller (`src/api/admin.ts`) already read
+   * it out of `src/lib/adminToken.ts`'s sessionStorage-backed store. Mutually
+   * exclusive with `owner` in practice (no route needs both), but nothing
+   * here enforces that since no route ever will. */
+  adminToken?: string;
   /** Sent as `cf-turnstile-response` on Turnstile-protected routes. */
   turnstileToken?: string;
   /** Sent as `X-Idempotency-Key`. */
@@ -55,7 +61,7 @@ function isEnvelope(value: unknown): value is Envelope<unknown> {
 }
 
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const { method = "GET", body, owner = false, turnstileToken, idempotencyKey, signal } = options;
+  const { method = "GET", body, owner = false, adminToken, turnstileToken, idempotencyKey, signal } = options;
 
   const url = `${config.siteUrl}${path}`;
   const headers: Record<string, string> = {};
@@ -72,6 +78,9 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 
   if (owner) {
     headers.Authorization = `Bearer ${getOrCreateOwnerToken()}`;
+  }
+  if (adminToken !== undefined) {
+    headers.Authorization = `Bearer ${adminToken}`;
   }
   if (turnstileToken !== undefined) {
     headers["cf-turnstile-response"] = turnstileToken;
