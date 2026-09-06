@@ -94,7 +94,16 @@ itemRoutes.get("/:id", async (c) => {
       : {}),
   });
 
-  const rewriter = new HTMLRewriter().on("head", {
+  // Drop the shell's default title/OG/Twitter tags first: crawlers take the
+  // first og:* they see, and the exported shell already carries the site-wide
+  // defaults ahead of the marker.
+  const rewriter = new HTMLRewriter()
+    .on('title, link[rel="canonical"], meta[property^="og:"], meta[name^="twitter:"]', {
+      element(el) {
+        el.remove();
+      },
+    })
+    .on("head", {
     element(el) {
       el.append(tags, { html: true });
     },

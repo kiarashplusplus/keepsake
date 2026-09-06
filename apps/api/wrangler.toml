@@ -187,7 +187,7 @@ MAX_PHOTO_BYTES = "5242880"
 IMAGE_TRANSFORMS_ENABLED = "0"
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
-SITE_URL = "https://preview.keepsake.ing"
+SITE_URL = "https://keepsake-preview.leapkg.workers.dev"  # until preview.keepsake.ing DNS exists
 MOCK_AI = "0"
 
 [[env.preview.d1_databases]]
