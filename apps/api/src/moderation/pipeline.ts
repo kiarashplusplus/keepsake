@@ -13,7 +13,7 @@ import { ulid } from "../lib/ids.js";
 import { checkAndBump } from "./budget.js";
 import { parseIntVar } from "../env.js";
 import { moderateText } from "./text.js";
-import { moderateImage } from "./image.js";
+import { isImageError, moderateImage } from "./image.js";
 import { decide, decideImage, decideText } from "./decide.js";
 
 /** After this many failed attempts (AI errors, exhausted budget, timeouts —
@@ -229,7 +229,9 @@ export async function moderateListing(env: Env, listingId: string, version: numb
 
       const imageStart = Date.now();
       const base64 = arrayBufferToBase64(await object.arrayBuffer());
-      const verdict = await moderateImage(env, base64);
+      const contentType = object.httpMetadata?.contentType ?? "image/jpeg";
+      const outcome = await moderateImage(env, base64, contentType);
+      const verdict = isImageError(outcome) ? ("error" as const) : outcome;
       await logEvent(env, {
         listingId,
         listingVersion: version,
@@ -237,7 +239,8 @@ export async function moderateListing(env: Env, listingId: string, version: numb
         kind: "image",
         model: MODELS.imageVision,
         verdict: decideImage(verdict),
-        flagsJson: verdict === "error" ? undefined : JSON.stringify(verdict),
+        reason: isImageError(outcome) ? outcome.error : undefined,
+        flagsJson: isImageError(outcome) ? undefined : JSON.stringify(outcome),
         attempt,
         latencyMs: Date.now() - imageStart,
       });

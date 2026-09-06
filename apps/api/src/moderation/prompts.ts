@@ -17,3 +17,12 @@ Return only the JSON object.`;
 
 /** Sent as an extra instruction on the single retry after a parse failure. */
 export const IMAGE_RETRY_INSTRUCTION = "Your previous response could not be parsed as JSON. Return only the JSON object described above — no other text.";
+
+/**
+ * The user-turn text that accompanies the image. The vision model needs a
+ * text part in the user turn; an image-only turn returned empty responses on
+ * preview. Keep it a restatement of the shape so the model has it closest to
+ * the image.
+ */
+export const IMAGE_USER_PROMPT =
+  'Classify this photo and return ONLY the JSON object: {"is_physical_object":true,"nsfw":0,"violence":0,"weapons":0,"drugs":0,"hate_symbols":0,"personal_info":0,"notes":"short reason"} with numbers from 0 to 1.';
