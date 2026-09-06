@@ -81,12 +81,7 @@ Migrations are additive and forward-only (per plan), so rolling back code does n
 schema; check a failing migration's compatibility with the previous code before rolling back
 across one.
 
-## Account-side prerequisites still owed (as of 2026-09-06)
+## Account-side prerequisites
 
-These need the Cloudflare dashboard (the wrangler OAuth token lacks the scopes). Until they are done, preview runs with Turnstile in soft-pass and email disabled.
-
-1. **Email Service: onboard `keepsake.ing`.** Preview currently logs `send_failed: could not find domain config of sending domain` in `email_events`. Dashboard → Email → Email Service → Sending domains → add `keepsake.ing`, let Cloudflare add the DKIM/SPF/DMARC records, wait for "Verified". Sender is `hello@keepsake.ing` (`EMAIL_FROM`); no mailbox is needed for sending. Re-test: `POST /api/me/email` on preview, then `SELECT error FROM email_events ORDER BY created_at DESC LIMIT 1`.
-2. **Turnstile widget.** Dashboard → Turnstile → Add widget → hostnames `keepsake.ing`, `preview.keepsake.ing`, `keepsake-preview.leapkg.workers.dev`; mode Managed. Then `wrangler secret put TURNSTILE_SECRET --env preview` (and `--env production`), and set `EXPO_PUBLIC_TURNSTILE_SITE_KEY` in the GitHub Environment vars (it is public by design).
-3. **DNS / routes.** `preview.keepsake.ing` → Worker `keepsake-preview` (Workers & Pages → keepsake-preview → Settings → Domains & Routes → add custom domain). Apex `keepsake.ing` → Worker `keepsake` (production) when M5 cuts over. Then flip `SITE_URL` in `wrangler.toml` `[env.preview.vars]` back to `https://preview.keepsake.ing`.
-4. **GitHub Environments `preview` and `production`.** Secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts:Edit, D1:Edit, Workers KV:Edit, Workers R2:Edit, Account Settings:Read), `CLOUDFLARE_ACCOUNT_ID=dc6a87ed4a4269ed74c8f508b275b703`; vars `EXPO_PUBLIC_SITE_URL`, `EXPO_PUBLIC_TURNSTILE_SITE_KEY`, `EXPO_PUBLIC_ENV`; set repo var `DEPLOY_ENABLED=true` to arm `deploy.yml`.
-5. **Worker secrets** (both envs): `ADMIN_TOKEN` (random 32 bytes; used by the admin page in M4), `SENTRY_DSN` (optional).
+Moved to [kiarash-checklist.md](kiarash-checklist.md) — a step-by-step guide with the exact
+dashboard clicks, in the order that unblocks the most verification first.
