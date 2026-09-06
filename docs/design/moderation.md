@@ -69,3 +69,9 @@ API-only session. `sendMail()` (`src/email/sendMail.ts`) sends the verify-email 
 real `EMAIL` binding when `EMAIL_PROVIDER=cf` and it's configured, else logs `[email:stub]` — the
 `GET /api/me/email/verify` endpoint itself is explicitly M3 scope, so that link is a placeholder
 until then. Feed/requests/admin/recovery are out of scope for this session (M2–M4).
+
+## Real-stack findings (preview, 2026-09-05)
+- Vision (`@cf/meta/llama-3.2-11b-vision-instruct`) via `messages` + `image_url` data URI works, ~2.3–4 s per 640px thumb, ~15 neurons per call (3.2k prompt tokens). Workers AI hands back `response` as a **parsed object** when the model emits JSON; the extractor normalises it. An image-only user turn returns an empty response: always send a text part.
+- Llama Guard 3 judges *descriptions of objects* leniently: a story describing explicit adult magazines came back `safe`. Text-side `review` will rarely fire; the vision pass and the report button carry borderline cases. This is consistent with the minimal-list decision. Revisit if reports show text-only abuse.
+- Phone number in a story → `rejected` / `contact_in_story` before any model call, as designed.
+- Cron retry (`*/5`) re-ran listings left `pending` by the earlier failure and approved them once the fix deployed.
