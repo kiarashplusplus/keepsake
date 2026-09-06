@@ -1,3 +1,4 @@
+import { guardRecipient } from "../src/email/sendMail.js";
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
@@ -158,5 +159,56 @@ describe("POST /api/recover + POST /api/recover/:token", () => {
     // The recovery token itself is single-use.
     const secondExchange = await SELF.fetch(`http://x/api/recover/${recoverToken}`, { method: "POST" });
     expect(secondExchange.status).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Recipient guard. Cloudflare scores the sending domain on bounce rate (safe
+// under 2%), and this repo carries 80 `@example.com` fixtures, so the guard is
+// the thing that keeps a stray test run from burning keepsake.ing.
+// ---------------------------------------------------------------------------
+describe("guardRecipient", () => {
+  const env = (mode: string, allowlist = "") =>
+    ({ EMAIL_MODE: mode, EMAIL_ALLOWLIST: allowlist }) as unknown as Parameters<typeof guardRecipient>[0];
+
+  it("refuses reserved domains even in live mode", () => {
+    for (const address of [
+      "someone@example.com",
+      "a@example.net",
+      "b@example.org",
+      "c@anything.test",
+      "d@thing.invalid",
+      "e@localhost",
+      "f@dev.local",
+    ]) {
+      expect(guardRecipient(env("live"), address), address).toEqual({
+        allowed: false,
+        reason: "blocked_reserved_domain",
+      });
+    }
+  });
+
+  it("refuses anything off the allowlist, and allows what is on it", () => {
+    const e = env("allowlist", "kiarasha@alum.mit.edu");
+    expect(guardRecipient(e, "kiarasha@alum.mit.edu")).toEqual({ allowed: true });
+    expect(guardRecipient(e, "  KiaraSha@Alum.MIT.edu  ")).toEqual({ allowed: true });
+    expect(guardRecipient(e, "stranger@gmail.com")).toEqual({
+      allowed: false,
+      reason: "blocked_not_allowlisted",
+    });
+  });
+
+  it("fails closed when the mode is unset or unrecognised", () => {
+    expect(guardRecipient(env(""), "real@gmail.com").allowed).toBe(false);
+    expect(guardRecipient(env("yolo"), "real@gmail.com").allowed).toBe(false);
+  });
+
+  it("allows a real address in live mode", () => {
+    expect(guardRecipient(env("live"), "real@gmail.com")).toEqual({ allowed: true });
+  });
+
+  it("rejects malformed addresses", () => {
+    expect(guardRecipient(env("live"), "not-an-address").allowed).toBe(false);
+    expect(guardRecipient(env("live"), "").allowed).toBe(false);
   });
 });

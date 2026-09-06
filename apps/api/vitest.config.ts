@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
@@ -46,6 +47,13 @@ export default defineConfig({
           // newer bundled workerd.
           compatibilityDate: "2026-08-22",
           bindings: {
+        // Unit tests use a fake EMAIL binding; "test" lets the guard through
+        // so the send path is exercised. Never set in wrangler.toml.
+        EMAIL_MODE: "test",
+        // The config guard test asserts on the real file; the workers runtime
+        // has no fs, so it is read here (Node) and passed through.
+        WRANGLER_TOML_TEXT: readFileSync(new URL("./wrangler.toml", import.meta.url), "utf8"),
+        EMAIL_ALLOWLIST: "",
             TEST_MIGRATIONS: migrations,
             // Pinned the same way Bayan's `worker/vitest.config.ts` pins its
             // budget vars: so a retune of the real ceilings in wrangler.toml

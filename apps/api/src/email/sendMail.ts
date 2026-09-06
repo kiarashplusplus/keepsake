@@ -23,6 +23,87 @@ import { emailProviderName } from "../env.js";
 import { sha256Hex } from "../lib/digest.js";
 import { ulid } from "../lib/ids.js";
 
+/**
+ * Recipient guard — the reason Keepsake cannot spray bounces at its own
+ * sending reputation.
+ *
+ * Cloudflare scores a sending domain on bounce rate (safe under 2%, at risk
+ * at 5%). At our volume that is one or two bad addresses, and the repo is
+ * full of `someone@example.com` fixtures: 80 of them across the API, web and
+ * contract tests. Those run against a fake binding today, but "today" is not
+ * a safety property. This runs on every send, in every environment, and is
+ * the only thing standing between a stray test run and a burned domain.
+ *
+ * Two layers:
+ *
+ * 1. **Reserved domains are refused everywhere, production included.**
+ *    RFC 2606 / RFC 6761 set aside `example.com|net|org` and the `.test`,
+ *    `.invalid`, `.localhost` and `.local` suffixes precisely so they can
+ *    never resolve. Mail to them is guaranteed to bounce, so there is no
+ *    environment where sending is the right behaviour.
+ *
+ * 2. **Outside production, an allowlist.** `EMAIL_MODE=allowlist` sends only
+ *    to addresses in `EMAIL_ALLOWLIST`; everything else is recorded and
+ *    dropped. Preview talks to the same verified domain as production, so
+ *    without this a preview smoke test would mail a real stranger who typed
+ *    their address into a listing request.
+ *
+ * Fails closed: an unset or unrecognised `EMAIL_MODE` sends nothing.
+ * Blocked attempts are still written to `email_events` (`ok = 0`) so a
+ * silently-dropped notification is visible rather than mysterious.
+ */
+const RESERVED_DOMAINS = new Set(["example.com", "example.net", "example.org", "example.edu"]);
+const RESERVED_SUFFIXES = [".test", ".invalid", ".localhost", ".local", ".example"];
+
+export type GuardDecision = { allowed: true } | { allowed: false; reason: string };
+
+export function domainOf(address: string): string {
+  const at = address.lastIndexOf("@");
+  return at === -1 ? "" : address.slice(at + 1).trim().toLowerCase();
+}
+
+/** Reserved-by-standard domains that can never accept mail. */
+export function isReservedDomain(address: string): boolean {
+  const domain = domainOf(address);
+  if (domain.length === 0) return true;
+  if (RESERVED_DOMAINS.has(domain)) return true;
+  return RESERVED_SUFFIXES.some((suffix) => domain === suffix.slice(1) || domain.endsWith(suffix));
+}
+
+function parseAllowlist(raw: string | undefined): string[] {
+  return (raw ?? "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+}
+
+export function guardRecipient(env: Env, to: string): GuardDecision {
+  const address = to.trim().toLowerCase();
+  const mode = (env.EMAIL_MODE ?? "").trim().toLowerCase();
+
+  // "test" short-circuits everything, including the reserved-domain rule,
+  // because the unit suite is built on `@example.com` fixtures and sends them
+  // through a fake binding where nothing leaves the process. It is safe only
+  // because it can never be set outside vitest: `email-mode-config.test.ts`
+  // reads wrangler.toml and fails if this value ever appears there.
+  if (mode === "test") return { allowed: true };
+
+  if (address.length === 0 || !address.includes("@")) {
+    return { allowed: false, reason: "blocked_invalid_address" };
+  }
+  if (isReservedDomain(address)) {
+    return { allowed: false, reason: "blocked_reserved_domain" };
+  }
+
+  if (mode === "live") return { allowed: true };
+  if (mode === "allowlist") {
+    const allowed = parseAllowlist(env.EMAIL_ALLOWLIST);
+    if (allowed.includes(address)) return { allowed: true };
+    return { allowed: false, reason: "blocked_not_allowlisted" };
+  }
+  return { allowed: false, reason: "blocked_email_mode_off" };
+}
+
 export type EmailKind = "verify_email" | "new_request" | "chosen" | "recover";
 
 export interface MailMessage {
@@ -106,6 +187,22 @@ export async function sendMail(env: Env, message: MailMessage): Promise<SendMail
 
   let result: SendMailResult;
   let providerLabel: string;
+
+  const guard = guardRecipient(env, message.to);
+  if (!guard.allowed) {
+    // Recorded, not thrown: the give/request/choose flow it belongs to must
+    // still succeed, and `email_events` is where "why did nothing arrive"
+    // gets answered.
+    console.log("[email:blocked]", { subject: message.subject, reason: guard.reason });
+    await recordEmailEvent(env, {
+      kind: message.kind,
+      toHash,
+      provider: "blocked",
+      ok: false,
+      error: guard.reason,
+    });
+    return { sent: false, reason: guard.reason };
+  }
 
   if (provider === "cf" && env.EMAIL) {
     providerLabel = "cf";

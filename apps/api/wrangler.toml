@@ -71,6 +71,10 @@ IMAGE_TRANSFORMS_ENABLED = "0"
 # onboarding (see plan Risks #1) doesn't land in time.
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
+# Local and e2e never send. The bindings exist so the code path is exercised;
+# "off" makes a real delivery impossible no matter what a test does.
+EMAIL_MODE = "off"
+EMAIL_ALLOWLIST = ""
 SITE_URL = "http://localhost:8787"
 # M1: flips the moderation pipeline to canned responses for local dev and
 # Playwright, so `give` works without live Workers AI calls.
@@ -187,6 +191,11 @@ MAX_PHOTO_BYTES = "5242880"
 IMAGE_TRANSFORMS_ENABLED = "0"
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
+# Preview shares the verified keepsake.ing sender with production, so it is
+# restricted to a named list. Anything else is recorded and dropped — a smoke
+# test must never mail a stranger who typed their address into a request.
+EMAIL_MODE = "allowlist"
+EMAIL_ALLOWLIST = "kiarasha@alum.mit.edu"
 SITE_URL = "https://keepsake-preview.leapkg.workers.dev"  # until preview.keepsake.ing DNS exists
 MOCK_AI = "0"
 
@@ -277,6 +286,10 @@ MAX_PHOTO_BYTES = "5242880"
 IMAGE_TRANSFORMS_ENABLED = "0"
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
+# Real users. Reserved domains (example.com, .test, .invalid) are still
+# refused by guardRecipient; bounce rate is scored from 2%.
+EMAIL_MODE = "live"
+EMAIL_ALLOWLIST = ""
 SITE_URL = "https://keepsake.ing"
 MOCK_AI = "0"
 
