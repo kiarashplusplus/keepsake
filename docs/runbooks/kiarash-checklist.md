@@ -17,36 +17,19 @@ Paste anything you get back (site keys, tokens) into chat and I'll wire it up an
 Enabled, DNS configured, sending from `hello@keepsake.ing`, quota 1000/day. First real
 delivery confirmed in `email_events` (`provider=cf, ok=1`).
 
-## 2. Turnstile — create the widget (~5 min) — STILL NEEDED
+## 2. Turnstile — widget created, one hostname missing
 
-**The `cf` token cannot do this one.** Its permission list is Workers Routes Write, DNS Write,
-API Tokens Write, Workers Scripts/KV/R2/Pages/AI Write, Account Settings Read — no Turnstile
-scope, so `POST /challenges/widgets` returns `10000 Authentication error`.
+The widget exists (`Keepsake`, managed, sitekey `0x4AAAAAAEqUUMHIymlBJ3pb`) but its hostname
+list is only `keepsake.ing`. Turnstile refuses to render on a host that is not listed, so
+enabling it on preview right now would break every write there.
 
-**Why it matters:** every public write (post a keepsake, ask for one, report one) is meant to be behind
-Turnstile. Right now the middleware **soft-passes when no secret is set**, which is fine on
-preview and must not be true in production.
+**The one thing left:** Turnstile → the `Keepsake` widget → add `preview.keepsake.ing` to
+Hostnames. Then tell me and I will set `TURNSTILE_SECRET` on the preview Worker, add the site
+key to the preview build, and verify that a request with no token is refused.
 
-1. Dashboard → **Turnstile** → **Add widget**.
-2. Name: `keepsake`. Mode: **Managed**.
-3. Hostnames — add all three:
-   - `keepsake.ing`
-   - `preview.keepsake.ing`
-   - `keepsake-preview.leapkg.workers.dev`
-4. Create. You'll get two values:
-   - **Site key** — public, safe to paste in chat. Goes into the web build.
-   - **Secret key** — treat as a password. Paste it in chat too (it only ever reaches the
-     Worker as an encrypted secret), or run it yourself:
-     ```
-     cd ~/Documents/keepsake/apps/api
-     npx wrangler secret put TURNSTILE_SECRET --env preview
-     npx wrangler secret put TURNSTILE_SECRET --env production
-     ```
-
-**Then tell me** the site key and I'll rebuild preview with it and confirm a request without a
-token is refused with `turnstile_failed`.
-
----
+The `cf` token cannot do this: its permissions are Workers Routes Write, DNS Write, API Tokens
+Write, Workers Scripts/KV/R2/Pages/AI Write and Account Settings Read — no Turnstile scope, so
+both create and update return `10000 Authentication error`.
 
 ## 3. ~~DNS — `preview.keepsake.ing`~~ ✅ DONE 2026-09-06
 
@@ -55,36 +38,19 @@ Workers Routes Write). `SITE_URL` now points at it, so share links, Open Graph t
 sitemap all use the real domain. Verified: `/health` 200, `/`, `/about`, `/give/`, `/mine/` all
 200, item unfurl shows `https://preview.keepsake.ing/...`.
 
-## 4. GitHub Environments — let CI deploy on its own (~10 min)
+## 4. ~~GitHub Environments~~ ✅ DONE 2026-09-06
 
-**Why:** right now I deploy by hand from a local worktree. The `deploy.yml` workflow exists but
-is gated off, so nothing ships automatically and there's no record of what shipped when.
-
-1. Create the API token: dashboard → **My Profile** → **API Tokens** → **Create Token** →
-   **Create Custom Token**. Permissions:
-   | Scope | Resource | Level |
-   |---|---|---|
-   | Account | Workers Scripts | Edit |
-   | Account | Workers KV Storage | Edit |
-   | Account | Workers R2 Storage | Edit |
-   | Account | D1 | Edit |
-   | Account | Account Settings | Read |
-   | Zone | Workers Routes | Edit (zone: keepsake.ing) |
-2. GitHub → `kiarashplusplus/keepsake` → **Settings** → **Environments** → **New environment**
-   → `preview`. Repeat for `production`.
-3. In **each** environment add:
-   - Secret `CLOUDFLARE_API_TOKEN` = the token from step 1
-   - Secret `CLOUDFLARE_ACCOUNT_ID` = `dc6a87ed4a4269ed74c8f508b275b703`
-   - Variable `EXPO_PUBLIC_SITE_URL` = `https://preview.keepsake.ing` / `https://keepsake.ing`
-   - Variable `EXPO_PUBLIC_TURNSTILE_SITE_KEY` = the site key from step 2
-   - Variable `EXPO_PUBLIC_ENV` = `preview` / `production`
-4. Repo **Settings → Secrets and variables → Actions → Variables** → add `DEPLOY_ENABLED` = `true`.
-   This is the master switch; the deploy job is a no-op until it's set.
-
-For production, consider adding yourself as a **required reviewer** on the `production`
-environment so a merge to `main` can't ship without you clicking approve.
-
----
+- Minted `keepsake-ci-deploy`, scoped to Workers Scripts / KV / R2 / D1 write plus Account
+  Settings read on this account, and Workers Routes write on the zone. Verified it *cannot*
+  write DNS or mint further tokens. Your broad `cf` token stays on your machine.
+- `preview` and `production` environments created, each with `CLOUDFLARE_API_TOKEN` and
+  `CLOUDFLARE_ACCOUNT_ID`; site URL and env variables set per tier; the production site key is
+  in place.
+- `DEPLOY_ENABLED=true`.
+- **Production is manual only.** GitHub's required-reviewers gate is a paid feature on private
+  repos, so instead of letting a merge to main ship the public site, `deploy.yml` now takes
+  production only from a `workflow_dispatch` run (Actions tab → Deploy → choose `production`).
+  Preview deploys itself on every PR and every push to main.
 
 ## 5. Production cutover — only when you're ready to be public
 
