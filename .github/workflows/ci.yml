@@ -170,11 +170,18 @@ jobs:
   e2e:
     name: e2e
     runs-on: ubuntu-latest
-    # Gated behind both: the suite needs the exported bundle `build-web`
-    # uploads (the Worker serves it through its [assets] binding), and there
-    # is no point paying for a browser run when the API's own unit tests are
-    # red. Skipping either need skips this job, which is the scoping we want.
+    # Needs the bundle `build-web` uploads (the Worker serves it through its
+    # [assets] binding), and there is no point paying for a browser run when
+    # the API's own unit tests are red.
+    #
+    # The explicit `if` is load-bearing: GitHub skips a job when *any* of its
+    # `needs` is skipped, and `test-api` only runs when `apps/api/**` changed.
+    # Without this, every web-only change skipped the end-to-end suite —
+    # precisely the change it exists to check. It ran on nothing for its first
+    # several commits. So: require `build-web` to have passed, and allow
+    # `test-api` to be either passed or skipped, but never failed.
     needs: [build-web, test-api]
+    if: ${{ !cancelled() && needs.build-web.result == 'success' && needs.test-api.result != 'failure' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
