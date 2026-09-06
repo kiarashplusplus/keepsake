@@ -36,5 +36,9 @@ module.exports = {
   },
   setupFiles: ["<rootDir>/test/setup/matchMedia.ts"],
   setupFilesAfterEnv: [],
-  testPathIgnorePatterns: ["/node_modules/", "/dist/", "/.expo/"],
+  // `e2e/` holds Playwright specs, whose `*.spec.ts` names match Jest's
+  // default `testMatch` exactly. Without this they'd be collected here, fail
+  // on `@playwright/test`'s runner-only imports, and turn a green unit suite
+  // red for no reason. `pnpm --filter @keepsake/web e2e` runs them.
+  testPathIgnorePatterns: ["/node_modules/", "/dist/", "/.expo/", "/e2e/"],
 };

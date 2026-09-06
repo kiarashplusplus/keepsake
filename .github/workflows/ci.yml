@@ -170,12 +170,11 @@ jobs:
   e2e:
     name: e2e
     runs-on: ubuntu-latest
+    # Gated behind both: the suite needs the exported bundle `build-web`
+    # uploads (the Worker serves it through its [assets] binding), and there
+    # is no point paying for a browser run when the API's own unit tests are
+    # red. Skipping either need skips this job, which is the scoping we want.
     needs: [build-web, test-api]
-    # M4: enable. Playwright specs (browse, give -> live, request, dashboard,
-    # choose reveals contact, 3 reports hide, recover, dark mode, reduced
-    # motion) don't exist yet — apps/web/e2e/ is a later milestone. The job
-    # is wired up now so turning it on is a one-line diff, not a new job.
-    if: false
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -188,5 +187,14 @@ jobs:
         with:
           name: web-dist
           path: apps/web/dist
-      - run: pnpm --filter @keepsake/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @keepsake/web e2e:install
+      # `wrangler dev --local` keeps every binding local (D1/R2/KV in a
+      # throwaway --persist-to directory, no remote AI), so this needs no
+      # Cloudflare credentials — see apps/web/playwright.config.ts.
       - run: pnpm --filter @keepsake/web e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          retention-days: 7

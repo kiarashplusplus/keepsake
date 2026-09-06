@@ -8,7 +8,9 @@
     "export": "expo export --platform web && node scripts/write-version-json.mjs && node scripts/copy-site.mjs",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "e2e": "playwright test",
+    "e2e:install": "playwright install --with-deps chromium"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
@@ -31,7 +33,9 @@
     "react-native-web": "^0.21.2"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@babel/core": "^7.25.2",
+    "@playwright/test": "^1.63.0",
     "@react-native/jest-preset": "^0.86.3",
     "@testing-library/react-native": "^13.3.3",
     "@types/jest": "^29.5.14",
