@@ -24,12 +24,12 @@ export function Chip({ label, selected = false, onPress }: ChipProps): React.Rea
         paddingHorizontal: space.md,
         borderRadius: radii.pill,
         borderWidth: 1,
-        borderColor: selected ? "transparent" : colors.border,
+        borderColor: selected ? "transparent" : colors.rule,
         backgroundColor: selected ? colors.accentSoft : colors.surface,
         opacity: pressed ? 0.85 : 1,
       })}
     >
-      <Text variant="label" color={selected ? "accentText" : "textSecondary"}>
+      <Text variant="bodySm" color={selected ? "accentText" : "textSecondary"} style={{ fontWeight: "500" }}>
         {label}
       </Text>
     </Pressable>

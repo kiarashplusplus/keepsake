@@ -5,14 +5,17 @@ import { useColors, useContainerBorder } from "@/ui/theme";
 
 type SurfaceProps = ViewProps & { style?: ViewStyle | ViewStyle[] };
 
-/** An elevated container: surface fill, hairline border, warm card shadow. */
+/** An elevated container: surface fill, hairline `rule` border, paper-on-
+ * paper shadow, square-ish corners. For anything that is a *thing* in the
+ * feed (a listing, a photo) prefer `TagCard`, which is the same paper with
+ * the hole punched. */
 export function Card({ style, children, ...rest }: SurfaceProps): React.ReactElement {
   const colors = useColors();
   const border = useContainerBorder();
 
   const composed: ViewStyle = {
     backgroundColor: colors.surface,
-    borderRadius: radii.lg,
+    borderRadius: radii.md,
     ...border,
     // `boxShadow` renders on iOS/Android/web alike under the New Architecture —
     // see packages/tokens/src/radii.ts's header comment.

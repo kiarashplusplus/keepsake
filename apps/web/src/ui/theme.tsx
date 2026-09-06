@@ -118,9 +118,11 @@ export function useThemeMode(): ThemeContextValue {
 
 /**
  * The canonical hairline border for elevated containers (cards, sheets,
- * inputs) so every surface reads as the same layer. 1 device pixel thin.
+ * inputs) so every surface reads as the same layer. 1 device pixel thin, in
+ * `rule` (ink at partial opacity) rather than the pale `border` tint — the
+ * v2 identity draws dividers as pencil hairlines, not as boxes.
  */
 export function useContainerBorder(): { borderWidth: number; borderColor: string } {
   const colors = useColors();
-  return { borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border };
+  return { borderWidth: StyleSheet.hairlineWidth, borderColor: colors.rule };
 }

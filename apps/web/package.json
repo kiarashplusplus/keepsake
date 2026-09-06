@@ -12,7 +12,9 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
+    "@keepsake/contracts": "workspace:*",
     "@keepsake/tokens": "workspace:*",
+    "blurhash": "^2.0.5",
     "expo": "~57.0.14",
     "expo-constants": "~57.0.0",
     "expo-image": "~57.0.3",

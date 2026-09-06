@@ -2,7 +2,13 @@
 module.exports = {
   preset: "jest-expo/web",
   transformIgnorePatterns: [
-    "node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules-.*|sentry-expo|native-base|react-native-svg|react-native-reanimated|react-native-gesture-handler|react-native-screens|react-native-safe-area-context|react-native-web)/)",
+    // `react-native-worklets` added for M1: react-native-reanimated v4 pulls
+    // it in as a runtime dependency (the `Seal`/`Skeleton` components use
+    // `react-native-reanimated`, first exercised by a render test in M1's
+    // give-review test), and it ships ESM (`import ... from`) that Jest's
+    // default node_modules skip can't parse without being run through the
+    // transform like its sibling packages below.
+    "node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules-.*|sentry-expo|native-base|react-native-svg|react-native-reanimated|react-native-worklets|react-native-gesture-handler|react-native-screens|react-native-safe-area-context|react-native-web)/)",
   ],
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/src/$1",
@@ -24,6 +30,7 @@ module.exports = {
     // the preset's broader pattern ever gets a chance to.
     "^react-native$": "react-native-web",
   },
+  setupFiles: ["<rootDir>/test/setup/matchMedia.ts"],
   setupFilesAfterEnv: [],
   testPathIgnorePatterns: ["/node_modules/", "/dist/", "/.expo/"],
 };

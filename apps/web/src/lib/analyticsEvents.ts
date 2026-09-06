@@ -4,7 +4,10 @@ export const AnalyticsEvents = {
   FeedViewed: "feed_viewed",
   ListingViewed: "listing_viewed",
   GiveStarted: "give_started",
+  GivePhotoUploaded: "give_photo_uploaded",
   GiveSubmitted: "give_submitted",
+  GiveLive: "give_live",
+  GiveRejected: "give_rejected",
   RequestSent: "request_sent",
 } as const;
 
