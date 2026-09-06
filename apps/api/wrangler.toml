@@ -196,7 +196,7 @@ EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 # test must never mail a stranger who typed their address into a request.
 EMAIL_MODE = "allowlist"
 EMAIL_ALLOWLIST = "kiarasha@alum.mit.edu"
-SITE_URL = "https://keepsake-preview.leapkg.workers.dev"  # until preview.keepsake.ing DNS exists
+SITE_URL = "https://preview.keepsake.ing"
 MOCK_AI = "0"
 
 [[env.preview.d1_databases]]
