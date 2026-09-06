@@ -1,5 +1,6 @@
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import * as Sentry from "@sentry/cloudflare";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { freshClientIp, insertApprovedListing, insertOwner, readErr, readOk } from "./helpers.js";
 
 async function report(listingId: string, clientIp: string, reason = "not_a_keepsake"): Promise<Response> {
@@ -63,5 +64,29 @@ describe("POST /api/listings/:id/reports", () => {
 
     const res = await report(listingId, freshClientIp());
     expect(res.status).toBe(404);
+  });
+
+  describe("Sentry notification on autohide", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("calls Sentry.captureMessage once the threshold hides the listing", async () => {
+      const captureMessageSpy = vi.spyOn(Sentry, "captureMessage");
+      const ownerId = await insertOwner();
+      const listingId = await insertApprovedListing({ ownerId });
+
+      await report(listingId, freshClientIp());
+      await report(listingId, freshClientIp());
+      expect(captureMessageSpy).not.toHaveBeenCalled();
+
+      const third = await report(listingId, freshClientIp());
+      expect(third.status).toBe(201);
+
+      expect(captureMessageSpy).toHaveBeenCalledTimes(1);
+      const [message] = captureMessageSpy.mock.calls[0] ?? [];
+      expect(message).toContain(listingId);
+      expect(message).toContain("auto-hidden");
+    });
   });
 });

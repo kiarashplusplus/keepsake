@@ -31,6 +31,13 @@ describe("redactDeep", () => {
     expect(output.form.name).toBe("Jane");
   });
 
+  it("redacts an x-idempotency-key header nested in an object", () => {
+    const input = { headers: { "x-idempotency-key": "client-generated-key-abc", accept: "application/json" } };
+    const output = redactDeep(input) as { headers: { "x-idempotency-key": string; accept: string } };
+    expect(output.headers["x-idempotency-key"]).toBe("[REDACTED]");
+    expect(output.headers.accept).toBe("application/json");
+  });
+
   it("redacts sensitive keys inside arrays", () => {
     const input = [{ owner_token: "ks_secret" }, { safe: "ok" }];
     const output = redactDeep(input) as Record<string, string>[];

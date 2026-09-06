@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import * as Sentry from "@sentry/cloudflare";
+import { sentryOptions } from "@keepsake/observability/init";
 import { apiErr } from "@keepsake/contracts/common";
 import { assertBindings, type Env } from "./env.js";
 import { moderationRetry } from "./cron/moderationRetry.js";
@@ -14,6 +16,7 @@ import { feedRoutes } from "./routes/feed.js";
 import { itemRoutes } from "./routes/item.js";
 import { sitemapRoutes } from "./routes/sitemap.js";
 import { recoverRoutes } from "./routes/recover.js";
+import { adminRoutes } from "./routes/admin.js";
 
 type Variables = {
   requestId: string;
@@ -39,6 +42,13 @@ app.onError((err, c) => {
     status,
     error: err instanceof Error ? err.message : String(err),
   });
+  // `withSentry` below instruments `app.fetch` itself, but Hono's own
+  // `onError` already turns every thrown error into a normal JSON response
+  // before that instrumentation ever sees an exception propagate — so
+  // without this explicit call, a route bug would show up in the Worker's
+  // own logs but never in Sentry. `captureException` is a safe no-op when
+  // `SENTRY_DSN` is unset (no client, per `buildSentryOptions` below).
+  Sentry.captureException(err);
   // Every code here must be one of `@keepsake/contracts/common`'s
   // `ERROR_CODES` — this is the catch-all for anything a route didn't
   // already turn into a proper `fail(...)` response via `src/lib/respond.ts`,
@@ -61,14 +71,30 @@ app.get("/health", async (c) => {
     d1 = "error";
   }
 
-  const checks = { ...bindingChecks, d1 };
+  // Neither secret's presence nor absence is ever put in the response body
+  // by name — only this rolled-up "ok"/"degraded" verdict — and only in
+  // `production`. Local dev and preview routinely run without Turnstile/
+  // admin provisioned yet (see `.dev.vars.example`); that shouldn't make
+  // their `/health` look unhealthy the way it must once traffic is real.
+  const isProduction = c.env.ENVIRONMENT === "production";
+  const secretsConfigured = Boolean(c.env.TURNSTILE_SECRET) && Boolean(c.env.ADMIN_TOKEN);
+  const secrets: "ok" | "degraded" = !isProduction || secretsConfigured ? "ok" : "degraded";
+
+  const checks = { ...bindingChecks, d1, secrets };
   const ok = bindingsOk && d1 === "ok";
+  const degraded = secrets === "degraded";
+  const commit = c.env.COMMIT_SHA ?? "dev";
 
   return c.json(
     {
       ok,
-      commit: c.env.COMMIT_SHA ?? "dev",
+      degraded,
+      commit,
       env: c.env.ENVIRONMENT,
+      // Same shape `/version.json` returns, inlined here too so a single
+      // `/health` fetch is enough to confirm which build answered — no
+      // second round trip needed just to double-check the commit.
+      version: { commit, environment: c.env.ENVIRONMENT },
       checks,
     },
     ok ? 200 : 503,
@@ -82,15 +108,13 @@ app.get("/version.json", (c) => {
   return c.json({ commit: c.env.COMMIT_SHA ?? "dev" });
 });
 
-// M1/M2/M3 routes. Admin is the only remaining milestone (M4) — until then
-// every other /api/* path is an honest 404 (the catch-all below), rather
-// than falling through to the SPA shell.
 app.route("/api/geo", geoRoutes);
 app.route("/api/photos", photoRoutes);
 app.route("/api/listings", listingRoutes);
 app.route("/api/me", meRoutes);
 app.route("/api/feed", feedRoutes);
 app.route("/api/recover", recoverRoutes);
+app.route("/api/admin", adminRoutes);
 app.route("/i", imageRoutes);
 // Mounted at the Worker root, per the plan's route table — not under /api/*,
 // and reached at all only because wrangler.toml's `run_worker_first` lists
@@ -135,7 +159,36 @@ async function scheduled(controller: ScheduledController, env: Env, ctx: Executi
   }
 }
 
-export default {
+/**
+ * `withSentry`'s options callback, exported for direct unit testing. Returns
+ * `undefined` — the documented way to tell `withSentry` not to initialize a
+ * client at all — whenever `SENTRY_DSN` is unset, which is true for local
+ * dev and any preview/production deploy before the DSN secret is
+ * provisioned. `@keepsake/observability/init`'s `sentryOptions()` already
+ * wires `beforeSend`/`beforeBreadcrumb` to the redaction layer; the double
+ * cast at the end exists only because that package is dependency-free (no
+ * `@sentry/*` import allowed in it) and so its plain `(event: unknown) =>
+ * unknown` function types don't structurally satisfy Sentry's own
+ * `Event`/`Breadcrumb`-typed callback signatures — the redaction functions
+ * themselves operate on plain objects either way, so the mismatch is in the
+ * type system only, not in behavior.
+ */
+export function buildSentryOptions(env: Env): Sentry.CloudflareOptions | undefined {
+  if (!env.SENTRY_DSN) return undefined;
+  return sentryOptions({
+    service: "keepsake-api",
+    runtime: "cloudflare",
+    dsn: env.SENTRY_DSN,
+    environment: env.ENVIRONMENT,
+    release: env.COMMIT_SHA,
+  }) as unknown as Sentry.CloudflareOptions;
+}
+
+// `withSentry` instruments both `fetch` and `scheduled` on the handler
+// object it's given (see @sentry/cloudflare's own `withSentry.ts`), so the
+// cron handler above is covered by the same wrapping as every HTTP route —
+// no separate scheduled-specific setup needed.
+export default Sentry.withSentry(buildSentryOptions, {
   fetch: app.fetch,
   scheduled,
-};
+});

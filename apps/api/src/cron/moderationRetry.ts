@@ -31,4 +31,9 @@ export async function moderationRetry(env: Env): Promise<void> {
   for (const candidate of candidates) {
     await moderateListing(env, candidate.id, candidate.version);
   }
+
+  // Read by `GET /api/admin/health` (`cron:last:<name>`) so a stalled cron
+  // trigger is visible from the admin page rather than inferred from a
+  // growing pile of stuck `pending` listings.
+  await env.KV.put("cron:last:moderationRetry", String(Date.now()));
 }

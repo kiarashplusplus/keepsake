@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import * as Sentry from "@sentry/cloudflare";
 import { CreateListingInput, UpdateListingInput } from "@keepsake/contracts/listing";
 import type { Country } from "@keepsake/contracts/geo";
 import { CreateReportInput } from "@keepsake/contracts/report";
@@ -378,6 +379,13 @@ listingRoutes.post(
       )
         .bind(ulid(), id, row.version, now)
         .run();
+
+      // A listing dropping out of the public feed on its own, with no admin
+      // action, is exactly the kind of thing Kiarash should hear about
+      // without having to remember to check the queue — the listing id is a
+      // public ULID (already in every share link), not PII, so it's safe to
+      // put in the message itself.
+      Sentry.captureMessage(`Listing ${id} auto-hidden after ${reportCount} reports`, "warning");
     }
 
     return ok(c, { id: reportId }, 201);
@@ -403,6 +411,26 @@ listingRoutes.post(
       return fail(c, "not_found", "Listing not found.", 404);
     }
 
+    const owner = await c.env.DB.prepare("SELECT email, email_verified_at, banned_at FROM owners WHERE id = ?")
+      .bind(row.owner_id)
+      .first<{ email: string | null; email_verified_at: number | null; banned_at: number | null }>();
+
+    // A banned owner's listings are meant to already be hidden (the admin
+    // ban action hides every non-given one), but this is the same
+    // "not found, not forbidden" treatment `ownerAuth` gives a banned
+    // owner's own requests — a stranger asking about a listing gets no
+    // signal that a ban is the reason it's unavailable.
+    if (owner?.banned_at !== null && owner?.banned_at !== undefined) {
+      return fail(c, "not_found", "Listing not found.", 404);
+    }
+
+    // The giver asking for their own keepsake isn't a request anyone can
+    // "choose" — there's no one else to hand it to — and it would otherwise
+    // sit in the queue looking like a real ask.
+    if (owner?.email && owner.email.toLowerCase() === input.email.toLowerCase()) {
+      return fail(c, "bad_request", "That's your own keepsake.", 400);
+    }
+
     // Pre-check rather than relying on the UNIQUE(listing_id, email)
     // constraint to reject a duplicate — same style as the reports handler
     // above and `ownerAuth`'s ON CONFLICT DO NOTHING: an honest, readable
@@ -426,10 +454,6 @@ listingRoutes.post(
       .bind(requestId, id, input.note, input.email, input.phone ?? null, ipDigest, now)
       .run();
     await c.env.DB.prepare("UPDATE listings SET request_count = request_count + 1 WHERE id = ?").bind(id).run();
-
-    const owner = await c.env.DB.prepare("SELECT email, email_verified_at FROM owners WHERE id = ?")
-      .bind(row.owner_id)
-      .first<{ email: string | null; email_verified_at: number | null }>();
 
     if (owner?.email && owner.email_verified_at !== null) {
       const dashboardLink = `${c.env.SITE_URL}/mine/${id}`;

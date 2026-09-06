@@ -12,7 +12,7 @@
  * regexes below.
  */
 const SENSITIVE_KEY_RE =
-  /(?:password|passwd|pwd|secret|token|api[-_]?key|authorization|cookie|set-cookie|session|csrf|xsrf|jwt|private[-_]?key|client[-_]?secret|refresh[-_]?token|access[-_]?token|id[-_]?token|owner[-_]?token|cf-turnstile-response|turnstile)/i;
+  /(?:password|passwd|pwd|secret|token|api[-_]?key|authorization|cookie|set-cookie|session|csrf|xsrf|jwt|private[-_]?key|client[-_]?secret|refresh[-_]?token|access[-_]?token|id[-_]?token|owner[-_]?token|cf-turnstile-response|turnstile|idempotency[-_]?key)/i;
 
 export { SENSITIVE_KEY_RE };
 

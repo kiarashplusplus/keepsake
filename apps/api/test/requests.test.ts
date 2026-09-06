@@ -98,4 +98,40 @@ describe("POST /api/listings/:id/requests", () => {
     expect(res.status).toBe(201);
     expect(sent).toHaveLength(0);
   });
+
+  it("404s a listing whose owner is banned, same as if the listing didn't exist", async () => {
+    const ownerId = await insertOwner();
+    await env.DB.prepare("UPDATE owners SET banned_at = ? WHERE id = ?").bind(Date.now(), ownerId).run();
+    const listingId = await insertApprovedListing({ ownerId });
+
+    const res = await requestListing(listingId, VALID_REQUEST_BODY);
+    expect(res.status).toBe(404);
+    const error = await readErr(res);
+    expect(error.code).toBe("not_found");
+  });
+
+  it("400s when the requester's email is the giver's own (verified) email", async () => {
+    const ownerId = await insertOwner();
+    await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE id = ?")
+      .bind("giver@example.com", Date.now(), ownerId)
+      .run();
+    const listingId = await insertApprovedListing({ ownerId });
+
+    const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, email: "giver@example.com" });
+    expect(res.status).toBe(400);
+    const error = await readErr(res);
+    expect(error.code).toBe("bad_request");
+    expect(error.message).toBe("That's your own keepsake.");
+  });
+
+  it("matches the giver's own email case-insensitively", async () => {
+    const ownerId = await insertOwner();
+    await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE id = ?")
+      .bind("giver@example.com", Date.now(), ownerId)
+      .run();
+    const listingId = await insertApprovedListing({ ownerId });
+
+    const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, email: "GIVER@Example.com" });
+    expect(res.status).toBe(400);
+  });
 });

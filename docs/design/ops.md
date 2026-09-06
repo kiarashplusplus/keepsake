@@ -1,6 +1,7 @@
 # Ops
 
-Status: `[IN PROGRESS]` (preflight + CI landed in M0; Sentry/Analytics/runbooks are M4–M5).
+Status: `[IN PROGRESS]` (preflight + CI landed in M0; Worker-side Sentry + admin API + orphan
+sweep landed in M4 2026-09-06, see below; web-side Sentry/Analytics/runbooks/e2e are still M4–M5).
 
 ## CI shape
 
@@ -49,3 +50,22 @@ Ported from Finderly's `useVersionSkewGuard`: the exported `index.html` and `/ve
 served `no-store`; hashed assets are immutable. A stale client polling `/version.json` detects a
 new deploy and prompts a reload rather than silently running against an API contract the server
 has moved past.
+
+## M4 status (API side, 2026-09-06)
+
+`[DONE]` — `apps/api`'s M4 slice: `@sentry/cloudflare` `withSentry()` wraps the default export
+(`src/index.ts`), instrumenting both `fetch` and `scheduled` from one call; `beforeSend`/
+`beforeBreadcrumb` go through `@keepsake/observability/redact` via a `buildSentryOptions(env)`
+helper that returns `undefined` (no client, no network) whenever `SENTRY_DSN` is unset.
+`SENSITIVE_KEY_RE` (`packages/observability/src/redact.ts`) extended with `idempotency[-_]?key`
+(`cf-turnstile-response`/`turnstile` were already there). `GET /health` gained `degraded` +
+`version` fields — `degraded` fires only in `production` and only when `TURNSTILE_SECRET` or
+`ADMIN_TOKEN` is unset, never naming which. Admin API (`src/routes/admin.ts` +
+`src/middleware/adminAuth.ts`, constant-time token compare, `RL_ADMIN`-limited) and a real
+`orphanSweep` cron (photos >24h orphaned, `recovery_tokens` >7d expired,
+`moderation_events`/`email_events` >90d old) replace their M0 stubs — see
+[`docs/runbooks/admin.md`](../runbooks/admin.md). 41 new API-side tests (149 total in
+`apps/api`); `packages/contracts/src/admin.ts` extended additively (`AdminQueueItem` now carries
+`owner`/`report_count`/`events`/`reports`; the old bare-`OwnerListing` shape had no callers to
+break). Web-side Sentry, the `/admin` page itself, and Playwright `e2e` are not part of this
+slice.
