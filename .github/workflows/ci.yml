@@ -31,6 +31,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # LFS bandwidth is metered; only preflight needs the real seed file
+          # (its lfs-pointers check). Every other job seeds its own rows.
           lfs: true
       - uses: dorny/paths-filter@v3
         id: filter
@@ -58,8 +60,6 @@ jobs:
     # migration numbering gap).
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -76,8 +76,6 @@ jobs:
     if: needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true'
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -93,8 +91,6 @@ jobs:
     if: needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true'
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -110,8 +106,6 @@ jobs:
     if: needs.changes.outputs.packages == 'true'
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -129,8 +123,6 @@ jobs:
     if: needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true'
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -146,8 +138,6 @@ jobs:
     if: needs.changes.outputs.web == 'true' || needs.changes.outputs.packages == 'true'
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -164,8 +154,6 @@ jobs:
     needs: [test-web]
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -190,8 +178,6 @@ jobs:
     if: false
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
