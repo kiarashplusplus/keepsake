@@ -2,11 +2,22 @@
  * KV-based daily budget counters.
  *
  * Ported from Bayan `worker/src/budget.ts`. That Worker rations Workers AI
- * calls behind one unauthenticated endpoint; this one rations five different
- * things — two AI calls (`mod_text`, `mod_image`) and three write endpoints
- * that don't touch AI at all (`listing`, `request`, `upload`) — because
- * Keepsake has no accounts either, so the only caller identity available is
- * an IP address.
+ * calls behind one unauthenticated endpoint; this one rations six different
+ * things — three AI calls (`mod_text`, `mod_image`, `suggest`) and three
+ * write endpoints that don't touch AI at all (`listing`, `request`,
+ * `upload`) — because Keepsake has no accounts either, so the only caller
+ * identity available is an IP address.
+ *
+ * `suggest` (AI autofill, `POST /api/photos/:id/suggest`) is checked with a
+ * real global `dailyLimit`, the same way `mod_text`/`mod_image` are checked
+ * directly from `moderation/pipeline.ts` — unlike `listing`/`request`/
+ * `upload`, whose global side is deliberately unbounded (see
+ * `middleware/rateLimit.ts`'s `EFFECTIVELY_UNLIMITED`) because only their
+ * per-IP ceiling is meant to bite. `suggest` gets its own counter rather than
+ * sharing `mod_image`'s: an exhausted image-moderation budget leaves
+ * listings `pending` until midnight UTC (`pipeline.ts`, the image budget
+ * gate), so a burst of autofill calls must never be able to spend the budget
+ * a real listing needs to finish moderating.
  *
  * Global key format:    "budget:<kind>:YYYY-MM-DD"
  * Per-client key format: "budget:ip:<kind>:<daily-digest>:YYYY-MM-DD"
@@ -46,8 +57,8 @@
 
 const TTL_SECONDS = 172_800; // 48 hours
 
-/** The five things this Worker rations per calendar day. */
-export type BudgetKind = "mod_text" | "mod_image" | "listing" | "request" | "upload";
+/** The six things this Worker rations per calendar day. */
+export type BudgetKind = "mod_text" | "mod_image" | "suggest" | "listing" | "request" | "upload";
 
 export interface CheckAndBumpOptions {
   kind: BudgetKind;

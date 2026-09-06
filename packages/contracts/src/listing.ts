@@ -2,25 +2,13 @@ import { z } from "zod";
 import { MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
 import { CountrySchema } from "./geo";
 import { PublicPhoto } from "./photo";
+// Re-exported below so nothing outside the package needs to know these live
+// in their own leaf module — see category.ts for why they aren't declared
+// here directly (a circular import with photo.ts).
+import { CATEGORIES, CATEGORY_LABELS, CategorySchema, TITLE_MAX, TITLE_MIN, type Category } from "./category";
 
-export const CATEGORIES = [
-  "books_letters",
-  "jewelry_watches",
-  "home_kitchen",
-  "photos_art_handmade",
-  "other",
-] as const;
-
-export const CategorySchema = z.enum(CATEGORIES);
-export type Category = z.infer<typeof CategorySchema>;
-
-export const CATEGORY_LABELS: Record<Category, string> = {
-  books_letters: "Books & letters",
-  jewelry_watches: "Jewelry & watches",
-  home_kitchen: "Home & kitchen",
-  photos_art_handmade: "Photos, art & handmade",
-  other: "Other",
-};
+export { CATEGORIES, CATEGORY_LABELS, CategorySchema, TITLE_MAX, TITLE_MIN };
+export type { Category };
 
 export const LISTING_STATUSES = [
   "pending",
@@ -39,8 +27,6 @@ export type ListingStatus = z.infer<typeof ListingStatusSchema>;
 export const PublicListingStatusSchema = z.enum(["approved", "given"]);
 export type PublicListingStatus = z.infer<typeof PublicListingStatusSchema>;
 
-export const TITLE_MIN = 4;
-export const TITLE_MAX = 80;
 export const STORY_MIN = 20;
 export const STORY_MAX = 2000;
 

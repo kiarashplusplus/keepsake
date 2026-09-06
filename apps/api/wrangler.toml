@@ -49,6 +49,13 @@ COMMIT_SHA = "dev"
 # can't spend the whole day's AI allocation before a real giver gets to post.
 MOD_TEXT_DAILY_BUDGET = "1000"
 MOD_IMAGE_DAILY_BUDGET = "3000"
+# AI autofill (POST /api/photos/:id/suggest). Its own counter, deliberately
+# not shared with MOD_IMAGE_DAILY_BUDGET: an exhausted image budget leaves
+# listings pending until midnight UTC, so a burst of autofill calls must
+# never be able to starve the budget a real listing needs to finish
+# moderating. ~15 neurons/call, ~$0.17 per 1000 listings — this is runaway
+# protection, not a real usage ceiling.
+SUGGEST_DAILY_BUDGET = "1000"
 # Per-IP daily ceilings for the write endpoints. An address is not a person —
 # a household or a mobile carrier's CGNAT range sits behind one IP — so these
 # are set loose on purpose; they catch a runaway script, not a family posting
@@ -56,6 +63,10 @@ MOD_IMAGE_DAILY_BUDGET = "3000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
+# Loose for the same reason as the ceilings above — one giver calls this a
+# handful of times per give flow; this only stops a single retry loop from
+# working through SUGGEST_DAILY_BUDGET alone.
+SUGGEST_IP_DAILY_BUDGET = "30"
 # Three independent reporters is enough signal to pull a listing from public
 # view pending Kiarash's review; it is not a ban, just a hide.
 REPORT_AUTOHIDE_THRESHOLD = "3"
@@ -182,9 +193,11 @@ ENVIRONMENT = "preview"
 COMMIT_SHA = "dev"
 MOD_TEXT_DAILY_BUDGET = "1000"
 MOD_IMAGE_DAILY_BUDGET = "3000"
+SUGGEST_DAILY_BUDGET = "1000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
+SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
 MAX_PHOTOS = "5"
 MAX_PHOTO_BYTES = "5242880"
@@ -277,9 +290,11 @@ ENVIRONMENT = "production"
 COMMIT_SHA = "dev"
 MOD_TEXT_DAILY_BUDGET = "1000"
 MOD_IMAGE_DAILY_BUDGET = "3000"
+SUGGEST_DAILY_BUDGET = "1000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
+SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
 MAX_PHOTOS = "5"
 MAX_PHOTO_BYTES = "5242880"
