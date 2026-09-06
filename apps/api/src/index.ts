@@ -1,9 +1,15 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { apiErr } from "@keepsake/contracts/common";
 import { assertBindings, type Env } from "./env.js";
 import { moderationRetry } from "./cron/moderationRetry.js";
 import { orphanSweep } from "./cron/orphanSweep.js";
+import { geoRoutes } from "./routes/geo.js";
+import { photoRoutes } from "./routes/photos.js";
+import { listingRoutes } from "./routes/listings.js";
+import { meRoutes } from "./routes/me.js";
+import { imageRoutes } from "./routes/images.js";
 
 type Variables = {
   requestId: string;
@@ -23,14 +29,17 @@ app.use("*", async (c, next) => {
 
 app.onError((err, c) => {
   const status: ContentfulStatusCode = err instanceof HTTPException ? err.status : 500;
-  const code = err instanceof HTTPException ? "http_error" : "internal_error";
   console.error("unhandled error", {
     requestId: c.get("requestId"),
     path: c.req.path,
     status,
     error: err instanceof Error ? err.message : String(err),
   });
-  return c.json({ ok: false as const, error: { code, message: err.message } }, status);
+  // Every code here must be one of `@keepsake/contracts/common`'s
+  // `ERROR_CODES` — this is the catch-all for anything a route didn't
+  // already turn into a proper `fail(...)` response via `src/lib/respond.ts`,
+  // so "internal" (an unexpected failure) is the only honest code for it.
+  return c.json(apiErr("internal", err.message), status);
 });
 
 app.get("/health", async (c) => {
@@ -69,9 +78,15 @@ app.get("/version.json", (c) => {
   return c.json({ commit: c.env.COMMIT_SHA ?? "dev" });
 });
 
-// M1: real routes (feed, listings, photos, requests, me, admin, …) mount
-// here, above this catch-all, per the plan's API table. Until then every
-// /api/* path is an honest 404 rather than falling through to the SPA shell.
+// M1 routes. Feed, requests, admin, and recovery are later milestones —
+// until then every other /api/* path is an honest 404 (the catch-all below),
+// rather than falling through to the SPA shell.
+app.route("/api/geo", geoRoutes);
+app.route("/api/photos", photoRoutes);
+app.route("/api/listings", listingRoutes);
+app.route("/api/me", meRoutes);
+app.route("/i", imageRoutes);
+
 app.all("/api/*", (c) => c.json({ ok: false as const, error: { code: "not_found", message: "Not found" } }, 404));
 
 // Everything else — the SPA shell, hashed static assets, `/item/:id` (M2

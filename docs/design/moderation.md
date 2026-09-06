@@ -1,6 +1,6 @@
 # Moderation
 
-Status: `[TODO]` (M1).
+Status: `[QA]` (M1 API side implemented; needs a real Workers AI run on preview per M1 DoD — see "M1 status" below).
 
 Open models pre-screen every listing before it's public. Minimal prohibited list: auto-reject
 only clear illegality; anything borderline is held for Kiarash, the sole admin, to approve.
@@ -46,3 +46,26 @@ AI throws→pending, budget 0→pending/budget, stale version→no approval, cro
 Vision model cost/latency/JSON discipline is unmeasured until M1 runs against real traffic; the
 fallback is `MODELS.imageVision → @cf/meta/llama-4-scout-17b-16e-instruct` if parse failures
 exceed a few percent (plan Risk #4).
+
+## M1 status (API side)
+
+Implemented as described above, plus the routes and middleware it hangs off of: owner auth
+(`src/middleware/ownerAuth.ts`), Turnstile (`src/middleware/turnstile.ts` — soft-passes with a
+one-time log when `TURNSTILE_SECRET` is unset, per `.dev.vars.example`), burst + daily-budget
+rate limiting (`src/middleware/rateLimit.ts`), idempotent listing creation
+(`src/middleware/idempotency.ts`), photo upload/serve (`src/routes/photos.ts`,
+`src/routes/images.ts`), geo lookup (`src/geo/lookup.ts`), and the listing CRUD + lifecycle
+routes (`src/routes/listings.ts`, `src/routes/me.ts`). `apps/api/test/moderation.test.ts` covers
+the full decision matrix from "Testing" above against a mocked `env.AI.run`, plus
+`apps/api/test/{photos,listings,geo,imageSniff}.test.ts` for the surrounding routes; all green
+locally (`pnpm --filter @keepsake/api test`).
+
+Real Workers AI vision text/image calls (`Ai_Cf_Meta_Llama_Guard_3_8B_Output` /
+`Ai_Cf_Meta_Llama_3_2_11B_Vision_Instruct_Messages`, both confirmed against the generated
+`worker-configuration.d.ts` types) are wired but **unverified against live Workers AI** — the
+M1 DoD's "vision path runs once against real Workers AI, parsed JSON lands in
+`moderation_events`" needs a real preview deploy + a real listing post, which is outside this
+API-only session. `sendMail()` (`src/email/sendMail.ts`) sends the verify-email stub through the
+real `EMAIL` binding when `EMAIL_PROVIDER=cf` and it's configured, else logs `[email:stub]` — the
+`GET /api/me/email/verify` endpoint itself is explicitly M3 scope, so that link is a placeholder
+until then. Feed/requests/admin/recovery are out of scope for this session (M2–M4).

@@ -16,7 +16,9 @@
     "migrate:prod": "wrangler d1 migrations apply keepsake-db-production --env production --remote"
   },
   "dependencies": {
-    "hono": "^4.13.7"
+    "@keepsake/contracts": "workspace:*",
+    "hono": "^4.13.7",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",

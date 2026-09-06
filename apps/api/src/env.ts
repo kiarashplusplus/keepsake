@@ -44,6 +44,19 @@ export function assertBindings(env: Env): AssertBindingsResult {
 }
 
 /**
+ * `wrangler types` generates a single string-literal type for a `[vars]`
+ * entry from whatever value is currently in `wrangler.toml` (e.g. `MOCK_AI:
+ * "0"`) rather than the general `string` you'd get from a real env var at
+ * runtime — so `env.MOCK_AI === "1"` doesn't type-check as written even
+ * though the deployed value absolutely can be `"1"` (`.dev.vars`, `wrangler
+ * dev --var`, a different environment block). Centralized here instead of an
+ * `as string` at every call site.
+ */
+export function isMockAi(env: Env): boolean {
+  return (env.MOCK_AI as string) === "1";
+}
+
+/**
  * Parse an integer-shaped [vars] entry (all Worker vars are strings), falling
  * back when the value is missing or not a valid integer rather than throwing
  * — a malformed budget var should degrade to a safe default, not 500 the

@@ -34,6 +34,10 @@ export type ApiErr = {
     code: ErrorCode;
     message: string;
     retryAfter?: number;
+    /** Flattened zod issues from `src/middleware/validate.ts`, present only
+     * on `bad_request` responses from body/query validation. Additive field:
+     * older clients that only read `code`/`message` are unaffected. */
+    issues?: Record<string, unknown>;
   };
 };
 
@@ -43,13 +47,19 @@ export function apiOk<T>(data: T): ApiOk<T> {
   return { ok: true, data };
 }
 
-export function apiErr(code: ErrorCode, message: string, retryAfter?: number): ApiErr {
+export function apiErr(
+  code: ErrorCode,
+  message: string,
+  retryAfter?: number,
+  issues?: Record<string, unknown>,
+): ApiErr {
   return {
     ok: false,
     error: {
       code,
       message,
       ...(retryAfter === undefined ? {} : { retryAfter }),
+      ...(issues === undefined ? {} : { issues }),
     },
   };
 }

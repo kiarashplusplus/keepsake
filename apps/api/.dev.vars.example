@@ -5,6 +5,13 @@
 # Turnstile secret key for the domain, paired with the public site key the
 # web app embeds. Verifies `cf-turnstile-response` on listing/request/report
 # submission and email add/recover.
+#
+# M1: left blank here on purpose. `src/middleware/turnstile.ts` treats an
+# unset secret as "pass every request through, log once" rather than 403ing
+# every write — local dev and preview both run without it until the widget
+# is provisioned for the domain (plan Risks). Set this before any deploy
+# whose traffic should actually be checked; once it's set, verification is
+# unconditionally enforced.
 TURNSTILE_SECRET=
 
 # Kiarash's one admin credential (Bearer <ADMIN_TOKEN>, constant-time

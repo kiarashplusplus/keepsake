@@ -113,6 +113,11 @@ export type PublicListing = z.infer<typeof PublicListing>;
 
 export const OwnerListing = PublicListing.omit({ status: true }).extend({
   status: ListingStatusSchema,
+  // Giver-only: the normalized postal code (not the raw input) so the web
+  // dashboard's Edit step can prefill it. Deliberately not on `PublicListing`
+  // — a stranger only ever sees `place_name`/`admin1`, never the postcode
+  // itself.
+  postal_code: z.string(),
   moderation_reason: ModerationReasonSchema.nullable(),
   request_count: z.number().int().nonnegative(),
   chosen_request_id: UlidSchema.nullable(),
