@@ -19,6 +19,15 @@ export const CreateRequestInput = z.object({
 });
 export type CreateRequestInput = z.infer<typeof CreateRequestInput>;
 
+/** `POST /api/listings/:id/requests` response — just enough for the client
+ * to confirm the ask landed and show a timestamp; full request state lives
+ * behind the owner's dashboard (`OwnerViewRequest`), not here. */
+export const CreateRequestResult = z.object({
+  id: UlidSchema,
+  created_at: TimestampMs,
+});
+export type CreateRequestResult = z.infer<typeof CreateRequestResult>;
+
 export const REQUEST_STATUSES = ["open", "chosen", "not_chosen", "withdrawn"] as const;
 export const RequestStatusSchema = z.enum(REQUEST_STATUSES);
 export type RequestStatus = z.infer<typeof RequestStatusSchema>;

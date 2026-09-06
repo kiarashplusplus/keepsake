@@ -6,12 +6,16 @@ import { CountrySchema } from "./geo";
 export const RADIUS_OPTIONS = [10, 25, 50, 100] as const;
 export type RadiusMi = (typeof RADIUS_OPTIONS)[number];
 
-export const RadiusMiSchema = z.union([
-  z.literal(10),
-  z.literal(25),
-  z.literal(50),
-  z.literal(100),
-]);
+/**
+ * `z.coerce.number()` first, then piped into the literal union — a bare
+ * `z.union([z.literal(10), ...])` only ever accepts the JS `number` 10, but
+ * `radius_mi` arrives as the query-string value `"10"` on every real HTTP
+ * `GET /api/feed?radius_mi=10` request (query values are always strings).
+ * Matches how `lat`/`lng`/`limit` below all coerce for the same reason.
+ */
+export const RadiusMiSchema = z.coerce
+  .number()
+  .pipe(z.union([z.literal(10), z.literal(25), z.literal(50), z.literal(100)]));
 
 export const FeedQuery = z.object({
   cursor: CursorSchema.optional(),

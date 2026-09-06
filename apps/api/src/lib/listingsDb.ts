@@ -20,3 +20,29 @@ export async function fetchPhotoRows(env: Env, listingId: string): Promise<Photo
     .all<PhotoRow>();
   return results;
 }
+
+/** Batches the same lookup `fetchPhotoRows` does across a whole feed page,
+ * so `src/routes/feed.ts` issues one query for up to `limit` listings
+ * instead of N+1. Returns a map so callers can look photos up per listing in
+ * whatever order the page itself is in. */
+export async function fetchPhotoRowsForListings(env: Env, listingIds: string[]): Promise<Map<string, PhotoRow[]>> {
+  const byListing = new Map<string, PhotoRow[]>();
+  if (listingIds.length === 0) return byListing;
+
+  const placeholders = listingIds.map(() => "?").join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT id, listing_id, width, height, blurhash FROM photos WHERE listing_id IN (${placeholders}) ORDER BY listing_id, position`,
+  )
+    .bind(...listingIds)
+    .all<PhotoRow & { listing_id: string }>();
+
+  for (const row of results) {
+    const existing = byListing.get(row.listing_id);
+    if (existing) {
+      existing.push(row);
+    } else {
+      byListing.set(row.listing_id, [row]);
+    }
+  }
+  return byListing;
+}

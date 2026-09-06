@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@keepsake/contracts": "workspace:*",
+    "@keepsake/tokens": "workspace:*",
     "hono": "^4.13.7",
     "zod": "^4.5.4"
   },

@@ -56,6 +56,20 @@ export function isMockAi(env: Env): boolean {
   return (env.MOCK_AI as string) === "1";
 }
 
+/** Same widening trick as `isMockAi`: `wrangler types` gives `EMAIL_PROVIDER`
+ * a single string-literal type matching whatever's currently in
+ * `wrangler.toml` (`"cf"`), so comparing it against `"resend"` doesn't
+ * type-check as written even though a real deploy can set either. Returns
+ * `undefined` for anything that isn't one of the two providers `sendMail`
+ * knows how to use, rather than throwing — an unrecognized value should fall
+ * through to the stub-log path, not 500 every send. */
+export type EmailProviderName = "cf" | "resend";
+
+export function emailProviderName(env: Env): EmailProviderName | undefined {
+  const value = env.EMAIL_PROVIDER as string;
+  return value === "cf" || value === "resend" ? value : undefined;
+}
+
 /**
  * Parse an integer-shaped [vars] entry (all Worker vars are strings), falling
  * back when the value is missing or not a valid integer rather than throwing

@@ -3,6 +3,7 @@
  * out of any one test file since photos/listings/moderation tests all need
  * the same building blocks. */
 import { env, SELF } from "cloudflare:test";
+import { ulid } from "../src/lib/ids.js";
 
 let tokenCounter = 0;
 let ipCounter = 0;
@@ -170,8 +171,132 @@ export async function waitForListingStatus(
   });
 }
 
+/** Inserts an `owners` row directly, bypassing `ownerAuth`'s upsert-on-first-
+ * write path — for feed tests that need many listings and don't care whose
+ * they are. */
+export async function insertOwner(): Promise<string> {
+  const id = ulid();
+  const now = Date.now();
+  await env.DB.prepare("INSERT INTO owners (id, token_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?)")
+    .bind(id, `test-hash-${id}`, now, now)
+    .run();
+  return id;
+}
+
+export interface InsertApprovedListingOptions {
+  ownerId: string;
+  title?: string;
+  story?: string;
+  category?: string;
+  country?: string;
+  postalCode?: string;
+  placeName?: string;
+  admin1?: string | null;
+  lat?: number;
+  lng?: number;
+  publishedAt?: number;
+}
+
+/** Inserts a `listings` row directly at `status='approved'`, skipping the
+ * owner-auth/photo-upload/moderation round trip entirely — for feed tests
+ * that need dozens of approved listings fast, where what's under test is
+ * pagination/filtering/search, not the create-and-moderate flow already
+ * covered by `listings.test.ts`/`moderation.test.ts`. */
+export async function insertApprovedListing(options: InsertApprovedListingOptions): Promise<string> {
+  const id = ulid();
+  const now = options.publishedAt ?? Date.now();
+  await env.DB.prepare(
+    `INSERT INTO listings
+      (id, owner_id, title, story, category, country, postal_code, place_name, admin1, lat, lng,
+       status, version, created_at, updated_at, published_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', 1, ?, ?, ?)`,
+  )
+    .bind(
+      id,
+      options.ownerId,
+      options.title ?? "A quiet teacup",
+      // Deliberately doesn't contain any FTS test's search term (e.g.
+      // "grandmother") — feed.test.ts's search-mode tests share this file's
+      // D1 state with every other test in the same describe block, and a
+      // default fixture word colliding with a search assertion would be a
+      // flaky, hard-to-diagnose false failure.
+      options.story ?? "This belonged to a dear friend of the family, and I'd love for it to find a new home.",
+      options.category ?? "home_kitchen",
+      options.country ?? "US",
+      options.postalCode ?? "02144",
+      options.placeName ?? "Somerville",
+      options.admin1 ?? "MA",
+      options.lat ?? 42.3958,
+      options.lng ?? -71.0967,
+      now,
+      now,
+      now,
+    )
+    .run();
+  return id;
+}
+
 export async function seedStandardPostalCodes(): Promise<void> {
   await seedPostalCode({ country: "US", code: "02144", place_name: "Somerville", admin1: "MA", lat: 42.3958, lng: -71.0967 });
   await seedPostalCode({ country: "CA", code: "M5V", place_name: "Toronto", admin1: "ON", lat: 43.6426, lng: -79.3871 });
   await seedPostalCode({ country: "GB", code: "SW1A", place_name: "London", admin1: null, lat: 51.5010, lng: -0.1416 });
+  // For the M2 geo-radius DoD: 25 mi from 02144 (Somerville) includes 02139
+  // (Cambridge, ~1.7 mi away) and excludes 01608 (Worcester, ~37 mi away).
+  await seedPostalCode({ country: "US", code: "02139", place_name: "Cambridge", admin1: "MA", lat: 42.3736, lng: -71.1097 });
+  await seedPostalCode({ country: "US", code: "01608", place_name: "Worcester", admin1: "MA", lat: 42.2626, lng: -71.8023 });
+}
+
+// ---------------------------------------------------------------------------
+// Email fakes (M3): every `sendMail()` call site reads `env.EMAIL`/
+// `env.RESEND_API_KEY` through `src/env.ts`'s `emailProviderName`, so
+// installing a fake `.send()` here is the one seam that works regardless of
+// which provider a test's `EMAIL_PROVIDER` var is pointed at.
+// ---------------------------------------------------------------------------
+
+export interface CapturedEmail {
+  from: string;
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+  replyTo?: string;
+}
+
+interface FakeSendEmailMessage {
+  from: string;
+  to: string;
+  subject: string;
+  html?: string;
+  text?: string;
+  replyTo?: string;
+}
+
+/** Replaces `env.EMAIL` with a fake `.send()` that records every message
+ * instead of attempting a real send, and returns the array it appends to —
+ * call this in a test's `beforeEach`/at the top of a test, then assert on
+ * the returned array's contents. */
+export function installFakeEmail(): CapturedEmail[] {
+  const sent: CapturedEmail[] = [];
+  const fakeEmail = {
+    send: async (message: FakeSendEmailMessage) => {
+      sent.push({
+        from: message.from,
+        to: message.to,
+        subject: message.subject,
+        html: message.html ?? "",
+        text: message.text ?? "",
+        ...(message.replyTo !== undefined ? { replyTo: message.replyTo } : {}),
+      });
+      return { messageId: "fake-message-id" };
+    },
+  };
+  (env as unknown as Record<string, unknown>).EMAIL = fakeEmail;
+  return sent;
+}
+
+/** Removes the fake installed by `installFakeEmail`, restoring the
+ * "binding missing" stub-log path — used by tests asserting an owner
+ * *without* a verified email gets no notification at all. */
+export function removeFakeEmail(): void {
+  delete (env as unknown as Record<string, unknown>).EMAIL;
 }

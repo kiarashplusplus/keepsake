@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { CreateListingInput, UpdateListingInput } from "@keepsake/contracts/listing";
 import type { Country } from "@keepsake/contracts/geo";
+import { CreateReportInput } from "@keepsake/contracts/report";
+import { CreateRequestInput, type CreateRequestResult } from "@keepsake/contracts/request";
 import type { Env } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
@@ -12,7 +14,13 @@ import { burst, dailyBudget } from "../middleware/rateLimit.js";
 import { validateBody } from "../middleware/validate.js";
 import { lookupPostalCode } from "../geo/lookup.js";
 import { sendMail } from "../email/sendMail.js";
+import { verifyEmail } from "../email/templates/verifyEmail.js";
+import { newRequest as newRequestTemplate } from "../email/templates/newRequest.js";
 import { sha256Hex } from "../lib/digest.js";
+import { todayISO } from "../lib/day.js";
+import { randomTokenRaw } from "../lib/tokens.js";
+import { clientIPFrom } from "../moderation/budget.js";
+import { parseIntVar } from "../env.js";
 import { moderateListing } from "../moderation/pipeline.js";
 import { serializeOwnerListing, serializePublicListing } from "../lib/serialize.js";
 import { fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
@@ -21,6 +29,8 @@ type Vars = { owner: OwnerRow; validatedBody: unknown };
 export const listingRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 const DEFAULT_LISTING_IP_DAILY_BUDGET = 20;
+const DEFAULT_REQUEST_IP_DAILY_BUDGET = 20;
+const DEFAULT_REPORT_AUTOHIDE_THRESHOLD = 3;
 
 // ---------------------------------------------------------------------------
 // POST /api/listings
@@ -92,7 +102,7 @@ listingRoutes.post(
         .bind(input.email, owner.id)
         .run();
 
-      const rawVerifyToken = `${crypto.randomUUID()}${crypto.randomUUID()}`;
+      const rawVerifyToken = randomTokenRaw();
       const verifyTokenHash = await sha256Hex(rawVerifyToken);
       await c.env.DB.prepare(
         `INSERT INTO recovery_tokens (id, owner_id, purpose, token_hash, expires_at, created_at)
@@ -101,17 +111,8 @@ listingRoutes.post(
         .bind(ulid(), owner.id, verifyTokenHash, now + 24 * 60 * 60 * 1000, now)
         .run();
 
-      // The verify endpoint itself (`GET /api/me/email/verify`) is M3 scope —
-      // this link is a placeholder until then. Sending it anyway (via the
-      // `sendMail` stub in dev/preview) is still useful: it proves the plumbing
-      // end to end and gives Kiarash a real preview of the email shape early.
       const verifyUrl = `${c.env.SITE_URL}/api/me/email/verify?token=${rawVerifyToken}`;
-      await sendMail(c.env, {
-        to: input.email,
-        subject: "Confirm your email — Keepsake",
-        html: `<p>Confirm your email to get notified about your keepsake and recover your listings later.</p><p><a href="${verifyUrl}">Confirm email</a></p>`,
-        text: `Confirm your email: ${verifyUrl}`,
-      });
+      await sendMail(c.env, { kind: "verify_email", to: input.email, ...verifyEmail({ link: verifyUrl }) });
     }
 
     c.executionCtx.waitUntil(moderateListing(c.env, id, 1));
@@ -319,3 +320,127 @@ listingRoutes.get("/:id", async (c) => {
   const photos = await fetchPhotoRows(c.env, id);
   return ok(c, serializePublicListing(row, photos));
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/listings/:id/reports
+// ---------------------------------------------------------------------------
+listingRoutes.post(
+  "/:id/reports",
+  turnstile(),
+  burst("RL_REPORT"),
+  validateBody(CreateReportInput),
+  async (c) => {
+    const id = requireParam(c, "id");
+    const input = c.get("validatedBody") as CreateReportInput;
+
+    const row = await fetchListingRow(c.env, id);
+    if (!row || (row.status !== "approved" && row.status !== "given")) {
+      return fail(c, "not_found", "Listing not found.", 404);
+    }
+
+    // Rotates daily (sha256(day:ip), the same shape src/moderation/budget.ts
+    // uses for its KV keys) — the same address can report the same listing
+    // again tomorrow; this only blocks a repeat within one day, on purpose,
+    // so `reports.ip_digest` never becomes a long-term per-address
+    // identifier.
+    const ipDigest = await sha256Hex(`${todayISO()}:${clientIPFrom(c.req.raw)}`);
+
+    const existing = await c.env.DB.prepare("SELECT id FROM reports WHERE listing_id = ? AND ip_digest = ?")
+      .bind(id, ipDigest)
+      .first<{ id: string }>();
+    if (existing) {
+      return fail(c, "conflict", "You've already reported this one.", 409);
+    }
+
+    const now = Date.now();
+    const reportId = ulid();
+    await c.env.DB.prepare(
+      `INSERT INTO reports (id, listing_id, reason, details, ip_digest, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(reportId, id, input.reason, input.details ?? null, ipDigest, now)
+      .run();
+    await c.env.DB.prepare("UPDATE listings SET report_count = report_count + 1 WHERE id = ?").bind(id).run();
+
+    const reportCount = row.report_count + 1;
+    const threshold = parseIntVar("REPORT_AUTOHIDE_THRESHOLD", c.env.REPORT_AUTOHIDE_THRESHOLD, DEFAULT_REPORT_AUTOHIDE_THRESHOLD);
+
+    // Only pulls a listing that's currently public — a report against a
+    // listing already `given`/`hidden`/etc. still counts (report_count
+    // above already incremented) but never flips status out from under a
+    // state this middleware didn't put it in.
+    if (reportCount >= threshold && row.status === "approved") {
+      await c.env.DB.prepare("UPDATE listings SET status = 'hidden', updated_at = ? WHERE id = ? AND status = 'approved'")
+        .bind(now, id)
+        .run();
+      await c.env.DB.prepare(
+        `INSERT INTO moderation_events (id, listing_id, listing_version, kind, verdict, reason, attempt, created_at)
+         VALUES (?, ?, ?, 'report_autohide', 'hidden', 'report_autohide', 1, ?)`,
+      )
+        .bind(ulid(), id, row.version, now)
+        .run();
+    }
+
+    return ok(c, { id: reportId }, 201);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/listings/:id/requests
+// ---------------------------------------------------------------------------
+listingRoutes.post(
+  "/:id/requests",
+  idempotency(),
+  turnstile(),
+  burst("RL_REQUEST"),
+  dailyBudget({ kind: "request", ipDailyLimitVar: "REQUEST_IP_DAILY_BUDGET", fallbackIpDailyLimit: DEFAULT_REQUEST_IP_DAILY_BUDGET }),
+  validateBody(CreateRequestInput),
+  async (c) => {
+    const id = requireParam(c, "id");
+    const input = c.get("validatedBody") as CreateRequestInput;
+
+    const row = await fetchListingRow(c.env, id);
+    if (!row || row.status !== "approved") {
+      return fail(c, "not_found", "Listing not found.", 404);
+    }
+
+    // Pre-check rather than relying on the UNIQUE(listing_id, email)
+    // constraint to reject a duplicate — same style as the reports handler
+    // above and `ownerAuth`'s ON CONFLICT DO NOTHING: an honest, readable
+    // 409 rather than parsing a D1 driver error message.
+    const existingRequest = await c.env.DB.prepare("SELECT id FROM requests WHERE listing_id = ? AND email = ?")
+      .bind(id, input.email)
+      .first<{ id: string }>();
+    if (existingRequest) {
+      return fail(c, "conflict", "You've already asked for this one.", 409);
+    }
+
+    const clientIp = clientIPFrom(c.req.raw);
+    const ipDigest = await sha256Hex(`${todayISO()}:${clientIp}`);
+    const now = Date.now();
+    const requestId = ulid();
+
+    await c.env.DB.prepare(
+      `INSERT INTO requests (id, listing_id, note, email, phone, ip_digest, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'open', ?)`,
+    )
+      .bind(requestId, id, input.note, input.email, input.phone ?? null, ipDigest, now)
+      .run();
+    await c.env.DB.prepare("UPDATE listings SET request_count = request_count + 1 WHERE id = ?").bind(id).run();
+
+    const owner = await c.env.DB.prepare("SELECT email, email_verified_at FROM owners WHERE id = ?")
+      .bind(row.owner_id)
+      .first<{ email: string | null; email_verified_at: number | null }>();
+
+    if (owner?.email && owner.email_verified_at !== null) {
+      const dashboardLink = `${c.env.SITE_URL}/mine/${id}`;
+      const template = newRequestTemplate({ listingTitle: row.title, note: input.note, dashboardLink });
+      const result = await sendMail(c.env, { kind: "new_request", to: owner.email, ...template });
+      if (result.sent) {
+        await c.env.DB.prepare("UPDATE requests SET notified_at = ? WHERE id = ?").bind(Date.now(), requestId).run();
+      }
+    }
+
+    const result: CreateRequestResult = { id: requestId, created_at: now };
+    return ok(c, result, 201);
+  },
+);

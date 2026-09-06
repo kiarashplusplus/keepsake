@@ -81,7 +81,7 @@ export default defineConfig({
             directory: path.join(__dirname, "test/fixtures/public"),
             binding: "ASSETS",
             notFoundHandling: "single-page-application",
-            runWorkerFirst: ["/api/*", "/i/*", "/item/*", "/health", "/version.json"],
+            runWorkerFirst: ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml"],
           },
         },
       };

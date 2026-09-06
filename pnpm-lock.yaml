@@ -38,6 +38,9 @@ importers:
       '@keepsake/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@keepsake/tokens':
+        specifier: workspace:*
+        version: link:../../packages/tokens
       hono:
         specifier: ^4.13.7
         version: 4.13.7

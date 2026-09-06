@@ -10,6 +10,10 @@ import { photoRoutes } from "./routes/photos.js";
 import { listingRoutes } from "./routes/listings.js";
 import { meRoutes } from "./routes/me.js";
 import { imageRoutes } from "./routes/images.js";
+import { feedRoutes } from "./routes/feed.js";
+import { itemRoutes } from "./routes/item.js";
+import { sitemapRoutes } from "./routes/sitemap.js";
+import { recoverRoutes } from "./routes/recover.js";
 
 type Variables = {
   requestId: string;
@@ -78,14 +82,22 @@ app.get("/version.json", (c) => {
   return c.json({ commit: c.env.COMMIT_SHA ?? "dev" });
 });
 
-// M1 routes. Feed, requests, admin, and recovery are later milestones —
-// until then every other /api/* path is an honest 404 (the catch-all below),
-// rather than falling through to the SPA shell.
+// M1/M2/M3 routes. Admin is the only remaining milestone (M4) — until then
+// every other /api/* path is an honest 404 (the catch-all below), rather
+// than falling through to the SPA shell.
 app.route("/api/geo", geoRoutes);
 app.route("/api/photos", photoRoutes);
 app.route("/api/listings", listingRoutes);
 app.route("/api/me", meRoutes);
+app.route("/api/feed", feedRoutes);
+app.route("/api/recover", recoverRoutes);
 app.route("/i", imageRoutes);
+// Mounted at the Worker root, per the plan's route table — not under /api/*,
+// and reached at all only because wrangler.toml's `run_worker_first` lists
+// these exact paths, overriding the static-assets system that would
+// otherwise serve them as SPA-shell/404 before this Worker code ever runs.
+app.route("/item", itemRoutes);
+app.route("/sitemap.xml", sitemapRoutes);
 
 app.all("/api/*", (c) => c.json({ ok: false as const, error: { code: "not_found", message: "Not found" } }, 404));
 

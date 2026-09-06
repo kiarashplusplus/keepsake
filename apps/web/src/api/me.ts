@@ -1,16 +1,22 @@
 import { z } from "zod";
-import { OwnerMe, type OwnerMe as OwnerMeT } from "@keepsake/contracts/owner";
-import { ListingStatusSchema, ModerationReasonSchema, OwnerListing, type OwnerListing as OwnerListingT } from "@keepsake/contracts/listing";
+import { OwnerMe, SetEmailInput as SetEmailInputSchema, type OwnerMe as OwnerMeT, type SetEmailInput } from "@keepsake/contracts/owner";
+import {
+  ListingStatusSchema,
+  ModerationReasonSchema,
+  OwnerListing,
+  type OwnerListing as OwnerListingT,
+} from "@keepsake/contracts/listing";
+import { ChooseRequestInput as ChooseRequestInputSchema, OwnerViewRequest, type ChooseRequestInput, type OwnerViewRequest as OwnerViewRequestT } from "@keepsake/contracts/request";
 import { apiFetch } from "@/api/client";
+import { fixPhotoUrls } from "@/api/fixPhotoUrls";
 
-/** `GET /api/me/listings/:id` adds a `requests` list (empty until M3 wires
- * up requests) and a `moderation` summary the dashboard detail page reads
- * for the held/rejected copy. Declared here rather than in
- * `@keepsake/contracts` because it's a client-facing composite, not a
- * request/response body shape the API itself validates against a single
- * named schema. */
+/** `GET /api/me/listings/:id` adds a `requests` list and a `moderation`
+ * summary the dashboard detail page reads for the held/rejected copy.
+ * Declared here rather than in `@keepsake/contracts` because it's a
+ * client-facing composite, not a request/response body shape the API itself
+ * validates against a single named schema. */
 export const OwnerListingDetail = OwnerListing.extend({
-  requests: z.array(z.unknown()),
+  requests: z.array(OwnerViewRequest),
   moderation: z.object({
     status: ListingStatusSchema,
     reason: ModerationReasonSchema.nullable().optional(),
@@ -26,7 +32,7 @@ export async function getMe(signal?: AbortSignal): Promise<OwnerMeT> {
 
 export async function getMyListings(signal?: AbortSignal): Promise<OwnerListingT[]> {
   const data = await apiFetch<unknown>("/api/me/listings", { owner: true, ...(signal !== undefined ? { signal } : {}) });
-  return z.array(OwnerListing).parse(data);
+  return z.array(OwnerListing).parse(fixPhotoUrls(data));
 }
 
 export async function getMyListing(id: string, signal?: AbortSignal): Promise<OwnerListingDetail> {
@@ -34,5 +40,46 @@ export async function getMyListing(id: string, signal?: AbortSignal): Promise<Ow
     owner: true,
     ...(signal !== undefined ? { signal } : {}),
   });
-  return OwnerListingDetail.parse(data);
+  return OwnerListingDetail.parse(fixPhotoUrls(data));
+}
+
+export type SetEmailOptions = {
+  turnstileToken: string;
+  signal?: AbortSignal;
+};
+
+/** `POST /api/me/email` — stores an unverified address and sends a
+ * verification link that redirects to `/mine?verified=1|0&reason=`. */
+export async function setEmail(input: SetEmailInput, options: SetEmailOptions): Promise<OwnerMeT> {
+  const body = SetEmailInputSchema.parse(input);
+  const data = await apiFetch<unknown>("/api/me/email", {
+    method: "POST",
+    body,
+    owner: true,
+    turnstileToken: options.turnstileToken,
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+  });
+  return OwnerMe.parse(data);
+}
+
+export async function deleteEmail(signal?: AbortSignal): Promise<OwnerMeT> {
+  const data = await apiFetch<unknown>("/api/me/email", {
+    method: "DELETE",
+    owner: true,
+    ...(signal !== undefined ? { signal } : {}),
+  });
+  return OwnerMe.parse(data);
+}
+
+/** `POST /api/me/listings/:id/choose` — marks one request `chosen` (the
+ * rest `not_chosen`) and reveals its full contact in the response. */
+export async function chooseRequest(listingId: string, input: ChooseRequestInput, signal?: AbortSignal): Promise<OwnerViewRequestT> {
+  const body = ChooseRequestInputSchema.parse(input);
+  const data = await apiFetch<unknown>(`/api/me/listings/${encodeURIComponent(listingId)}/choose`, {
+    method: "POST",
+    body,
+    owner: true,
+    ...(signal !== undefined ? { signal } : {}),
+  });
+  return OwnerViewRequest.parse(data);
 }

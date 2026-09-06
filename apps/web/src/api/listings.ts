@@ -3,10 +3,23 @@ import {
   type CreateListingInput,
   OwnerListing,
   type OwnerListing as OwnerListingT,
+  PublicListing,
+  type PublicListing as PublicListingT,
   UpdateListingInput as UpdateListingInputSchema,
   type UpdateListingInput,
 } from "@keepsake/contracts/listing";
 import { apiFetch } from "@/api/client";
+import { fixPhotoUrls } from "@/api/fixPhotoUrls";
+
+/** `GET /api/listings/:id` — approved/given only; 404 otherwise (surfaced as
+ * an `ApiError` with `code: "not_found"`, left for the caller to catch since
+ * the item page's 404 state needs to distinguish it from other failures). */
+export async function getListing(id: string, signal?: AbortSignal): Promise<PublicListingT> {
+  const data = await apiFetch<unknown>(`/api/listings/${encodeURIComponent(id)}`, {
+    ...(signal !== undefined ? { signal } : {}),
+  });
+  return PublicListing.parse(fixPhotoUrls(data));
+}
 
 export type CreateListingOptions = {
   turnstileToken: string;
@@ -27,7 +40,7 @@ export async function createListing(input: CreateListingInput, options: CreateLi
     idempotencyKey: options.idempotencyKey,
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
   });
-  return OwnerListing.parse(data);
+  return OwnerListing.parse(fixPhotoUrls(data));
 }
 
 export async function updateListing(id: string, input: UpdateListingInput, signal?: AbortSignal): Promise<OwnerListingT> {
@@ -38,7 +51,7 @@ export async function updateListing(id: string, input: UpdateListingInput, signa
     owner: true,
     ...(signal !== undefined ? { signal } : {}),
   });
-  return OwnerListing.parse(data);
+  return OwnerListing.parse(fixPhotoUrls(data));
 }
 
 export async function deleteListing(id: string, signal?: AbortSignal): Promise<void> {
@@ -55,7 +68,7 @@ async function postAction(id: string, action: "given" | "withdraw" | "relist", s
     owner: true,
     ...(signal !== undefined ? { signal } : {}),
   });
-  return OwnerListing.parse(data);
+  return OwnerListing.parse(fixPhotoUrls(data));
 }
 
 export const markGiven = (id: string, signal?: AbortSignal): Promise<OwnerListingT> => postAction(id, "given", signal);

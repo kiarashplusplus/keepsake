@@ -1,6 +1,6 @@
 # Identity
 
-Status: `[TODO]` (M1 mints the token; M3 adds recovery).
+Status: `[QA]` (M1 minted the token; M3 recovery implemented on the API side — see "M3 status" below).
 
 No accounts. A giver's identity is a device-bound secret token; an optional verified email exists
 only for notifications and dashboard recovery — losing the device without one means losing the
@@ -38,3 +38,23 @@ Kiarash alone. Not an owner token with elevated scope — there is no user table
   (`POST/DELETE /api/me/email`) never touches the owner token itself.
 - Every write path re-derives identity from the bearer token per request — there is no session
   state to leak or expire mid-flow.
+
+## M3 status (API side)
+
+`POST /api/recover` and `POST /api/recover/:token` (`apps/api/src/routes/recover.ts`) implement
+recovery exactly as described above: always `{ sent: true }` regardless of a match (no
+enumeration signal — the D1 lookup and the conditional send happen entirely inside the "always
+200" branch); a matching, *verified* owner gets a 30-minute `recovery_tokens` row (`purpose =
+'recover'`) and the `recover` email template; exchanging the token rotates `owners.token_hash` and
+marks the row used in the same request, so the old token 401s on its very next call and the
+recovery token itself can't be replayed. `POST /api/me/email` mints the `verify_email` counterpart
+(24 h TTL) and `GET /api/me/email/verify` redirects to `/mine?verified=1|0&reason=expired|invalid`.
+
+Both token kinds share `src/lib/tokens.ts`'s `randomTokenRaw()` — one `crypto.getRandomValues(32)`
++ base64url-without-padding implementation for every raw secret this Worker mints (owner tokens,
+verify links, recovery links), replacing the M1 stub's ad hoc `crypto.randomUUID() +
+crypto.randomUUID()` string in `POST /api/listings`'s email path.
+
+Tests: `apps/api/test/email.test.ts` covers verify (single-use, expiry) and recover (fresh token
+works, old owner token 401s immediately after, an unknown email still returns `{ sent: true }`,
+the recovery token itself is single-use).

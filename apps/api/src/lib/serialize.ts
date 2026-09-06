@@ -49,7 +49,39 @@ export function serializePhoto(row: PhotoRow): PublicPhoto {
   };
 }
 
-export function serializePublicListing(row: ListingRow, photos: PhotoRow[]): PublicListing {
+/**
+ * The exact fields `serializePublicListing` reads, as a structural type
+ * rather than the full `ListingRow` — so `src/routes/feed.ts`'s leaner
+ * `FeedListingRow` (which never selects `owner_id`, `moderation_reason`, and
+ * the other owner-only columns) satisfies this by having the same field
+ * names/types, with no cast and no second serializer to keep in sync.
+ */
+export type PublicListingSource = Pick<
+  ListingRow,
+  "id" | "title" | "story" | "category" | "place_name" | "admin1" | "country" | "status" | "published_at" | "given_at"
+>;
+
+/** Row shape selected by `src/routes/feed.ts`'s three query modes — a subset
+ * of `ListingRow`'s columns (never the owner-only ones) plus `lat`/`lng`,
+ * which the feed needs for the geo mode's haversine filter but never
+ * serializes onto `PublicListing` directly (only the derived `distance_mi`
+ * is public). */
+export interface FeedListingRow {
+  id: string;
+  title: string;
+  story: string;
+  category: string;
+  country: string;
+  place_name: string;
+  admin1: string | null;
+  status: string;
+  lat: number;
+  lng: number;
+  published_at: number | null;
+  given_at: number | null;
+}
+
+export function serializePublicListing(row: PublicListingSource, photos: PhotoRow[], distanceMi?: number): PublicListing {
   return {
     id: row.id,
     title: row.title,
@@ -62,6 +94,10 @@ export function serializePublicListing(row: ListingRow, photos: PhotoRow[]): Pub
     photos: photos.map(serializePhoto),
     published_at: row.published_at ?? 0,
     ...(row.given_at !== null ? { given_at: row.given_at } : {}),
+    // Rounded to 1 decimal place per the plan — the haversine result has
+    // more precision than is meaningful to show ("2.3 mi", not
+    // "2.31871... mi").
+    ...(distanceMi !== undefined ? { distance_mi: Math.round(distanceMi * 10) / 10 } : {}),
   };
 }
 

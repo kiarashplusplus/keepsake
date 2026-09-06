@@ -29,6 +29,10 @@ module.exports = {
     // overwritten without moving it), so it is tried — and matches — before
     // the preset's broader pattern ever gets a chance to.
     "^react-native$": "react-native-web",
+    // See test/mocks/expoImage.tsx's header comment: the real package's
+    // native-module dependency chain doesn't run under Jest's jsdom
+    // environment.
+    "^expo-image$": "<rootDir>/test/mocks/expoImage.tsx",
   },
   setupFiles: ["<rootDir>/test/setup/matchMedia.ts"],
   setupFilesAfterEnv: [],

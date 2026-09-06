@@ -2,7 +2,7 @@
 // grouped into Reviewing / Live / Needs attention / Given / Withdrawn.
 import * as React from "react";
 import { Pressable, StyleSheet, View } from "react-native";
-import { Link } from "expo-router";
+import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import { Image as ExpoImage } from "expo-image";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
 import { radii } from "@keepsake/tokens/radii";
@@ -17,10 +17,35 @@ import { Text, type TextColor } from "@/ui/Text";
 import { Skeleton } from "@/ui/Skeleton";
 import { Seal } from "@/ui/Seal";
 import { useColors } from "@/ui/theme";
+import { useToast } from "@/ui/Toast";
 import { getOwnerToken } from "@/lib/ownerToken";
 import { getMyListings } from "@/api/me";
 import { ApiError } from "@/api/client";
 import { LISTING_GROUP_LABELS, LISTING_GROUP_ORDER, groupListings } from "@/features/mine/groupListings";
+
+/** The `/mine?verified=1|0&reason=` toast the email-verify link redirects
+ * to. A dedicated hook (rather than inlining in the component body) so it's
+ * easy to see this only ever fires once per verify redirect: the params are
+ * cleared via `router.setParams` right after the toast, so a later re-render
+ * of this screen (e.g. tab refocus) never re-shows it. */
+function useVerifiedToast(): void {
+  const router = useRouter();
+  const toast = useToast();
+  const params = useLocalSearchParams<{ verified?: string; reason?: string }>();
+  const handled = React.useRef(false);
+
+  React.useEffect(() => {
+    if (handled.current || params.verified === undefined) return;
+    handled.current = true;
+    if (params.verified === "1") {
+      toast.show("Email verified.");
+    } else {
+      toast.show(params.reason !== undefined ? `Couldn't verify: ${params.reason}` : "Couldn't verify that email.");
+    }
+    router.setParams({ verified: undefined, reason: undefined } as never);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.verified, params.reason]);
+}
 
 /** Status as a small serif label on the row, not a chip: green for live,
  * foil for anything still in the box, ink-red only when it needs a hand. */
@@ -77,6 +102,7 @@ function ListingRow({ listing, index }: { listing: OwnerListing; index: number }
 
 export default function Mine(): React.ReactElement {
   const colors = useColors();
+  useVerifiedToast();
   const [hasOwnerToken] = React.useState(() => getOwnerToken() !== null);
   const [listings, setListings] = React.useState<OwnerListing[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -110,16 +136,9 @@ export default function Mine(): React.ReactElement {
               <Link href="/give" asChild>
                 <Button label="Give something" />
               </Link>
-              {/* `/recover` lands in M3 — this is a placeholder link to a
-                  route that doesn't exist as an app/ file yet, so it's a raw
-                  navigation rather than a typed expo-router `Link`. */}
-              <Button
-                label="Lost your listings?"
-                variant="link"
-                onPress={() => {
-                  if (typeof window !== "undefined") window.location.assign("/recover");
-                }}
-              />
+              <Link href="/recover" asChild>
+                <Button label="Lost your listings?" variant="link" />
+              </Link>
             </View>
           }
         />
@@ -167,9 +186,14 @@ export default function Mine(): React.ReactElement {
 
   return (
     <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
-      <View style={{ gap: space.sm }}>
-        <Eyebrow tick>Your keepsakes</Eyebrow>
-        <Text variant="displayLg">Mine</Text>
+      <View style={{ flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: space.md }}>
+        <View style={{ gap: space.sm }}>
+          <Eyebrow tick>Your keepsakes</Eyebrow>
+          <Text variant="displayLg">Mine</Text>
+        </View>
+        <Link href="/mine/email" asChild>
+          <Button label="Email" variant="link" arrow={false} />
+        </Link>
       </View>
       <DeckleRule style={{ marginTop: sectionRhythm.tight, marginBottom: sectionRhythm.tight }} />
       <View style={{ gap: sectionRhythm.normal }}>

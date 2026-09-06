@@ -17,6 +17,7 @@ export function Chip({ label, selected = false, onPress }: ChipProps): React.Rea
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={label}
       accessibilityState={{ selected }}
       onPress={onPress}
       style={({ pressed }): ViewStyle => ({

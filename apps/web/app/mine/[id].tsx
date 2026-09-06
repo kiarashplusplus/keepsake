@@ -17,9 +17,13 @@ import { Sheet } from "@/ui/Sheet";
 import { Skeleton } from "@/ui/Skeleton";
 import { EmptyState } from "@/ui/EmptyState";
 import { useColors } from "@/ui/theme";
-import { getMyListing, type OwnerListingDetail } from "@/api/me";
+import { chooseRequest, getMyListing, type OwnerListingDetail } from "@/api/me";
 import { deleteListing, markGiven, relistListing, withdrawListing } from "@/api/listings";
 import { ApiError } from "@/api/client";
+import { RequestList } from "@/features/mine/RequestList";
+import { HandoffSheet } from "@/features/mine/HandoffSheet";
+import { track } from "@/lib/analytics";
+import { AnalyticsEvents } from "@/lib/analyticsEvents";
 
 const STATUS_LABELS: Record<ListingStatus, { label: string; color: TextColor }> = {
   pending: { label: "Reviewing", color: "foilText" },
@@ -41,6 +45,9 @@ export default function MineDetail(): React.ReactElement {
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const [chooseTarget, setChooseTarget] = React.useState<string | null>(null);
+  const [choosing, setChoosing] = React.useState(false);
+  const [chooseError, setChooseError] = React.useState<string | null>(null);
 
   const load = React.useCallback(() => {
     if (typeof id !== "string") return;
@@ -69,6 +76,22 @@ export default function MineDetail(): React.ReactElement {
     setConfirmDelete(false);
     if (listing === null) return;
     void runAction(() => deleteListing(listing.id)).then(() => router.replace("/mine"));
+  }
+
+  async function handleConfirmChoose(handoffNote: string): Promise<void> {
+    if (listing === null || chooseTarget === null) return;
+    setChoosing(true);
+    setChooseError(null);
+    try {
+      await chooseRequest(listing.id, { request_id: chooseTarget, handoff_note: handoffNote });
+      setChooseTarget(null);
+      load();
+      track(AnalyticsEvents.Chosen);
+    } catch (err) {
+      setChooseError(err instanceof ApiError ? err.message : "That didn't go through. Try again.");
+    } finally {
+      setChoosing(false);
+    }
   }
 
   if (error !== null && listing === null) {
@@ -155,9 +178,12 @@ export default function MineDetail(): React.ReactElement {
         <View style={rule}>
           <Eyebrow>Requests</Eyebrow>
         </View>
-        <Text variant="body" color="textSecondary">
-          No one has asked yet. Share the link.
-        </Text>
+        <RequestList
+          requests={listing.requests}
+          canChoose={listing.chosen_request_id === null && listing.status === "approved"}
+          busy={busy || choosing}
+          onChoose={setChooseTarget}
+        />
       </View>
 
       {/* One pill at most; the rest are bordered, the destructive one bare. */}
@@ -186,6 +212,17 @@ export default function MineDetail(): React.ReactElement {
           <Button label="Cancel" variant="link" arrow={false} onPress={() => setConfirmDelete(false)} />
         </View>
       </Sheet>
+
+      <HandoffSheet
+        visible={chooseTarget !== null}
+        onClose={() => {
+          setChooseTarget(null);
+          setChooseError(null);
+        }}
+        onConfirm={(handoffNote) => void handleConfirmChoose(handoffNote)}
+        busy={choosing}
+        error={chooseError}
+      />
     </ReadableWidth>
   );
 }

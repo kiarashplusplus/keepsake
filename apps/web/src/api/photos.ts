@@ -1,5 +1,6 @@
 import { PublicPhoto, type PublicPhoto as PublicPhotoT } from "@keepsake/contracts/photo";
 import { apiFetch } from "@/api/client";
+import { fixPhotoUrls } from "@/api/fixPhotoUrls";
 
 export type UploadPhotoInput = {
   full: Blob;
@@ -28,7 +29,7 @@ export async function uploadPhoto(input: UploadPhotoInput): Promise<PublicPhotoT
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
   });
 
-  return PublicPhoto.parse(data);
+  return PublicPhoto.parse(fixPhotoUrls(data));
 }
 
 export async function deletePhoto(id: string, signal?: AbortSignal): Promise<void> {

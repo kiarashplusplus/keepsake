@@ -1,6 +1,6 @@
 # Email
 
-Status: `[TODO]` (M3).
+Status: `[QA]` (M3 API side implemented; a real send from `hello@keepsake.ing` on preview per M3 DoD is still owed — see plan Risk #1).
 
 Cloudflare Email Service `send_email` binding is the primary transport, sending from
 `hello@keepsake.ing`; Resend is a fallback behind the same `sendMail()` interface, selected by
@@ -36,3 +36,36 @@ reveals either party's contact info.
 
 Rendered with `@keepsake/tokens` (colors/typography) so transactional email doesn't visually
 diverge from the app — warm, Fraunces-titled, not a generic transactional-email look.
+
+## M3 status (API side)
+
+`src/email/sendMail.ts` now does the real thing: `cf` via `env.EMAIL.send(...)` (the
+`SendEmail`/`EmailMessageBuilder` shape from the generated `worker-configuration.d.ts`) or
+`resend` via `POST https://api.resend.com/emails`, chosen by `emailProviderName(env)` (a
+same-shape widening helper as `env.ts`'s existing `isMockAi`, since `wrangler types` gives
+`EMAIL_PROVIDER` a single string-literal type). A missing binding/key, an unrecognized provider,
+or the send itself throwing all fall through to a `[email:stub]` log and `{ sent: false, reason }`
+— nothing here can break a give/request/choose flow. Every attempt, successful or not, is recorded
+in `email_events` (migration `0004_email_events.sql`), keyed by `sha256(lowercased address)`
+(`to_hash`) — never the raw address.
+
+Four templates in `src/email/templates/*.ts` (`verifyEmail`, `newRequest`, `chosen`, `recover`),
+sharing `templates/shared.ts`'s table-based HTML shell styled with `@keepsake/tokens/colors`'
+*light* palette only (email clients don't reliably honor `prefers-color-scheme`). Each ends with
+the one-line footer "Keepsake · keepsake.ing · you're getting this because …", the reason varying
+per template. `chosen`'s `giverEmail` param and the `replyTo` set on the message itself always
+agree (both come from the same "does the giver have a verified email" check in
+`src/routes/me.ts`'s choose handler).
+
+Wired at every send point from the table above: `POST /api/listings/:id/requests` (→ `newRequest`,
+only when the giver's email is verified, `notified_at` set on success), `POST
+/api/me/listings/:id/choose` (→ `chosen`, reply-to the giver when verified), `POST /api/me/email`
++ `POST /api/listings` with an `email` field (→ `verifyEmail`, the same path — M1's stub link now
+actually resolves via `GET /api/me/email/verify`), `POST /api/recover` (→ `recover`, only for a
+verified match, but always 200 either way).
+
+Tests: `apps/api/test/requests.test.ts` (notified + `email_events` row when verified, no send when
+unverified), `test/choose.test.ts` (reveal + reply-to), `test/email.test.ts` (verify single-use +
+expiry, `POST /api/listings` reusing the same flow, recover new-token/old-401/unknown-still-200).
+A fake `EMAIL` binding (`test/helpers.ts`'s `installFakeEmail`/`removeFakeEmail`) captures sends
+per test rather than exercising a real provider.

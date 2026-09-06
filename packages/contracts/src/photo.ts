@@ -11,13 +11,21 @@ export type AllowedImageType = z.infer<typeof AllowedImageTypeSchema>;
 export const FULL_EDGE_PX = 2048;
 export const THUMB_EDGE_PX = 640;
 
+export const ImageUrlSchema = z
+  .string()
+  .min(1)
+  .refine((v) => v.startsWith("/i/") || /^https?:\/\//.test(v), "Expected /i/... or an absolute http(s) URL");
+
 export const PublicPhoto = z.object({
   id: UlidSchema,
   width: z.number().int().positive(),
   height: z.number().int().positive(),
   blurhash: z.string().min(6).max(100),
-  url_full: z.string().url(),
-  url_thumb: z.string().url(),
+  // Origin-relative (`/i/<id>/full`) from the API, absolute once a client has
+  // resolved it against its origin. Both are valid; a bare `.url()` rejected
+  // every real response.
+  url_full: ImageUrlSchema,
+  url_thumb: ImageUrlSchema,
 });
 export type PublicPhoto = z.infer<typeof PublicPhoto>;
 

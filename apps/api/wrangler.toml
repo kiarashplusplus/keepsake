@@ -14,7 +14,7 @@ compatibility_flags = ["nodejs_compat"]
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json"]
+run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml"]
 
 [ai]
 binding = "AI"
@@ -165,7 +165,7 @@ compatibility_flags = ["nodejs_compat"]
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json"]
+run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml"]
 
 [env.preview.ai]
 binding = "AI"
@@ -255,7 +255,7 @@ compatibility_flags = ["nodejs_compat"]
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json"]
+run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml"]
 
 [env.production.ai]
 binding = "AI"
