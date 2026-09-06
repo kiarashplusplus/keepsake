@@ -10,6 +10,13 @@ import { ReportReasonSchema } from "./report";
  * Numeric fields are coerced because the model sometimes emits `"0.4"`.
  */
 export const ImageVerdictSchema = z.object({
+  /**
+   * What the model says is in the frame, in a few words. Optional because it
+   * was added after the first deploys, but the prompt asks for it first on
+   * purpose: naming the subject before judging is what stopped the model
+   * copying a pre-filled example (see apps/api/src/moderation/prompts.ts).
+   */
+  subject: z.string().max(120).optional(),
   is_physical_object: z.boolean(),
   nsfw: z.coerce.number().min(0).max(1),
   violence: z.coerce.number().min(0).max(1),
