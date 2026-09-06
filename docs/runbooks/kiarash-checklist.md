@@ -17,9 +17,13 @@ Paste anything you get back (site keys, tokens) into chat and I'll wire it up an
 Enabled, DNS configured, sending from `hello@keepsake.ing`, quota 1000/day. First real
 delivery confirmed in `email_events` (`provider=cf, ok=1`).
 
-## 2. Turnstile — create the widget (~5 min)
+## 2. Turnstile — create the widget (~5 min) — STILL NEEDED
 
-**Why:** every public write (post a keepsake, ask for one, report one) is meant to be behind
+**The `cf` token cannot do this one.** Its permission list is Workers Routes Write, DNS Write,
+API Tokens Write, Workers Scripts/KV/R2/Pages/AI Write, Account Settings Read — no Turnstile
+scope, so `POST /challenges/widgets` returns `10000 Authentication error`.
+
+**Why it matters:** every public write (post a keepsake, ask for one, report one) is meant to be behind
 Turnstile. Right now the middleware **soft-passes when no secret is set**, which is fine on
 preview and must not be true in production.
 
@@ -44,19 +48,12 @@ token is refused with `turnstile_failed`.
 
 ---
 
-## 3. DNS — point `preview.keepsake.ing` at the preview Worker (~2 min)
+## 3. ~~DNS — `preview.keepsake.ing`~~ ✅ DONE 2026-09-06
 
-**Why:** cosmetic but real — share links and Open Graph previews currently show the
-`workers.dev` host. It also lets Turnstile's hostname list match.
-
-1. Dashboard → **Workers & Pages** → **keepsake-preview** → **Settings** → **Domains & Routes**
-   → **Add** → **Custom domain**.
-2. Enter `preview.keepsake.ing`. Cloudflare creates the DNS record itself.
-
-**Then tell me** and I'll flip `SITE_URL` back to `https://preview.keepsake.ing`, redeploy, and
-re-check that an item link unfurls with the photo in iMessage.
-
----
+Attached to the `keepsake-preview` Worker via the API (the `cf` token has DNS Write and
+Workers Routes Write). `SITE_URL` now points at it, so share links, Open Graph tags and the
+sitemap all use the real domain. Verified: `/health` 200, `/`, `/about`, `/give/`, `/mine/` all
+200, item unfurl shows `https://preview.keepsake.ing/...`.
 
 ## 4. GitHub Environments — let CI deploy on its own (~10 min)
 
