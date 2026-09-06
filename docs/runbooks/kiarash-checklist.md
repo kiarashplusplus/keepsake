@@ -1,6 +1,6 @@
 # What's blocked on Kiarash
 
-Five things need a human with dashboard access. Everything else in M0–M4 is built, tested and
+Everything here is now done except the production cutover. Kept as the record of what was set up and how it was verified. Everything else in M0–M4 is built, tested and
 running on preview. Do them in this order — each one unblocks the next round of verification.
 
 Account: **Leapkg@gmail.com's Account**, id `dc6a87ed4a4269ed74c8f508b275b703`
@@ -17,19 +17,13 @@ Paste anything you get back (site keys, tokens) into chat and I'll wire it up an
 Enabled, DNS configured, sending from `hello@keepsake.ing`, quota 1000/day. First real
 delivery confirmed in `email_events` (`provider=cf, ok=1`).
 
-## 2. Turnstile — widget created, one hostname missing
+## 2. ~~Turnstile~~ ✅ DONE 2026-09-06
 
-The widget exists (`Keepsake`, managed, sitekey `0x4AAAAAAEqUUMHIymlBJ3pb`) but its hostname
-list is only `keepsake.ing`. Turnstile refuses to render on a host that is not listed, so
-enabling it on preview right now would break every write there.
-
-**The one thing left:** Turnstile → the `Keepsake` widget → add `preview.keepsake.ing` to
-Hostnames. Then tell me and I will set `TURNSTILE_SECRET` on the preview Worker, add the site
-key to the preview build, and verify that a request with no token is refused.
-
-The `cf` token cannot do this: its permissions are Workers Routes Write, DNS Write, API Tokens
-Write, Workers Scripts/KV/R2/Pages/AI Write and Account Settings Read — no Turnstile scope, so
-both create and update return `10000 Authentication error`.
+Widget `Keepsake` (managed), hostnames `keepsake.ing` and `preview.keepsake.ing`, sitekey
+`0x4AAAAAAEqUUMHIymlBJ3pb`. Secret set on the preview Worker; site key set as an environment
+variable for both tiers. Verified on preview: a request with no token and a request with a
+bogus token are both refused with `turnstile_failed`, while the feed, item pages and health
+stay open. Playwright is unaffected — it runs with no secret, which soft-passes by design.
 
 ## 3. ~~DNS — `preview.keepsake.ing`~~ ✅ DONE 2026-09-06
 
