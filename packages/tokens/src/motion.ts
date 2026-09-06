@@ -3,6 +3,11 @@
  * numbers. Reduce-motion is folded in here, at the token layer, via
  * `motionSafe(reduce)`: components receive already-tamed values and never
  * check the preference themselves (Bayan's `motionSafe()` idea).
+ *
+ * The product has exactly one signature loop (the breathing seal) and one
+ * signature micro-interaction (a card "picked up like a tag": a small lift
+ * plus a small tilt, `liftMs` / `tagTiltDeg`). Nothing else should animate —
+ * resist the urge to add more.
  */
 export type SpringToken = { readonly damping: number; readonly stiffness: number; readonly mass: number };
 
@@ -21,6 +26,10 @@ export const motion = {
   sealBreathMs: 2400,
   /** Skeleton shimmer sweep. */
   shimmerMs: 1400,
+  /** Hover/press lift on a card, picked up like a tag. */
+  liftMs: 150,
+  /** Rotation applied alongside the lift, in degrees — small and specific. */
+  tagTiltDeg: 0.4,
 } as const;
 
 export type MotionTokens = {
@@ -33,6 +42,8 @@ export type MotionTokens = {
   readonly imageFadeMs: number;
   readonly sealBreathMs: number;
   readonly shimmerMs: number;
+  readonly liftMs: number;
+  readonly tagTiltDeg: number;
   /** True when the user asked for reduced motion; loops (breath, shimmer) must not run. */
   readonly reduce: boolean;
 };
@@ -51,6 +62,8 @@ export function motionSafe(reduce: boolean): MotionTokens {
     imageFadeMs: 0,
     sealBreathMs: 0,
     shimmerMs: 0,
+    liftMs: 0,
+    tagTiltDeg: 0,
     reduce: true,
   };
 }

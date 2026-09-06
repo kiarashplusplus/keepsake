@@ -46,7 +46,13 @@ async function resolveFile(root, urlPath) {
     await stat(filePath);
     return filePath;
   } catch {
-    return null;
+    // Mirror the Workers assets binding: `/about` serves `about.html`.
+    try {
+      await stat(`${filePath}.html`);
+      return `${filePath}.html`;
+    } catch {
+      return null;
+    }
   }
 }
 

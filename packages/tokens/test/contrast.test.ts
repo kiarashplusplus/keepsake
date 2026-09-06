@@ -25,6 +25,12 @@ describe("colour contrast (WCAG AA)", () => {
       it("accentText on accentSoft >= 4.5:1 (selected chips)", () => {
         expect(contrastRatio(c.accentText, c.accentSoft)).toBeGreaterThanOrEqual(AA);
       });
+      it("onAccent2 on accent2 >= 4.5:1 (ribbon labels)", () => {
+        expect(contrastRatio(c.onAccent2, c.accent2)).toBeGreaterThanOrEqual(AA);
+      });
+      it("onFoil on foil >= 4.5:1 (seal / ornament labels)", () => {
+        expect(contrastRatio(c.onFoil, c.foil)).toBeGreaterThanOrEqual(AA);
+      });
       it("never pure black or white grounds", () => {
         expect(c.bg.toLowerCase()).not.toBe("#000000");
         expect(c.bg.toLowerCase()).not.toBe("#ffffff");
@@ -46,6 +52,8 @@ describe("motionSafe", () => {
     expect(m.sealBreathMs).toBe(0);
     expect(m.shimmerMs).toBe(0);
     expect(m.standardMs).toBe(0);
+    expect(m.liftMs).toBe(0);
+    expect(m.tagTiltDeg).toBe(0);
     expect(m.spring.stiffness).toBeGreaterThan(motion.spring.stiffness);
   });
 });

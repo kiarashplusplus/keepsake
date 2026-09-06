@@ -1,0 +1,8 @@
+# Served by the Workers assets binding. Hashed bundles are immutable; the
+# HTML shell and version.json are handled by the Worker (no-store).
+/_expo/static/*
+  Cache-Control: public, max-age=31536000, immutable
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
+/site.css
+  Cache-Control: public, max-age=3600

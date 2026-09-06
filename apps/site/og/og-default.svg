@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Keepsake default Open Graph image, source of truth.
+  Keepsake default Open Graph image, source of truth (v2 identity, 2026-09-05).
 
   Rendered to ../public/og-default.png at 1200x630 with resvg-js-cli
   (fonts passed via font file flags, see apps/site/README.md), falling back
   to qlmanage or Chrome headless against an HTML wrapper if unavailable.
 
-  Colors are the packages/tokens/src/colors.ts light-mode values: bg #FBF7F0,
-  ink #1F1B17, accent #B9502F, onAccent #FFF8F2, textSecondary #5C544B.
+  Colors are the packages/tokens/src/colors.ts light-mode v2 values:
+  bg #F6EFE1, ink #241C12, accent (terracotta) #AB4726, foil (gold) #B8862E,
+  accent2 (bottle green) #1E4D3F, onFoil #241C12, textSecondary #5C4F3B.
 -->
 <svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -33,46 +34,87 @@
     </style>
   </defs>
 
-  <rect width="1200" height="630" fill="#FBF7F0" />
+  <!-- ground: deep paper cream -->
+  <rect width="1200" height="630" fill="#F6EFE1" />
 
-  <!-- subtle paper texture rects for depth (kept simple: two soft washes) -->
-  <rect x="0" y="0" width="1200" height="630" fill="#F3EDE2" opacity="0.35" />
-  <rect x="-100" y="380" width="1000" height="500" fill="#F2D9CC" opacity="0.25" transform="rotate(-8 400 500)" />
+  <!-- a torn/deckled band of a deeper parchment along the bottom, like a card stock swatch -->
+  <path d="M0 520 L60 512 L130 524 L200 514 L270 522 L340 510 L410 520 L480 512 L550 522
+           L620 514 L690 522 L760 512 L830 520 L900 512 L970 522 L1040 512 L1110 522 L1200 514
+           L1200 630 L0 630 Z" fill="#ECE0C8" />
 
-  <!-- terracotta seal mark -->
-  <circle cx="120" cy="120" r="34" fill="none" stroke="#B9502F" stroke-width="3" />
-  <circle cx="120" cy="120" r="22" fill="none" stroke="#B9502F" stroke-width="1.5" />
-  <circle cx="120" cy="120" r="4" fill="#B9502F" />
+  <!-- bottle-green rule under the wordmark -->
+  <rect x="122" y="284" width="220" height="3" fill="#1E4D3F" />
+
+  <!-- wax seal, upper right: foil ring + terracotta disc + pressed mark -->
+  <circle cx="1046" cy="140" r="86" fill="none" stroke="#B8862E" stroke-width="2" opacity="0.55" />
+  <circle cx="1046" cy="140" r="62" fill="#AB4726" />
+  <circle cx="1046" cy="140" r="62" fill="none" stroke="#8C3A1E" stroke-width="2" />
+  <text x="1046" y="156" font-family="Fraunces" font-style="italic" font-weight="600"
+        font-variation-settings="'opsz' 144, 'SOFT' 100, 'WONK' 1"
+        font-size="52" fill="#FFF7EC" text-anchor="middle">K</text>
+
+  <!-- small fleuron ornament (hedera leaf: three lobes + stem) -->
+  <g transform="translate(140,238) scale(0.85)">
+    <path d="M0,-6 C -6,-20 -26,-20 -30,-4 C -33,8 -20,18 -4,14 C -14,20 -14,32 0,32
+             C 14,32 14,20 4,14 C 20,18 33,8 30,-4 C 26,-20 6,-20 0,-6 Z"
+          fill="none" stroke="#7A5710" stroke-width="2.5" stroke-linejoin="round" />
+    <line x1="0" y1="14" x2="0" y2="-6" stroke="#7A5710" stroke-width="2" />
+  </g>
 
   <!-- wordmark -->
   <text
     x="120"
-    y="270"
+    y="200"
     font-family="Fraunces"
     font-style="italic"
-    font-weight="600" font-variation-settings="'wght' 600"
-    font-size="92"
-    fill="#1F1B17"
+    font-weight="600"
+    font-variation-settings="'opsz' 144, 'SOFT' 100, 'WONK' 1"
+    font-size="96"
+    fill="#241C12"
   >Keepsake</text>
 
-  <!-- headline -->
+  <!-- headline, dense + tight -->
+  <text
+    x="120"
+    y="380"
+    font-family="Fraunces"
+    font-weight="600"
+    font-variation-settings="'opsz' 100, 'SOFT' 30, 'WONK' 1"
+    font-size="46"
+    letter-spacing="-1"
+    fill="#241C12"
+  >Give a keepsake</text>
+  <text
+    x="120"
+    y="436"
+    font-family="Fraunces"
+    font-weight="600"
+    font-variation-settings="'opsz' 100, 'SOFT' 30, 'WONK' 1"
+    font-size="46"
+    letter-spacing="-1"
+    fill="#241C12"
+  >a second life.</text>
+
+  <!-- deck line -->
   <text
     x="122"
-    y="360"
-    font-family="Inter"
-    font-weight="500" font-variation-settings="'wght' 500"
-    font-size="34"
-    fill="#5C544B"
-  >Give a keepsake a second life.</text>
+    y="486"
+    font-family="Fraunces"
+    font-style="italic"
+    font-variation-settings="'opsz' 9, 'SOFT' 20, 'WONK' 1"
+    font-size="24"
+    fill="#5C4F3B"
+  >No accounts. No money. Just the story, and someone who'll love it.</text>
 
   <!-- footer line -->
   <text
     x="122"
-    y="560"
+    y="578"
     font-family="Inter"
-    font-weight="600" font-variation-settings="'wght' 600"
-    font-size="22"
-    letter-spacing="0.6"
-    fill="#96401F"
+    font-weight="600"
+    font-variation-settings="'wght' 600"
+    font-size="20"
+    letter-spacing="2"
+    fill="#7A5710"
   >KEEPSAKE.ING</text>
 </svg>

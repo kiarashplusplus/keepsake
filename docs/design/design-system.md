@@ -46,3 +46,42 @@ are ported from Finderly's `frontend/src/design-system/theme.tsx` /
 
 See also: [platform-differences.md](../platform-differences.md) for the web-specific traps
 (shadows, `position: fixed`) this system has to route around today.
+
+## v2 identity (2026-09-05)
+
+The concept: Keepsake is a lidded card box, not a SaaS product — a wax-sealed tag tied with
+string, a torn deckle edge, a hand-set italic. One terracotta pill button, a bottle-green second
+voice for links/labels, and a foil gold reserved for the seal keep any single color from doing
+all the work, and Fraunces' `SOFT`/`WONK` axes are switched on for the first time (wordmark,
+display, drop cap) instead of sitting at their defaults.
+
+| Token | Light | Dark | Role | Contrast (light, on `bg`) |
+|---|---|---|---|---|
+| `ink` | `#241C12` | `#F5ECDC` | body text | 14.7:1 |
+| `accent` (terracotta) | `#AB4726` | `#E08258` | the one pill, the seal | decorative |
+| `accentText` | `#8C3A1E` | `#F3A97E` | links/labels on `accent` hue | 6.7:1 |
+| `accent2` (bottle green) | `#1E4D3F` | `#5FA98C` | second voice: nav, eyebrows, rules | decorative |
+| `accent2Text` | `#1E4D3F` | `#7FC4A8` | readable green text | 8.4:1 |
+| `foil` (gold) | `#B8862E` | `#D9B155` | seal ring, ornaments | decorative only |
+| `foilText` | `#7A5710` | `#E8C97A` | footer mark, readable gold | 5.7:1 |
+| `rule` | ink @35% | cream @28% | hairline dividers, replaces pale borders | decorative |
+
+Type: modular-ish scale, tight leading, negative tracking on display (`displayXl` 52/54, `-1.4`
+tracking, `"opsz" 144, "SOFT" 40, "WONK" 1`). New tokens: `wordmark` (italic, full SOFT+WONK),
+`dropCap`, `numeral` (96px ghost step numbers), `eyebrow` (spaced-caps Fraunces, low opsz,
+replaces Inter all-caps). `radii` went square (`sm 4/md 8/lg 14`, new `tag: 6`), `pill` stays
+reserved for the one primary button. `shadow.*` is now two offsets of the same color ("paper on
+paper") instead of one blur. `motion` gained `liftMs`/`tagTiltDeg` for the one hover
+micro-interaction (card lifts 2px, rotates 0.4°, like picking up a tag); both zero under
+reduce-motion.
+
+Surfaces: example cards are tags (radius `tag`, a punched-hole+string SVG, dashed rule instead of
+a card border, torn-deckle `clip-path` dividers between alternating-tone sections). "How it
+works" is a numbered list with oversized translucent numerals, not a 3-card grid.
+
+**Checklist for `apps/web`** (tokens are additive/ready, not yet adopted there):
+- [ ] Wordmark: apply `type.wordmark`'s `fontVariationSettings` (`AppHeader.tsx`, `Seal.tsx`'s "K")
+- [ ] Card treatment: adopt `radii.tag` + `shadow.tag` for feed cards, add the punched-hole SVG
+- [ ] Eyebrows/labels: swap `type.label` (Inter caps) for `type.eyebrow` where it reads as a section head
+- [ ] Seal colors: ring in `foil`, disc in `accent`, mark in `onAccent` (matches the new OG seal)
+- [ ] Adopt `accent2`/`accent2Text` for links and the "Mine" nav item so terracotta isn't the only color
