@@ -77,24 +77,54 @@ export function useFeed(baseQuery: FeedQueryInput, options: UseFeedOptions = {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryKey, enabled, reloadToken]);
 
+  // The request key as of the latest render, readable from inside a promise
+  // that was created several renders ago. The page-1 effect gets the same
+  // protection from its `cancelled` flag, which its own cleanup flips; a
+  // callback has no cleanup to hang that on.
+  const currentRequestKeyRef = React.useRef(requestKey);
+  React.useEffect(() => {
+    currentRequestKeyRef.current = requestKey;
+  }, [requestKey]);
+
   const loadMore = React.useCallback(() => {
-    if (!enabled || cursor === null || loadingMore) return;
+    // `loading` is in the guard because between a query changing and its page
+    // 1 landing, `cursor` still holds the *previous* query's cursor — so a
+    // sentinel that scrolls into view in that window would ask the new query
+    // to continue from the old query's position.
+    if (!enabled || cursor === null || loadingMore || loading) return;
+    // Which query this page is for. `LoadMoreSentinel` fires this from an
+    // IntersectionObserver the moment the sentinel appears, so it is in
+    // flight far more often than a "More" button would be, and the visitor
+    // does not have to try to hit the race: tap a category chip while page 2
+    // is out and, without this, its 24 unfiltered listings appended
+    // underneath the filtered ones and `cursor` became the *unfiltered*
+    // query's cursor, so every later "More" kept paginating the query they
+    // abandoned (#187).
+    const firedFor = requestKey;
     setLoadingMore(true);
     setError(null);
 
     getFeed({ ...baseQuery, cursor, limit: PAGE_SIZE })
       .then((page) => {
+        if (currentRequestKeyRef.current !== firedFor) return;
         setItems((current) => [...current, ...page.items]);
         setCursor(page.next_cursor);
       })
       .catch((err: unknown) => {
+        if (currentRequestKeyRef.current !== firedFor) return;
         setError(err instanceof ApiError ? err.message : "Couldn't load more.");
       })
       .finally(() => {
+        // Unconditional, unlike the two above: `loadingMore` is the flag that
+        // stops a second `loadMore` starting, so leaving it true for an
+        // abandoned request would wedge pagination for the *new* query
+        // forever. Nothing else can have set it in the meantime — the guard
+        // at the top of this callback is what guarantees only one page-N
+        // request is ever in flight.
         setLoadingMore(false);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cursor, loadingMore, queryKey, enabled]);
+  }, [cursor, loadingMore, loading, requestKey, queryKey, enabled]);
 
   return { items, loading, loadingMore, error, hasMore: cursor !== null, loadMore };
 }
