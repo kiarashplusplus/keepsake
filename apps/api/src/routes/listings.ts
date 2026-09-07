@@ -709,22 +709,50 @@ listingRoutes.post(
       return fail(c, "not_found", "Listing not found.", 404);
     }
 
-    // The giver asking for their own keepsake isn't a request anyone can
-    // "choose" — there's no one else to hand it to — and it would otherwise
-    // sit in the queue looking like a real ask.
-    if (owner?.email && owner.email.toLowerCase() === input.email.toLowerCase()) {
-      return fail(c, "bad_request", "That's your own keepsake.", 400);
-    }
+    // Issue #189. These two conditions used to answer with distinguishable,
+    // content-bearing errors — `400 "That's your own keepsake."` and
+    // `409 "You've already asked for this one."` — both above the insert and
+    // above both sends, which made probing completely silent to the victim:
+    //
+    // - the 400 confirmed a *specific email address belongs to the giver of
+    //   a specific listing*, an address the privacy page promises is never
+    //   shown publicly, on a stranger's say-so and with no mail sent to warn
+    //   the owner. It matched on `owners.email`, not `email_verified_at`, so
+    //   it confirmed unverified addresses too.
+    // - the 409 confirmed *whether a named person has asked for a named
+    //   keepsake* — a fact the product hides even from other requesters, and
+    //   one that is sensitive in exactly the domestic situations this
+    //   product invites.
+    //
+    // `routes/recover.ts` already enforces the opposite rule, and its comment
+    // says why: a different response for an unknown address "would let a
+    // caller enumerate which addresses have a Keepsake dashboard behind
+    // them." Same rule here. Both cases now return the same shape the success
+    // path returns, having written nothing and sent nothing.
+    //
+    // The confirmation mail is deliberately *not* re-sent on a duplicate:
+    // that would turn this endpoint into an unbounded mailer aimed at any
+    // address a stranger cares to name.
+    //
+    // What this costs, said plainly: a giver who types their own address by
+    // mistake now gets a cheerful "sent" and no request. That message was
+    // worth keeping — but it belongs in the client, checked against the
+    // owner address the device already knows, where it helps the one person
+    // it was for without the server answering the question for everyone
+    // else. `apps/web`'s `RequestSheet` still needs that follow-up.
+    const isSelfRequest = Boolean(owner?.email && owner.email.toLowerCase() === input.email.toLowerCase());
 
-    // Pre-check rather than relying on the UNIQUE(listing_id, email)
-    // constraint to reject a duplicate — same style as the reports handler
-    // above and `ownerAuth`'s ON CONFLICT DO NOTHING: an honest, readable
-    // 409 rather than parsing a D1 driver error message.
     const existingRequest = await c.env.DB.prepare("SELECT id FROM requests WHERE listing_id = ? AND email = ?")
       .bind(id, input.email)
       .first<{ id: string }>();
-    if (existingRequest) {
-      return fail(c, "conflict", "You've already asked for this one.", 409);
+
+    if (isSelfRequest || existingRequest) {
+      // A fresh ULID and the current time, so the response is
+      // indistinguishable from a real one by shape, content or the absence
+      // of an id — the caller learns only that a well-formed ask was
+      // accepted, which is what every caller learns.
+      const result: CreateRequestResult = { id: ulid(), created_at: Date.now() };
+      return ok(c, result, 201);
     }
 
     const clientIp = clientIPFrom(c.req.raw);
