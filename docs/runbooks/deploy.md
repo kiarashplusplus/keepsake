@@ -21,6 +21,44 @@ main ships to the public site" would have had nothing standing in front of it.
 Both are gated on the `DEPLOY_ENABLED` repository/environment variable being `"true"`; until the
 Cloudflare resources below exist, leave it unset (or `"false"`) so the workflow is a no-op.
 
+## Verifying against preview
+
+**"Preview is one shared Worker" (row above) is not a detail — it is the reason "I checked it on
+preview" is not, by itself, evidence of anything (issue #66).** Every open pull request deploys
+to the same Worker as every other open pull request and every push to `main`. Deploys queue
+(`concurrency: { group: deploy-preview, cancel-in-progress: false }`) rather than run in
+parallel, so `deploy.yml`'s own "Verify /health reports this commit" step is never wrong when it
+runs — but it proves nothing about a moment later, because the next queued deploy (someone else's
+PR) can land seconds after yours finishes. This is not hypothetical: verifying #14, a probe ran 90
+seconds after an unrelated branch's deploy landed on top of the one just verified, and got a
+commit belonging to neither.
+
+Before trusting anything you observe on preview — a probed endpoint, a page loaded in a browser,
+a screenshot — confirm which commit is actually being served, immediately before and immediately
+after:
+
+```sh
+# One-off check: fails loud (exit 1) if preview isn't on the commit you expect.
+node tools/ci/verify-preview-commit.mjs https://preview.keepsake.ing <expected-sha>
+
+# Wrapping a longer verification: checks before AND after <your command>, and fails
+# even if <your command> itself "succeeded" — because a redeploy mid-check means
+# whatever you just observed may not belong to the commit you thought you tested.
+node tools/ci/verify-preview-commit.mjs https://preview.keepsake.ing <expected-sha> -- <your command>
+```
+
+`<expected-sha>` accepts a full 40-char commit or any non-empty prefix (short shas from
+`git rev-parse --short HEAD` work). Every preview deploy's PR comment (`deploy.yml`'s "Comment
+preview URL" step) now includes the exact command to run, filled in with that deploy's real
+commit, so you don't have to remember the syntax.
+
+This does not close the race — nothing checked after the fact can, on a Worker other sessions can
+redeploy at any time. It converts "silently wrong" into "loudly refuses to proceed," which is the
+bar this repo holds every guard to (`AGENTS.md`, "the one rule that matters"). The actual fix —
+per-PR preview Workers, or restricting preview deploys to `main` only so preview always means one
+knowable thing — needs a decision (and, for per-PR Workers, likely credentials) only Kiarash has;
+tracked in the follow-up filed from #66.
+
 ## One-time Cloudflare setup
 
 Run once per environment (`preview`, `production`), from `apps/api/`:
