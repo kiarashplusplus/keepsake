@@ -1,8 +1,7 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import * as Sentry from "@sentry/cloudflare";
-import { sentryOptions } from "@keepsake/observability/init";
+import { captureException, configureCapture } from "@keepsake/observability/capture";
 import { apiErr } from "@keepsake/contracts/common";
 import { assertBindings, isProduction, type Env } from "./env.js";
 import { moderationRetry } from "./cron/moderationRetry.js";
@@ -34,6 +33,13 @@ const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 app.use("*", async (c, next) => {
   const requestId = crypto.randomUUID();
   c.set("requestId", requestId);
+  // Every capture call below (this file, listings.ts, moderation/pipeline.ts,
+  // cron/moderationRetry.ts) reads `service`/`environment`/`release` from
+  // here rather than taking them as arguments — see
+  // `@keepsake/observability/capture`'s own comment on why a module-level
+  // set-once value is safe for these three in particular. Set unconditionally
+  // on every request, before anything downstream has a chance to throw.
+  configureCapture({ service: "keepsake-api", environment: c.env.ENVIRONMENT, release: c.env.COMMIT_SHA });
   await next();
   c.header("X-Request-Id", requestId);
 
@@ -71,13 +77,14 @@ app.onError((err, c) => {
     status,
     error: err instanceof Error ? err.message : String(err),
   });
-  // `withSentry` below instruments `app.fetch` itself, but Hono's own
-  // `onError` already turns every thrown error into a normal JSON response
-  // before that instrumentation ever sees an exception propagate — so
-  // without this explicit call, a route bug would show up in the Worker's
-  // own logs but never in Sentry. `captureException` is a safe no-op when
-  // `SENTRY_DSN` is unset (no client, per `buildSentryOptions` below).
-  Sentry.captureException(err);
+  // Hono's own `onError` already turns every thrown error into a normal JSON
+  // response, and Workers Logs (`[observability]` in wrangler.toml) only
+  // captures an exception automatically if it's actually *uncaught* — once
+  // `onError` handles it, nothing propagates for the platform to see. This
+  // explicit call is what gets the error into the same structured capture
+  // shape as every other `captureException` call, tagged with the request id
+  // above so it can be matched back to whatever the giver saw.
+  captureException(err, { tags: { requestId: c.get("requestId"), path: c.req.path } });
   // Every code here must be one of `@keepsake/contracts/common`'s
   // `ERROR_CODES` — this is the catch-all for anything a route didn't
   // already turn into a proper `fail(...)` response via `src/lib/respond.ts`,
@@ -211,27 +218,33 @@ app.all("*", async (c) => {
  *
  * Launch audit finding 12: both jobs used to be handed to
  * `ctx.waitUntil(...)` and the handler returned immediately. Two things
- * followed from that, and neither was survivable. Sentry's scheduled
- * instrumentation wraps this handler, so it had already resolved by the time
- * the job did any work — its `finally` disposes the client while the job is
- * still running, and a rejection inside `orphanSweep` or `moderationRetry`
- * became a detached unhandled rejection with nothing to catch it. And
- * Cloudflare judges a cron invocation by whether the handler resolved, so a
- * job that threw every single night still reported as a successful run,
- * forever, in silence.
+ * followed from that, and neither was survivable. `@sentry/cloudflare`'s
+ * scheduled instrumentation used to wrap this handler, so it had already
+ * resolved by the time the job did any work — its `finally` disposed the
+ * client while the job was still running, and a rejection inside
+ * `orphanSweep` or `moderationRetry` became a detached unhandled rejection
+ * with nothing to catch it. And Cloudflare judges a cron invocation by
+ * whether the handler resolved, so a job that threw every single night still
+ * reported as a successful run, forever, in silence.
  *
- * Awaiting instead fixes both: the exception propagates into the
- * instrumentation that exists to report it, this function additionally
- * captures it with the job's name attached (so the Sentry issue says which
- * cron, not just "scheduled"), and rethrowing marks the invocation failed in
- * the Cloudflare dashboard. The heartbeat each job writes as its last
- * statement (`cron:last:<name>` in KV) stays the positive signal —
- * `GET /api/admin/health` turns a stale one into `ok: false`.
+ * Awaiting instead fixes both: the exception now propagates all the way out
+ * of `scheduled` (an uncaught exception here is captured by Workers Logs —
+ * `[observability]` in wrangler.toml — automatically, no SDK needed), this
+ * function additionally captures it with the job's name attached (so the log
+ * line says which cron, not just "scheduled"), and rethrowing marks the
+ * invocation failed in the Cloudflare dashboard. The heartbeat each job
+ * writes as its last statement (`cron:last:<name>` in KV) stays the positive
+ * signal — `GET /api/admin/health` turns a stale one into `ok: false`.
  *
  * `ctx` is still passed and used for `waitUntil`, so the job keeps running if
  * the request context is torn down early — belt and braces, not either/or.
  */
 async function runCron(name: string, job: (env: Env) => Promise<void>, env: Env, ctx: ExecutionContext): Promise<void> {
+  // `scheduled` (below) never touches the `app.use("*", ...)` middleware
+  // above — it isn't an HTTP request — so this is the only place a cron
+  // invocation gets `service`/`environment`/`release` configured before any
+  // job it runs might call `captureException`/`captureMessage`.
+  configureCapture({ service: "keepsake-api", environment: env.ENVIRONMENT, release: env.COMMIT_SHA });
   const started = Date.now();
   const running = job(env);
   ctx.waitUntil(running);
@@ -244,11 +257,11 @@ async function runCron(name: string, job: (env: Env) => Promise<void>, env: Env,
       durationMs: Date.now() - started,
       error: err instanceof Error ? err.message : String(err),
     });
-    Sentry.captureException(err, { tags: { cron: name } });
+    captureException(err, { tags: { cron: name } });
     // Rethrow so the invocation is recorded as failed by the platform too —
-    // Sentry is the alert, the dashboard is the audit trail, and a job that
-    // silently "succeeded" while doing nothing is the exact failure mode this
-    // whole function exists to remove.
+    // the capture above is the alert, the dashboard is the audit trail, and
+    // a job that silently "succeeded" while doing nothing is the exact
+    // failure mode this whole function exists to remove.
     throw err;
   }
 }
@@ -267,41 +280,18 @@ async function scheduled(controller: ScheduledController, env: Env, ctx: Executi
 }
 
 /** Exported for `test/cron.test.ts`: the scheduled handler is not reachable
- * through `SELF.fetch`, and the property under test — a throwing job reaches
- * Sentry and is rethrown rather than swallowed — is not observable from
+ * through `SELF.fetch`, and the property under test — a throwing job is
+ * captured and rethrown rather than swallowed — is not observable from
  * anywhere else. */
 export { runCron };
 
-/**
- * `withSentry`'s options callback, exported for direct unit testing. Returns
- * `undefined` — the documented way to tell `withSentry` not to initialize a
- * client at all — whenever `SENTRY_DSN` is unset, which is true for local
- * dev and any preview/production deploy before the DSN secret is
- * provisioned. `@keepsake/observability/init`'s `sentryOptions()` already
- * wires `beforeSend`/`beforeBreadcrumb` to the redaction layer; the double
- * cast at the end exists only because that package is dependency-free (no
- * `@sentry/*` import allowed in it) and so its plain `(event: unknown) =>
- * unknown` function types don't structurally satisfy Sentry's own
- * `Event`/`Breadcrumb`-typed callback signatures — the redaction functions
- * themselves operate on plain objects either way, so the mismatch is in the
- * type system only, not in behavior.
- */
-export function buildSentryOptions(env: Env): Sentry.CloudflareOptions | undefined {
-  if (!env.SENTRY_DSN) return undefined;
-  return sentryOptions({
-    service: "keepsake-api",
-    runtime: "cloudflare",
-    dsn: env.SENTRY_DSN,
-    environment: env.ENVIRONMENT,
-    release: env.COMMIT_SHA,
-  }) as unknown as Sentry.CloudflareOptions;
-}
-
-// `withSentry` instruments both `fetch` and `scheduled` on the handler
-// object it's given (see @sentry/cloudflare's own `withSentry.ts`), so the
-// cron handler above is covered by the same wrapping as every HTTP route —
-// no separate scheduled-specific setup needed.
-export default Sentry.withSentry(buildSentryOptions, {
+// No more `Sentry.withSentry(...)` wrapper (issue #14 — `@sentry/cloudflare`
+// removed entirely): this is the same `{ fetch, scheduled }` shape Cloudflare
+// expects from a Worker's default export, just not instrumented by an SDK
+// that never had a DSN to send through. Workers Logs (`[observability]` in
+// wrangler.toml) captures uncaught exceptions from either handler on its
+// own, no wrapping required.
+export default {
   fetch: app.fetch,
   scheduled,
-});
+};

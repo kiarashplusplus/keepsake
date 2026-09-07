@@ -61,7 +61,6 @@ jobs:
         env:
           EXPO_PUBLIC_SITE_URL: ${{ vars.EXPO_PUBLIC_SITE_URL }}
           EXPO_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.EXPO_PUBLIC_TURNSTILE_SITE_KEY }}
-          EXPO_PUBLIC_SENTRY_DSN: ${{ vars.EXPO_PUBLIC_SENTRY_DSN }}
           EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN: ${{ vars.EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN }}
           EXPO_PUBLIC_ENV: ${{ env.DEPLOY_ENV }}
           COMMIT_SHA: ${{ github.sha }}

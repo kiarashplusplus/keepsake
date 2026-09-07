@@ -117,7 +117,7 @@ export interface CheckAndBumpResult {
  * refusing them.
  */
 
-/** Exported for `moderation/pipeline.ts`'s once-a-day Sentry alert on budget
+/** Exported for `moderation/pipeline.ts`'s once-a-day capture alert on budget
  * exhaustion (issue #18), which needs the same UTC-day key this module
  * uses so the "have we already alerted today" flag rolls over at the same
  * boundary the counters do. */

@@ -228,11 +228,12 @@
           Beyond what's named above (Cloudflare for hosting, storage, and AI screening; Google for
           the advertising tag, only after you consent), a few smaller services touch limited data
           on our behalf: Cloudflare Turnstile checks that a submission is coming from a real browser,
-          not a bot, before it reaches our server; Sentry receives error reports if something breaks,
-          so we can fix it, with obvious personal data redacted before it's sent; and Resend is a
-          backup email provider we can fall back to if Cloudflare's own email sending isn't
-          available. None of them receive your photos or story text beyond what's needed to run the
-          service itself.
+          not a bot, before it reaches our server; and Resend is a backup email provider we can fall
+          back to if Cloudflare's own email sending isn't available. If something breaks, error
+          diagnostics stay inside Cloudflare — the same platform already hosting the app — rather
+          than going to a separate error-tracking company, with obvious personal data redacted
+          before anything is written. None of them receive your photos or story text beyond what's
+          needed to run the service itself.
         </p>
 
         <h2>Questions</h2>

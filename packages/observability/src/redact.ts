@@ -4,6 +4,13 @@
  * byte-for-byte where it can. Extended with owner-token and Turnstile keys,
  * which are Keepsake-specific.
  *
+ * `redactString`/`redactDeep` are consumed directly by `./capture.ts`
+ * (Workers Logs, since #14 replaced `@sentry/cloudflare`) — the two
+ * Sentry-shaped wrappers this file used to export (`redactEvent`,
+ * `redactBreadcrumb`, usable directly as Sentry's `beforeSend`/
+ * `beforeBreadcrumb`) were removed with the SDK itself. This redaction
+ * logic is the part of the Sentry work worth keeping and outlived it.
+ *
  * No lookbehind and no named groups anywhere in this file: it must run on
  * React Native Hermes later, which supports neither.
  *
@@ -39,10 +46,6 @@ export function redactString(value: string): string {
     .replace(JSON_STRING_SECRET_RE, '$1"[REDACTED]"')
     .replace(JSON_NONSTRING_SECRET_RE, "$1[REDACTED]")
     .replace(new RegExp(`((?:${KEY_VALUE_NAMES})\\s*[:=]\\s*)[^\\s,;&]+`, "gi"), "$1[REDACTED]");
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Object.prototype.toString.call(value) === "[object Object]";
 }
 
 /**
@@ -85,21 +88,4 @@ export function redactDeep(
   } finally {
     ancestors.delete(value);
   }
-}
-
-/** Usable directly as a Sentry `beforeSend`. */
-export function redactEvent(event: unknown): unknown {
-  return redactDeep(event);
-}
-
-/** Usable directly as a Sentry `beforeBreadcrumb`. */
-export function redactBreadcrumb(breadcrumb: unknown): unknown {
-  if (!isPlainObject(breadcrumb)) return breadcrumb;
-
-  return {
-    ...breadcrumb,
-    message:
-      typeof breadcrumb.message === "string" ? redactString(breadcrumb.message) : breadcrumb.message,
-    data: isPlainObject(breadcrumb.data) ? redactDeep(breadcrumb.data) : breadcrumb.data,
-  };
 }

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { AdminHideInput, AdminQueueItem, AdminQueueQuery, AdminRejectInput, AdminTestEmailInput, ImageVerdictSchema } from "../src/admin";
+import {
+  AdminHideInput,
+  AdminQueueItem,
+  AdminQueueQuery,
+  AdminRejectInput,
+  AdminTestEmailInput,
+  AdminTestErrorInput,
+  ImageVerdictSchema,
+} from "../src/admin";
 
 const base = {
   is_physical_object: true,
@@ -117,5 +125,21 @@ describe("AdminTestEmailInput", () => {
 
   it("rejects a malformed address", () => {
     expect(AdminTestEmailInput.safeParse({ to: "not-an-email" }).success).toBe(false);
+  });
+});
+
+describe("AdminTestErrorInput", () => {
+  it("defaults kind to exception on an empty body", () => {
+    const result = AdminTestErrorInput.safeParse({});
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.kind).toBe("exception");
+  });
+
+  it("accepts kind: message", () => {
+    expect(AdminTestErrorInput.safeParse({ kind: "message" }).success).toBe(true);
+  });
+
+  it("rejects an unrecognized kind", () => {
+    expect(AdminTestErrorInput.safeParse({ kind: "not-a-real-kind" }).success).toBe(false);
   });
 });

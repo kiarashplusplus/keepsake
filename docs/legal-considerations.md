@@ -362,7 +362,7 @@ Checked against `apps/site/public/privacy.html` as it reads today (last updated 
 | UK representative (if Art. 27 applies) | UK GDPR Art. 27(1) | **No** — and whether one is required is itself unresolved, see above |
 | Purposes of processing | UK GDPR Art. 13(1)(c) | **Yes** — device key, optional email, request contact info, photos, screening, rate limiting are each described |
 | Legal basis for processing | UK GDPR Art. 13(1)(c) | **No** — no lawful-basis language (e.g., legitimate interest, consent) is used anywhere |
-| Categories of recipients / third parties | UK GDPR Art. 13(1)(e) | **Partial** — Cloudflare (R2, AI screening, analytics) and Google (ads) are named; Turnstile, Sentry, Resend are used per the code but not named on the page (per launch-audit §7) |
+| Categories of recipients / third parties | UK GDPR Art. 13(1)(e) | **Partial** — Cloudflare (R2, AI screening, analytics, and — since issue #14 replaced Sentry with Workers Logs — error diagnostics too) and Google (ads) are named; Turnstile and Resend are used per the code but not named on the page (per launch-audit §7) |
 | Retention periods or criteria | UK GDPR Art. 13(2)(a) | **Partial** — photos: "as long as the listing exists, plus a short grace period"; other categories (email, request contact info) have no stated retention |
 | Data subject rights (access, erasure, objection, portability) | UK GDPR Art. 13(2)(b) | **Partial** — deletion is described (listing/photos self-serve, everything else via email request); access/portability/objection are not named as rights |
 | Right to complain to a supervisory authority (ICO) | UK GDPR Art. 13(2)(d) | **No** |

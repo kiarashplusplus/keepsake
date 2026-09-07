@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import * as Sentry from "@sentry/cloudflare";
+import * as Capture from "@keepsake/observability/capture";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { freshClientIp, insertApprovedListing, insertOwner, readErr, readOk } from "./helpers.js";
 
@@ -66,13 +66,13 @@ describe("POST /api/listings/:id/reports", () => {
     expect(res.status).toBe(404);
   });
 
-  describe("Sentry notification on autohide", () => {
+  describe("capture notification on autohide", () => {
     afterEach(() => {
       vi.restoreAllMocks();
     });
 
-    it("calls Sentry.captureMessage once the threshold hides the listing", async () => {
-      const captureMessageSpy = vi.spyOn(Sentry, "captureMessage");
+    it("calls captureMessage once the threshold hides the listing", async () => {
+      const captureMessageSpy = vi.spyOn(Capture, "captureMessage");
       const ownerId = await insertOwner();
       const listingId = await insertApprovedListing({ ownerId });
 

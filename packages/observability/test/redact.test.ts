@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redactBreadcrumb, redactDeep, redactEvent, redactString } from "../src/redact";
+import { redactDeep, redactString } from "../src/redact";
 
 describe("redactString", () => {
   it("redacts key=value pairs", () => {
@@ -58,29 +58,5 @@ describe("redactDeep", () => {
     cyclic.self = cyclic;
     const output = redactDeep(cyclic) as { self: unknown };
     expect(output.self).toBe("[Circular]");
-  });
-});
-
-describe("redactEvent", () => {
-  it("scrubs request.headers.authorization", () => {
-    const event = { request: { headers: { authorization: "Bearer secret-token-value" } } };
-    const output = redactEvent(event) as { request: { headers: { authorization: string } } };
-    expect(output.request.headers.authorization).toBe("[REDACTED]");
-  });
-});
-
-describe("redactBreadcrumb", () => {
-  it("scrubs the message and nested data", () => {
-    const breadcrumb = {
-      message: "login failed password=hunter2",
-      data: { turnstile: "response-value" },
-    };
-    const output = redactBreadcrumb(breadcrumb) as { message: string; data: { turnstile: string } };
-    expect(output.message).toBe("login failed password=[REDACTED]");
-    expect(output.data.turnstile).toBe("[REDACTED]");
-  });
-
-  it("passes through non-object breadcrumbs unchanged", () => {
-    expect(redactBreadcrumb("not an object")).toBe("not an object");
   });
 });

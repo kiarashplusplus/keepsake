@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import * as Sentry from "@sentry/cloudflare";
+import { captureMessage } from "@keepsake/observability/capture";
 import { CreateListingInput, UpdateListingInput } from "@keepsake/contracts/listing";
 import type { Country } from "@keepsake/contracts/geo";
 import { CreateReportInput } from "@keepsake/contracts/report";
@@ -408,7 +408,7 @@ listingRoutes.post(
       // without having to remember to check the queue — the listing id is a
       // public ULID (already in every share link), not PII, so it's safe to
       // put in the message itself.
-      Sentry.captureMessage(`Listing ${id} auto-hidden after ${reportCount} reports`, "warning");
+      captureMessage(`Listing ${id} auto-hidden after ${reportCount} reports`, "warning");
     }
 
     return ok(c, { id: reportId }, 201);

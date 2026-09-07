@@ -44,7 +44,7 @@ condensed to what actually earns its keep on a solo-agent-driven repo:
 | M1 Give + moderation | `[DONE]` | Migrations 0001–0003, geodata seed loaded on preview, owner token middleware, photo upload, create listing, moderation pipeline + cron retry + budgets, web give flow (5 steps), breathing seal, reviewing states, read-only dashboard. |
 | M2 Browse + share | `[DONE]` | Feed (keyset/category/FTS/geo), item page, `/i/:id/:variant` edge cache, `/item/:id` OG injection, masonry feed, location bar, share, `+not-found`. |
 | M3 Requests, email, recovery | `[DONE]` | Turnstile, requests, giver email add/verify, `sendMail()` (cf + resend fallback), choose flow + contact reveal, given/withdraw/relist/edit/delete, recovery. |
-| M4 Trust and operations | `[DONE]`, version skew guard excepted (`[TODO]` on the client — issue #23) | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Sentry both sides, Web Analytics, Playwright in CI, runbooks. Version skew: server half (`/version.json`, `no-store`) is done and tested; nothing in `apps/web` polls it yet — see `docs/design/ops.md#version-skew`. |
+| M4 Trust and operations | `[DONE]`, version skew guard excepted (`[TODO]` on the client — issue #23) | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Workers Logs observability (issue #14, replaced a never-configured Sentry), Web Analytics, Playwright in CI, runbooks. Version skew: server half (`/version.json`, `no-store`) is done and tested; nothing in `apps/web` polls it yet — see `docs/design/ops.md#version-skew`. |
 | M5 Polish and launch | `[IN PROGRESS]` | About/Privacy/Terms, empty states, motion + reduce-motion pass, keyboard/focus audit, robots/sitemap, cache-header audit, production secrets, `keepsake.ing` cutover. |
 
 Definition of done per milestone lives with the plan (`M0`–`M5` DoD bullets); the short version:
@@ -63,7 +63,8 @@ Definition of done per milestone lives with the plan (`M0`–`M5` DoD bullets); 
   the requester with reply-to; recovery restores the dashboard and revokes the old token;
   Turnstile failure returns 403 with a retry.
 - **M4**: three reports hide a listing and queue it; approve restores it; banned owner gets 403
-  everywhere; e2e green in CI; a thrown error appears in Sentry with `Authorization` redacted.
+  everywhere; e2e green in CI; a thrown error appears in Workers Logs with `Authorization`
+  redacted.
 - **M5**: Lighthouse a11y ≥ 95 on feed/item/give; production deploy from `main` with `/health`
   commit check; first real listing posted from a phone.
 

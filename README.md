@@ -32,7 +32,7 @@ apps/web/          Expo app: routes (app/), design-system primitives (src/ui/), 
 apps/api/           Cloudflare Worker: routes, moderation pipeline, migrations, seeds (git-lfs)
 packages/tokens/    Design tokens — plain TS constants, subpath exports only
 packages/contracts/ Zod schemas shared by the API and the web client, subpath exports only
-packages/observability/  Sentry init + redaction, subpath exports only
+packages/observability/  Workers Logs capture + redaction, subpath exports only
 tools/preflight/    Zero-dependency CI checks that don't need a running Worker
 tools/geodata/      Builds the bundled postal-code seed from GeoNames
 tools/readable-test-runner.mjs   Runs every package's tests, non-fail-fast, with a summary table
