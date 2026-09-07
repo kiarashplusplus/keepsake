@@ -8,7 +8,16 @@ module.exports = {
     // give-review test), and it ships ESM (`import ... from`) that Jest's
     // default node_modules skip can't parse without being run through the
     // transform like its sibling packages below.
-    "node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules-.*|sentry-expo|native-base|react-native-svg|react-native-reanimated|react-native-worklets|react-native-gesture-handler|react-native-screens|react-native-safe-area-context|react-native-web)/)",
+    //
+    // `expo-constants`/`expo-modules-core` added for issue #23's
+    // version-skew guard: `src/lib/buildInfo.ts` is the first thing in this
+    // app to actually import `expo-constants` (it was previously wired into
+    // `app.config.js`'s `extra` but never read at runtime — see
+    // `docs/design/ops.md`'s "Version skew" section). `expo-constants` ships
+    // an ESM build and `expo-modules-core`'s `main` points straight at its
+    // TypeScript source, so both need the same transform every other
+    // untranspiled Expo package here gets.
+    "node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo(nent)?/.*|expo-constants|expo-modules-core|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules-.*|sentry-expo|native-base|react-native-svg|react-native-reanimated|react-native-worklets|react-native-gesture-handler|react-native-screens|react-native-safe-area-context|react-native-web)/)",
   ],
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/src/$1",

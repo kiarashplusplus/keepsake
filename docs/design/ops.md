@@ -107,10 +107,9 @@ suite currently protects that pair.
 
 ## Version skew
 
-**`[PARTIAL]`, corrected 2026-09-06 (issue #23)** — this section used to describe the guard as
-shipped ("ported from Finderly's `useVersionSkewGuard`"). It wasn't: nothing in `apps/web`
-referenced `/version.json` at all, so a tab left open across a deploy ran its stale bundle
-indefinitely with nothing telling it otherwise.
+**`[DONE]`, closed 2026-09-07 (issue #23)** — this section used to describe the guard as shipped
+("ported from Finderly's `useVersionSkewGuard`") while the client half didn't exist, then (as of
+2026-09-06) was corrected to say so honestly and left `[PARTIAL]`. The client half is now built.
 
 What's actually true today:
 
@@ -118,15 +117,32 @@ What's actually true today:
   `Cache-Control: no-store`, and is in `wrangler.toml`'s `run_worker_first` list so a cached
   static asset at that path can never shadow the live one. `commit` is `COMMIT_SHA`, stamped by
   `deploy.yml` with the full `github.sha` at deploy time — see `apps/api/test/health.test.ts`.
-- **Build-time plumbing (`apps/web`, done but unused):** `app.config.js` bakes a commit hash into
+  Verified against real bytes, not just the test: `curl` against a local `wrangler dev` returned
+  `{"commit":"dev"}` with `Cache-Control: no-store` and no other caching header.
+- **Build-time plumbing (`apps/web`, done):** `app.config.js` bakes a commit hash into
   `expo.extra.buildInfo.commitHash` via `scripts/resolveBuildInfo.mjs`, and
-  `scripts/write-version-json.mjs` writes a static `dist/version.json` next to the export.
-  Neither is read by anything at runtime yet — they're the ingredients for a guard, not the guard.
-- **The guard itself (`apps/web`, not done):** no polling, no comparison, no reload prompt exists
-  anywhere in the client. This is the actual client-side port of Finderly's
-  `useVersionSkewGuard`, and it's still unbuilt. See issue #23's closing comment for the exact
-  contract (including a real gotcha: the baked-in `commitHash` is a **7-character prefix** of the
-  full SHA `/version.json` returns, so the comparison needs `startsWith`, not `===`).
+  `scripts/write-version-json.mjs` writes a static `dist/version.json` next to the export. Both
+  are now actually read — `src/lib/buildInfo.ts` is the one place `expo-constants` gets pulled at
+  runtime.
+- **The guard itself (`apps/web`, done):** `src/features/versionSkew/useVersionSkewGuard.ts`
+  polls `GET /version.json` (`cache: "no-store"`, belt-and-braces on top of the server's own
+  header) on mount, every 5 minutes on an interval, and on window focus/tab-visible — capped to
+  once per minute so switching tabs isn't chatty. `src/lib/versionSkew.ts`'s `isVersionStale`
+  compares with `startsWith`, not `===` — the baked-in `commitHash` is a **7-character prefix**,
+  `/version.json`'s `commit` is the full SHA, and either side reading `"dev"` (no `COMMIT_SHA`
+  stamped — local dev, or a preview build without it) skips the comparison instead of nagging
+  every session. `responseIsCacheable` explicitly checks the response's own `Cache-Control` header
+  and `console.warn`s once if it's ever missing `no-store` — the exact class of dead check this
+  document's other sections have caught before, made to fail loudly instead of just being trusted.
+  `src/features/versionSkew/VersionSkewBanner.tsx` (mounted once, in `app/_layout.tsx`) shows a
+  dismissible strip — never a modal, never an automatic `location.reload()` — so it can't pull the
+  page out from under someone mid-story in the give flow or mid-note in `RequestSheet`; reload only
+  happens when the visitor presses the button.
+- **Proof it can fail:** `isVersionStale`'s `startsWith` was temporarily swapped for `===` (the
+  exact bug this section used to describe) and the "matches" test in
+  `test/lib/versionSkew.test.ts` / `test/features/versionSkew/useVersionSkewGuard.test.tsx` failed
+  as expected — a real deploy's full SHA never equals the build's 7-character prefix, so that
+  regression would have shown the banner on every single page load. Reverted; suite green again.
 
 ## M4 status (API side, 2026-09-06)
 
