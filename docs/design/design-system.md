@@ -62,8 +62,10 @@ See also: [platform-differences.md](../platform-differences.md) for the web-spec
 
 ## v2 identity (2026-09-05) — SUPERSEDED by v3 below
 
-The founder rejected this round ("too generic / too Claude" — see
-`apps/site/screenshots/v2-about-390-light.png`, `apps/web/screenshots/v3-home-390-light.png`).
+The founder rejected this round ("too generic / too Claude"). The two screenshots this
+paragraph used to cite as evidence — under `apps/site/screenshots/` and `apps/web/screenshots/` —
+**have never existed in the repo**: neither path is tracked and neither is gitignored, so there is
+nothing to recover from history either. The rejection is the record; the pointer never was one.
 Kept here for the record; do not build against it. See "v3 — Polaroids on a table" below for the
 current identity.
 
@@ -203,5 +205,9 @@ that, not the token name `CourierPrime`, or resvg silently falls back to its def
 `apps/web/public/favicon.png` regenerated the same way from `apps/site/og/favicon.svg` (a tilted
 print with a red stamp dot).
 
-**Screenshots:** `apps/web/screenshots/v4-*.png`, `apps/site/screenshots/v4-*.png` (light + dark,
-390 + 1280, home/item/give/give-review/mine/about).
+**Screenshots:** taken at light + dark, 390 + 1280, across home/item/give/give-review/mine/about.
+They are **not in the repo** — this line named `apps/web/screenshots/v4-*.png` and
+`apps/site/screenshots/v4-*.png`, neither of which has ever been tracked. Committed QA shots go
+under `docs/qa/`, whose own README caps them at one change's worth of evidence and records that
+the directory was emptied on 2026-09-07; re-shoot from the local stack
+(`pnpm --filter @keepsake/web e2e`) rather than looking for these.
