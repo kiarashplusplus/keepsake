@@ -149,7 +149,8 @@ is the lock.
   promises 48-hour expiry twice, a recovery token logged verbatim because it travels as a path
   segment, and a request endpoint that is an oracle for the giver's address.
 - **More checks that could not fail:** #166 (preflight's shell-syntax check has never examined a
-  byte of shell), #173 (the consent banner is never scanned by axe), #175, #176, #181, #191. Six
+  byte of shell), #173 (the consent banner was never scanned by axe — fixed; it and a dark-mode pass are
+  scanned now), #175, #176, #181, #191. Six
   more instances of `AGENTS.md`'s table, found in a single pass — the table is at seven rows and
   should be read as a pattern, not a closed list.
 - **Moderation and abuse surface:** #168, #171, #179, #183.
