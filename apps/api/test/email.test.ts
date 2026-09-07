@@ -3,7 +3,7 @@ import { guardRecipient, recipientDomain, sendMail } from "../src/email/sendMail
 import type { Env } from "../src/env.js";
 import { sanitizeSubject } from "../src/email/templates/shared.js";
 import { env, SELF } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
 import {
   authHeaders,
@@ -67,6 +67,204 @@ describe("POST /api/me/email + GET /api/me/email/verify", () => {
     expect(secondUse.headers.get("Location")).toBe("http://localhost:8787/mine?verified=0&reason=invalid");
   });
 
+  // Issue #167. The move none of the cases above makes: change the address
+  // *between* mint and redeem. The token's only subject used to be
+  // `owner_id`, so clicking the first link stamped "verified" on whatever
+  // address was on the row at click time — an address nobody at that address
+  // ever confirmed. A typo corrected before clicking is enough to do it; the
+  // adversarial version attaches a stranger's inbox and then collects
+  // recovery links, requesters' private notes, and the giver's own address.
+  it("refuses a link mailed to an address that is no longer on the row, and never marks the new one verified", async () => {
+    const sent = installFakeEmail();
+    const token = freshOwnerToken();
+    await uploadPhoto({ token });
+
+    // 1. First address — link L1 lands in *this* inbox and is left unclicked.
+    const first = await SELF.fetch("http://x/api/me/email", {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "typo@keepsake.ing" }),
+    });
+    expect(first.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.to).toBe("typo@keepsake.ing");
+    const staleLink = sent[0]?.text.match(/https?:\/\/\S+/)?.[0];
+    expect(staleLink).toBeTruthy();
+
+    // 2. Corrected address. Nothing at `corrected@` has confirmed anything.
+    const second = await SELF.fetch("http://x/api/me/email", {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "corrected@keepsake.ing" }),
+    });
+    expect(second.status).toBe(200);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.to).toBe("corrected@keepsake.ing");
+
+    // 3. Click L1 out of the first inbox.
+    const staleRes = await SELF.fetch(staleLink as string, { redirect: "manual" });
+    expect(staleRes.status).toBe(302);
+    expect(staleRes.headers.get("Location")).toBe("http://localhost:8787/mine?verified=0&reason=invalid");
+
+    // The assertion that matters is the row, not the redirect: `corrected@`
+    // must still be unverified, because nobody there confirmed it.
+    const me = await readOk<{ email: string; email_verified: boolean }>(
+      await SELF.fetch("http://x/api/me", { headers: authHeaders(token) }),
+    );
+    expect(me.email).toBe("corrected@keepsake.ing");
+    expect(me.email_verified).toBe(false);
+
+    // And the stale link is burned, not merely refused this once.
+    const replay = await SELF.fetch(staleLink as string, { redirect: "manual" });
+    expect(replay.headers.get("Location")).toBe("http://localhost:8787/mine?verified=0&reason=invalid");
+
+    // The link that was actually mailed to the current address still works —
+    // this is a fix, not a padlock on the whole flow.
+    const goodLink = sent[1]?.text.match(/https?:\/\/\S+/)?.[0];
+    const goodRes = await SELF.fetch(goodLink as string, { redirect: "manual" });
+    expect(goodRes.headers.get("Location")).toBe("http://localhost:8787/mine?verified=1");
+    const verified = await readOk<{ email_verified: boolean }>(await SELF.fetch("http://x/api/me", { headers: authHeaders(token) }));
+    expect(verified.email_verified).toBe(true);
+  });
+
+  // The same fix from the other side: a token that predates the address
+  // column (or was minted by `POST /api/listings`, which does not record
+  // one) carries `email IS NULL`. It must still be refused once the address
+  // has moved on — otherwise the migration only half-lands and every link
+  // already in flight at deploy time keeps the old behaviour for 24 hours.
+  it("refuses a NULL-address (legacy) verify token once the address has changed", async () => {
+    const sent = installFakeEmail();
+    const token = freshOwnerToken();
+    const ownerId = await registerOwner(token);
+
+    const now = Date.now();
+    const rawToken = randomTokenRaw();
+    await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = NULL WHERE id = ?").bind("old@keepsake.ing", ownerId).run();
+    // Exactly the shape `0001_init.sql` produced: no address on the row.
+    await env.DB.prepare(
+      `INSERT INTO recovery_tokens (id, owner_id, purpose, token_hash, expires_at, created_at) VALUES (?, ?, 'verify_email', ?, ?, ?)`,
+    )
+      .bind(ulid(), ownerId, await sha256Hex(rawToken), now + 60_000, now)
+      .run();
+
+    const changed = await SELF.fetch("http://x/api/me/email", {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "new@keepsake.ing" }),
+    });
+    expect(changed.status).toBe(200);
+    expect(sent).toHaveLength(1);
+
+    const res = await SELF.fetch(`http://x/api/me/email/verify?token=${rawToken}`, { redirect: "manual" });
+    expect(res.headers.get("Location")).toBe("http://localhost:8787/mine?verified=0&reason=invalid");
+
+    const me = await readOk<{ email_verified: boolean }>(await SELF.fetch("http://x/api/me", { headers: authHeaders(token) }));
+    expect(me.email_verified).toBe(false);
+  });
+
+  // The read-side half of #167 on its own, with no help from the write-side
+  // invalidation in `POST /api/me/email`. `POST /api/listings` also changes
+  // `owners.email` and mints a verify token, and it does *not* invalidate
+  // outstanding ones (that file is owned by another session on this branch).
+  // So this drives the whole sequence through that route: two listings, two
+  // addresses, then click the first link. Only `GET /email/verify`'s
+  // "a newer verify_email token exists for this owner" rule can refuse it.
+  it("refuses a superseded verify link even when nothing invalidated it on write (listing-create path)", async () => {
+    const sent = installFakeEmail();
+    await seedStandardPostalCodes();
+    const token = freshOwnerToken();
+
+    async function createListingWithEmail(email: string, title: string): Promise<void> {
+      const photo = await readOk<PublicPhoto>(await uploadPhoto({ token }));
+      const res = await SELF.fetch("http://x/api/listings", {
+        method: "POST",
+        headers: { ...authHeaders(token), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          story: "This was my grandmother's favorite thing, and I'd love for it to find a new home.",
+          category: "home_kitchen",
+          country: "US",
+          postal_code: "02144",
+          photo_ids: [photo.id],
+          email,
+          date_of_birth: "1990-01-01",
+        }),
+      });
+      expect(res.status).toBe(201);
+    }
+
+    await createListingWithEmail("first-typo@keepsake.ing", "A quiet teacup");
+    expect(sent).toHaveLength(1);
+    const staleLink = sent[0]?.text.match(/https?:\/\/\S+/)?.[0];
+    expect(staleLink).toBeTruthy();
+
+    await createListingWithEmail("second-correct@keepsake.ing", "A tin lunchbox");
+    expect(sent).toHaveLength(2);
+
+    // Neither token records an address (that route does not write one), so
+    // this is the "newer token exists" rule alone doing the work.
+    const staleRes = await SELF.fetch(staleLink as string, { redirect: "manual" });
+    expect(staleRes.headers.get("Location")).toBe("http://localhost:8787/mine?verified=0&reason=invalid");
+
+    const me = await readOk<{ email: string; email_verified: boolean }>(
+      await SELF.fetch("http://x/api/me", { headers: authHeaders(token) }),
+    );
+    expect(me.email).toBe("second-correct@keepsake.ing");
+    expect(me.email_verified).toBe(false);
+
+    // The newest link — the one actually mailed to the address on file — works.
+    const goodLink = sent[1]?.text.match(/https?:\/\/\S+/)?.[0];
+    const goodRes = await SELF.fetch(goodLink as string, { redirect: "manual" });
+    expect(goodRes.headers.get("Location")).toBe("http://localhost:8787/mine?verified=1");
+  });
+
+  // The write-side half of #167, asserted on the table rather than through
+  // a redirect — `GET /email/verify` would refuse these links anyway, so a
+  // route-level assertion could not tell the two halves apart. What this
+  // pins is that changing or clearing the address leaves **no redeemable
+  // verify_email row behind at all**: the invariant is true in the data, not
+  // merely enforced on the way out. Anything auditing `recovery_tokens` for
+  // live credentials depends on that.
+  it("burns outstanding verify_email tokens the moment the address changes or is cleared", async () => {
+    installFakeEmail();
+    const token = freshOwnerToken();
+    const ownerId = await registerOwner(token);
+
+    const liveCount = async (): Promise<number> => {
+      const row = await env.DB.prepare(
+        "SELECT COUNT(*) AS n FROM recovery_tokens WHERE owner_id = ? AND purpose = 'verify_email' AND used_at IS NULL",
+      )
+        .bind(ownerId)
+        .first<{ n: number }>();
+      return row?.n ?? -1;
+    };
+
+    const setEmail = async (email: string): Promise<void> => {
+      const res = await SELF.fetch("http://x/api/me/email", {
+        method: "POST",
+        headers: { ...authHeaders(token), "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      expect(res.status).toBe(200);
+    };
+
+    await setEmail("one@keepsake.ing");
+    expect(await liveCount()).toBe(1);
+
+    // Changing it leaves exactly the new link live — not two.
+    await setEmail("two@keepsake.ing");
+    expect(await liveCount()).toBe(1);
+
+    // Resending to the same unverified address is also a change of link.
+    await setEmail("two@keepsake.ing");
+    expect(await liveCount()).toBe(1);
+
+    // Removing the address leaves nothing redeemable at all.
+    const del = await SELF.fetch("http://x/api/me/email", { method: "DELETE", headers: authHeaders(token) });
+    expect(del.status).toBe(200);
+    expect(await liveCount()).toBe(0);
+  });
+
   it("redirects with reason=expired for an expired token", async () => {
     const token = freshOwnerToken();
     const ownerId = await registerOwner(token);
@@ -115,7 +313,7 @@ describe("POST /api/me/email + GET /api/me/email/verify", () => {
   });
 });
 
-describe("POST /api/recover + POST /api/recover/:token", () => {
+describe("POST /api/recover + POST /api/recover/exchange", () => {
   afterEach(() => removeFakeEmail());
 
   it("still returns {sent:true} for an email with no owner (no enumeration)", async () => {
@@ -150,7 +348,11 @@ describe("POST /api/recover + POST /api/recover/:token", () => {
     expect(link).toBeTruthy();
     const recoverToken = (link as string).split("/recover/")[1];
 
-    const exchangeRes = await SELF.fetch(`http://x/api/recover/${recoverToken}`, { method: "POST" });
+    const exchangeRes = await SELF.fetch("http://x/api/recover/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: recoverToken }),
+    });
     expect(exchangeRes.status).toBe(200);
     const result = await readOk<{ ownerToken: string }>(exchangeRes);
     expect(result.ownerToken).not.toBe(oldToken);
@@ -165,8 +367,90 @@ describe("POST /api/recover + POST /api/recover/:token", () => {
     expect(newRes.status).toBe(200);
 
     // The recovery token itself is single-use.
-    const secondExchange = await SELF.fetch(`http://x/api/recover/${recoverToken}`, { method: "POST" });
+    const secondExchange = await SELF.fetch("http://x/api/recover/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: recoverToken }),
+    });
     expect(secondExchange.status).toBe(401);
+  });
+
+  // Issue #182. Exchanging a recovery token rotates `owners.token_hash` —
+  // full takeover of a giver's dashboard — and it used to travel as
+  // `POST /api/recover/<token>`, a URL path segment. `index.ts`'s `onError`
+  // wrote `path: c.req.path` into a bare `console.error` and into a
+  // `captureException` tag, and Workers Logs keeps every line, so a giver
+  // clicking their emailed link during any request that threw put a *live*
+  // credential into a log store. The fix is the route shape, so what this
+  // pins is the shape: there must be no way to put the token in a URL.
+  it("refuses to exchange a token supplied as a URL path segment", async () => {
+    const sent = installFakeEmail();
+    const ownerToken = freshOwnerToken();
+    await registerOwner(ownerToken);
+    const now = Date.now();
+    await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE token_hash = ?")
+      .bind("path-shape@keepsake.ing", now, await sha256Hex(ownerToken))
+      .run();
+
+    const requested = await SELF.fetch("http://x/api/recover", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "path-shape@keepsake.ing" }),
+    });
+    expect(requested.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    const recoverToken = (sent[0]?.text.match(/https?:\/\/\S+\/recover\/\S+/)?.[0] as string).split("/recover/")[1];
+    expect(recoverToken).toBeTruthy();
+
+    // A real, live, unused token — the strongest form of the assertion,
+    // since a bad token would 401 whatever the route shape was.
+    const viaPath = await SELF.fetch(`http://x/api/recover/${recoverToken}`, { method: "POST" });
+    expect(viaPath.status).toBe(404);
+
+    // And it is still live afterwards, i.e. the 404 is "no such route", not
+    // "the token got spent by the old handler".
+    const viaBody = await SELF.fetch("http://x/api/recover/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: recoverToken }),
+    });
+    expect(viaBody.status).toBe(200);
+  });
+
+  // The other half of #182: whatever `onError` writes into a log field must
+  // not be able to carry a caller's secret. It logs the matched route
+  // *pattern* now, never the concrete path — a string this repo wrote rather
+  // than one a caller supplied. Driven by making D1 throw, which is exactly
+  // the "a D1 blip while a giver clicks their link" case the issue describes.
+  it("logs the route pattern, not the request path, when a request throws", async () => {
+    const secretish = "hQ2n0Xa9Vb7cD3eF5gH8iJ1kL4mN6oP0qR2sT4uV6wY";
+    const logged: unknown[][] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args);
+    };
+    const prepare = vi.spyOn(env.DB, "prepare").mockImplementation(() => {
+      throw new Error("D1_ERROR: simulated 7403");
+    });
+    try {
+      const res = await SELF.fetch("http://x/api/recover/exchange", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: secretish }),
+      });
+      expect(res.status).toBe(500);
+    } finally {
+      prepare.mockRestore();
+      console.error = originalError;
+    }
+
+    const unhandled = logged.find((args) => args[0] === "unhandled error");
+    expect(unhandled).toBeTruthy();
+    const fields = (unhandled as unknown[])[1] as Record<string, unknown>;
+    expect(fields.route).toBe("/api/recover/exchange");
+    // The field that carried the token is gone entirely, not merely cleaned.
+    expect(fields).not.toHaveProperty("path");
+    expect(JSON.stringify(fields)).not.toContain(secretish);
   });
 
   // The email tells the reader when their link stops working. That sentence
@@ -446,13 +730,16 @@ describe("sendMail failure reporting", () => {
     return { kind: "new_request", to, subject: "s", html: "<p>h</p>", text: "t" };
   }
 
-  it("returns the provider's raw text as `detail` and keeps `reason` a stable code", async () => {
+  it("returns the provider's text as `detail`, recipient scrubbed, and keeps `reason` a stable code", async () => {
     installThrowingEmail(REFUSAL);
     const result = await sendMail(env as unknown as Env, testMessage("recipient@gmail.com"));
 
     expect(result.sent).toBe(false);
     expect(result.reason).toBe("send_failed");
-    expect(result.detail).toBe(REFUSAL);
+    // The sentence, whole — minus the identifier. #190.
+    expect(result.detail).toBe(
+      "destination address not verified: <recipient> is not a verified destination address for this Email Routing zone",
+    );
   });
 
   /**
@@ -479,7 +766,25 @@ describe("sendMail failure reporting", () => {
     expect(second.detail).not.toBe(result.detail);
   });
 
-  it("writes the code, the raw detail and the recipient's domain to email_events", async () => {
+  /**
+   * Issue #190, and the assertion this test exists to have *inverted*.
+   *
+   * It used to read `expect(row?.error_detail).toBe(REFUSAL)` — two lines
+   * above `expect(row?.to_hash).not.toContain("@")`. The suite was enforcing
+   * that the recipient's plaintext address is stored in the same row whose
+   * hash is defended immediately below it: not a gap in coverage, but
+   * coverage pointed the wrong way, which is why it would survive an ordinary
+   * review. Inverting it and watching it fail against the unmodified code was
+   * the proof that the leak was real:
+   *
+   *     AssertionError: expected 'destination address not verified: rec…'
+   *       not to contain 'recipient@gmail.com'
+   *
+   * The recipient here is `Recipient@GMAIL.com` while the provider quotes
+   * `recipient@gmail.com`, so this also pins the case-insensitive match — a
+   * provider echoing a normalised form must not slip past.
+   */
+  it("scrubs the recipient out of error_detail while keeping the diagnosis", async () => {
     installThrowingEmail(REFUSAL);
     const result = await sendMail(env as unknown as Env, testMessage("Recipient@GMAIL.com"));
 
@@ -490,11 +795,37 @@ describe("sendMail failure reporting", () => {
 
     expect(row?.ok).toBe(0);
     expect(row?.error).toBe("send_failed");
-    expect(row?.error_detail).toBe(REFUSAL);
+
+    // The address is gone — in any casing.
+    expect(row?.error_detail ?? "").not.toContain("recipient@gmail.com");
+    expect((row?.error_detail ?? "").toLowerCase()).not.toContain("recipient@gmail.com");
+    expect(row?.error_detail ?? "").not.toContain("@gmail.com");
+
+    // ...and the diagnosis is not. This is the half that would answer #6, so
+    // "scrubbed" must not have quietly become "blanked".
+    expect(row?.error_detail).toContain("<recipient>");
+    expect(row?.error_detail).toContain("is not a verified destination address");
+
     // Lowercased, and the domain only — `to_hash` stays the one column that
     // identifies *who* was mailed.
     expect(row?.to_domain).toBe("gmail.com");
     expect(row?.to_hash).not.toContain("@");
+  });
+
+  /**
+   * The backstop. If the provider quotes an address that is *not* the one we
+   * sent to — a forwarding target, an envelope sender — step 1 of the scrub
+   * cannot match it by string equality, and #170's `redactString` has to
+   * catch it by shape. The domain survives on purpose: it names a mail
+   * provider, not a person.
+   */
+  it("also scrubs an address the provider quotes that is not the recipient", async () => {
+    installThrowingEmail("forwarding loop: someone-else@yahoo.com refused relay");
+    const result = await sendMail(env as unknown as Env, testMessage("recipient@gmail.com"));
+
+    expect(result.detail).not.toContain("someone-else@yahoo.com");
+    expect(result.detail).toContain("@yahoo.com");
+    expect(result.detail).toContain("refused relay");
   });
 
   it("records the domain on a successful send too, so a failure ratio has a denominator", async () => {

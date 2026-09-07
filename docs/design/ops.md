@@ -80,11 +80,43 @@ opts?)` — plain functions that write one structured object to `console.error`/
 fields like `tags.cron`). Every message/tag/extra/error still runs through
 `@keepsake/observability/redact`'s `redactDeep`/`redactString` first — that redaction is the part
 of the original Sentry work worth keeping, and it outlived the SDK — minus the two Sentry-shaped wrappers,
-`redactEvent` and `redactBreadcrumb`, which went with it. **Redaction is credential-shaped
-only:** `SENSITIVE_KEY_RE` and `KEY_VALUE_NAMES` are lists of key and token names, and
-`redactDeep` matches on key name, so an email address or phone number — the only PII Keepsake
-holds — is not matched anywhere, and one sitting in a message string, a stack or an unrecognised
-`extra` key reaches Workers Logs verbatim (#170).
+`redactEvent` and `redactBreadcrumb`, which went with it.
+
+**Redaction was credential-shaped only until 2026-09-07**, and that is worth keeping written down
+because of how convincingly it read as working. `SENSITIVE_KEY_RE` and `KEY_VALUE_NAMES` were
+lists of key and token names, and `redactDeep` matched on key name alone — so `Bearer` tokens and
+`?token=` were caught, and an email address or phone number, the only PII Keepsake holds, was
+matched nowhere. One sitting in a message string, a stack, or under an ordinary key like `to`
+reached Workers Logs verbatim, with `head_sampling_rate = 1` keeping every line. The tell was that
+the redactor's test file contained no email address at all, so no test could ever have failed on
+it (#170).
+
+It now redacts three more shapes, built from `packages/observability/src/patterns.ts` — the single
+definition of what an address looks like, which `apps/api/src/moderation/contactInfo.ts` reads
+too, so the moderation check and the redactor cannot drift apart:
+
+- **Email**, keeping the domain: `alice@gmail.com` → `[REDACTED]@gmail.com`. Same trade
+  `email_events.to_domain` makes — a domain names a mail provider, not a person — and it is what
+  separates "one address bounced" from "this provider refuses everything" (#6).
+- **Phone**, but *not* with moderation's pattern. `contactInfo`'s rule matches any 8+ digit run,
+  which is every `Date.now()` in every log line; the redaction rule requires a `+` country code or
+  real separators. The two definitions live side by side in `patterns.ts` with the reason for the
+  split. **Do not unify them** — the must-survive tests in `test/redact.test.ts` exist to catch
+  exactly that, and half of them assert what redaction must *leave alone* (a bare domain, a ULID,
+  epoch millis, `552 5.2.2`), because a redactor is trivially "correct" by erasing everything and
+  an unreadable log is its own outage.
+- **A secret in a URL path segment** — `/recover/<token>`, `/withdraw/<token>`. The `?key=` rule
+  only ever matched query parameters. Defence in depth alongside #182, which moves the recovery
+  token out of the path.
+
+`redactDeep` now also catches an address by value shape and as an object key, not only by key
+name. There is deliberately no second address pattern inside `redactDeep`: every string leaf
+already routes through `redactString`.
+
+One path this does **not** cover, by construction: a bare `console.error`/`console.log` never
+reaches `redactString`. `sendMail.ts` scrubs its own provider text for that reason (#190) — if you
+add a direct console call that can carry provider or user text, it is on you, not on this layer.
+
 `SENSITIVE_KEY_RE` covers `cf-turnstile-response` and `idempotency[-_]?key` alongside the
 originals. `POST /api/admin/test-error` (`src/routes/admin.ts`, `adminAuth()`-guarded) exists
 purely to prove an event actually lands against a real deployment — a unit test asserting
