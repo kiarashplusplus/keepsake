@@ -37,8 +37,43 @@ stays an honest record of what was found and when:**
   as controller; the postal address is a `TODO(kiarash)` placeholder in the HTML, not invented.
 - **Requester data removal (launch-audit's open item, not numbered above): done.** See
   `POST /api/requests/withdraw` and `docs/design/identity.md`'s "Request withdrawal" section.
-- Everything else below — Rhode Island/Montana, in-person safety copy, the Article 27
-  representative question, the eight lawyer questions — is **still open**, unchanged from the
+- **Location precision (issue #62): confirmed and disclosed.** Traced the code: `CreateListingInput`
+  (`packages/contracts/src/listing.ts`) has no lat/lng field, only `postal_code`; `POST /api/listings`
+  always resolves a stored lat/lng via `lookupPostalCode` against the `postal_codes` table (a
+  postcode centroid seeded from GeoNames by `tools/geodata/build-postal-seed.mjs`). The give flow's
+  "Use my location" converts device coordinates to a postcode client-side and never sends the
+  coordinates to the API. No device-precise coordinate is ever stored for a listing — the Montana
+  minors'-precise-geolocation question in the original research is moot. (The feed's separate "near
+  me" *search* does send raw coordinates to `GET /api/feed` as a one-off query parameter, but they
+  are not persisted anywhere server-side; `privacy.html`'s new "Location" section states both facts
+  precisely rather than one overclaiming the other.)
+- **Privacy page retention/rights/Rhode Island (issue #60): done.** The page now names access and
+  portability alongside deletion, states retention in concrete numbers pulled from the actual crons
+  (30-day terminal-photo grace period and 24-hour orphan-upload cleanup from
+  `apps/api/src/cron/orphanSweep.ts`; 90-day moderation/email-event retention; 48-hour rate-limit
+  hash TTL from `apps/api/src/moderation/budget.ts`), and says plainly that an owner's email is kept
+  indefinitely once set (inactivity alone doesn't delete it — `sweepEmptyOwners` requires
+  `email IS NULL`) rather than leaving that undocumented. It also carries a designated
+  "Categories of information we collect" section satisfying Rhode Island's RIDTPPA §6-48.1-3(a)
+  disclosure, which folds in the controller designation from "Who runs this" rather than duplicating
+  it (closes the overlap with #26 noted in that issue).
+- **Minimum-age takedown rule (issue #61): user-facing wording made concrete, operational gap still
+  open.** `privacy.html` and `terms.html` now commit to a specific action — remove the listing or
+  request, and ban the device key/token when it's a giver — instead of the vague "remove an account"
+  (which also contradicted the page's own "no accounts" framing). Verified in `apps/api/src/routes/
+  admin.ts`: `POST /admin/owners/:id/ban` is real and hides every non-`given` listing for that
+  owner, so the giver-side commitment is backed by working code. **The requester side is not**: a
+  `requests` row has no `owner_id` (only `email`/`phone`/`ip_digest`), and there is no admin endpoint
+  to hide or remove a single request — so "actual knowledge a requester is a minor" currently has no
+  one-click operational step, only a manual DB edit. That gap, plus the written moderator-facing
+  runbook procedure for recognizing "actual knowledge" in the first place, is `docs/runbooks/**` /
+  admin-UI territory and is left for whoever owns those.
+- **18+ checkbox wording (issue #64): out of scope for this pass.** The control
+  (`AgeAttestationCheckbox`) lives in `apps/web` (`app/give/review.tsx`,
+  `src/features/request/RequestSheet.tsx`), not `apps/site`. Left un-implemented; see the issue
+  comment for proposed neutral wording.
+- Everything else below — Montana's targeting-language ambiguity, in-person safety copy, the Article
+  27 representative question, the eight lawyer questions — is **still open**, unchanged from the
   original research.
 
 ---

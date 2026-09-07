@@ -112,8 +112,29 @@
         <h2>Photos</h2>
         <p>
           Photos you upload are stored on Cloudflare R2. We keep a full-size and a thumbnail
-          version of each one for as long as the listing exists, plus a short grace period after
-          it's removed.
+          version of each one for as long as the listing exists, plus 30 days after it's rejected,
+          withdrawn, or hidden. If you upload a photo but never finish posting the listing, we
+          delete it after 24 hours.
+        </p>
+
+        <h2>Location</h2>
+        <p>
+          A listing's location is a postcode centroid, not a device-precise coordinate. When you
+          post something, we look up the latitude and longitude of the postcode you gave us in a
+          fixed table built from public postal-code data — the same point every listing in that
+          postcode gets, not a spot tied to your address or device. If you use "Use my location"
+          while posting, your device's exact coordinates go straight from your browser to a
+          reverse-geocoding lookup (BigDataCloud, or OpenStreetMap's Nominatim as a fallback) to
+          work out your postcode. That exchange happens between your browser and those services
+          directly — we only ever receive the postcode it hands back, never the coordinates.
+        </p>
+        <p>
+          Browsing "near me" is a separate feature, worth being precise about on its own: if you
+          use "Use my location" to search rather than to post, your device's coordinates are sent
+          to us as part of that one search request, so we can sort listings by distance — they
+          aren't looked up from a postcode table, and we don't store them. Your browser remembers
+          your last search location for next time, the same way it would a typed-in postcode, but
+          our server only ever sees the coordinates for the moment it takes to answer that request.
         </p>
 
         <h2>Screening</h2>
@@ -133,7 +154,8 @@
           possible address — this isn't a strong cryptographic guarantee against a motivated
           adversary. What it does do: we never handle or store your address in the clear at all,
           and the hash is scoped to a single day, so two days' records can't be joined into a
-          history of your address the way a raw IP log could be.
+          history of your address the way a raw IP log could be. We keep each day's hash for 48
+          hours, then it expires automatically.
         </p>
 
         <h2>Your choice, before anything loads</h2>
@@ -196,31 +218,55 @@
           will quietly undo it.
         </p>
 
-        <h2>Deleting your information</h2>
+        <h2>Categories of information we collect</h2>
         <p>
-          You can delete a listing (and its photos) at any time from your dashboard. If you asked
-          for someone's keepsake, the confirmation email you received has a link to withdraw that
+          Gathered in one place, since some places ask for it that way: a device-generated
+          identifier (your device key), an optional email address, an optional phone number (if
+          you request something), a note you write when requesting a keepsake, and the title,
+          story, photos, and postcode-level location of a listing you post. Separately, we keep a
+          short-lived, hashed record of your IP address for abuse prevention (see "Rate limiting"
+          above). We don't sell any of it, to anyone, for any reason — see the section above.
+          Kiarash, named under "Who runs this" above, is the controller for all of it.
+        </p>
+
+        <h2>Your rights: access, deletion, and portability</h2>
+        <p>
+          Because there's no account to log into, most of this is already self-service. You can
+          delete a listing (and its photos) at any time from your dashboard. If you asked for
+          someone's keepsake, the confirmation email you received has a link to withdraw that
           request and erase your note, email, and phone number — see "What a requester shares"
           above for the one thing that link can't undo (a chosen request whose contact info the
-          giver already has by email). To remove your email or ask us to delete anything else we
-          hold about you, write to <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a> and
-          we'll take care of it.
+          giver already has by email).
         </p>
         <p>
-          What we keep and for how long: your device key and preferences live in your own
-          browser's storage, not ours, until you clear them. Photos and listing text live for as
-          long as the listing exists, plus a short grace period. Request notes/emails/phone numbers
-          live until the request is withdrawn (see above) or you ask us to remove them. Rate-limit
-          hashes and moderation records are kept only as long as they're useful for abuse
-          prevention and the audit trail described elsewhere on this page.
+          For anything that isn't self-service — seeing a copy of what we hold about you (access),
+          getting it in a portable form, or removing your email or anything else on this page —
+          write to <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a> and we'll take care
+          of it. There's one operator and no account system behind this, so these are manual
+          requests we handle by hand, not an automated export button, but we'll get you an answer.
+        </p>
+        <p>
+          What we keep and for how long: your device key, preferences, and last search location
+          live in your own browser's storage, not ours, until you clear them. Photos and listing
+          text live for as long as the listing exists, plus 30 days if it's rejected, withdrawn, or
+          hidden. Request notes/emails/phone numbers live until the request is withdrawn (see
+          above) or you ask us to remove them. Your own email, if you added one, stays on file
+          tied to your device key — being inactive doesn't delete it — until you ask us to remove
+          it. A link we send to verify an email or recover your dashboard expires in 24 hours (or
+          30 minutes for a recovery link) and the record of it is cleared within a further week.
+          Rate-limit hashes expire automatically after 48 hours (see "Rate limiting" above), and
+          moderation and email-delivery logs are kept for 90 days as an abuse-prevention audit
+          trail.
         </p>
 
         <h2>Minimum age</h2>
         <p>
           Keepsake asks everyone posting or requesting a keepsake to confirm they're 18 or older —
           see <a href="/terms">Terms</a> for why. We can't verify anyone's age; the point of asking
-          is a documented, honest basis for removing an account the moment we learn someone using it
-          is a minor.
+          is a documented, honest basis for acting the moment we actually learn — through a report,
+          a listing, or a request — that someone using Keepsake is a minor. Acting on that means
+          removing the listing or request involved, and, when it's a giver, banning the device key
+          that posted it.
         </p>
 
         <h2>Other services we rely on</h2>
