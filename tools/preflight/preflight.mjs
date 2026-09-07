@@ -848,6 +848,103 @@ function checkShellSyntax(ctx) {
   return { status: "pass", details: [`${scripts.length} shell script(s) parse`] };
 }
 
+// ── gh-repo-context ────────────────────────────────────────────────────────
+
+const WORKFLOWS_DIR = ".github/workflows";
+
+/**
+ * Split a workflow file into its `jobs:` blocks without a YAML parser.
+ *
+ * This file imports node builtins only, on purpose — it must run standalone,
+ * and its tests point it at fixture trees in `os.tmpdir()`. `yaml` is not a
+ * declared dependency of this repo (only a transitive one), so it is not
+ * available to lean on. Workflow YAML is regular enough to split by
+ * indentation, the same trade `parseToml` above already makes.
+ *
+ * Returns `[{ name, lines }]`, one entry per top-level key under `jobs:`.
+ */
+function splitWorkflowJobs(text) {
+  const lines = text.split("\n");
+  const jobsAt = lines.findIndex((line) => /^jobs:\s*$/.test(line));
+  if (jobsAt === -1) return [];
+
+  const jobs = [];
+  let current = null;
+  for (let i = jobsAt + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (/^\S/.test(line) && line.trim() !== "") break; // back to a top-level key
+    const header = /^ {2}([A-Za-z_][A-Za-z0-9_-]*):\s*$/.exec(line);
+    if (header) {
+      current = { name: header[1], lines: [] };
+      jobs.push(current);
+      continue;
+    }
+    if (current) current.lines.push(line);
+  }
+  return jobs;
+}
+
+/** `gh` invoked as a command, not the letters "gh" inside another word. */
+const GH_INVOCATION = /(?:^|[|&;(`$\s])gh\s+[a-z]/;
+
+/**
+ * A workflow step that shells out to `gh` needs to know which repository it
+ * is acting on. `gh` derives that from the git remote, so a job containing an
+ * `actions/checkout` step has it for free — and a job without one has nothing
+ * unless `GH_REPO` is set.
+ *
+ * Getting this wrong does not degrade an alert, it silently removes it: every
+ * `gh` call exits non-zero with "failed to run git: fatal: not a git
+ * repository". `uptime.yml` shipped exactly that, and because its alerting
+ * step is `if: failure()` — it only runs when something is genuinely wrong —
+ * it had never once succeeded in filing an issue (#106). The workflow ran on
+ * schedule, probed both tiers correctly and went red the whole time; the step
+ * that turns a red run into a notification a human receives was dead.
+ *
+ * Deliberately coarse: any `gh <subcommand>` in a `run:` block counts, and a
+ * checkout anywhere in the job counts as context. A false positive is
+ * silenced by setting `GH_REPO`; a false negative is an alert nobody gets.
+ */
+function checkGhRepoContext(ctx) {
+  if (!ctx.exists(WORKFLOWS_DIR)) {
+    return { status: "skip", details: [`${WORKFLOWS_DIR} not present`] };
+  }
+  const files = ctx.walk(WORKFLOWS_DIR).filter((f) => /\.ya?ml$/.test(f));
+  if (files.length === 0) {
+    return { status: "skip", details: [`no workflow files under ${WORKFLOWS_DIR}`] };
+  }
+
+  const details = [];
+  let jobsUsingGh = 0;
+
+  for (const file of files) {
+    const text = ctx.readText(file) ?? "";
+    // A repo-wide `env:` at the top level applies to every job in the file.
+    const topLevelGhRepo = /^env:\s*$[\s\S]*?^ {2}GH_REPO:/m.test(text);
+
+    for (const job of splitWorkflowJobs(text)) {
+      const body = job.lines.join("\n");
+      if (!GH_INVOCATION.test(body)) continue;
+      jobsUsingGh += 1;
+      if (body.includes("actions/checkout")) continue;
+      if (body.includes("GH_REPO:") || topLevelGhRepo) continue;
+      details.push(
+        `${file}: job "${job.name}" runs \`gh\` with no actions/checkout in the job and no ` +
+          "GH_REPO in scope — gh cannot resolve the repository, so every call fails with " +
+          '"fatal: not a git repository". Set GH_REPO: ${{ github.repository }}.',
+      );
+    }
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+  return {
+    status: "pass",
+    details: [
+      `${jobsUsingGh} job(s) invoking gh across ${files.length} workflow file(s), all with repo context`,
+    ],
+  };
+}
+
 export const CHECKS = {
   fonts: { description: "@font-face url(/fonts/*) vs apps/web/public/fonts/*.ttf", run: checkFonts },
   migrations: { description: "apps/api/migrations/*.sql naming, apply order and terminators", run: checkMigrations },
@@ -860,6 +957,7 @@ export const CHECKS = {
   "conflict-markers": { description: "no unresolved <<<<<<< / >>>>>>> in tracked text", run: checkConflictMarkers },
   "lfs-pointers": { description: "apps/api/seeds/*.sql are not unfetched LFS pointers", run: checkLfsPointers },
   "public-env": { description: "EXPO_PUBLIC_* names are never secrets", run: checkPublicEnv },
+  "gh-repo-context": { description: "workflow steps running `gh` can resolve the repo", run: checkGhRepoContext },
   "shell-syntax": { description: "bash -n on every *.sh under tools/ and .github/", run: checkShellSyntax },
 };
 

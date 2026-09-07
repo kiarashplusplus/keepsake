@@ -22,10 +22,14 @@ The product is the story. Anything that makes a listing feel like a classified a
   pushed last. **Verify a branch locally instead** (`pnpm --filter @keepsake/web e2e`, real
   `workerd` + local D1/R2/KV); see "Verifying against preview" below for what preview is still
   good for and what still needs a commit check.
-- **Production**: `keepsake-production` exists, migrated, seeded, secrets set — but **no domain
-  points at it** and that is deliberate. Attaching `keepsake.ing` is Kiarash's call, and
-  production deploys are manual (`workflow_dispatch`) because GitHub's required-reviewer gate is a
-  paid feature on private repos.
+- **Production**: <https://keepsake.ing> — live. The custom domain is attached to
+  `keepsake-production` and both of that Worker's `workers.dev` hostnames are disabled, so the
+  apex is the only way in (#46, 2026-09-07). Production deploys stay **manual**
+  (`workflow_dispatch` from the Actions tab, choosing `production`) because GitHub's
+  required-reviewer gate is a paid feature on private repos — merging to `main` does **not** ship
+  the public site. Email is `live` there for all recipients (#43), and note what that still
+  rests on: delivery to any address other than Kiarash's has never been observed arriving (#6).
+  The preview Worker's `workers.dev` hostnames, unlike production's, are still enabled (#105).
 - **The UK is geo-blocked on purpose** (`docs/runbooks/uk-block.md`). Not a bug.
 - Work is tracked as GitHub issues across five milestones. Conventions in
   `docs/runbooks/issue-workflow.md`.

@@ -751,3 +751,106 @@ test("CLI --list prints every check name without touching disk", () => {
   assert.match(out, /migrations/);
   assert.match(out, /shell-syntax/);
 });
+
+// ── gh-repo-context ────────────────────────────────────────────────────────
+//
+// The bug these cover shipped for real (#106): uptime.yml's alerting step
+// called `gh issue create` from a job with no checkout, so every call died
+// with "fatal: not a git repository" and no issue was ever filed. It went
+// unnoticed because the step is `if: failure()` — it only runs when something
+// is genuinely wrong, and until the first real failure nothing ever exercised
+// it. A green run history was mistaken for a working alert.
+
+const GH_ALERT_JOB = (env) => `name: Uptime
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check health
+        run: curl -fsS https://example.test/health
+      - name: Open an issue when unhealthy
+        if: \${{ failure() }}
+        env:
+          GH_TOKEN: \${{ github.token }}
+${env}        run: |
+          gh issue create --title "down" --body "see run"
+`;
+
+test("gh-repo-context fails when a gh step has no checkout and no GH_REPO", () => {
+  const result = runOne("gh-repo-context", {
+    ".github/workflows/uptime.yml": GH_ALERT_JOB(""),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details[0], /job "health" runs `gh`/);
+  assert.match(result.details[0], /GH_REPO/);
+});
+
+test("gh-repo-context passes once GH_REPO is set on the step", () => {
+  const result = runOne("gh-repo-context", {
+    ".github/workflows/uptime.yml": GH_ALERT_JOB("          GH_REPO: ${{ github.repository }}\n"),
+  });
+  assert.equal(result.status, "pass");
+});
+
+test("gh-repo-context passes when the job checks the repo out instead", () => {
+  const result = runOne("gh-repo-context", {
+    ".github/workflows/report.yml": `name: Report
+on:
+  schedule:
+    - cron: "0 * * * *"
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: File a finding
+        run: gh issue create --title "x" --body "y"
+`,
+  });
+  assert.equal(result.status, "pass");
+});
+
+test("gh-repo-context only faults the job that lacks context, not its neighbour", () => {
+  const result = runOne("gh-repo-context", {
+    ".github/workflows/two.yml": `name: Two
+on: [push]
+jobs:
+  fine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: gh issue list
+  broken:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh issue create --title "t" --body "b"
+`,
+  });
+  assert.equal(result.status, "fail");
+  assert.equal(result.details.length, 1);
+  assert.match(result.details[0], /job "broken"/);
+});
+
+test("gh-repo-context ignores words merely containing gh, and steps with no gh at all", () => {
+  const result = runOne("gh-repo-context", {
+    ".github/workflows/build.yml": `name: Build
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "highlight the through-put, weigh the light"
+      - run: pnpm run build
+`,
+  });
+  assert.equal(result.status, "pass");
+  assert.match(result.details[0], /0 job\(s\) invoking gh/);
+});
+
+test("gh-repo-context skips a tree with no workflows rather than passing it", () => {
+  const result = runOne("gh-repo-context", { "README.md": "# nothing here\n" });
+  assert.equal(result.status, "skip");
+});
