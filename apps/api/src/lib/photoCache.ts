@@ -40,16 +40,10 @@
  * each Cloudflare data center, not one cache shared across the network. A
  * copy served from a different colo (a browser on another continent, say) is
  * untouched by this call and only expires on its own via the TTL above. A
- * true every-colo purge needs Cloudflare's zone-level Purge Cache API. Both
- * things that needs now exist (2026-09-07): `keepsake.ing` is an attached
- * zone (#46), and `CF_CACHE_PURGE_TOKEN` — scoped to that zone's Cache Purge
- * permission and nothing else — is set on the preview and production Workers.
- * That one API call clearing a `caches.default` entry at two different colos
- * at once was verified live against this zone, so the mechanism is known to
- * work rather than assumed to; see
- * `docs/runbooks/deploy.md#the-cache-purge-token-94`, which also records the
- * two ways this is easy to false-pass. Calling it from here is the still-open
- * half of #94 and is not blocked on anything.
+ * true every-colo purge needs Cloudflare's zone-level Purge Cache API, which
+ * needs a zone attached to a domain and an API token scoped to it — neither
+ * exists yet (`keepsake.ing` isn't attached to a zone; see #46), so that half
+ * is `blocked-on-kiarash` on #94, not implemented here.
  *
  * Not called from `orphanSweep.ts`'s `sweepOrphanPhotos`: those rows never
  * had a `listing_id`, so `isPublic` was false for every request that ever
