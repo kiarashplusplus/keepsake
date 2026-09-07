@@ -1,6 +1,7 @@
 # What's blocked on Kiarash
 
-Everything here is now done except the production cutover and one Turnstile hostname (#73). Kept as the record of what was set up and how it was verified. Everything else in M0–M4 is built, tested and
+Everything here is now done except the production cutover, one Turnstile hostname (#73), and the
+two paper things in §7 that the sole-proprietor decision left open (#108). Kept as the record of what was set up and how it was verified. Everything else in M0–M4 is built, tested and
 running on preview. Do them in this order — each one unblocks the next round of verification.
 
 Account: **Leapkg@gmail.com's Account**, id `dc6a87ed4a4269ed74c8f508b275b703`
@@ -89,6 +90,43 @@ When you say go, I will:
    must show `Disallow: /` with `https://preview.keepsake.ing/sitemap.xml` returning 404. Preview
    was fully indexable until 2026-09-06 (launch audit finding 2); this is the one-command check
    that it still is not.
+
+## 7. Two paper things, off this computer entirely (#108)
+
+Neither is a Cloudflare click and neither blocks a deploy. Both fall out of the 2026-09-07 decision
+to keep Keepsake a sole proprietorship rather than form an LLC — the reasoning, the numbers and the
+triggers that would reverse it are in
+[`docs/legal-entity-and-insurance.md`](../legal-entity-and-insurance.md). The short version is that
+the decision is only conservative if these two actually happen; without them it is just "no entity."
+
+**a. General-liability cover.** This is the protection the LLC would not have given you anyway — an
+LLC does not shield you from a claim that *you* screened a listing negligently, and you are the only
+person who screens anything. What a policy buys that no clause on `terms.html` can is a **duty to
+defend**: the insurer pays for the lawyer even on a suit it thinks is groundless, which is the
+realistic bad day here. Right now there is **no cover at all** — your renter's policy excludes
+"business pursuits," so it would not answer a Keepsake claim.
+
+Use a broker, not a quote form, and ask in this order: (1) will anyone write a one-person,
+zero-revenue marketplace whose product is arranging in-person meetings between strangers? (2) which
+policy answers "a user was hurt meeting another user we introduced" — the CGL, or tech E&O /
+media liability, since a claim that the *screening* was inadequate can land in the CGL's
+professional-services exclusion? (3) read three exclusions before looking at price: professional
+services, assault and battery, and anything excluding claims arising out of meetings arranged
+between users — that last one would exclude the whole product. Then price: **$300–$800/year** is the
+band a quote for this shape should be sanity-checked against.
+
+**b. The assumed-name certificate (DBA).** "Keepsake" is not your surname, so Business & Commerce
+Code ch. 71 wants a certificate filed with the **Harris County Clerk** — form 02-07 (1–3 owners),
+signed before a notary or a deputy clerk, good for ten years, tens of dollars. The reason to bother
+is §71.201: without it you can still *defend* a suit and your contracts stay valid, but you **may
+not maintain** an action in a Texas court arising out of a contract made in the assumed name — and
+`terms.html` is exactly such a contract. Know before you file that the certificate is a public
+county record carrying an address; ask the clerk whether a mailing address other than the residence
+is acceptable rather than assuming either way.
+
+The address of record for both, and for anything else that asks: **Kiarash Adl, 2004 San Sebastian
+Ct, Apt 2318, Houston, Texas 77058.** It stays off the website on purpose — see that document's
+"Where the address goes" section for why.
 
 ---
 
