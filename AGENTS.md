@@ -221,6 +221,18 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
     linking the folder alone still fails. All 84 specs pass on the older build (Chromium
     141.0.7390.37); nothing about the suite needs the newer one. Re-confirmed 2026-09-07 with a
     `-1194` build linked under the expected `-1243` name.
+  - **UX review is its own command, and deliberately not part of `pnpm e2e`.**
+    `pnpm --filter @keepsake/web e2e:ux` runs `e2e/ux.spec.ts` in two extra projects and rewrites
+    `docs/qa/baseline/` — one viewport frame of every screen at 390px and at 1280px, plus a dark
+    set. It exports nothing for you (`pnpm --filter @keepsake/web export` first, same as the
+    suite) and it wants the port to itself: `UX_SHOTS` turns `reuseExistingServer` off, so it
+    always starts its own `wrangler dev` on a freshly wiped database and the feed holds exactly
+    the fixed catalogue in `e2e/support/demoCatalog.ts` rather than whatever the functional specs
+    posted. An ordinary suite run cannot touch those frames — the two projects only exist when
+    `UX_SHOTS` is set, and `mobile`/`desktop` ignore that spec. Refresh the baseline in the same
+    pull request as any change that moves a screen; `docs/qa/baseline/README.md` says what the
+    directory is (evidence for a human to look at) and is not (a pixel gate — nothing compares
+    these images, and CI does not run the capture).
   - **`e2e/versionSkew.spec.ts` fails if `dist/` is older than `HEAD`, and says nothing about
     why.** It reads `dist/version.json` and compares against the commit hash baked into the
     bundle, so exporting at one commit and then moving `HEAD` (a merge, a rebase, a new commit)
@@ -275,6 +287,9 @@ pnpm test                          # preflight, packages, api, web
 pnpm --filter @keepsake/web e2e    # 84 specs, mobile and desktop
 node tools/preflight/preflight.mjs
 ```
+
+If the change moves a screen, also refresh the UX baseline (`pnpm --filter @keepsake/web e2e:ux`)
+and commit the frames it rewrites — see the bullet above and `docs/qa/baseline/README.md`.
 
 The accessibility specs carry **no per-rule or per-selector exclusions**. One thing still narrows
 what they can catch, so "green" is not quite "everything was scanned": `a11y.spec.ts` fails only

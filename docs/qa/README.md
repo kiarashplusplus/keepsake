@@ -15,6 +15,12 @@ Two rules, both learned the hard way elsewhere:
 Keep this directory small — a screenshot here is evidence for one change, not an archive.
 Delete one once the change it argued for has shipped and been looked at.
 
+**`baseline/` is the other kind of screenshot** and does not follow that rule: it is the
+standing set — one frame of every screen, in both viewports, refreshed by
+`pnpm --filter @keepsake/web e2e:ux` whenever a screen changes rather than deleted when a
+change ships. See [baseline/README.md](baseline/README.md). Loose files here are still the
+right thing for arguing one point in one pull request.
+
 **Emptied 2026-09-07**, applying that rule for the first time. The seven files that were here
 argued for #108, #133, #134, #135 and #136 — all five closed, all five shipped to `main`. They are
 in git history, not gone:
