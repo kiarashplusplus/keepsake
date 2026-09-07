@@ -27,9 +27,13 @@ paperwork is owed somewhere.
   itself.
 - Issue #30 (`kiarashplusplus/keepsake`) — the tracking placeholder this checklist exists to back
   up.
-- Issue #34 — the lawyer-questions tracking issue. Q1 (Article 27 representative) and Q6 (Ofcom
-  record-keeping exemption) are OSA questions explicitly noted there as moot under the geo-block
-  but live again the moment it's lifted.
+- Issue #34 — the lawyer-questions tracking issue. Q1 (Article 27 representative), Q4 (Age
+  Appropriate Design Code) and Q6 (Ofcom record-keeping exemption) are the three UK questions
+  explicitly noted there as moot under the geo-block but live again the moment it's lifted. Q1 is
+  section 5 below, Q4 is section 6, Q6 is section 4. **#34 is closed** — see the 2026-09-07 note in
+  `docs/legal-considerations.md` for why that closure does not mean these were answered; the
+  research behind all three is in
+  [`docs/legal-open-questions-research.md`](../legal-open-questions-research.md).
 
 ## 1. Illegal-content risk assessment (required regardless of size)
 
@@ -82,7 +86,12 @@ To do:
   using it (an 18+ self-declaration gate is *a* signal Ofcom's guidance treats as relevant, but
   per `docs/legal-considerations.md`'s Minimum age section, "not seeming appealing to children" is
   explicitly **not** sufficient on its own, and there is currently no age gate at all in the
-  product — see issue #25).
+  product — see issue #25). **Correction, 2026-09-07:** the "no age gate at all" clause was true
+  when this was written and is not now — issue #25 shipped a self-declared 18+ gate on both
+  create-listing and create-request, and #64 replaced the checkbox with a date-of-birth prompt
+  (`DateOfBirthSchema`/`MINIMUM_AGE`, recorded as `age_attested_at`). The rest of the bullet stands:
+  a self-declaration is a relevant signal, not a demonstration. Section 6 below covers documenting
+  what it is and isn't worth.
 - [ ] If that can't be shown, treat Keepsake as likely accessed by children and complete the
   associated Children's Risk Assessment and implement Part 3 protection measures before re-opening
   to the UK.
@@ -135,9 +144,50 @@ To do:
 - [ ] If a representative is required, budget for it as an ongoing cost, not a one-time fee — it's
   a paid, continuing service.
 
-## 6. Before flipping the code back
+## 6. Age Appropriate Design Code — write the "not likely to be accessed by children" rationale down
 
-Once (and only once) sections 1–5 are actually done, in good faith, and filed somewhere durable:
+This is the other UK question the geo-block moots and re-enabling revives: it's Q4 on the
+lawyer-questions list (issue #34). Like section 5 it's data-protection law, not the Online Safety
+Act, but it's gated by the same "is the UK market being served" decision. It is **not** the same
+duty as section 2 — section 2 is the OSA children's *access assessment* Ofcom supervises; this is
+the ICO's Children's Code, which attaches to information society services "likely to be accessed by
+children" in the UK. They overlap in evidence and can share one document, but they are two regimes
+and both have to be satisfied.
+
+**Sourced from search summaries of ICO guidance, not the ICO pages read end to end** — the same
+egress limitation recorded in `docs/legal-open-questions-research.md`'s method note and in "What I
+verified vs. could not" below applies here. The write-up is in that document's Q4 section.
+
+The important finding, because it changes what the work *is*: the configuration Keepsake runs today
+— a self-declared 18+ gate with nothing documented behind it — is, per that research, the one ICO
+guidance most clearly rejects, but **the gap is documentary, not technical.** ICO expects a provider
+that concludes children are not likely to access the service to record that conclusion with
+evidence and keep it under review; a provider that does not assess at all is treated as likely
+accessed by children, which is the worst of the three outcomes. So the fix here is a written
+rationale, **not** procuring an age-verification vendor. (Note that self-declaration is not
+"effective" age assurance in the sense ICO uses when it says an effective age-gate takes a service
+outside the code — the rationale route is the one actually available at this scale.)
+
+To do:
+
+- [ ] Write a dated, evidenced rationale for concluding under-18s are not likely to access
+  Keepsake. ICO's own listed examples of acceptable evidence are market research, current evidence
+  on user behaviour, the user base of similar or existing services and service types, and testing
+  of access-restriction measures — reason from Keepsake's actual facts (subject matter, 18+ terms,
+  the in-person adult handoff, no child-oriented design, and whatever the user base actually looks
+  like at the time), not from a template.
+- [ ] Record the age gate as it actually exists at that point as one input, honestly labelled: it
+  is a self-declared date-of-birth prompt (`DateOfBirthSchema`/`MINIMUM_AGE` in
+  `@keepsake/contracts/common`, recorded as `age_attested_at`), which is evidence, not verification.
+- [ ] File it alongside the sections 1–2 assessments and put a review date on it — ICO expects the
+  conclusion to be kept under review, not decided once.
+- [ ] **Do not treat this as answered by this checklist.** Q4 is one of the eight questions #34
+  raised for a lawyer and it was never answered by one; the research narrows what to ask, and the
+  hedge above is part of the answer, not decoration.
+
+## 7. Before flipping the code back
+
+Once (and only once) sections 1–6 are actually done, in good faith, and filed somewhere durable:
 
 1. Remove the relevant code(s) from `UK_BLOCKED_COUNTRIES` in
    `apps/api/src/middleware/ukBlock.ts`.
