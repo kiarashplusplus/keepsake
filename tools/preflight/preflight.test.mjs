@@ -27,6 +27,8 @@ import {
   scheduledCronDispatch,
   parseCronRegistry,
   cronIntervalMs,
+  tablesAfterMigrations,
+  documentedBackupTables,
   checkLfsPointers,
   lfsPointerDetail,
   resolveNumericExpr,
@@ -674,6 +676,122 @@ test("callArguments splits a call written across lines", () => {
   const text = 'parseIntVar(\n  "SHELF_MIN_ITEMS",\n  env.SHELF_MIN_ITEMS as string | undefined,\n  DEFAULT_SHELF,\n)';
   const args = callArguments(text, text.indexOf("("));
   assert.deepEqual(args, ['"SHELF_MIN_ITEMS"', "env.SHELF_MIN_ITEMS as string | undefined", "DEFAULT_SHELF", ""]);
+});
+
+// ── backup-tables ──────────────────────────────────────────────────────
+//
+// #164: the documented `--table` list omitted `listing_aspects`, so no export
+// made by following restore.md contained any listing's aspects — and
+// `listings.aspects_backfilled_at`, which *is* in the export, made the loss
+// permanent. The list going stale once is a typo; twice is a missing guard.
+
+const BACKUP_MIGRATIONS = {
+  "apps/api/migrations/0001_init.sql": "CREATE TABLE owners (id TEXT PRIMARY KEY);\nCREATE TABLE listings (id TEXT PRIMARY KEY);\n",
+  "apps/api/migrations/0002_geo.sql": "CREATE TABLE postal_codes (code TEXT PRIMARY KEY);\n",
+  "apps/api/migrations/0003_fts.sql": "CREATE VIRTUAL TABLE listings_fts USING fts5(title, content='listings');\n",
+};
+
+function backupRunbook(tables) {
+  return `# Restore
+
+\`\`\`sh
+pnpm exec wrangler d1 export keepsake-db-production --no-schema \\
+${tables.map((t) => `  --table ${t}`).join(" \\\n")}
+\`\`\`
+
+\`postal_codes\` is excluded: it is reproducible from the bundled seed.
+`;
+}
+
+test("backup-tables: passes when the documented list covers every migration-created table", () => {
+  const result = runOne("backup-tables", {
+    ...BACKUP_MIGRATIONS,
+    "docs/runbooks/restore.md": backupRunbook(["owners", "listings"]),
+  });
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  assert.match(result.details[0], /excluding postal_codes \(documented\)/);
+  assert.match(result.details[0], /listings_fts is virtual/);
+});
+
+test("backup-tables: fails when a later migration adds a table the runbook never learned about", () => {
+  // This is #164 itself, and the break-the-guard experiment the issue asks
+  // for: a new migration, a new table, an unchanged runbook.
+  const result = runOne("backup-tables", {
+    ...BACKUP_MIGRATIONS,
+    "apps/api/migrations/0006_aspects.sql": "CREATE TABLE listing_aspects (listing_id TEXT, aspect TEXT);\n",
+    "docs/runbooks/restore.md": backupRunbook(["owners", "listings"]),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /creates "listing_aspects" but docs\/runbooks\/restore\.md's export command does not `--table` it/);
+});
+
+test("backup-tables: fails when a table is excluded with no written reason", () => {
+  const result = runOne("backup-tables", {
+    ...BACKUP_MIGRATIONS,
+    "docs/runbooks/restore.md": backupRunbook(["owners", "listings"]).replace(
+      /`postal_codes` is excluded.*\n/,
+      "",
+    ),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /excluded from the documented export but .* never mentions it/);
+});
+
+test("backup-tables: fails when the runbook names a table no migration creates", () => {
+  const result = runOne("backup-tables", {
+    ...BACKUP_MIGRATIONS,
+    "docs/runbooks/restore.md": backupRunbook(["owners", "listings", "wishlists"]),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /--table wishlists names a table no migration/);
+});
+
+test("backup-tables: fails when the runbook tries to export the FTS5 virtual table", () => {
+  const result = runOne("backup-tables", {
+    ...BACKUP_MIGRATIONS,
+    "docs/runbooks/restore.md": backupRunbook(["owners", "listings", "listings_fts"]),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /listings_fts is an FTS5 virtual table/);
+});
+
+test("backup-tables: fails rather than passing when the runbook has no --table list at all", () => {
+  const result = runOne("backup-tables", {
+    ...BACKUP_MIGRATIONS,
+    "docs/runbooks/restore.md": "# Restore\n\nJust use Time Travel.\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /contains no `--table` arguments/);
+});
+
+test("backup-tables: this repository's own runbook covers listing_aspects", () => {
+  const result = runChecks(["backup-tables"], REPO_ROOT)[0];
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  const runbook = createContext(REPO_ROOT).readText("docs/runbooks/restore.md");
+  assert.match(runbook, /--table listing_aspects/, "#164's actual fix");
+});
+
+test("tablesAfterMigrations replays rename/create/drop rather than counting CREATEs", () => {
+  // 0005_compliance.sql's shuffle: rename the old table aside, create the new
+  // one, copy, drop the old. Naively counting CREATE TABLE sees two.
+  const { real, virtual } = tablesAfterMigrations([
+    "CREATE TABLE requests (id TEXT);",
+    `ALTER TABLE requests RENAME TO requests_old;
+     CREATE TABLE requests (id TEXT, note TEXT);
+     INSERT INTO requests SELECT id, NULL FROM requests_old;
+     DROP TABLE requests_old;`,
+    "CREATE VIRTUAL TABLE listings_fts USING fts5(title);",
+  ]);
+  assert.deepEqual([...real].sort(), ["requests"]);
+  assert.deepEqual([...virtual], ["listings_fts"]);
+});
+
+test("documentedBackupTables reads the --table arguments out of the runbook", () => {
+  assert.deepEqual(documentedBackupTables("  --table owners --table listings \\\n  --table photos\n"), [
+    "owners",
+    "listings",
+    "photos",
+  ]);
 });
 
 // ── cron-triggers ──────────────────────────────────────────────────────

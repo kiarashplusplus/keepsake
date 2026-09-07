@@ -1918,6 +1918,155 @@ function checkShellSyntax(ctx) {
   return { status: "pass", details: summary };
 }
 
+// ── backup-tables ──────────────────────────────────────────────────────────
+//
+// Issue #164. `wrangler d1 export` refuses this database outright — migration
+// `0003_fts.sql` creates a virtual FTS5 table and wrangler will not export a
+// database that has one — so `docs/runbooks/restore.md` names the tables one
+// at a time with `--table`. That hard-coded list went stale the moment
+// `0006_aspects.sql` landed: `listing_aspects` was excluded with no reason at
+// all, so no export made by following the runbook contained any listing's
+// aspects.
+//
+// What turns a bad restore into a permanent one is that `listings` *is* in
+// the export, and it carries `aspects_backfilled_at`. The backfill only
+// considers rows where that column is null, so every listing restored from
+// such an export says "already done" and its aspects can never be re-derived.
+//
+// The runbook already knows this hazard — it glob-loops the *migrations*
+// rather than naming them, and says why — but the `--table` list sitting
+// beside that loop was the hard-coded list it warns about. So: derive the
+// real table set from the migrations, derive the documented set from the
+// runbook, and fail on any difference that is not a written exclusion. The
+// next migration that adds a table now fails the build instead of the backup.
+//
+// Exclusions are named here *and* have to be mentioned in the runbook: an
+// exclusion nobody wrote down is exactly what #164 was.
+
+const RESTORE_RUNBOOK_PATH = "docs/runbooks/restore.md";
+
+const BACKUP_EXCLUDED_TABLES = new Map([
+  [
+    "postal_codes",
+    "~3.4 MB of the database's 3.6 MB, reproducible from apps/api/seeds/postal_codes.sql in one command",
+  ],
+  ["_cf_KV", "Cloudflare-internal"],
+  ["d1_migrations", "wrangler's own ledger; migrations own the schema, the export owns the rows"],
+]);
+
+/**
+ * The tables a D1 database ends up with after applying `migrations` in order,
+ * split into real tables and FTS5 virtual ones. Statements are replayed
+ * rather than pattern-counted so `0005_compliance.sql`'s
+ * rename-create-copy-drop shuffle of `requests` resolves to one table, not
+ * three.
+ */
+export function tablesAfterMigrations(sqlByFileInOrder) {
+  const real = new Set();
+  const virtual = new Set();
+  for (const sql of sqlByFileInOrder) {
+    const stripped = sql.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const statement of stripped.split(";")) {
+      const create = /\bCREATE\s+(VIRTUAL\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"'[]?([A-Za-z_][\w]*)/i.exec(statement);
+      if (create) {
+        if (create[1]) virtual.add(create[2]);
+        else real.add(create[2]);
+        continue;
+      }
+      const rename = /\bALTER\s+TABLE\s+[`"'[]?([A-Za-z_][\w]*)[`"'\]]?\s+RENAME\s+TO\s+[`"'[]?([A-Za-z_][\w]*)/i.exec(statement);
+      if (rename) {
+        for (const set of [real, virtual]) {
+          if (set.delete(rename[1])) set.add(rename[2]);
+        }
+        continue;
+      }
+      const drop = /\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?[`"'[]?([A-Za-z_][\w]*)/i.exec(statement);
+      if (drop) {
+        real.delete(drop[1]);
+        virtual.delete(drop[1]);
+      }
+    }
+  }
+  return { real, virtual };
+}
+
+/** The `--table <name>` arguments in the runbook's export command. */
+export function documentedBackupTables(markdown) {
+  return [...markdown.matchAll(/--table\s+([A-Za-z_][\w]*)/g)].map((m) => m[1]);
+}
+
+function checkBackupTables(ctx) {
+  if (!ctx.exists(MIGRATIONS_DIR)) return { status: "skip", details: [`${MIGRATIONS_DIR} not present`] };
+  const runbook = ctx.readText(RESTORE_RUNBOOK_PATH);
+  if (runbook === null) return { status: "skip", details: [`${RESTORE_RUNBOOK_PATH} not present`] };
+
+  const files = migrationFiles(ctx);
+  if (files.length === 0) return { status: "skip", details: [`${MIGRATIONS_DIR} has no *.sql files yet`] };
+
+  const ordered = migrationApplyOrder(files.map((f) => path.posix.basename(f)));
+  const order = ordered === null ? files.map((f) => path.posix.basename(f)) : ordered;
+  const { real, virtual } = tablesAfterMigrations(
+    order.map((base) => ctx.readText(`${MIGRATIONS_DIR}/${base}`) ?? ""),
+  );
+
+  const documented = documentedBackupTables(runbook);
+  if (documented.length === 0) {
+    return {
+      status: "fail",
+      details: [
+        `${RESTORE_RUNBOOK_PATH} contains no \`--table\` arguments, so this check has nothing to compare the ${real.size} migration-created table(s) against. \`wrangler d1 export\` refuses this database (fts5), so the documented backup must name its tables — see #164.`,
+      ],
+    };
+  }
+
+  const documentedSet = new Set(documented);
+  const details = [];
+
+  for (const [i, name] of documented.entries()) {
+    if (documented.indexOf(name) !== i) {
+      details.push(`${RESTORE_RUNBOOK_PATH}: --table ${name} is listed more than once`);
+    }
+  }
+
+  for (const table of [...real].sort()) {
+    if (documentedSet.has(table)) continue;
+    const reason = BACKUP_EXCLUDED_TABLES.get(table);
+    if (reason === undefined) {
+      details.push(
+        `${MIGRATIONS_DIR} creates "${table}" but ${RESTORE_RUNBOOK_PATH}'s export command does not \`--table\` it — a backup taken exactly as documented would silently come back without those rows (#164). Add it, or add it to BACKUP_EXCLUDED_TABLES here with the reason.`,
+      );
+    } else if (!runbook.includes(table)) {
+      details.push(
+        `"${table}" is excluded from the documented export but ${RESTORE_RUNBOOK_PATH} never mentions it — an exclusion nobody wrote down is exactly what #164 was. Reason on file here: ${reason}`,
+      );
+    }
+  }
+
+  for (const table of documented) {
+    if (real.has(table)) continue;
+    if (virtual.has(table)) {
+      details.push(
+        `${RESTORE_RUNBOOK_PATH}: --table ${table} is an FTS5 virtual table — \`wrangler d1 export\` refuses those, and it is rebuilt from listings by its triggers`,
+      );
+    } else {
+      details.push(
+        `${RESTORE_RUNBOOK_PATH}: --table ${table} names a table no migration in ${MIGRATIONS_DIR} creates — the documented export would fail`,
+      );
+    }
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+  const excluded = [...real].filter((t) => !documentedSet.has(t)).sort();
+  return {
+    status: "pass",
+    details: [
+      `${documented.length} \`--table\` name(s) in ${RESTORE_RUNBOOK_PATH} cover every table ${files.length} migration(s) create` +
+        (excluded.length > 0 ? `, excluding ${excluded.join(", ")} (documented)` : "") +
+        (virtual.size > 0 ? `; ${[...virtual].sort().join(", ")} is virtual and cannot be exported` : ""),
+    ],
+  };
+}
+
 // ── gh-repo-context ────────────────────────────────────────────────────────
 
 const WORKFLOWS_DIR = ".github/workflows";
@@ -2019,6 +2168,7 @@ export const CHECKS = {
   fonts: { description: "@font-face url(/fonts/*) vs apps/web/public/fonts/*.ttf", run: checkFonts },
   migrations: { description: "apps/api/migrations/*.sql naming, apply order and terminators", run: checkMigrations },
   "migration-drift": { description: "no landed migration is renamed/edited/deleted (git)", run: checkMigrationDrift },
+  "backup-tables": { description: "restore.md's `--table` list covers every table the migrations create", run: checkBackupTables },
   "env-parity": { description: ".env.example vs wrangler.toml [vars] / [env.*.vars]", run: checkEnvParity },
   "var-usage": { description: "wrangler.toml [vars] vs what apps/api/src reads and falls back to", run: checkVarUsage },
   "cron-triggers": { description: "wrangler.toml [triggers] ↔ scheduled() ↔ cron/registry.ts agree (name, schedule, staleAfterMs)", run: checkCronTriggers },
