@@ -325,8 +325,13 @@ describe("admin routes", () => {
       const heldId = await insertApprovedListing({ ownerId });
       await setListingStatus(heldId, "needs_review");
 
-      await env.DB.prepare("INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at) VALUES (?, ?, ?, ?, ?, 'open', ?)")
-        .bind(ulid(), heldId, "I would love this, thank you.", "someone@keepsake.ing", "digest", Date.now())
+      // `confirmed_at` alongside `status = 'open'` since #188: an `open` row
+      // with a null `confirmed_at` is not a state the Worker can produce, and
+      // every owner-facing read filters it out.
+      await env.DB.prepare(
+        "INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at, confirmed_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
+      )
+        .bind(ulid(), heldId, "I would love this, thank you.", "someone@keepsake.ing", "digest", Date.now(), Date.now())
         .run();
       await env.DB.prepare("INSERT INTO email_events (id, kind, to_hash, provider, ok, error, created_at) VALUES (?, 'new_request', 'hash', 'cf', 0, 'send_failed', ?)")
         .bind(ulid(), Date.now())

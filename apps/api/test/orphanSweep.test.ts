@@ -258,10 +258,13 @@ describe("orphanSweep: hashed IPs expire at 48 hours (#169)", () => {
     const listingId = await insertApprovedListing({ ownerId });
     const id = ulid();
     await env.DB.prepare(
-      `INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at)
-       VALUES (?, ?, 'A note', ?, ?, 'open', ?)`,
+      // Confirmed, so this fixture is the "real ask, old row" case these
+      // digest-expiry assertions are about — not #188's held-and-unconfirmed
+      // case, which the sweep deletes outright and which has its own test.
+      `INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at, confirmed_at)
+       VALUES (?, ?, 'A note', ?, ?, 'open', ?, ?)`,
     )
-      .bind(id, listingId, `requester-${id}@keepsake.ing`, `digest-${id}`, createdAt)
+      .bind(id, listingId, `requester-${id}@keepsake.ing`, `digest-${id}`, createdAt, createdAt)
       .run();
     return id;
   }

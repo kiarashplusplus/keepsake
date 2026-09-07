@@ -43,3 +43,29 @@ export async function sha256Hex(input: string): Promise<string> {
 export async function dailyIpDigest(clientIP: string): Promise<string> {
   return sha256Hex(`${todayISO()}:${clientIP}`);
 }
+
+/**
+ * The one way this Worker is allowed to turn a *recipient address* into a
+ * counter key: SHA-256 over `<UTC day>:<lowercased address>`, the same
+ * construction `dailyIpDigest` uses for addresses of the other kind, and for
+ * the same reason — a key that rotates daily cannot be joined across days
+ * into a history of one mailbox.
+ *
+ * Issue #188. The confirm-then-forward step means the only message a stranger
+ * can aim at an address they don't own is the "was this you?" confirmation —
+ * but one message per listing, across a public feed, is still a flood aimed at
+ * a real person's inbox, and per-IP ceilings do not bound it (an attacker with
+ * a /64 has a fresh ceiling per address, as `moderation/budget.ts`'s header
+ * says of every per-IP number here). Bounding it needs a counter keyed by the
+ * one identifier that *is* stable across the attack: the victim's address.
+ *
+ * Lowercased before hashing so `Victim@example.org` and `victim@example.org`
+ * share a counter — otherwise the ceiling is bypassed by changing the case of
+ * a letter, which is not a different mailbox anywhere it matters. No other
+ * normalisation is attempted: dots-and-plus-tags differ per provider, and
+ * guessing wrong would silently merge counters for mailboxes that are
+ * genuinely distinct.
+ */
+export async function dailyEmailDigest(address: string): Promise<string> {
+  return sha256Hex(`${todayISO()}:${address.trim().toLowerCase()}`);
+}

@@ -23,13 +23,26 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CreateRequestResult } from "@keepsake/contracts/request";
-import { freshClientIp, insertApprovedListing, insertOwner, installFakeEmail, readOk, removeFakeEmail } from "./helpers.js";
+import {
+  freshClientIp,
+  freshRequesterEmail,
+  insertApprovedListing,
+  insertOwner,
+  installFakeEmail,
+  readOk,
+  removeFakeEmail,
+} from "./helpers.js";
 
-const VALID_REQUEST_BODY = {
-  note: "This would mean so much to my family, thank you for considering us.",
-  email: "requester@keepsake.ing",
-  date_of_birth: "1990-01-01",
-};
+/** Fresh address per call — since #188 the requester's address is itself a
+ * rate-limit key, so a shared constant would have these probes spending one
+ * another's allowance and changing what is being measured. */
+function validRequestBody(email = freshRequesterEmail()): Record<string, unknown> {
+  return {
+    note: "This would mean so much to my family, thank you for considering us.",
+    email,
+    date_of_birth: "1990-01-01",
+  };
+}
 
 async function requestListing(listingId: string, body: Record<string, unknown>): Promise<Response> {
   return SELF.fetch(`http://x/api/listings/${listingId}/requests`, {
@@ -67,8 +80,8 @@ describe("POST /api/listings/:id/requests is not an enumeration oracle (issue #1
     const otherOwnerId = await insertOwner();
     const controlListingId = await insertApprovedListing({ ownerId: otherOwnerId });
 
-    const probe = await observable(await requestListing(probedListingId, { ...VALID_REQUEST_BODY, email: "kiarash@keepsake.ing" }));
-    const control = await observable(await requestListing(controlListingId, { ...VALID_REQUEST_BODY, email: "kiarash@keepsake.ing" }));
+    const probe = await observable(await requestListing(probedListingId, { ...validRequestBody(), email: "kiarash@keepsake.ing" }));
+    const control = await observable(await requestListing(controlListingId, { ...validRequestBody(), email: "kiarash@keepsake.ing" }));
 
     expect(probe).toEqual(control);
     expect(probe.status).toBe(201);
@@ -81,8 +94,8 @@ describe("POST /api/listings/:id/requests is not an enumeration oracle (issue #1
     const ownerId = await insertOwner();
     const listingId = await insertApprovedListing({ ownerId });
 
-    const first = await observable(await requestListing(listingId, VALID_REQUEST_BODY));
-    const repeat = await observable(await requestListing(listingId, VALID_REQUEST_BODY));
+    const first = await observable(await requestListing(listingId, validRequestBody()));
+    const repeat = await observable(await requestListing(listingId, validRequestBody()));
 
     expect(repeat).toEqual(first);
     expect(repeat.status).toBe(201);
@@ -98,7 +111,7 @@ describe("POST /api/listings/:id/requests is not an enumeration oracle (issue #1
     const listingId = await insertApprovedListing({ ownerId: giverOwnerId });
 
     // Self-request probe.
-    const selfRes = await requestListing(listingId, { ...VALID_REQUEST_BODY, email: "giver189@keepsake.ing" });
+    const selfRes = await requestListing(listingId, { ...validRequestBody(), email: "giver189@keepsake.ing" });
     expect(selfRes.status).toBe(201);
     expect(sent).toHaveLength(0);
 
@@ -108,16 +121,29 @@ describe("POST /api/listings/:id/requests is not an enumeration oracle (issue #1
     const selfRow = await env.DB.prepare("SELECT id FROM requests WHERE id = ?").bind(selfBody.id).first();
     expect(selfRow).toBeNull();
 
-    // One genuine ask, then the duplicate probe.
-    const realRes = await requestListing(listingId, VALID_REQUEST_BODY);
+    // One genuine ask, carried all the way through the #188 confirmation so
+    // the duplicate probe below is a probe against a *real* request — which
+    // is the fact #189 is about hiding.
+    const asker = freshRequesterEmail();
+    const realRes = await requestListing(listingId, validRequestBody(asker));
     expect(realRes.status).toBe(201);
+    const confirmToken = /\/confirm\/([A-Za-z0-9_-]+)/.exec(sent.at(-1)?.text ?? "")?.[1];
+    expect(confirmToken).toBeTruthy();
+    const confirmed = await SELF.fetch("http://x/api/requests/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "CF-Connecting-IP": freshClientIp() },
+      body: JSON.stringify({ token: confirmToken }),
+    });
+    expect(confirmed.status).toBe(200);
     const mailsAfterRealAsk = sent.length;
     expect(mailsAfterRealAsk).toBeGreaterThan(0);
 
-    const dupRes = await requestListing(listingId, VALID_REQUEST_BODY);
+    const dupRes = await requestListing(listingId, validRequestBody(asker));
     expect(dupRes.status).toBe(201);
     // Deliberately no re-send: replaying an ask must not become an unbounded
-    // mailer aimed at whatever address a stranger names.
+    // mailer aimed at whatever address a stranger names. (#188's reissue path
+    // is the bounded exception, and it only applies to a request still
+    // waiting on its own confirmation — not to this one, which is confirmed.)
     expect(sent).toHaveLength(mailsAfterRealAsk);
 
     const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM requests WHERE listing_id = ?")
@@ -143,7 +169,7 @@ describe("POST /api/listings/:id/requests is not an enumeration oracle (issue #1
       .run();
     const listingId = await insertApprovedListing({ ownerId });
 
-    const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, email: "unverified189@keepsake.ing" });
+    const res = await requestListing(listingId, { ...validRequestBody(), email: "unverified189@keepsake.ing" });
     expect(res.status).toBe(201);
 
     const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM requests WHERE listing_id = ?")

@@ -37,6 +37,7 @@ import { recover } from "../src/email/templates/recover.js";
 import { RECOVER_TTL_MS } from "../src/routes/recover.js";
 import { requestReceived } from "../src/email/templates/requestReceived.js";
 import { verifyEmail } from "../src/email/templates/verifyEmail.js";
+import { confirmRequest } from "../src/email/templates/confirmRequest.js";
 import { adminTest } from "../src/email/templates/adminTest.js";
 import type { EmailTemplate } from "../src/email/templates/shared.js";
 
@@ -47,6 +48,7 @@ const DASHBOARD_LINK = "https://fixture.test/sentinel/dashboard-link";
 const RECOVER_LINK = "https://fixture.test/sentinel/recover-link";
 const WITHDRAW_LINK = "https://fixture.test/sentinel/withdraw-link";
 const VERIFY_LINK = "https://fixture.test/sentinel/verify-link";
+const CONFIRM_LINK = "https://fixture.test/sentinel/confirm-link";
 const GIVER_EMAIL = "sentinel-giver@fixture.test";
 
 interface Case {
@@ -89,6 +91,14 @@ const CASES: Case[] = [
     name: "recover",
     template: recover({ link: RECOVER_LINK, ttlMs: RECOVER_TTL_MS }),
     allowedUrls: [RECOVER_LINK],
+  },
+  {
+    // Issue #188. The one template that can be aimed at an address whose
+    // owner never asked for anything, which makes "no link but the one this
+    // message is about" a safety property here and not just tidiness.
+    name: "confirmRequest",
+    template: confirmRequest({ listingTitle: "Grandma's teapot", confirmLink: CONFIRM_LINK }),
+    allowedUrls: [CONFIRM_LINK],
   },
   {
     name: "requestReceived",

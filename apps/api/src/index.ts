@@ -22,6 +22,7 @@ import { sitemapRoutes } from "./routes/sitemap.js";
 import { recoverRoutes } from "./routes/recover.js";
 import { adminRoutes } from "./routes/admin.js";
 import { requestWithdrawRoutes } from "./routes/requestWithdraw.js";
+import { requestConfirmRoutes } from "./routes/requestConfirm.js";
 
 type Variables = {
   requestId: string;
@@ -314,6 +315,7 @@ app.route("/api/me", meRoutes);
 app.route("/api/feed", feedRoutes);
 app.route("/api/recover", recoverRoutes);
 app.route("/api/requests", requestWithdrawRoutes);
+app.route("/api/requests", requestConfirmRoutes);
 app.route("/api/admin", adminRoutes);
 app.route("/i", imageRoutes);
 // Mounted at the Worker root, per the plan's route table — not under /api/*,

@@ -41,6 +41,25 @@ export function freshClientIp(): string {
   return `198.51.100.${ipCounter}`;
 }
 
+let requesterEmailCounter = 0;
+
+/**
+ * A requester address no other test has used, for the same reason
+ * `freshClientIp` exists — except that the limit this one keeps out of the
+ * way is keyed by the *recipient*.
+ *
+ * Issue #188 added a per-address daily ceiling on the "was this you?"
+ * confirmation (three, `REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET`). A suite where
+ * every test asks as `requester@keepsake.ing` shares one counter, so the
+ * fourth test in a file silently stops receiving mail and fails somewhere far
+ * from the cause. The ceiling itself is proved deliberately, with an address
+ * of its own, in `requestConfirm.test.ts`.
+ */
+export function freshRequesterEmail(): string {
+  requesterEmailCounter += 1;
+  return `requester-${requesterEmailCounter}@keepsake.ing`;
+}
+
 /** Headers for an authenticated request from a fresh synthetic client. Each
  * call gets its own `CF-Connecting-IP` so burst/daily rate limits never leak
  * between unrelated test cases — the primitives themselves (`checkAndBump`,

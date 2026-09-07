@@ -89,14 +89,21 @@ describe("RequestSheet", () => {
     expect(JSON.stringify(instance.toJSON())).toContain("That address can't receive mail — try another.");
   });
 
-  it("submits and shows the sent state on success", async () => {
+  // Issue #188: the success state names the confirmation step rather than
+  // claiming the note was delivered. The assertion is on the "check your
+  // email" half specifically — that is the sentence the flow now depends on
+  // someone reading, and a copy edit that drops it would leave people
+  // believing an unconfirmed request is on its way.
+  it("submits and asks the requester to confirm by email on success", async () => {
     jest.mocked(createRequest).mockResolvedValue({ id: "req-1", created_at: Date.now() });
     const instance = render(<RequestSheet visible onClose={jest.fn()} listingId="listing-1" />);
 
     await fillAndSubmit(instance, "Tell them why it should be mine, please and thank you.", "person@keepsake.ing");
 
     expect(jest.mocked(createRequest)).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(instance.toJSON())).toContain("Sent. The giver will choose in their own time.");
+    const tree = JSON.stringify(instance.toJSON());
+    expect(tree).toContain("We've emailed you to check it was really you.");
+    expect(tree).not.toContain("Sent. The giver will choose in their own time.");
   });
 
   it("shows the 409 conflict message inline instead of a generic error", async () => {

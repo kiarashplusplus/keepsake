@@ -36,11 +36,45 @@ listings, and the email step in `give` says so explicitly.
   (`used_at`), plus `email` — the address a `verify_email` link was actually mailed to
   (migration `20260907181446_recovery_tokens_email.sql`).
 
+## Request confirmation (#188)
+
+A requester's email address is the only identity claim they ever make, and until #188 nothing
+checked it. `POST /api/listings/:id/requests` accepted any syntactically valid address, wrote it
+into `requests` as the requester of record, mailed it, and showed the giver a genuine-looking ask
+— so anyone could enrol a third party and, if the giver chose that ask, have Keepsake deliver the
+giver's real address to someone who had never asked for anything. `POST /api/recover` had already
+settled the principle (it refuses to act on an unproven address); this route acted on one.
+
+So a request is now **held, not forwarded**, until the address answers for itself:
+
+- Submitting writes the row as `status = 'unconfirmed'` with `confirm_token_hash` and
+  `confirm_expires_at` (72 h), and mails exactly one message — the `confirmRequest` "was this
+  you?" link. It carries the listing title and *nothing the submitter wrote*: reflecting a
+  stranger's free text into a stranger's inbox would rebuild the harassment channel the step
+  exists to close.
+- `POST /api/requests/confirm` redeems that token. It is the only place the giver's side moves:
+  the row becomes `open`, `request_count` is incremented, the giver is mailed, and the withdraw
+  token below is minted. A POST from `/confirm/<token>` in the web app rather than a GET on the
+  emailed URL, because mail scanners and security proxies fetch links before a human sees them —
+  a confirmation that completed on GET would be completed by the victim's own provider.
+- Nothing confirmed is deleted, not redacted, by the nightly sweep once the link lapses. An
+  address nobody vouched for is data this service was never authorised to hold.
+- Every owner-facing read filters on `confirmed_at IS NOT NULL`, including the choose lookup —
+  the one action that mails a stranger the giver's address.
+
+The confirmation step stops a victim being *enrolled*; on its own it does not stop them being
+*mailed*, and one message per listing across a public feed is a mail-bomb whichever gate it passes
+(the failure mode M3AAWG's web-form recommendation names, where the confirmation is itself the
+payload). So a second control sits beside it: `REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET`, a ceiling
+keyed by the **recipient's** address rather than the caller's IP — the only shape of limit an
+attacker cannot widen by moving. Being over it looks exactly like succeeding, and writes nothing.
+
 ## Request withdrawal
 
 A requester never gets a device token or a dashboard — the only record they have of having asked
 for a keepsake is the `requestReceived` confirmation email (`src/email/templates/requestReceived.ts`),
-sent every time from `POST /api/listings/:id/requests`. That email carries a signed, single-use
+sent from `POST /api/requests/confirm` once the address above is proved (before #188 it went out
+at submit time, when nothing had in fact been passed along to anyone). That email carries a signed, single-use
 link (the same `randomTokenRaw()` + sha256-of-the-raw-value shape every other bearer secret here
 uses) to `POST /api/requests/withdraw`, which erases that request's `note`/`email`/`phone` and
 flips its status to `withdrawn` — no login, no proof of identity beyond possessing the link, by
@@ -53,7 +87,9 @@ implying withdrawal un-sends anything. Withdrawing at that point only erases Kee
 copy and updates what the owner's dashboard shows going forward.
 
 `listings.request_count` is decremented on withdrawal (floored at 0) so it keeps meaning "how many
-live asks does this listing have," not "how many were ever made."
+live asks does this listing have," not "how many were ever made." Since #188 it is *incremented*
+at confirmation rather than submission, for the same reason — which is why the admin removal path
+decrements only for a request that was confirmed, and an unconfirmed one takes nothing with it.
 
 ## Admin
 

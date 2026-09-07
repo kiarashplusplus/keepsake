@@ -140,8 +140,17 @@ meRoutes.get("/listings/:id", ownerAuth(), async (c) => {
   const aspects = await fetchAspectRows(c.env, id);
   const ownerListing = serializeOwnerListing(row, photos, aspects);
 
+  // `confirmed_at IS NOT NULL` (issue #188) is what keeps an unverified
+  // address out of a giver's dashboard. A held request is a submission
+  // nobody has proved they made: showing it here is the harm — it is what
+  // made a stranger's address look like a real ask, and what put the giver
+  // one tap away from mailing them their own address. The status column says
+  // the same thing (`'unconfirmed'`), but the filter is on the timestamp
+  // because that is the column every other reader keys off, and one rule in
+  // one shape is what stops two readers disagreeing.
   const { results: requestRows } = await c.env.DB.prepare(
-    "SELECT id, note, email, phone, status, created_at, notify_failed_reason FROM requests WHERE listing_id = ? ORDER BY created_at",
+    `SELECT id, note, email, phone, status, created_at, notify_failed_reason FROM requests
+     WHERE listing_id = ? AND confirmed_at IS NOT NULL ORDER BY created_at`,
   )
     .bind(id)
     .all<RequestRow>();
@@ -170,8 +179,15 @@ meRoutes.post("/listings/:id/choose", ownerAuth(), validateBody(ChooseRequestInp
     return fail(c, "not_found", "Listing not found.", 404);
   }
 
+  // `confirmed_at IS NOT NULL` again, belt and braces: `status !== "open"`
+  // below already refuses an unconfirmed request, but choose is the one
+  // action that mails a stranger the giver's own address, and it should be
+  // impossible to reach with an unverified one by any route — including a
+  // request id a giver kept from somewhere else, and including whatever the
+  // status column comes to mean later.
   const request = await c.env.DB.prepare(
-    "SELECT id, listing_id, note, email, phone, status, created_at, notify_failed_reason FROM requests WHERE id = ?",
+    `SELECT id, listing_id, note, email, phone, status, created_at, notify_failed_reason FROM requests
+     WHERE id = ? AND confirmed_at IS NOT NULL`,
   )
     .bind(input.request_id)
     .first<RequestRow & { listing_id: string }>();

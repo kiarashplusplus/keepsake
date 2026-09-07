@@ -237,9 +237,13 @@ async function insertRequest(listingId: string, email: string): Promise<string> 
   const id = ulid();
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at) VALUES (?, ?, ?, ?, ?, 'open', ?)`,
+    // `confirmed_at` is what makes this an ask a giver can act on (#188);
+    // `status = 'open'` without it is a row the Worker never writes and every
+    // owner-facing read ignores.
+    `INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at, confirmed_at)
+     VALUES (?, ?, ?, ?, ?, 'open', ?, ?)`,
   )
-    .bind(id, listingId, "I would love this, thank you for considering me.", email, `test-digest-${freshClientIp()}`, now)
+    .bind(id, listingId, "I would love this, thank you for considering me.", email, `test-digest-${freshClientIp()}`, now, now)
     .run();
   return id;
 }

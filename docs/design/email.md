@@ -90,12 +90,33 @@ works out.
 
 | Trigger | To | Notes |
 |---|---|---|
-| `POST /api/listings/:id/requests` | giver (if verified) | new request on their listing |
-| `POST /api/listings/:id/requests` | requester, always | "we passed your note along" confirmation + a signed, single-use link to `POST /api/requests/withdraw` — the requester's only no-account way back in; see `docs/design/identity.md`'s "Request withdrawal" section |
+| `POST /api/listings/:id/requests` | requester, always | **the only message that can be aimed at an address nobody has proved they own** (#188): one "did you ask for this?" link, carrying the listing title and nothing the submitter wrote. Capped per *recipient* address per day (`REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET`), not per caller — see identity.md's "Request confirmation" |
+| `POST /api/requests/confirm` | giver (if verified) | new request on their listing. Moved here from the create route by #188: until the requester redeems their link, the giver is told nothing |
+| `POST /api/requests/confirm` | requester | "we passed your note along" confirmation + a signed, single-use link to `POST /api/requests/withdraw` — the requester's only no-account way back in; see `docs/design/identity.md`'s "Request withdrawal" section. Sent here rather than at submit time so the sentence is true when it is sent |
 | `POST /api/me/listings/:id/choose` | requester | handoff note, reply-to set to the giver's email — this is the one place both parties' emails become mutually visible |
 | `POST/POST verify` on `/api/me/email` | giver | verification link |
 | `POST /api/recover` | the address given | recovery link, always sent as if the address matched (see identity.md) |
 | `POST /api/admin/test-email` | whatever address the admin gives | on-demand delivery proof — a real send through the real path, reported back honestly (sent/blocked and why); see `docs/runbooks/admin.md` |
+
+## Mail aimed at people who never asked for it
+
+One send point is different in kind from every other on that table: the `confirm_request` message
+goes to an address supplied by a stranger, which may belong to someone who has never heard of
+Keepsake. Three rules follow, and they are load-bearing rather than stylistic — see
+`src/email/templates/confirmRequest.ts`, which restates them where they can be broken:
+
+1. **It never echoes the submitter's text.** Only the listing title is interpolated, and that is
+   public, already-moderated content. Reflecting the note would make the safety mechanism a
+   delivery channel for anonymous messages into a stranger's inbox.
+2. **Doing nothing is a complete answer**, and the copy says so. Someone who didn't send it has
+   no account to secure and nothing to click; the held row is deleted on its own.
+3. **It is capped per recipient**, because confirm-then-forward alone does not stop a flood — it
+   only changes what the flood is made of. M3AAWG's web-form signup recommendation
+   (`draft-levine-mailbomb-header`, which proposes a `Form-Sub` header so providers can throttle
+   exactly this traffic) is the industry statement of the same problem. Keepsake does not emit
+   that header today — `sendMail()` exposes no per-message header hook, and neither the Cloudflare
+   `EMAIL.send` shape nor the Resend call it builds carries one — which is worth knowing as an
+   unclaimed improvement rather than a gap being papered over.
 
 ## Contact reveal rule
 
