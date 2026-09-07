@@ -552,6 +552,15 @@ listingRoutes.post(
       const result = await sendMail(c.env, { kind: "new_request", to: owner.email, ...template });
       if (result.sent) {
         await c.env.DB.prepare("UPDATE requests SET notified_at = ? WHERE id = ?").bind(Date.now(), requestId).run();
+      } else {
+        // Issue #6: this used to be silently discarded — the giver's own
+        // email address rejected the notification and nothing said so
+        // anywhere they could see it. Recorded on the request itself (not
+        // just `email_events`) so the owner dashboard can surface it right
+        // next to the ask it belongs to.
+        await c.env.DB.prepare("UPDATE requests SET notify_failed_reason = ? WHERE id = ?")
+          .bind(result.reason ?? "send_failed", requestId)
+          .run();
       }
     }
 

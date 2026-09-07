@@ -483,6 +483,48 @@ function todayStartMs(): number {
   return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
 }
 
+/**
+ * Issue #6: there is no bounce webhook and nothing else reads `email_events`
+ * on a schedule, so this rolling window is the only place a real delivery
+ * problem (a bad allowlist entry, a domain starting to bounce) would ever
+ * become visible instead of silently accumulating. Seven days rather than
+ * "today" — `email_failures_today` above already covers the same-day glance,
+ * this is for the pattern a single day is too short to show.
+ */
+const EMAIL_EVENTS_WINDOW_DAYS = 7;
+
+interface EmailEventGroupRow {
+  ok: number;
+  error: string | null;
+  count: number;
+}
+
+async function fetchEmailEventStats(env: Env, now: number): Promise<AdminStats["email_events_7d"]> {
+  const windowStart = now - EMAIL_EVENTS_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  const { results: rows } = await env.DB.prepare(
+    "SELECT ok, error, COUNT(*) AS count FROM email_events WHERE created_at >= ? GROUP BY ok, error",
+  )
+    .bind(windowStart)
+    .all<EmailEventGroupRow>();
+
+  let total = 0;
+  let okCount = 0;
+  let failed = 0;
+  const byError: { error: string; count: number }[] = [];
+  for (const row of rows) {
+    total += row.count;
+    if (row.ok) {
+      okCount += row.count;
+    } else {
+      failed += row.count;
+      byError.push({ error: row.error ?? "(unspecified)", count: row.count });
+    }
+  }
+  byError.sort((a, b) => b.count - a.count);
+
+  return { window_days: EMAIL_EVENTS_WINDOW_DAYS, total, ok: okCount, failed, by_error: byError };
+}
+
 adminRoutes.get("/stats", async (c) => {
   const { results: statusRows } = await c.env.DB.prepare("SELECT status, COUNT(*) AS count FROM listings GROUP BY status").all<{
     status: string;
@@ -511,6 +553,8 @@ adminRoutes.get("/stats", async (c) => {
   const modTextUsed = await c.env.KV.get(`budget:mod_text:${todayISO()}`);
   const modImageUsed = await c.env.KV.get(`budget:mod_image:${todayISO()}`);
 
+  const emailEvents7d = await fetchEmailEventStats(c.env, Date.now());
+
   const stats: AdminStats = {
     listings_by_status,
     requests_today: requestsToday?.count ?? 0,
@@ -519,6 +563,7 @@ adminRoutes.get("/stats", async (c) => {
       mod_text: modTextUsed ? Number.parseInt(modTextUsed, 10) : 0,
       mod_image: modImageUsed ? Number.parseInt(modImageUsed, 10) : 0,
     },
+    email_events_7d: emailEvents7d,
   };
   return ok(c, stats);
 });

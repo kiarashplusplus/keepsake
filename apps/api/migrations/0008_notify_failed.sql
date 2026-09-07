@@ -1,0 +1,11 @@
+-- Issue #6: a rejected notification email was recorded in `email_events`
+-- but never surfaced anywhere a giver would see it — the give/request/choose
+-- flow reported success to the user regardless. This column tracks the
+-- outcome of whichever automated notification currently matters for this
+-- request's state: the owner-notify sent on creation while `status='open'`
+-- (did the giver hear about the ask at all), and the requester-notify sent
+-- on choose once `status='chosen'` (did the chosen person hear they were
+-- picked). NULL means the relevant send succeeded (or none has been
+-- attempted yet); non-NULL is `sendMail()`'s own reason string, the same
+-- vocabulary `email_events.error` already uses.
+ALTER TABLE requests ADD COLUMN notify_failed_reason TEXT;

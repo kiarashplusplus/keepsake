@@ -172,6 +172,43 @@ export function StatsStrip({ stats, health, healthAsOf }: StatsStripProps): Reac
           ))}
         </View>
       )}
+
+      <EmailEventsSection stats={stats.email_events_7d} />
     </Card>
+  );
+}
+
+/**
+ * `email_events` grouped by outcome, `window_days` wide — issue #6: there is
+ * no bounce webhook or complaint feedback loop, so this is the only place a
+ * real delivery problem would ever surface rather than silently
+ * accumulating. Same stamped-badge language as the rest of the strip for the
+ * ok/failed counts; the per-reason breakdown underneath is plain text rather
+ * than another row of badges, since the number of distinct reasons varies
+ * and a bad week could otherwise produce an unbounded row of boxes.
+ */
+function EmailEventsSection({ stats }: { stats: AdminStats["email_events_7d"] }): React.ReactElement {
+  return (
+    <View style={{ gap: space.sm }}>
+      <Eyebrow>{`Email, last ${stats.window_days} days`}</Eyebrow>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
+        <StatBadge label="Sent" value={stats.ok} />
+        <StatBadge label="Failed" value={stats.failed} />
+      </View>
+      {stats.by_error.length > 0 ? (
+        <View style={{ gap: space.xxs }}>
+          {stats.by_error.map((entry) => (
+            <View key={entry.error} style={{ flexDirection: "row", gap: space.sm }}>
+              <Text variant="caption" color="dangerText">
+                {entry.count}×
+              </Text>
+              <Text variant="caption" color="textSecondary">
+                {entry.error}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
   );
 }

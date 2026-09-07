@@ -46,6 +46,16 @@ export type RequestStatus = z.infer<typeof RequestStatusSchema>;
 /**
  * `email`/`phone` are only populated by the API once a request has been
  * chosen — until then the owner only sees the masked forms.
+ *
+ * `notify_failed`: whether the automated email that matters for this
+ * request's current status actually went out — the owner-notify sent when
+ * the request came in (`status: "open"`) or the requester-notify sent when
+ * it was chosen (`status: "chosen"`). Issue #6: `sendMail()` always returned
+ * `{ sent: false, reason }` on a rejected recipient, but nothing before this
+ * surfaced that past a `console.error` and an `email_events` row — the
+ * give/request/choose flow reported success to the giver either way. A
+ * plain boolean, not the raw reason string, so the dashboard can warn
+ * without echoing provider internals.
  */
 export const OwnerViewRequest = z.object({
   id: UlidSchema,
@@ -56,6 +66,7 @@ export const OwnerViewRequest = z.object({
   phone_masked: z.string().optional(),
   email: EmailSchema.optional(),
   phone: PhoneSchema.optional(),
+  notify_failed: z.boolean(),
 });
 export type OwnerViewRequest = z.infer<typeof OwnerViewRequest>;
 

@@ -90,7 +90,19 @@ function RequestRow({ request, canChoose, busy, onChoose }: RequestRowProps): Re
         </Text>
       </View>
 
+      {request.notify_failed && request.status === "open" ? (
+        <Text variant="body" color="dangerText">
+          {"We couldn't reach you about this one — check the email address on your dashboard so the next note doesn't miss you too."}
+        </Text>
+      ) : null}
+
       {request.status === "chosen" ? <ContactRow request={request} /> : null}
+
+      {request.notify_failed && request.status === "chosen" ? (
+        <Text variant="body" color="dangerText">
+          {"We couldn't reach them to say you chose them — worth a note yourself, using what's above."}
+        </Text>
+      ) : null}
 
       {canChoose && request.status === "open" ? (
         <View style={{ flexDirection: "row" }}>
