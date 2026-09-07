@@ -264,8 +264,12 @@ MAX_PHOTO_BYTES = "5242880"
 # passes DMARC today. Resend's bounce domain is not under keepsake.ing and
 # the zone carries none of its records, so flipping this var on its own
 # produces mail that fails DMARC against a *reject* policy: receivers
-# discard it outright rather than spam-foldering it, `sendMail()` still
-# returns success, and the policy has no `rua=` for anyone to find out from.
+# discard it outright rather than spam-foldering it, and `sendMail()` still
+# returns success. Since 2026-09-07 the policy does carry
+# `rua=mailto:dmarc@keepsake.ing` (see docs/design/email.md), but aggregate
+# reports arrive up to a day late, as gzipped XML nothing parses yet, in a
+# catch-all inbox — a post-mortem trail, not a signal anyone would notice
+# during the incident this switch exists for.
 # The failover meant to rescue a partial email outage would quietly convert
 # it into a total one. Add Resend's SPF/DKIM to the zone, verify alignment,
 # *then* flip this. Same rule as the `MAX_PHOTOS` note above: a control that
