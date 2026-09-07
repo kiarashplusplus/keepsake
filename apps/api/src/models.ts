@@ -12,4 +12,10 @@ export const MODELS = {
   textGuard: "@cf/meta/llama-guard-3-8b",
   /** Image moderation: one call per photo thumbnail. */
   imageVision: "@cf/meta/llama-3.2-11b-vision-instruct",
+  /** Semantic search (issue #38): one embedding per listing (title + story +
+   * aspects, `search/embedding.ts`) and one per search query, both landing
+   * in the same 768-dim Vectorize index (`wrangler.toml`'s `[[vectorize]]`
+   * binding, dimensions = 768 to match). Symmetric model — no separate
+   * query/passage variant to pick between. */
+  embedding: "@cf/baai/bge-base-en-v1.5",
 } as const;

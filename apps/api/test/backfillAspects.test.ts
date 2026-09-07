@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { MODELS } from "../src/models.js";
 import { runAspectsBackfillBatch } from "../src/backfill/aspects.js";
 import { todayISO } from "../src/moderation/budget.js";
-import { insertOwner, seedStandardPostalCodes, setTestEnvVar } from "./helpers.js";
+import { insertOwner, installFakeVectorize, seedStandardPostalCodes, setTestEnvVar } from "./helpers.js";
 import { ulid } from "../src/lib/ids.js";
 
 const ADMIN_TOKEN = "test-admin-token-abcdef0123456789";
@@ -19,9 +19,26 @@ function adminHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" };
 }
 
+/** Counts calls that reach the embedding model, so a test can assert "no
+ * embedding call was spent" rather than only "no vector was written" — the
+ * same distinction `search.test.ts` draws, and for the same reason: with
+ * the flag off the point is that nothing is *called*, not merely that
+ * nothing lands. */
+let embeddingCallCount = 0;
+
 function mockSuggestAi(handler: (callIndex: number) => unknown): void {
   let callIndex = 0;
+  embeddingCallCount = 0;
   const run = async (model: string) => {
+    // The backfill re-embeds each listing it touches (issue #38), so the
+    // embedding model reaches this stub too whenever SEMANTIC_SEARCH is on.
+    // A fixed vector is enough: nothing here asserts anything about vector
+    // *space* — only that the call happened and the value was stored under
+    // the right listing id. `search.test.ts` owns the ranking assertions.
+    if (model === MODELS.embedding) {
+      embeddingCallCount += 1;
+      return { shape: [1, 3], data: [[0.1, 0.2, 0.3]] };
+    }
     if (model !== MODELS.imageVision) {
       throw new Error(`mockSuggestAi: unexpected model ${model}`);
     }
@@ -312,5 +329,84 @@ describe("POST /api/admin/backfill-aspects", () => {
     const body = (await res.json()) as { ok: true; data: { processed: number; remaining: number } };
     expect(body.data.processed).toBe(5);
     expect(body.data.remaining).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #38 × #37. `reembedListing`'s doc comment always said this job should
+// call it; #37 landed first, nothing did, and an aspect the backfill wrote
+// stayed invisible to vector search until a human edited that listing. This
+// job is also the only path that reaches listings created before semantic
+// search existed — which, the day the flag went on, was every listing in
+// production (#135 measured one).
+//
+// `vitest.config.ts` pins SEMANTIC_SEARCH to "0" for the whole suite, so the
+// blocks above exercise the flag-off shape by default and these opt in
+// explicitly, the same way `search.test.ts` does.
+// ---------------------------------------------------------------------------
+describe("runAspectsBackfillBatch re-embeds each listing it touches (#38)", () => {
+  it("writes a vector for a listing it gave aspects to", async () => {
+    setTestEnvVar("SEMANTIC_SEARCH", "1");
+    const vectorize = installFakeVectorize();
+    mockSuggestAi(() => TEAPOT_SUGGESTION_JSON);
+    const ownerId = await insertOwner();
+    const listingId = await insertListingWithCoverPhoto({ ownerId });
+
+    const result = await runAspectsBackfillBatch(env, 5);
+
+    expect(result.withAspects).toBe(1);
+    expect(await fetchAspects(listingId)).not.toHaveLength(0);
+    // The point of the whole wiring: the aspects the job just wrote are
+    // searchable now, not after somebody edits the listing by hand.
+    expect(vectorize.has(listingId)).toBe(true);
+    expect(embeddingCallCount).toBe(1);
+  });
+
+  it("writes a vector even when the model names no aspect at all (#40)", async () => {
+    setTestEnvVar("SEMANTIC_SEARCH", "1");
+    const vectorize = installFakeVectorize();
+    mockSuggestAi(() => JSON.stringify({ subject: "a teapot", title: "Copper teapot", category: "home_kitchen", condition: "", aspects: [] }));
+    const ownerId = await insertOwner();
+    const listingId = await insertListingWithCoverPhoto({ ownerId });
+
+    const result = await runAspectsBackfillBatch(env, 5);
+
+    // Zero aspects is the case #40 is about, and the case that most needs a
+    // route in other than an aspect filter. The vector is built from title +
+    // story too, so it exists regardless.
+    expect(result.withoutAspects).toBe(1);
+    expect(await fetchAspects(listingId)).toHaveLength(0);
+    expect(vectorize.has(listingId)).toBe(true);
+  });
+
+  it("spends no embedding call and writes no vector with SEMANTIC_SEARCH off", async () => {
+    setTestEnvVar("SEMANTIC_SEARCH", "0");
+    const vectorize = installFakeVectorize();
+    mockSuggestAi(() => TEAPOT_SUGGESTION_JSON);
+    const ownerId = await insertOwner();
+    const listingId = await insertListingWithCoverPhoto({ ownerId });
+
+    const result = await runAspectsBackfillBatch(env, 5);
+
+    // The kill switch has to hold on this path too, or turning the feature
+    // off would still leave the backfill spending AI budget on it.
+    expect(result.withAspects).toBe(1);
+    expect(embeddingCallCount).toBe(0);
+    expect(vectorize.has(listingId)).toBe(false);
+
+    // ...and prove that "no vector" is the flag's doing rather than the
+    // wiring simply being absent. Without this half, deleting the
+    // `reembedListing` call from the job entirely would leave this test
+    // green — the exact shape of unfailable guard the rest of this PR was
+    // written to avoid. Same listing, same fixture, flag on:
+    setTestEnvVar("SEMANTIC_SEARCH", "1");
+    await env.DB.prepare("UPDATE listings SET aspects_backfilled_at = NULL WHERE id = ?").bind(listingId).run();
+    await env.DB.prepare("DELETE FROM listing_aspects WHERE listing_id = ?").bind(listingId).run();
+    await env.KV.delete(`budget:suggest:${todayISO()}`);
+
+    await runAspectsBackfillBatch(env, 5);
+
+    expect(embeddingCallCount).toBe(1);
+    expect(vectorize.has(listingId)).toBe(true);
   });
 });

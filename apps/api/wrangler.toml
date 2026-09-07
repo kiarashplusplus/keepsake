@@ -32,6 +32,38 @@ run_worker_first = true
 [ai]
 binding = "AI"
 
+# Issue #38: semantic search over story + aspects.
+#
+# These bindings were commented out while nobody could confirm the indexes
+# existed — an uncommented `[[vectorize]]` naming a missing index does not
+# degrade gracefully, it fails the Worker upload and takes down *every*
+# deploy of this Worker. That risk is now retired: the three indexes were
+# confirmed present on 2026-09-07 via the Vectorize API, all
+# `dimensions = 768, metric = cosine`:
+#
+#   keepsake-listings-dev         created 2026-09-07T05:12:58Z
+#   keepsake-listings-preview     created 2026-09-07T05:13:07Z
+#   keepsake-listings-production  created 2026-09-07T05:13:10Z
+#
+# 768 matches `MODELS.embedding`; cosine matches how `search/search.ts` reads
+# scores. Neither can be altered after creation — only deleted and recreated.
+# One index per environment, the same separation the D1/R2/KV bindings below
+# already follow, so dev/preview/production never share one.
+#
+# The binding being present is NOT the same as the feature being on: that is
+# `SEMANTIC_SEARCH` in each [vars] block, checked before any embedding or
+# Vectorize call happens. `src/search/vectorize.ts` still treats an absent
+# `env.VECTORIZE` as "fall back to FTS", which is why `src/env.ts` keeps it
+# declared optional.
+#
+# Like `[ai]` above, Vectorize has no local emulator (`V4RemoteBinding` in
+# miniflare's own types) — every test stubs `env.VECTORIZE` directly, the
+# same convention `test/moderation.test.ts` uses for `env.AI`.
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "keepsake-listings-dev"
+
 # Issue #14: `SENTRY_DSN` was never set (it needs a Sentry account only
 # Kiarash can create), so every `Sentry.captureException`/`captureMessage`
 # call in the Worker was a silent no-op. Workers Logs is a Cloudflare-native
@@ -131,6 +163,41 @@ MOD_IMAGE_DAILY_BUDGET = "3000"
 # moderating. ~15 neurons/call, ~$0.17 per 1000 listings — this is runaway
 # protection, not a real usage ceiling.
 SUGGEST_DAILY_BUDGET = "1000"
+# Re-embedding on listing create/edit (issue #38, `src/search/reembed.ts`).
+# Global-only, no per-IP twin: unlike SUGGEST_DAILY_BUDGET this isn't behind
+# its own client-callable endpoint, and a failure here degrades to the FTS
+# fallback rather than parking anything, so a single runaway-protection
+# ceiling is enough. Pure runaway protection like every other budget in this
+# block, not sized against real traffic yet. Only ever consulted when
+# SEMANTIC_SEARCH is on, which since 2026-09-07 it is in every environment.
+EMBED_DAILY_BUDGET = "2000"
+# Issue #38's kill switch, now ON in every environment — the runbook errand
+# was completed 2026-09-07: the three indexes are confirmed to exist
+# (768/cosine), the embedding model was exercised against real Workers AI,
+# the full embed → upsert → query round trip was run against the real dev
+# index, and MIN_SCORE was re-derived from measurements
+# (`docs/design/min-score-calibration.md`).
+#
+# It remains a kill switch, and reverting it to "0" is still the first thing
+# to try if search misbehaves: with it off, `GET /api/feed?q=` is exactly
+# `main`'s FTS5 search, no embedding call and no Vectorize call happen on
+# either the read or the write path, and no AI budget is spent.
+# `src/env.ts`'s `semanticSearchEnabled` treats anything other than the
+# literal "1" as off, so it cannot be enabled by accident.
+#
+# Turning it on was timed deliberately, but the timing claim it shipped with
+# was already out of date. `reembedListing` runs on listing create, listing
+# edit, and the #37 aspects backfill — there is no standalone vector backfill
+# — so any listing created while this is "0" has no vector and is invisible
+# to vector search until it is next written. The flip was justified by the
+# production catalogue being empty; it was not. #135 measured a real
+# production listing (the KastKing spool) hours before this merged, and this
+# has never been deployed anywhere, so *every* listing that exists today
+# predates the feature. Running the aspects backfill after deploy embeds
+# them, which is why reembedListing is wired into it. If this is ever
+# switched off again while listings are being created, switching it back on
+# means running that backfill again — or writing a vector-only one.
+SEMANTIC_SEARCH = "1"
 # Per-IP daily ceilings for the write endpoints — all six of them: listing
 # create, request, photo upload, report, outbound email, and AI autofill,
 # each named below. An address is not a person — a household or a mobile
@@ -357,6 +424,13 @@ run_worker_first = true
 [env.preview.ai]
 binding = "AI"
 
+# Index confirmed to exist 2026-09-07 (768/cosine) — see the top-level
+# [[vectorize]] block. Whether search actually uses it is `SEMANTIC_SEARCH`
+# in [env.preview.vars], not the presence of this binding.
+[[env.preview.vectorize]]
+binding = "VECTORIZE"
+index_name = "keepsake-listings-preview"
+
 [env.preview.observability]
 enabled = true
 head_sampling_rate = 1
@@ -373,6 +447,8 @@ COMMIT_SHA = "dev"
 MOD_TEXT_DAILY_BUDGET = "2000"
 MOD_IMAGE_DAILY_BUDGET = "6000"
 SUGGEST_DAILY_BUDGET = "1000"
+EMBED_DAILY_BUDGET = "2000"
+SEMANTIC_SEARCH = "1"  # issue #38, on — see top-level [vars]
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
@@ -477,6 +553,13 @@ run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/s
 [env.production.ai]
 binding = "AI"
 
+# Index confirmed to exist 2026-09-07 (768/cosine) — see the top-level
+# [[vectorize]] block. The binding resolving is what makes this deploy safe;
+# whether search uses it is `SEMANTIC_SEARCH` in [env.production.vars].
+[[env.production.vectorize]]
+binding = "VECTORIZE"
+index_name = "keepsake-listings-production"
+
 [env.production.observability]
 enabled = true
 head_sampling_rate = 1
@@ -529,6 +612,8 @@ COMMIT_SHA = "dev"
 MOD_TEXT_DAILY_BUDGET = "20000"
 MOD_IMAGE_DAILY_BUDGET = "60000"
 SUGGEST_DAILY_BUDGET = "1000"
+EMBED_DAILY_BUDGET = "2000"
+SEMANTIC_SEARCH = "1"  # issue #38, on — see top-level [vars]
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"

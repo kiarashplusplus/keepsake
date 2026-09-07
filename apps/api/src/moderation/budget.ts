@@ -61,7 +61,7 @@ import { todayISO } from "../lib/day.js";
 const TTL_SECONDS = 172_800; // 48 hours
 
 /**
- * The eight things this Worker rations per calendar day.
+ * The nine things this Worker rations per calendar day.
  *
  * `report` and `email` joined the list in issue #92. Both were previously
  * guarded only by a `[[ratelimits]]` burst binding, which
@@ -78,8 +78,23 @@ const TTL_SECONDS = 172_800; // 48 hours
  *   counter for both routes on purpose: what's being rationed is outbound
  *   mail to a real inbox, not a URL path, and two kinds would let a caller
  *   have the allowance twice by alternating between them.
+ *
+ * `embed` (issue #38) joined in turn, and is global-only — no `ipDailyLimit`
+ * is ever passed for it, see `search/reembed.ts` — because unlike `suggest`
+ * it isn't behind its own client-callable endpoint; it only ever runs from
+ * inside a listing create/edit this Worker has already authenticated and
+ * rate-limited.
  */
-export type BudgetKind = "mod_text" | "mod_image" | "suggest" | "listing" | "request" | "upload" | "report" | "email";
+export type BudgetKind =
+  | "mod_text"
+  | "mod_image"
+  | "suggest"
+  | "listing"
+  | "request"
+  | "upload"
+  | "report"
+  | "email"
+  | "embed";
 
 export interface CheckAndBumpOptions {
   kind: BudgetKind;
