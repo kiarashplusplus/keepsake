@@ -22,13 +22,34 @@ that note came first and this table agrees with it.
 
 > **Re-checked against GitHub on 2026-09-07, later the same day.** Everything below that said
 > "fix merged, issue open" is now **closed**: #86, #87, #88, #89, #90, #91, #92 and #106 all
-> closed, as did **#6** (finding 3 — see the caveat in
-> [`docs/design/README.md`](../design/README.md#where-this-stands--2026-09-07): the close carries
-> no comment, and nothing in the repo records the inbox being read), **#94** (the zone cache-purge
-> token) and **#103**. The tables below are left as they were written, per rule 7; read this
-> paragraph as the overlay. **All 18 findings and every remainder are now closed as issues.** What
-> is still owed is verification, not code: **#47** (the live re-measurement of finding 1, plus the
-> first real listing on the apex) and **#42**.
+> closed, as did **#94** (the zone cache-purge token) and **#103**. The tables below are left as
+> they were written, per rule 7; read this paragraph as the overlay. What is still owed is
+> verification, not code: **#47** (the first real listing on the apex) and **#42**.
+>
+> **Two corrections, made 2026-09-07 evening.**
+>
+> **#6 (finding 3) is reopened, and finding 3 is still OPEN.** It was closed at 08:54 UTC with no
+> closing comment, thirteen minutes after its own last comment said it must stay open until someone
+> reads the `leapkg@gmail.com` inbox; this overlay previously recorded that as an unresolved
+> caveat. It has now been resolved, and not in the flattering direction. Kiarash, asked directly:
+> *"No emails were sent to leapkg yet."* The Cloudflare Email Sending activity log for
+> `keepsake.ing` shows 3 sends over the preceding 7 days, all three to `kiarasha@alum.mit.edu`, all
+> delivered, none anywhere else. The second-address test was never sent, so the inbox check could
+> never have proven anything. Finding 3's table row below is therefore correct exactly as written.
+> **It is not true that all 18 findings are closed as issues** — that sentence stood here and is
+> withdrawn.
+>
+> **Finding 1's live re-measurement is DONE and it passes.** Re-run 2026-09-07 against production
+> at commit `3980c9d`, in real Chromium at 390×844 (iPhone 13 UA, `isMobile`, `hasTouch`), with a
+> genuine `wheel` event and no `captureBeyondViewport`: `/` scrolled 600px, `/item/…` scrolled its
+> full 73px, and the `/privacy` control scrolled 600px of 16386px. Pages scroll. Two traps worth
+> keeping, because each produced a confident wrong answer first: (a) **`window.scrollY` is the
+> wrong assertion for `/` and `/item`** — `body` is `overflow: hidden` and React-Native-Web puts the
+> scroller in an inner `<div>`, so `scrollY` cannot move on the two pages that matter while it does
+> move on the control, i.e. exactly backwards; measure `scrollTop` on the overflowing element
+> instead. (b) A wheel dispatched at the viewport centre hit the **consent banner**
+> (`ks-consent__card` under `elementFromPoint`), which swallowed it and produced a clean-looking
+> FAIL on both pages. Recorded in **#47**, which stays open for §5 only.
 >
 > One dangling reference: finding 2's superseded note points at **issue #85** ("whether anything
 > indexed during the window before this landed needs a Search Console removal"). #85 has been
@@ -93,13 +114,17 @@ issue open".
 
 *As written 2026-09-07 morning, then corrected the same evening — the corrections are the point:*
 
-- ~~**#6** — the one real launch blocker: production email proven to reach a stranger.~~ **Closed
-  08:54 UTC**, with no closing comment and no recorded result for the inbox check its own last
-  comment demanded. Not reopened here; flagged in `docs/design/README.md` so nobody re-derives
-  either the old claim or a proof that was never written down.
-- Finding 1's live re-measurement, and the rest of the post-cutover checks that need a real
-  network: [verify-production.md](verify-production.md), tracked by **#47**. **Still owed** — this
-  is the one line in this section that has not changed.
+- **#6** — the one real launch blocker: production email proven to reach a stranger. ~~Closed
+  08:54 UTC with no closing comment.~~ **Reopened 2026-09-07 evening**, because the question its
+  close left hanging has now been answered: the `leapkg@gmail.com` test was never sent at all.
+  Kiarash's Cloudflare Email Sending log shows 3 sends in 7 days, all to his own address. **Still
+  owed**, and unchanged in substance since the audit: one real `request` and one real `choose` to a
+  second address, driven through a real browser because Turnstile enforces, then that inbox read.
+- ~~Finding 1's live re-measurement~~ **done 2026-09-07, passes** — see the overlay at the top.
+  The rest of the post-cutover checks that need a real network:
+  [verify-production.md](verify-production.md), tracked by **#47**. §1–§4 now all pass against the
+  live apex; **§5 — the first real listing, posted from a phone — is still owed**, and the runbook
+  is explicit that §1–§4 passing is not enough to close #47.
 - ~~The open remainders above (#86-#92, #106) whose fixes are merged but whose issues have not been
   closed out.~~ All closed.
 - **New, and not from this audit**: #116 (the `adminAuth` flake is back on unmodified `main`, so
