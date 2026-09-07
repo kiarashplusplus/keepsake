@@ -26,8 +26,17 @@ The product is the story. Anything that makes a listing feel like a classified a
 
 ## Picking up work
 
+**More than one session works this repo at once.** Kiarash runs sessions from his phone and from
+claude.ai alongside whatever is running locally. The label is the only shared source of truth
+about who has what.
+
 1. `gh issue list --label "launch-blocker" --state open` — or browse a milestone.
-2. **Skip anything labelled `status: in progress`.** That label is the lock; another session or a
+2. **Read the labels immediately before you start, not from memory.** This has already gone wrong
+   once: a coordinator handed an agent five issues based on what it remembered labelling, and
+   four had been claimed by another session minutes earlier. Re-read
+   `gh issue list --label "status: in progress"` at the moment you assign or begin work, however
+   recently you looked.
+3. **Skip anything labelled `status: in progress`.** That label is the lock; another session or a
    human is in those files right now.
 3. Add `status: in progress`, comment saying what you intend to change, then work.
 4. Reference the issue in commits (`Closes #12`, or `Refs #12` for partial work).
