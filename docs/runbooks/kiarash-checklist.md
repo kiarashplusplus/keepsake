@@ -103,6 +103,35 @@ bounce rate (safe under 2%, at risk at 5%) and this repo carries 80 `@example.co
 | preview | `allowlist` | Only `EMAIL_ALLOWLIST` addresses (currently just Kiarash). |
 | production | `live` | Real users. |
 
+### Day-one posture: **live immediately** (decided 2026-09-07, issue #43)
+
+The choice was between opening production email to everyone on day one and running an allowlist
+for the first real post before opening up. **Decision: live immediately.** No config change was
+needed — `apps/api/wrangler.toml`'s `[env.production.vars]` block already carries
+`EMAIL_MODE = "live"` with an empty `EMAIL_ALLOWLIST`, which is exactly this posture.
+
+What that accepts, stated plainly so nobody has to reconstruct it later: **delivery to a real
+address that is not Kiarash's has still never been observed** (#6, part 1 — the one test that has
+never been run). The worst case #6 describes is that the Cloudflare binding refuses non-verified
+destinations outright, in which case no giver hears that someone asked for their keepsake and no
+chosen requester hears they were chosen. Going live on day one means the first person to meet that
+failure, if it exists, is a real stranger rather than an allowlisted test address.
+
+Two things make that a smaller bet than it was when #43 was filed, and neither of them is a
+substitute for running the test:
+
+- A failed send is no longer silent. `f44052a` records it on `requests.notify_failed_reason` and
+  renders it on the giver's own dashboard at `/mine/:id`, so a giver sees "we couldn't reach your
+  email address" instead of nothing.
+- `GET /api/admin/stats` returns a 7-day `email_events` breakdown by `ok`/`error`, so a systematic
+  refusal reads as a spike on the admin stats strip within minutes rather than accumulating
+  invisibly.
+
+**Still worth doing first, and it costs one message:** send a request and a choose to
+`leapkg@gmail.com` on preview (allowlisted there for exactly this) and confirm the mail physically
+arrives. That closes #6 and turns this decision from a bet into a checked fact. It is not a
+blocker on the decision itself — it is the evidence the decision is currently missing.
+
 Reserved domains (`example.com/net/org`, `.test`, `.invalid`, `.localhost`, `.local`) are refused
 in **every** environment, production included — they are reserved by standard precisely so they
 can never accept mail. The guard fails closed if `EMAIL_MODE` is unset, blocked attempts are still
