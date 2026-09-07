@@ -80,7 +80,10 @@ interface CapturedError {
  * - `ts`: ISO timestamp — Workers Logs stamps its own ingestion time too,
  *   but this is the moment the Worker itself observed the failure.
  */
-interface CaptureLogLine {
+// Exported so a test can assert against the structured line this module
+// actually emits, rather than string-matching a stringified approximation
+// of it (issue #123's tests in apps/api/test/photoCache.test.ts).
+export interface CaptureLogLine {
   event: "capture";
   level: CaptureLevel;
   service: string;
