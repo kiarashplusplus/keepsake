@@ -10,6 +10,7 @@
  */
 import { Hono } from "hono";
 import {
+  AdminBackfillAspectsInput,
   AdminBanInput,
   AdminHideInput,
   AdminQueueQuery,
@@ -17,6 +18,7 @@ import {
   AdminRemoveRequestInput,
   AdminTestEmailInput,
   AdminTestErrorInput,
+  type AdminBackfillAspectsResult,
   type AdminHealth,
   type AdminQueueItem,
   type AdminRequestRemoveResult,
@@ -44,6 +46,7 @@ import { fetchAspectRows, fetchListingRow, fetchPhotoRows } from "../lib/listing
 import { serializeOwnerListing, type ListingRow } from "../lib/serialize.js";
 import { sendMail } from "../email/sendMail.js";
 import { adminTest as adminTestTemplate } from "../email/templates/adminTest.js";
+import { runAspectsBackfillBatch } from "../backfill/aspects.js";
 
 type Vars = { validatedBody: unknown; validatedQuery: unknown };
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -682,5 +685,33 @@ adminRoutes.post("/test-error", validateBody(AdminTestErrorInput), async (c) => 
     });
   }
   const result: AdminTestErrorResult = { captured: true, kind: input.kind };
+  return ok(c, result);
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/backfill-aspects
+// ---------------------------------------------------------------------------
+/**
+ * Issue #37: one batch of the aspects backfill (`src/backfill/aspects.ts` —
+ * see that file's header comment for the full design, including why a
+ * legitimate zero-aspect result and "never attempted" have to be tracked
+ * separately). POST `{}` (or `{"limit": N}`) repeatedly — from a terminal, a
+ * script, or just the same curl command run again — until
+ * `AdminBackfillAspectsResult.remaining` reaches 0. Same
+ * `burst("RL_ADMIN")` + `adminAuth()` guard as every other route on this
+ * router; every listing it touches still goes through the same
+ * `SUGGEST_DAILY_BUDGET` ceiling live traffic does; see `runAspectsBackfillBatch`.
+ */
+adminRoutes.post("/backfill-aspects", validateBody(AdminBackfillAspectsInput), async (c) => {
+  const input = c.get("validatedBody") as AdminBackfillAspectsInput;
+  const batch = await runAspectsBackfillBatch(c.env, input.limit);
+  const result: AdminBackfillAspectsResult = {
+    processed: batch.processed,
+    with_aspects: batch.withAspects,
+    without_aspects: batch.withoutAspects,
+    failed: batch.failed,
+    budget_exhausted: batch.budgetExhausted,
+    remaining: batch.remaining,
+  };
   return ok(c, result);
 });
