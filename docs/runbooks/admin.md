@@ -15,6 +15,40 @@ Web: `/admin` prompts for the token, stores it in `sessionStorage` only (cleared
 deliberately not `localStorage`, since this is the one credential in the app that grants access
 to everything). API: any `Authorization: Bearer <ADMIN_TOKEN>` request to `/api/admin/*`.
 
+### Where a session gets the token
+
+The two tiers have **different** tokens. They are not interchangeable, and nothing in the response
+tells you which one you are holding — a production token against preview is an ordinary `401`,
+indistinguishable from a typo.
+
+| Variable | Tier |
+| --- | --- |
+| `KEEPSAKE_PREVIEW_ADMIN_TOKEN` | `https://preview.keepsake.ing` |
+| `KEEPSAKE_PRODUCTION_ADMIN_TOKEN` | `https://keepsake.ing` |
+
+A **local** session reads them from Kiarash's `~/Documents/.env`, which is outside this repo and
+is never committed:
+
+```sh
+set -a && . ~/Documents/.env && set +a
+curl -s https://preview.keepsake.ing/api/admin/observatory \
+  -H "Authorization: Bearer $KEEPSAKE_PREVIEW_ADMIN_TOKEN" | jq
+```
+
+A **claude.ai / cloud** session cannot see that file — it runs in a sandbox with only this
+repository — so the same two names are configured as Claude Code environment secrets for this
+repo. Same variable names on purpose, so a runbook command works unchanged in either place. If
+they are unset, say so and stop: there is no fallback, and `/api/admin/*` returns the same `401`
+whether the token is wrong, missing, or never configured, so a failed call is not evidence about
+which.
+
+**Treat this as the most powerful credential in the project.** It is a single secret with no
+scopes: the same string that reads the Observatory can hide listings, ban owners, remove requests
+and reveal givers' email addresses. Prefer the preview token by default and reach for production
+only when you specifically mean the live site. It is deliberately *not* stored as a GitHub secret
+— those are readable only by workflow runs, and putting it there would hand it to every workflow
+that ever runs in this repo.
+
 Rotate with:
 
 ```sh
