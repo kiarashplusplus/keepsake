@@ -167,8 +167,13 @@ const HOSTILE_CASES: Record<string, () => EmailTemplate> = {
       dashboardLink: DIRTY,
     }),
   recover: () =>
-    (modules["../src/email/templates/recover.ts"] as { recover: (p: Record<string, string>) => EmailTemplate }).recover({
+    (
+      modules["../src/email/templates/recover.ts"] as {
+        recover: (p: { link: string; ttlMs: number }) => EmailTemplate;
+      }
+    ).recover({
       link: DIRTY,
+      ttlMs: 30 * 60 * 1000,
     }),
   requestReceived: () =>
     (
