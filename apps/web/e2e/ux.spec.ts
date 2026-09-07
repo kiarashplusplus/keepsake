@@ -64,6 +64,15 @@ const GIVEN_HERE = {
  * bytes for a second look at the same colours. */
 const DARK_PROJECT = "ux-mobile";
 
+/**
+ * `browser.newContext()` ignores the project's `use`, so every context this
+ * spec builds by hand has to restate the capture-wide `reducedMotion` from
+ * `playwright.config.ts` — see the note there for why the baseline is taken
+ * under it. Miss one and it is the only frame still catching a spring
+ * mid-drop, which reads as a design change on the next refresh.
+ */
+const CAPTURE_CONTEXT = { reducedMotion: "reduce" } as const;
+
 /** A context with nothing seeded at all, for the two screens that only exist
  * for someone who has never been here: the explainer and the consent banner.
  * `openFreshContext()` seeds both of those away, which is the right default
@@ -72,6 +81,7 @@ async function openUnseededContext(browser: Browser): Promise<BrowserContext> {
   return browser.newContext({
     baseURL: BASE_URL,
     extraHTTPHeaders: { "CF-Connecting-IP": freshClientIp() },
+    ...CAPTURE_CONTEXT,
   });
 }
 
@@ -260,7 +270,7 @@ test.describe("ux baseline", () => {
     const catalog = await ensureDemoCatalog(request);
 
     // --- A device that has never given anything -----------------------------
-    const strangerContext = await openFreshContext(browser);
+    const strangerContext = await openFreshContext(browser, CAPTURE_CONTEXT);
     const stranger = await strangerContext.newPage();
     await stranger.goto("/mine");
     await expect(stranger.getByText(/given anything yet/)).toBeVisible();
@@ -358,7 +368,7 @@ test.describe("ux baseline", () => {
     );
     const catalog = await ensureDemoCatalog(request);
 
-    const context = await openFreshContext(browser);
+    const context = await openFreshContext(browser, CAPTURE_CONTEXT);
     await seedTheme(context, "dark");
     await seedOwnerToken(context, catalog.ownerToken);
     const page = await context.newPage();

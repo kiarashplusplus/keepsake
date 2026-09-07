@@ -66,6 +66,29 @@ const WEB_SERVER_COMMAND = [
 const UX_SPEC = /ux\.spec\.ts$/;
 const CAPTURING_UX = Boolean(process.env.UX_SHOTS);
 
+/**
+ * Both capture projects run under `prefers-reduced-motion: reduce`, which is
+ * what finally makes the frames comparable.
+ *
+ * `Print.tsx` drops every card in on a Reanimated spring. That is driven from
+ * JavaScript, so Playwright's `animations: "disabled"` never touched it, and a
+ * capture landed wherever the spring happened to be: two runs of the same
+ * commit differed on 24 of 76 frames — the feed, `/mine`, the item page,
+ * every screen with cards on it. Waiting for the pixels to stop moving
+ * (`support/shots.ts`) took that to 17; the spring's tail moves less between
+ * probes than the comparison can see, so a wait alone cannot close it.
+ *
+ * Under `reduce`, `Print` initialises `drop` at 1 instead of animating to it,
+ * and at `drop === 1` the style is `opacity: 1`, `scale: 1`, full `tiltDeg` —
+ * pixel-for-pixel the state the animation was heading for. So this removes
+ * the transient without changing the design being photographed, and the
+ * frames show what a visitor sees a moment after the page settles either way.
+ *
+ * It is not set for the functional projects: how the app behaves mid-animation
+ * is exactly what a test like `scroll.spec.ts` should keep exercising.
+ */
+const UX_REDUCED_MOTION = "reduce" as const;
+
 const UX_PROJECTS = CAPTURING_UX
   ? [
       {
@@ -73,6 +96,7 @@ const UX_PROJECTS = CAPTURING_UX
         testMatch: UX_SPEC,
         use: {
           ...devices["Desktop Chrome"],
+          reducedMotion: UX_REDUCED_MOTION,
           viewport: { width: 390, height: 844 },
           // 2 rather than the `mobile` project's 3: the page still lays out
           // and picks assets as it would on a phone, and `support/shots.ts`
@@ -86,7 +110,11 @@ const UX_PROJECTS = CAPTURING_UX
       {
         name: "ux-desktop",
         testMatch: UX_SPEC,
-        use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 800 } },
+        use: {
+          ...devices["Desktop Chrome"],
+          reducedMotion: UX_REDUCED_MOTION,
+          viewport: { width: 1280, height: 800 },
+        },
       },
     ]
   : [];

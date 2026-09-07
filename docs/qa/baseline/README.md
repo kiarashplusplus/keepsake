@@ -79,23 +79,57 @@ question belongs in the running app.
 
 ## Known: the frames are not yet byte-stable between runs
 
-Re-capturing with no code change currently rewrites about eight of the 74
-frames. The cause is identified: `src/ui/Print.tsx` drops each card onto the
-table with a Reanimated `withSpring` on mount, and `page.screenshot()`'s
-`animations: "disabled"` only freezes CSS animations, not that one — so a
-capture can land at any point in the spring and the card's tilt and scale
-differ. Measured between two consecutive runs of the same commit:
-`feed-cards` 21–26% of pixels, `mine` 6–10%, `dark-mine` 8%, the rest under
-2%. The first version of `support/shots.ts` was worse (twelve frames, up to
-32% on the dark item page); waiting out `expo-image`'s placeholder fade —
-`PHOTO_FADE_MS` in that file — fixed the image half of it.
+Re-capturing with no code change rewrites 16 of the 76 frames. Two of the
+three causes are fixed; the third is understood and is not fixed here.
 
-Nothing here compares images, so this costs nobody a red build; what it costs
-is a noisier `git diff` than it should be when you refresh the set. The fix is
-to wait for visual stability before capturing — screenshot, wait, screenshot
-again, and only capture once two consecutive frames are identical, the same
-thing Playwright's own `toHaveScreenshot()` does internally. That belongs in
-`settle()`, and it is the next change to make here.
+**Fixed — the mount spring.** `src/ui/Print.tsx` drops each card onto the table
+with a Reanimated `withSpring`, and `page.screenshot()`'s `animations:
+"disabled"` only freezes CSS animations, so a capture could land anywhere in
+it. `support/shots.ts` now waits for two consecutive identical frames before
+capturing, and both capture projects run under `prefers-reduced-motion:
+reduce`, where `motionSafe()` starts `drop` at its settled value instead of
+animating to it. Note what `reduce` deliberately does *not* change:
+`tiltRangeDeg` is passed through untouched, so the prints are photographed at
+the same angles a visitor sees. What it drops are transients — the drop-in,
+`expo-image`'s cross-fade, and `Stamp.tsx`'s infinite wobble — every one of
+which resolves to the same resting pixels it was heading for. The baseline
+shows the design, not a reduced-motion variant of it.
+
+**Not fixed — the ids.** The 16 that still move are every screen that renders
+a list of prints: `feed-cards`, `feed-category`, `mine`, `mine-detail-*`,
+`admin-hidden`, `dark-mine`. `ListingCard` sets each print's angle from
+`tiltDegForId(listing.id)` and its offset from `verticalOffsetForId(listing.id)`
+(`src/lib/masonry.ts`), both of which hash the id — and ids are ULIDs the API
+mints fresh on every run, because `support/demoCatalog.ts` wipes the database
+and re-seeds through the real API. So the catalogue fixes the titles, the
+stories, the categories and the postcodes, and then every card lands at a
+different angle anyway. The diff is a halo around every edge in the list: a
+sub-pixel shift, invisible to a reader, loud to `git`.
+
+That is also why `item` and the give-flow frames are stable and these are not —
+`PhotoCarousel` passes a literal `tiltDeg={-1.2}` rather than hashing anything.
+
+The fix is to pin the six catalogue ids, which means seeding them with known
+ULIDs rather than letting the API mint them, and it belongs in
+`support/demoCatalog.ts`. Nothing here compares images, so none of this costs a
+red build; what it costs is a noisier `git diff` than it should be on refresh.
+
+## Always capture through `pnpm --filter @keepsake/web e2e:ux`
+
+That script exports the web bundle before it captures, and it is the only
+supported way to refresh this directory. The Worker serves `apps/web/dist`
+through its `[assets]` binding and nothing in the harness ever built it, so a
+bare `UX_SHOTS=1 playwright test` photographs whatever export happens to be on
+disk — another branch's, or one built before the change under review. That
+failure is silent and it inverts the point of a baseline: you change a screen,
+capture, and the frames come back identical.
+
+It is not hypothetical. A capture run on a checkout whose `dist` was eleven
+hours stale photographed an `/admin` that predated `aria-label="Queue status"`,
+and the spec failed against a screen that was correct in the source it was
+supposedly testing. `e2e/support/global-setup.mjs` now refuses to capture when
+`dist/version.json` names a different commit than `HEAD`, or when any file
+under `app/`, `src/` or `packages/` is newer than the export.
 
 ## Two rules inherited from `../README.md`
 

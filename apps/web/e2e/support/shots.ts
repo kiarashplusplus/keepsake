@@ -12,14 +12,17 @@
  * asked, which for this app means a real chance of catching a web font
  * swapping in, a photo still decoding, or a Reanimated transition halfway
  * through — none of which is a UX signal, all of which produce a diff on the
- * next run. `settle()` below waits for the things that do finish and
- * `animations: "disabled"` handles the ones that don't.
+ * next run. `settle()` below waits for the things that report their own
+ * completion, `animations: "disabled"` freezes the CSS ones, and
+ * `waitForVisualStability()` covers what neither reaches by simply watching
+ * the viewport until it stops moving.
  *
  * **A file path a human can read.** `docs/qa/baseline/<project>/<name>.png`,
  * committed, so a pull request can point at "the item page got taller on
  * mobile" instead of describing it. See `docs/qa/baseline/README.md` for what
  * that directory is and is not (it is evidence, not a pixel gate).
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { BrowserContext, Page, TestInfo } from "@playwright/test";
@@ -106,6 +109,54 @@ async function settle(page: Page): Promise<void> {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     });
   }, PHOTO_FADE_MS);
+  await waitForVisualStability(page);
+}
+
+/** How long to let the pixels keep moving before giving up and capturing
+ * anyway. A capture that hangs here would write nothing at all, which is
+ * worse than one noisy frame. */
+const STABILITY_TIMEOUT_MS = 4000;
+/** Gap between probes. Long enough that a spring visibly advances between
+ * two of them — sampling faster mostly proves the compositor is idle. */
+const STABILITY_INTERVAL_MS = 120;
+
+/**
+ * Poll until the viewport stops changing, then let the caller capture.
+ *
+ * The waits above handle everything that reports its own completion. What is
+ * left is `Print.tsx` dropping each card in on a Reanimated spring: it is
+ * driven from JavaScript, so `animations: "disabled"` does not freeze it and
+ * `PHOTO_FADE_MS` only lands mid-flight at a slightly more consistent point.
+ *
+ * The fixed pause alone was not enough — measured on this branch, two runs of
+ * the *same commit* against the *same seeded catalogue* differed on 24 of 76
+ * frames, every one of them a screen with cards on it (the feed, the item
+ * page, `/mine`, the review step). A third of the baseline was noise, and it
+ * was exactly the third a reviewer most wants to diff.
+ *
+ * Comparing successive screenshots rather than watching for an animation to
+ * end keeps this agnostic about which library drew the motion: whatever
+ * settles, this notices. Probes use the same `scale`/`animations` settings as
+ * the real capture so they measure the frame that is about to be written, at
+ * a lower quality because only the comparison matters, not the bytes.
+ */
+async function waitForVisualStability(page: Page): Promise<void> {
+  const deadline = Date.now() + STABILITY_TIMEOUT_MS;
+  let previous: string | null = null;
+
+  while (Date.now() < deadline) {
+    const frame = await page.screenshot({
+      scale: "css",
+      type: "jpeg",
+      quality: 40,
+      animations: "disabled",
+      caret: "hide",
+    });
+    const digest = createHash("sha1").update(frame).digest("hex");
+    if (digest === previous) return;
+    previous = digest;
+    await page.waitForTimeout(STABILITY_INTERVAL_MS);
+  }
 }
 
 /**
