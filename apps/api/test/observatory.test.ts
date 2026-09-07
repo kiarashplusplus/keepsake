@@ -17,7 +17,8 @@
  */
 import { env, SELF } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Observatory } from "@keepsake/contracts/observatory";
+import { OBSERVATORY_WINDOWS, type Observatory } from "@keepsake/contracts/observatory";
+import { MAX_EDGE_WINDOW_DAYS } from "../src/observatory/cloudflare.js";
 import { insertApprovedListing, insertOwner, readOk, setTestEnvVar } from "./helpers.js";
 
 const ADMIN_TOKEN = "test-admin-token-observatory";
@@ -149,10 +150,52 @@ describe("GET /api/admin/observatory", () => {
 
       if (observatory.edge.state !== "ok") throw new Error(`expected ok, got ${observatory.edge.state}`);
       expect(observatory.edge.data.totals).toEqual({ requests: 396, errors: 2, subrequests: 14 });
-      expect(observatory.edge.data.by_day).toHaveLength(2);
+      // Seven, not the fixture's two: the series is zero-filled across the
+      // window (covered on its own below), so this assertion is about the
+      // window, never about how many rows Cloudflare happened to return.
+      expect(observatory.edge.data.by_day).toHaveLength(7);
+      expect(observatory.edge.data.by_day.find((day) => day.date === "2026-09-07")?.requests).toBe(320);
       // Not an average of the two per-day groups — a window-level quantile
       // can only come from a window-level query.
       expect(observatory.edge.data.cpu_time_p99_us).toBe(17812);
+    });
+
+    it("zero-fills the days Cloudflare returned no row for", async () => {
+      // The fixture holds two days. A 7-day window must come back as 7
+      // points: Cloudflare emits nothing at all for a day with no
+      // invocations, and a chart fed only the days that exist draws a
+      // continuous line across the one day the Worker served nothing —
+      // which is the day worth seeing.
+      stubCloudflare({ graphql: edgeResponse, telemetry: logsResponse });
+      const observatory = await getObservatory("?window_days=7");
+
+      if (observatory.edge.state !== "ok") throw new Error("expected ok");
+      expect(observatory.edge.data.by_day).toHaveLength(7);
+
+      const dates = observatory.edge.data.by_day.map((day) => day.date);
+      expect([...dates].sort()).toEqual(dates);
+
+      // The filled days are real zeroes, not undefined leaking through.
+      const filled = observatory.edge.data.by_day.filter((day) => !["2026-09-06", "2026-09-07"].includes(day.date));
+      expect(filled.length).toBeGreaterThan(0);
+      for (const day of filled) {
+        expect(day).toMatchObject({ requests: 0, errors: 0, subrequests: 0 });
+      }
+
+      // Totals still come from the ungrouped selection, so zero-filling the
+      // series cannot dilute them.
+      expect(observatory.edge.data.totals.requests).toBe(396);
+    });
+
+    it("puts the edge series on the same days as the D1 series", async () => {
+      // The whole reason both are collected: "requests went up and listings
+      // created did not" is only readable if the two line up. They did not
+      // before — 7 app bars against 2 edge bars on a quiet Worker.
+      stubCloudflare({ graphql: edgeResponse, telemetry: logsResponse });
+      const observatory = await getObservatory("?window_days=7");
+
+      if (observatory.edge.state !== "ok") throw new Error("expected ok");
+      expect(observatory.edge.data.by_day.map((day) => day.date)).toEqual(observatory.app.by_day.map((day) => day.date));
     });
 
     it("reports a GraphQL error body as an error, not as zero traffic", async () => {
@@ -326,6 +369,22 @@ describe("the daily digest", () => {
 
     if (firstWarning !== -1 && lastCritical !== -1) {
       expect(lastCritical).toBeLessThan(firstWarning);
+    }
+  });
+});
+
+describe("the edge series", () => {
+  it("never claims a window the analytics API would refuse", () => {
+    // The zero-fill in `fetchEdgeTelemetry` reads "Cloudflare returned no row
+    // for this day" as "zero requests". That is only honest while the API
+    // actually covers the whole window — past its 32-day ceiling a missing
+    // day would mean "we did not look that far back", and rendering it as a
+    // zero bar would be the confident-empty answer `ObservatorySource` exists
+    // to prevent. Measured, not assumed: a 31-day query returns 32 contiguous
+    // rows and 40 days is refused with "cannot request a time range wider
+    // than 4w4d".
+    for (const days of OBSERVATORY_WINDOWS) {
+      expect(days).toBeLessThanOrEqual(MAX_EDGE_WINDOW_DAYS);
     }
   });
 });
