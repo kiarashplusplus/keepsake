@@ -13,6 +13,7 @@
 // Exit status is 0 when every check passes (skips and warnings do not fail
 // the build), 1 if any check fails.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -719,12 +720,198 @@ export function cronExpressionProblem(expr) {
  * `case "..."` elsewhere in the file is not mistaken for a cron.
  */
 export function scheduledCronCases(text) {
+  const dispatch = scheduledCronDispatch(text);
+  return dispatch === null ? null : dispatch.map((d) => d.cron);
+}
+
+/**
+ * `scheduled()`'s switch as pairs: the literal cron it matches, and the job
+ * name it hands `runCron`. That second half is the one nothing checked
+ * (#176) — `runCron`'s first argument *is* the heartbeat key
+ * (`cron:last:<name>`), so a name that disagrees with `cron/registry.ts`
+ * leaves `GET /api/admin/health` and the daily digest watching a key no code
+ * will ever write.
+ *
+ * `jobName` is `null` for a case that dispatches without a `runCron` call.
+ */
+export function scheduledCronDispatch(text) {
   const start = text.search(/function\s+scheduled\s*\(/);
   if (start === -1) return null;
   const rest = text.slice(start);
   const end = rest.search(/\n\}/);
   const body = end === -1 ? rest : rest.slice(0, end);
-  return [...body.matchAll(/case\s+"([^"]*)"/g)].map((m) => m[1]);
+  const cases = [...body.matchAll(/case\s+"([^"]*)"\s*:/g)];
+  return cases.map((match, i) => {
+    const from = match.index + match[0].length;
+    const to = i + 1 < cases.length ? cases[i + 1].index : body.length;
+    const arm = body.slice(from, to);
+    const call = /runCron\(\s*"([^"]*)"/.exec(arm);
+    return { cron: match[1], jobName: call ? call[1] : null };
+  });
+}
+
+// ── cron/registry.ts ───────────────────────────────────────────────────────
+//
+// Issue #176. `cron-triggers` used to read `wrangler.toml` and `index.ts` and
+// nothing else, while `registry.ts:1-19` and AGENTS.md's "A new cron is three
+// edits" bullet both said it tied the *three* files together. Renaming
+// `dailyDigest` to `weeklyDigest` in the registry and moving its schedule to
+// `"0 0 * * 0"` left preflight reporting `3 cron(s) valid` — naming the old
+// schedules, from the two files it did read — while the registry described a
+// job nothing would ever dispatch or heartbeat.
+//
+// So this now parses `CRON_JOBS` too, and asserts all three agree.
+
+const CRON_REGISTRY_PATH = "apps/api/src/cron/registry.ts";
+
+/** `26 * HOUR` / `60 * 1000` / `MINUTE`, against consts declared in the same
+ * file. `undefined` when it is not a plain product of integers and names. */
+function resolveProductExpr(expr, consts, seen = new Set()) {
+  const trimmed = (expr ?? "").trim().replace(/[,;]$/, "");
+  if (trimmed === "") return undefined;
+  const terms = trimmed.split("*").map((t) => t.trim());
+  let product = 1;
+  for (const term of terms) {
+    if (/^[\d_]+$/.test(term)) {
+      product *= Number(term.replace(/_/g, ""));
+      continue;
+    }
+    if (!/^[A-Za-z_$][\w$]*$/.test(term) || seen.has(term)) return undefined;
+    const next = consts.get(term);
+    if (next === undefined) return undefined;
+    const value = resolveProductExpr(next, consts, new Set([...seen, term]));
+    if (value === undefined) return undefined;
+    product *= value;
+  }
+  return product;
+}
+
+/**
+ * `CRON_JOBS` out of `registry.ts`, as `[{ name, cron, staleAfterMs }]`.
+ * `null` when the array cannot be found at all — the caller treats that as a
+ * failure rather than a quiet pass, because "I could not read the registry"
+ * and "the registry agrees" must not look the same (#166's lesson, applied
+ * here).
+ */
+export function parseCronRegistry(text) {
+  const consts = new Map(
+    [...text.matchAll(/^\s*(?:export\s+)?const\s+([A-Z_][A-Z0-9_]*)\s*=\s*([^;\n]+);/gm)].map((m) => [m[1], m[2]]),
+  );
+
+  const at = text.search(/CRON_JOBS\s*(?::[^=]*)?=\s*\[/);
+  if (at === -1) return null;
+  const open = text.indexOf("[", at);
+  let depth = 0;
+  let close = -1;
+  for (let i = open; i < text.length; i += 1) {
+    if (text[i] === "[") depth += 1;
+    else if (text[i] === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        close = i;
+        break;
+      }
+    }
+  }
+  if (close === -1) return null;
+
+  const body = text
+    .slice(open + 1, close)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:"])\/\/[^\n]*/g, "$1");
+
+  const jobs = [];
+  for (const entry of body.matchAll(/\{([^{}]*)\}/g)) {
+    const fields = entry[1];
+    const name = /\bname\s*:\s*"([^"]*)"/.exec(fields);
+    const cron = /\bcron\s*:\s*"([^"]*)"/.exec(fields);
+    const stale = /\bstaleAfterMs\s*:\s*([^,\n}]+)/.exec(fields);
+    if (!name || !cron) continue;
+    jobs.push({
+      name: name[1],
+      cron: cron[1],
+      staleAfterMs: stale ? resolveProductExpr(stale[1], consts) : undefined,
+      staleAfterMsExpr: stale ? stale[1].trim() : null,
+    });
+  }
+  return jobs;
+}
+
+/** The values a cron field matches, or `null` for a form this cannot expand
+ * (`L`, `?`, `3#2` — none of which appear here, and guessing at them would be
+ * worse than saying so). */
+function expandCronField(field, spec) {
+  if (spec.special?.test(field)) return null;
+  const out = new Set();
+  for (const part of field.split(",")) {
+    const [rangePart, stepPart, ...rest] = part.split("/");
+    if (rest.length > 0) return null;
+    const step = stepPart === undefined ? 1 : Number(stepPart);
+    if (!Number.isInteger(step) || step < 1) return null;
+    let lo;
+    let hi;
+    if (rangePart === "*") {
+      lo = spec.min;
+      hi = spec.max;
+    } else {
+      const ends = rangePart.split("-");
+      if (ends.length > 2) return null;
+      lo = cronEndpointValue(ends[0], spec);
+      hi = ends.length === 2 ? cronEndpointValue(ends[1], spec) : lo;
+      if (lo === null || hi === null) return null;
+      // A bare `5/2` means "from 5 to the ceiling, every 2" in standard cron.
+      if (ends.length === 1 && stepPart !== undefined) hi = spec.max;
+      if (lo > hi) return null;
+    }
+    for (let v = lo; v <= hi; v += step) out.add(v);
+  }
+  return out;
+}
+
+const WEEK_MINUTES = 7 * 24 * 60;
+
+/**
+ * The **longest** gap between two consecutive firings of `expr`, in ms — the
+ * number `staleAfterMs` has to beat, because a threshold shorter than the
+ * interval alarms on a perfectly healthy job.
+ *
+ * `null` when the schedule repeats on a cycle longer than a week (a fixed
+ * day-of-month, a month restriction). Callers say so out loud rather than
+ * treating "not computed" as "fine".
+ */
+export function cronIntervalMs(expr) {
+  const fields = (expr ?? "").trim().split(/\s+/).filter(Boolean);
+  if (fields.length !== 5) return null;
+  const [minuteF, hourF, domF, monthF, dowF] = fields;
+  if (monthF !== "*" || domF !== "*") return null;
+
+  const minutes = expandCronField(minuteF, CRON_FIELDS[0]);
+  const hours = expandCronField(hourF, CRON_FIELDS[1]);
+  const dows = expandCronField(dowF, CRON_FIELDS[4]);
+  if (!minutes || !hours || !dows) return null;
+  const dowSet = new Set([...dows].map((d) => (d === 7 ? 0 : d)));
+
+  const fires = [];
+  for (let i = 0; i < WEEK_MINUTES; i += 1) {
+    if (!minutes.has(i % 60)) continue;
+    if (!hours.has(Math.floor(i / 60) % 24)) continue;
+    if (!dowSet.has(Math.floor(i / 1440) % 7)) continue;
+    fires.push(i);
+  }
+  if (fires.length === 0) return null;
+
+  let longest = 0;
+  for (let i = 0; i < fires.length; i += 1) {
+    const next = i + 1 < fires.length ? fires[i + 1] : fires[0] + WEEK_MINUTES;
+    longest = Math.max(longest, next - fires[i]);
+  }
+  return longest * 60 * 1000;
+}
+
+function humanMs(ms) {
+  if (ms % (60 * 60 * 1000) === 0) return `${ms / (60 * 60 * 1000)}h`;
+  if (ms % (60 * 1000) === 0) return `${ms / (60 * 1000)}m`;
+  return `${ms}ms`;
 }
 
 function checkCronTriggers(ctx) {
@@ -733,7 +920,8 @@ function checkCronTriggers(ctx) {
 
   const triggerSections = parseCronTriggers(wranglerText);
   const indexText = ctx.readText(API_INDEX_PATH);
-  const handled = indexText === null ? null : scheduledCronCases(indexText);
+  const dispatch = indexText === null ? null : scheduledCronDispatch(indexText);
+  const handled = dispatch === null ? null : dispatch.map((d) => d.cron);
   const declared = Object.keys(triggerSections).length > 0;
 
   if (!declared) {
@@ -818,6 +1006,110 @@ function checkCronTriggers(ctx) {
     }
   }
 
+  // ── The third file (#176). ────────────────────────────────────────────
+  //
+  // `cron/registry.ts` is where the name, the schedule and the staleness
+  // threshold are described together, and it is what `GET /api/admin/health`
+  // and the daily digest read. Until this pass nothing compared it to the two
+  // files above, so a job renamed or rescheduled here alone kept the health
+  // endpoint watching a heartbeat key no code would ever write.
+  const registryText = ctx.readText(CRON_REGISTRY_PATH);
+  const notes = [];
+  if (registryText === null) {
+    notes.push(`${CRON_REGISTRY_PATH} not present, so registry agreement was not checked`);
+  } else {
+    const jobs = parseCronRegistry(registryText);
+    if (jobs === null || jobs.length === 0) {
+      details.push(
+        `${CRON_REGISTRY_PATH} exists but no CRON_JOBS entries could be parsed out of it — this check would otherwise report the registry as agreeing while reading nothing from it (#176)`,
+      );
+    } else {
+      const byName = new Map(jobs.map((job) => [job.name, job]));
+
+      // 1. Every registry schedule must actually be declared, in every tier —
+      //    a job whose cron is in the registry alone is never registered with
+      //    Cloudflare and never fires.
+      for (const job of jobs) {
+        for (const tier of tiers) {
+          if (tier.crons === undefined || tier.crons.length === 0) continue; // already reported above
+          if (!tier.crons.includes(job.cron)) {
+            details.push(
+              `${CRON_REGISTRY_PATH}: job "${job.name}" is scheduled "${job.cron}", which ${tier.label} does not declare — ${tier.envName ?? "that tier"} would never fire it, while /api/admin/health and the daily digest go on expecting its heartbeat`,
+            );
+          }
+        }
+      }
+
+      // 2. Every declared-and-dispatched cron must be described by the
+      //    registry, or nothing watches it.
+      const registryCrons = new Set(jobs.map((job) => job.cron));
+      for (const cron of [...resolved].sort()) {
+        if (!registryCrons.has(cron)) {
+          details.push(
+            `cron "${cron}" is declared in ${WRANGLER_PATH} but no CRON_JOBS entry in ${CRON_REGISTRY_PATH} describes it — it fires with no heartbeat and no staleness threshold, so nothing would notice it dying`,
+          );
+        }
+      }
+
+      // 3. The name in the registry must be the literal string `scheduled()`
+      //    hands `runCron` — that argument *is* the heartbeat key.
+      if (dispatch !== null) {
+        for (const { cron, jobName } of dispatch) {
+          const job = jobs.find((j) => j.cron === cron);
+          if (!job) continue; // reported by rule 2
+          if (jobName === null) {
+            details.push(
+              `${API_INDEX_PATH}: scheduled()'s case "${cron}" does not call runCron(), so nothing writes the heartbeat ${CRON_REGISTRY_PATH} names "${job.name}"`,
+            );
+          } else if (jobName !== job.name) {
+            details.push(
+              `${API_INDEX_PATH}: scheduled() runs "${jobName}" for cron "${cron}", but ${CRON_REGISTRY_PATH} calls that job "${job.name}" — runCron's first argument is the heartbeat key (cron:last:<name>), so /api/admin/health watches "${job.name}" while only "${jobName}" is ever written, and ok goes false forever`,
+            );
+          }
+        }
+        const dispatched = new Set(dispatch.map((d) => d.jobName).filter(Boolean));
+        for (const name of dispatched) {
+          if (!byName.has(name)) {
+            details.push(
+              `${API_INDEX_PATH}: scheduled() runs runCron("${name}"), which is not a CRON_JOBS entry in ${CRON_REGISTRY_PATH} — its heartbeat is written but nothing reads it, so the job could stop and no health check would say so`,
+            );
+          }
+        }
+      }
+
+      // 4. A staleness threshold shorter than the schedule alarms on a healthy
+      //    job; one much longer makes a dead job invisible, which is the
+      //    failure the heartbeat exists to prevent.
+      for (const job of jobs) {
+        const interval = cronIntervalMs(job.cron);
+        if (interval === null) {
+          notes.push(
+            `job "${job.name}" ("${job.cron}"): interval not computable (a fixed day-of-month or month), so staleAfterMs was not checked`,
+          );
+          continue;
+        }
+        if (job.staleAfterMs === undefined) {
+          details.push(
+            `${CRON_REGISTRY_PATH}: job "${job.name}" has staleAfterMs ${job.staleAfterMsExpr === null ? "missing" : `"${job.staleAfterMsExpr}"`}, which this check cannot resolve to a number — an unreadable threshold is an unchecked one`,
+          );
+          continue;
+        }
+        if (job.staleAfterMs <= interval) {
+          details.push(
+            `${CRON_REGISTRY_PATH}: job "${job.name}" fires every ${humanMs(interval)} ("${job.cron}") but staleAfterMs is ${humanMs(job.staleAfterMs)} — a threshold at or below the interval marks a perfectly healthy job stale, so /api/admin/health reports ok:false and the daily digest emits a permanent cron_stale critical`,
+          );
+        }
+      }
+
+      notes.unshift(
+        `${jobs.length} ${CRON_REGISTRY_PATH} job(s) agree with wrangler.toml and scheduled(): ` +
+          jobs
+            .map((job) => `${job.name} ("${job.cron}", stale after ${job.staleAfterMs === undefined ? "?" : humanMs(job.staleAfterMs)})`)
+            .join(", "),
+      );
+    }
+  }
+
   if (details.length > 0) return { status: "fail", details };
   const inherited = tiers.filter((t) => t.envName && !t.own).map((t) => t.envName);
   return {
@@ -825,6 +1117,7 @@ function checkCronTriggers(ctx) {
     details: [
       `${resolved.size} cron(s) valid and handled by scheduled(): ${[...resolved].sort().map((c) => `"${c}"`).join(", ")}` +
         (inherited.length > 0 ? `; inherited by ${inherited.join(", ")}` : ""),
+      ...notes,
     ],
   };
 }
@@ -1383,20 +1676,655 @@ function checkPublicEnv(ctx) {
   return { status: "pass", details: [`${seen.size} EXPO_PUBLIC_* name(s) across ${scanFiles.length} file(s), none look like secrets`] };
 }
 
-function checkShellSyntax(ctx) {
-  const scripts = [...ctx.walk("tools"), ...ctx.walk(".github")].filter((f) => f.endsWith(".sh"));
-  if (scripts.length === 0) return { status: "skip", details: ["no *.sh files under tools/ or .github/"] };
+// ── shell-syntax ───────────────────────────────────────────────────────────
+//
+// Issue #166. This check used to glob `tools/**` and `.github/**` for `*.sh`
+// and skip when there were none. There has never been a `.sh` file in this
+// repository — not in the working tree, not anywhere in git history — so the
+// check had skipped every time it had ever run, and it is named for catching
+// exactly the failure that #106 was: a shell parse error in `uptime.yml` kills
+// the only monitor of the live site, and because its alerting step is
+// `if: failure() && steps.check.outputs.failures != ''` and `failures` is
+// never written when the script dies at parse time, **no issue is filed**.
+//
+// All of this repo's shell is inline in workflow `run:` blocks — uptime's
+// probe and `gh issue` alerting, deploy's commit verification,
+// report-pressure's dedupe. So the check now extracts those blocks and runs
+// `bash -n` on each, and keeps the `*.sh` glob for whenever one appears.
+//
+// Two deliberate choices:
+//
+//   1. **"Nothing to check" is a failure, not a skip**, whenever the workflows
+//      do contain `run:` blocks. A check whose "nothing to do" state is
+//      indistinguishable from "I am misconfigured" is what let this sit for
+//      the whole life of the repository. The only remaining skip is the
+//      honest one: no `.sh` files *and* no `.github/workflows` at all, which
+//      is a fixture tree or a monorepo path that has not landed yet.
+//   2. `${{ … }}` is replaced with a placeholder word rather than left in
+//      place. GitHub substitutes those before the shell ever sees them, so
+//      parsing them literally would report syntax errors that do not exist at
+//      run time. The placeholder is a bare word, which is what an
+//      unquoted expression expands to in practice.
+//
+// Known gap, stated rather than papered over: `bash -n` is a *parse*, so it
+// catches an unbalanced `fi`/`done`/quote and nothing else. A step whose
+// `shell:` is not bash/sh (python, pwsh, node) is listed as not-parsed rather
+// than silently ignored.
 
-  const details = [];
-  for (const script of scripts) {
-    const result = spawnSync("bash", ["-n", path.join(ctx.root, script)], { encoding: "utf8" });
-    if (result.status !== 0) {
-      const lastLine = (result.stderr || "").trim().split("\n").pop();
-      details.push(`${script}: ${lastLine || "bash -n failed"}`);
+// GitHub expressions are substituted before the shell runs; parse a
+// placeholder in their place.
+const GHA_EXPRESSION_RE = /\$\{\{[\s\S]*?\}\}/g;
+const GHA_EXPRESSION_PLACEHOLDER = "GHA_EXPR";
+// `bash`, `sh`, and the `bash -e {0}`/`bash --noprofile … {0}` custom forms.
+const PARSEABLE_SHELL_RE = /^(?:\/usr\/bin\/env\s+)?(?:bash|sh)(?:\s|$)/;
+
+function indentWidth(line) {
+  return line.length - line.trimStart().length;
+}
+
+/**
+ * Every `run:` block in a workflow file, without a YAML parser.
+ *
+ * This module imports node builtins only, on purpose (see `splitWorkflowJobs`
+ * below for why `yaml` is not available to lean on), so this walks the same
+ * indentation shape that function already trusts.
+ *
+ * Returns `[{ line, firstScriptLine, shell, script }]` — `line` is the
+ * 1-based line of the `run:` key, `firstScriptLine` the 1-based line the
+ * returned script's first line came from (so `bash -n`'s "line N" can be
+ * mapped back onto the workflow file), and `shell` the step's `shell:` value
+ * or `null` when it takes the runner default.
+ */
+export function extractWorkflowRunBlocks(text) {
+  const lines = text.split("\n");
+  const blocks = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = /^(\s*)(-\s+)?run:(.*)$/.exec(lines[i]);
+    if (!match) continue;
+    const keyIndent = match[1].length + (match[2]?.length ?? 0);
+    const rest = (match[3] ?? "").trim();
+
+    let script;
+    let firstScriptLine;
+    let endLine = i;
+
+    const blockScalar = /^([|>])([+-]?)(\d*)$|^([|>])(\d*)([+-]?)$/.exec(rest);
+    if (blockScalar) {
+      const folded = rest.startsWith(">");
+      const body = [];
+      let j = i + 1;
+      for (; j < lines.length; j += 1) {
+        if (lines[j].trim() === "") {
+          body.push("");
+          continue;
+        }
+        if (indentWidth(lines[j]) <= keyIndent) break;
+        body.push(lines[j]);
+      }
+      endLine = j - 1;
+      // Trailing blank lines belong to the next key, not to this script.
+      while (body.length > 0 && body[body.length - 1] === "") body.pop();
+      const contentIndents = body.filter((l) => l !== "").map(indentWidth);
+      const strip = contentIndents.length > 0 ? Math.min(...contentIndents) : 0;
+      const dedented = body.map((l) => (l === "" ? "" : l.slice(strip)));
+      script = folded ? foldYamlScalar(dedented) : dedented.join("\n");
+      firstScriptLine = i + 2;
+    } else if (rest === "") {
+      continue; // `run:` with nothing after it — not shell, and YAML wouldn't accept it either.
+    } else {
+      script = unquoteYamlScalar(rest);
+      firstScriptLine = i + 1;
+    }
+
+    blocks.push({
+      line: i + 1,
+      firstScriptLine,
+      shell: stepShell(lines, i, endLine, keyIndent),
+      script,
+    });
+    i = endLine;
+  }
+
+  return blocks;
+}
+
+/** YAML folded (`>`) scalars join consecutive non-blank lines with a space. */
+function foldYamlScalar(bodyLines) {
+  const out = [];
+  let buffer = [];
+  for (const line of bodyLines) {
+    if (line === "") {
+      if (buffer.length > 0) out.push(buffer.join(" "));
+      buffer = [];
+      out.push("");
+    } else {
+      buffer.push(line);
     }
   }
+  if (buffer.length > 0) out.push(buffer.join(" "));
+  return out.join("\n");
+}
+
+function unquoteYamlScalar(value) {
+  const double = /^"([\s\S]*)"$/.exec(value);
+  if (double) return double[1].replace(/\\"/g, '"');
+  const single = /^'([\s\S]*)'$/.exec(value);
+  if (single) return single[1].replace(/''/g, "'");
+  return value;
+}
+
+/**
+ * The `shell:` a step declares, or `null` for the runner default (bash on
+ * ubuntu). Sibling keys of `run:` sit at the same indentation; the step's own
+ * list marker sits two columns left of them.
+ */
+function stepShell(lines, runLine, runEndLine, keyIndent) {
+  const readShell = (line) => {
+    const m = /^(?:-\s+)?shell:\s*(.+?)\s*$/.exec(line.trim());
+    return m ? unquoteYamlScalar(m[1]) : null;
+  };
+
+  const scan = (from, to, step) => {
+    for (let i = from; step > 0 ? i <= to : i >= to; i += step) {
+      const line = lines[i];
+      if (line === undefined || line.trim() === "") continue;
+      const indent = indentWidth(line);
+      if (indent > keyIndent) continue; // nested under a sibling key (an `env:` map, say)
+      if (indent === keyIndent) {
+        const shell = readShell(line);
+        if (shell) return shell;
+        continue;
+      }
+      // Left of the sibling keys: the step's own `- ` marker ends the step.
+      if (line.trim().startsWith("- ") && indent + 2 === keyIndent) return readShell(line);
+      return null;
+    }
+    return null;
+  };
+
+  return scan(runLine - 1, 0, -1) ?? scan(runEndLine + 1, lines.length - 1, 1);
+}
+
+function checkShellSyntax(ctx) {
+  const scripts = [...ctx.walk("tools"), ...ctx.walk(".github")].filter((f) => f.endsWith(".sh"));
+  const workflowFiles = ctx.exists(WORKFLOWS_DIR)
+    ? ctx.walk(WORKFLOWS_DIR).filter((f) => /\.ya?ml$/.test(f))
+    : [];
+
+  const units = [];
+  for (const script of scripts) {
+    units.push({ label: script, script: ctx.readText(script) ?? "", firstScriptLine: 1 });
+  }
+
+  let filesWithRunText = 0;
+  let runBlocks = 0;
+  const notParsed = [];
+  for (const file of workflowFiles) {
+    const text = ctx.readText(file) ?? "";
+    if (/^\s*(?:-\s+)?run:/m.test(text)) filesWithRunText += 1;
+    for (const block of extractWorkflowRunBlocks(text)) {
+      runBlocks += 1;
+      if (block.shell !== null && !PARSEABLE_SHELL_RE.test(block.shell)) {
+        notParsed.push(`${file}:${block.line}: shell: ${block.shell} — not parsed by bash -n`);
+        continue;
+      }
+      units.push({
+        label: `${file}:${block.line}`,
+        script: block.script.replace(GHA_EXPRESSION_RE, GHA_EXPRESSION_PLACEHOLDER),
+        firstScriptLine: block.firstScriptLine,
+      });
+    }
+  }
+
+  // The whole point of #166: "found nothing" must be loud. The one honest
+  // skip is a tree with neither shell scripts nor workflows.
+  if (scripts.length === 0 && workflowFiles.length === 0) {
+    return { status: "skip", details: [`no *.sh files under tools/ or .github/, and no ${WORKFLOWS_DIR}`] };
+  }
+  if (units.length === 0) {
+    return {
+      status: "fail",
+      details: [
+        filesWithRunText > 0
+          ? `${filesWithRunText} workflow file(s) under ${WORKFLOWS_DIR} contain \`run:\` blocks but this check extracted none — the extractor is broken, so it has been parsing nothing. It must not report "nothing to do" while the shell that alerts us the site is down goes unchecked (#166).`
+          : `no shell found at all: 0 *.sh files under tools/ or .github/ and 0 \`run:\` blocks across ${workflowFiles.length} workflow file(s). If that is genuinely true, this check has nothing to guard and should be removed rather than left skipping (#166).`,
+      ],
+    };
+  }
+
+  const details = [];
+  for (const unit of units) {
+    const result = spawnSync("bash", ["-n"], { input: unit.script, encoding: "utf8" });
+    if (result.status === 0) continue;
+    const stderr = (result.stderr || "").trim();
+    const message = (stderr.split("\n").pop() || "bash -n failed")
+      // bash counts lines from the start of what it was handed; say where that
+      // is in the workflow file instead.
+      .replace(/^bash: line (\d+):/, (_, n) => `line ${unit.firstScriptLine + Number(n) - 1}:`);
+    details.push(`${unit.label}: ${message}`);
+  }
+
+  if (details.length > 0) {
+    details.push(
+      "A workflow whose shell does not parse dies on its first run — and uptime.yml's alerting step " +
+        "is gated on an output the dead script never writes, so nobody is told (#106, #166).",
+    );
+    return { status: "fail", details };
+  }
+  const summary = [
+    `${scripts.length} shell script(s) and ${runBlocks - notParsed.length} workflow \`run:\` block(s) parse (bash -n), across ${workflowFiles.length} workflow file(s)`,
+  ];
+  for (const skipped of notParsed) summary.push(skipped);
+  return { status: "pass", details: summary };
+}
+
+// ── public-env-passthrough ─────────────────────────────────────────────────
+//
+// Issue #175, the half that can be settled statically. `.env.example`
+// declares the `EXPO_PUBLIC_*` names the client bundle is supposed to
+// contain; `deploy.yml`'s "Export web" step is the only thing that puts them
+// in the environment `expo export` inlines from. Those two lists disagreed
+// for the life of the ads feature — seven declared, four passed — and nothing
+// reconciled them: `env-parity` deliberately excludes `EXPO_PUBLIC_*` (they
+// are not wrangler vars), and `verify-public-env.mjs` derived its
+// expectations from the same environment that was missing the variable, so a
+// name deploy.yml forgot could never be reported.
+//
+// `verify-public-env.mjs` now catches this against a real bundle, which is
+// the stronger evidence — but only at deploy time. This catches the same
+// mistake on the pull request that makes it.
+
+const DEPLOY_WORKFLOW_PATH = ".github/workflows/deploy.yml";
+const PUBLIC_ENV_DECL_RE = /^[ \t]*(EXPO_PUBLIC_[A-Z0-9_]+)[ \t]*=/gm;
+// An `env:` mapping key in a workflow, i.e. `EXPO_PUBLIC_FOO: ${{ vars.FOO }}`.
+const PUBLIC_ENV_YAML_KEY_RE = /^[ \t]+(EXPO_PUBLIC_[A-Z0-9_]+)[ \t]*:/gm;
+
+function checkPublicEnvPassthrough(ctx) {
+  const envExample = ctx.readText(ENV_EXAMPLE_PATH);
+  if (envExample === null) return { status: "skip", details: [`${ENV_EXAMPLE_PATH} not present`] };
+  const deployText = ctx.readText(DEPLOY_WORKFLOW_PATH);
+  if (deployText === null) return { status: "skip", details: [`${DEPLOY_WORKFLOW_PATH} not present`] };
+
+  const declared = [...new Set([...envExample.matchAll(PUBLIC_ENV_DECL_RE)].map((m) => m[1]))];
+  if (declared.length === 0) {
+    return { status: "skip", details: [`${ENV_EXAMPLE_PATH} declares no EXPO_PUBLIC_* names`] };
+  }
+  const passed = new Set([...deployText.matchAll(PUBLIC_ENV_YAML_KEY_RE)].map((m) => m[1]));
+
+  const details = [];
+  for (const name of declared) {
+    if (passed.has(name)) continue;
+    details.push(
+      `${ENV_EXAMPLE_PATH} declares ${name} but ${DEPLOY_WORKFLOW_PATH} never passes it — it inlines as "" in every deployed bundle, and whatever reads it is dead code that nothing logs (#175)`,
+    );
+  }
+  for (const name of passed) {
+    if (declared.includes(name)) continue;
+    details.push(
+      `${DEPLOY_WORKFLOW_PATH} passes ${name}, which ${ENV_EXAMPLE_PATH} does not declare — the one human-readable list of what the client bundle carries is incomplete`,
+    );
+  }
+
   if (details.length > 0) return { status: "fail", details };
-  return { status: "pass", details: [`${scripts.length} shell script(s) parse`] };
+  return {
+    status: "pass",
+    details: [
+      `${declared.length} EXPO_PUBLIC_* name(s) declared in ${ENV_EXAMPLE_PATH} and all passed by ${DEPLOY_WORKFLOW_PATH}`,
+    ],
+  };
+}
+
+// ── csp-script-hash ────────────────────────────────────────────────────────
+//
+// Issue #194. A different animal from the other checks in this file: not a
+// check that could not fail, but one that **did not exist**.
+// `docs/design/ops.md` names the hazard in prose — "if the pre-hydration
+// theme script's text ever changes, its hash goes stale silently" — and
+// `apps/web/public/_headers:23-33` says the same about the `apps/site` copy.
+// Prose was the whole enforcement.
+//
+// `script-src` is hash-based rather than `'unsafe-inline'`, which is the
+// right call, and it means three `sha256-` values are written by hand into
+// two files that must agree with each other *and* with the scripts they
+// authorise. Nothing computed any of them. Change one character of
+// `PREHYDRATION_SCRIPT` — a space, a prettier reflow, since the hash covers
+// the exact bytes between the backticks — and the browser refuses to run it.
+// Every test still passes, because no test loads the page under the real
+// policy. The symptom is the theme flash the script exists to prevent, plus
+// a console error, in production only.
+//
+// This check computes what it can and is explicit about what it cannot:
+//
+//   - `PREHYDRATION_SCRIPT` (apps/web/app/+html.tsx) — computed from source.
+//   - the no-flash script inline in `apps/site/public/*.html` — computed from
+//     source, and the copies are compared against each other, because
+//     editing `about.html` and forgetting `terms.html` is the same bug one
+//     file over.
+//   - Expo Router's injected `globalThis.__EXPO_ROUTER_HYDRATE__=true;` —
+//     **not** from source; it is not in this tree. The declared hash is
+//     checked against the literal `_headers` records for it, which verifies
+//     the two agree and does *not* verify that Expo still emits that exact
+//     text. Only `dist/` shows that. Said out loud in the passing output
+//     rather than left to look like the other two.
+//
+// A declared hash matching none of the above is a failure too: "add the new
+// hash, forget to remove the old" leaves a policy authorising a script that
+// no longer exists, and only the reverse direction would catch it.
+
+const HTML_TSX_PATH = "apps/web/app/+html.tsx";
+const SITE_PUBLIC_DIR = "apps/site/public";
+const SECURITY_HEADERS_PATH = "apps/api/src/middleware/securityHeaders.ts";
+const HEADERS_FILE_PATH = "apps/web/public/_headers";
+
+// Expo Router's static-rendering output injects this verbatim. Recorded in
+// `_headers`' own comment; see the caveat above.
+const EXPO_ROUTER_HYDRATE_SCRIPT = "globalThis.__EXPO_ROUTER_HYDRATE__=true;";
+
+const CSP_HASH_RE = /'sha256-([A-Za-z0-9+/=]+)'/g;
+
+function sha256Base64(text) {
+  return createHash("sha256").update(text, "utf8").digest("base64");
+}
+
+/** The exact bytes between the backticks of `const <name> = \`…\`;`. */
+export function templateLiteralBody(text, name) {
+  const match = new RegExp(`const\\s+${name}\\s*=\\s*\`([\\s\\S]*?)\`;`).exec(text);
+  return match ? match[1] : null;
+}
+
+/** Inline `<script>` bodies (no `src=`) in an HTML document, in order. */
+export function inlineScriptBodies(html) {
+  return [...html.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+}
+
+/** The `'sha256-…'` sources in a CSP, ignoring any that appear in comments.
+ * `_headers` documents all three hashes in a comment block directly above the
+ * policy, so a whole-file scan would "find" a hash the policy does not
+ * actually declare. */
+export function cspHashesIn(text, { commentPrefixes = [] } = {}) {
+  const hashes = new Set();
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (commentPrefixes.some((p) => trimmed.startsWith(p))) continue;
+    for (const match of line.matchAll(CSP_HASH_RE)) hashes.add(match[1]);
+  }
+  return hashes;
+}
+
+function checkCspScriptHash(ctx) {
+  const headersText = ctx.readText(SECURITY_HEADERS_PATH);
+  const headersFile = ctx.readText(HEADERS_FILE_PATH);
+  if (headersText === null && headersFile === null) {
+    return { status: "skip", details: [`neither ${SECURITY_HEADERS_PATH} nor ${HEADERS_FILE_PATH} is present`] };
+  }
+
+  const details = [];
+  // name -> { hash, source } for every script this check can hash itself.
+  const computed = new Map();
+
+  const htmlTsx = ctx.readText(HTML_TSX_PATH);
+  if (htmlTsx === null) {
+    details.push(`${HTML_TSX_PATH} not present, but a CSP declaring script hashes is — nothing can be verified against its source`);
+  } else {
+    const script = templateLiteralBody(htmlTsx, "PREHYDRATION_SCRIPT");
+    if (script === null) {
+      details.push(
+        `${HTML_TSX_PATH}: could not find \`const PREHYDRATION_SCRIPT = \`…\`;\` — the script whose hash the CSP authorises. Renaming or reshaping it silently stops this check computing anything, which is how the hash went unguarded in the first place (#194).`,
+      );
+    } else if (script.includes("${")) {
+      details.push(
+        `${HTML_TSX_PATH}: PREHYDRATION_SCRIPT interpolates \${…}, so the source text is not the text the browser hashes and no hash can be computed from this file. Either inline the value or hash the rendered output instead.`,
+      );
+    } else {
+      computed.set("PREHYDRATION_SCRIPT", { hash: sha256Base64(script), where: `${HTML_TSX_PATH} (${script.length} chars)` });
+    }
+  }
+
+  if (ctx.exists(SITE_PUBLIC_DIR)) {
+    const pages = ctx.walk(SITE_PUBLIC_DIR).filter((f) => f.endsWith(".html"));
+    const byBody = new Map(); // script body -> [files]
+    for (const page of pages) {
+      for (const body of inlineScriptBodies(ctx.readText(page) ?? "")) {
+        if (!body.trim()) continue;
+        if (!byBody.has(body)) byBody.set(body, []);
+        byBody.get(body).push(page);
+      }
+    }
+    if (byBody.size > 1) {
+      details.push(
+        `${SITE_PUBLIC_DIR}: the static pages carry ${byBody.size} different inline <script> bodies — ` +
+          [...byBody.values()].map((files) => files.join(", ")).join(" vs ") +
+          ". They share one CSP, so each distinct body needs its own hash; editing one page's no-flash script and not its siblings is the same bug one file over.",
+      );
+    }
+    let i = 0;
+    for (const [body, files] of byBody) {
+      i += 1;
+      computed.set(`apps/site inline script${byBody.size > 1 ? ` #${i}` : ""}`, {
+        hash: sha256Base64(body),
+        where: `${files.join(", ")} (${body.length} chars)`,
+      });
+    }
+  }
+
+  // Declared, but not computable from this tree — see the header comment.
+  const documented = new Map([
+    [
+      sha256Base64(EXPO_ROUTER_HYDRATE_SCRIPT),
+      "Expo Router's injected `globalThis.__EXPO_ROUTER_HYDRATE__=true;` — checked against the literal _headers records, NOT against Expo's actual output",
+    ],
+  ]);
+
+  const policies = [];
+  if (headersText !== null) {
+    policies.push({ path: SECURITY_HEADERS_PATH, hashes: cspHashesIn(headersText, { commentPrefixes: ["//", "*", "/*"] }) });
+  }
+  if (headersFile !== null) {
+    policies.push({ path: HEADERS_FILE_PATH, hashes: cspHashesIn(headersFile, { commentPrefixes: ["#"] }) });
+  }
+
+  if (computed.size === 0 && details.length === 0) {
+    return {
+      status: "fail",
+      details: [
+        `a CSP declaring script hashes is present but this check computed none — with nothing to compare, it would report agreement it never checked (#194)`,
+      ],
+    };
+  }
+
+  for (const [name, { hash, where }] of computed) {
+    for (const policy of policies) {
+      if (policy.hashes.has(hash)) continue;
+      details.push(
+        `${policy.path} does not declare 'sha256-${hash}', the hash of ${name} (${where}). ` +
+          "The hash covers the *exact bytes* of the script, so a whitespace change or a prettier reflow is enough to do this — " +
+          "and nothing else notices, because no test loads the page under the real policy. The browser refuses to execute the script; " +
+          "the symptom is a theme flash and a console error in production only. Paste 'sha256-" +
+          `${hash}' into both ${SECURITY_HEADERS_PATH} and ${HEADERS_FILE_PATH}.`,
+      );
+    }
+  }
+
+  const known = new Set([...[...computed.values()].map((c) => c.hash), ...documented.keys()]);
+  for (const policy of policies) {
+    for (const hash of policy.hashes) {
+      if (known.has(hash)) continue;
+      details.push(
+        `${policy.path} declares 'sha256-${hash}', which matches no script in this tree and is not one of the documented external scripts — a stale hash left behind after a script edit authorises something that no longer exists`,
+      );
+    }
+  }
+
+  if (policies.length === 2) {
+    const [a, b] = policies;
+    for (const hash of a.hashes) {
+      if (!b.hashes.has(hash)) details.push(`${a.path} declares 'sha256-${hash}' and ${b.path} does not — the two policies are maintained by hand and must stay identical`);
+    }
+    for (const hash of b.hashes) {
+      if (!a.hashes.has(hash)) details.push(`${b.path} declares 'sha256-${hash}' and ${a.path} does not — the two policies are maintained by hand and must stay identical`);
+    }
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+
+  const lines = [
+    `${computed.size} inline script(s) hashed from source and declared by ${policies.length} polic(y/ies): ${policies.map((p) => p.path).join(", ")}`,
+  ];
+  for (const [name, { hash, where }] of computed) lines.push(`${name}: sha256-${hash} — ${where}`);
+  for (const [hash, note] of documented) {
+    if (policies.some((p) => p.hashes.has(hash))) lines.push(`sha256-${hash}: ${note}`);
+  }
+  return { status: "pass", details: lines };
+}
+
+// ── backup-tables ──────────────────────────────────────────────────────────
+//
+// Issue #164. `wrangler d1 export` refuses this database outright — migration
+// `0003_fts.sql` creates a virtual FTS5 table and wrangler will not export a
+// database that has one — so `docs/runbooks/restore.md` names the tables one
+// at a time with `--table`. That hard-coded list went stale the moment
+// `0006_aspects.sql` landed: `listing_aspects` was excluded with no reason at
+// all, so no export made by following the runbook contained any listing's
+// aspects.
+//
+// What turns a bad restore into a permanent one is that `listings` *is* in
+// the export, and it carries `aspects_backfilled_at`. The backfill only
+// considers rows where that column is null, so every listing restored from
+// such an export says "already done" and its aspects can never be re-derived.
+//
+// The runbook already knows this hazard — it glob-loops the *migrations*
+// rather than naming them, and says why — but the `--table` list sitting
+// beside that loop was the hard-coded list it warns about. So: derive the
+// real table set from the migrations, derive the documented set from the
+// runbook, and fail on any difference that is not a written exclusion. The
+// next migration that adds a table now fails the build instead of the backup.
+//
+// Exclusions are named here *and* have to be mentioned in the runbook: an
+// exclusion nobody wrote down is exactly what #164 was.
+
+const RESTORE_RUNBOOK_PATH = "docs/runbooks/restore.md";
+
+const BACKUP_EXCLUDED_TABLES = new Map([
+  [
+    "postal_codes",
+    "~3.4 MB of the database's 3.6 MB, reproducible from apps/api/seeds/postal_codes.sql in one command",
+  ],
+  ["_cf_KV", "Cloudflare-internal"],
+  ["d1_migrations", "wrangler's own ledger; migrations own the schema, the export owns the rows"],
+]);
+
+/**
+ * The tables a D1 database ends up with after applying `migrations` in order,
+ * split into real tables and FTS5 virtual ones. Statements are replayed
+ * rather than pattern-counted so `0005_compliance.sql`'s
+ * rename-create-copy-drop shuffle of `requests` resolves to one table, not
+ * three.
+ */
+export function tablesAfterMigrations(sqlByFileInOrder) {
+  const real = new Set();
+  const virtual = new Set();
+  for (const sql of sqlByFileInOrder) {
+    const stripped = sql.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const statement of stripped.split(";")) {
+      const create = /\bCREATE\s+(VIRTUAL\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"'[]?([A-Za-z_][\w]*)/i.exec(statement);
+      if (create) {
+        if (create[1]) virtual.add(create[2]);
+        else real.add(create[2]);
+        continue;
+      }
+      const rename = /\bALTER\s+TABLE\s+[`"'[]?([A-Za-z_][\w]*)[`"'\]]?\s+RENAME\s+TO\s+[`"'[]?([A-Za-z_][\w]*)/i.exec(statement);
+      if (rename) {
+        for (const set of [real, virtual]) {
+          if (set.delete(rename[1])) set.add(rename[2]);
+        }
+        continue;
+      }
+      const drop = /\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?[`"'[]?([A-Za-z_][\w]*)/i.exec(statement);
+      if (drop) {
+        real.delete(drop[1]);
+        virtual.delete(drop[1]);
+      }
+    }
+  }
+  return { real, virtual };
+}
+
+/** The `--table <name>` arguments in the runbook's export command. */
+export function documentedBackupTables(markdown) {
+  return [...markdown.matchAll(/--table\s+([A-Za-z_][\w]*)/g)].map((m) => m[1]);
+}
+
+function checkBackupTables(ctx) {
+  if (!ctx.exists(MIGRATIONS_DIR)) return { status: "skip", details: [`${MIGRATIONS_DIR} not present`] };
+  const runbook = ctx.readText(RESTORE_RUNBOOK_PATH);
+  if (runbook === null) return { status: "skip", details: [`${RESTORE_RUNBOOK_PATH} not present`] };
+
+  const files = migrationFiles(ctx);
+  if (files.length === 0) return { status: "skip", details: [`${MIGRATIONS_DIR} has no *.sql files yet`] };
+
+  const ordered = migrationApplyOrder(files.map((f) => path.posix.basename(f)));
+  const order = ordered === null ? files.map((f) => path.posix.basename(f)) : ordered;
+  const { real, virtual } = tablesAfterMigrations(
+    order.map((base) => ctx.readText(`${MIGRATIONS_DIR}/${base}`) ?? ""),
+  );
+
+  const documented = documentedBackupTables(runbook);
+  if (documented.length === 0) {
+    return {
+      status: "fail",
+      details: [
+        `${RESTORE_RUNBOOK_PATH} contains no \`--table\` arguments, so this check has nothing to compare the ${real.size} migration-created table(s) against. \`wrangler d1 export\` refuses this database (fts5), so the documented backup must name its tables — see #164.`,
+      ],
+    };
+  }
+
+  const documentedSet = new Set(documented);
+  const details = [];
+
+  for (const [i, name] of documented.entries()) {
+    if (documented.indexOf(name) !== i) {
+      details.push(`${RESTORE_RUNBOOK_PATH}: --table ${name} is listed more than once`);
+    }
+  }
+
+  for (const table of [...real].sort()) {
+    if (documentedSet.has(table)) continue;
+    const reason = BACKUP_EXCLUDED_TABLES.get(table);
+    if (reason === undefined) {
+      details.push(
+        `${MIGRATIONS_DIR} creates "${table}" but ${RESTORE_RUNBOOK_PATH}'s export command does not \`--table\` it — a backup taken exactly as documented would silently come back without those rows (#164). Add it, or add it to BACKUP_EXCLUDED_TABLES here with the reason.`,
+      );
+    } else if (!runbook.includes(table)) {
+      details.push(
+        `"${table}" is excluded from the documented export but ${RESTORE_RUNBOOK_PATH} never mentions it — an exclusion nobody wrote down is exactly what #164 was. Reason on file here: ${reason}`,
+      );
+    }
+  }
+
+  for (const table of documented) {
+    if (real.has(table)) continue;
+    if (virtual.has(table)) {
+      details.push(
+        `${RESTORE_RUNBOOK_PATH}: --table ${table} is an FTS5 virtual table — \`wrangler d1 export\` refuses those, and it is rebuilt from listings by its triggers`,
+      );
+    } else {
+      details.push(
+        `${RESTORE_RUNBOOK_PATH}: --table ${table} names a table no migration in ${MIGRATIONS_DIR} creates — the documented export would fail`,
+      );
+    }
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+  const excluded = [...real].filter((t) => !documentedSet.has(t)).sort();
+  return {
+    status: "pass",
+    details: [
+      `${documented.length} \`--table\` name(s) in ${RESTORE_RUNBOOK_PATH} cover every table ${files.length} migration(s) create` +
+        (excluded.length > 0 ? `, excluding ${excluded.join(", ")} (documented)` : "") +
+        (virtual.size > 0 ? `; ${[...virtual].sort().join(", ")} is virtual and cannot be exported` : ""),
+    ],
+  };
 }
 
 // ── gh-repo-context ────────────────────────────────────────────────────────
@@ -1500,9 +2428,10 @@ export const CHECKS = {
   fonts: { description: "@font-face url(/fonts/*) vs apps/web/public/fonts/*.ttf", run: checkFonts },
   migrations: { description: "apps/api/migrations/*.sql naming, apply order and terminators", run: checkMigrations },
   "migration-drift": { description: "no landed migration is renamed/edited/deleted (git)", run: checkMigrationDrift },
+  "backup-tables": { description: "restore.md's `--table` list covers every table the migrations create", run: checkBackupTables },
   "env-parity": { description: ".env.example vs wrangler.toml [vars] / [env.*.vars]", run: checkEnvParity },
   "var-usage": { description: "wrangler.toml [vars] vs what apps/api/src reads and falls back to", run: checkVarUsage },
-  "cron-triggers": { description: "every tier resolves valid crons, all handled by scheduled()", run: checkCronTriggers },
+  "cron-triggers": { description: "wrangler.toml [triggers] ↔ scheduled() ↔ cron/registry.ts agree (name, schedule, staleAfterMs)", run: checkCronTriggers },
   models: { description: '"@cf/" model ids confined to apps/api/src/models.ts', run: checkModels },
   "ip-digest": { description: "client-IP hashes rotate daily via lib/digest.ts's dailyIpDigest", run: checkIpDigest },
   exports: { description: "packages/*/package.json subpath exports (no \".\")", run: checkExports },
@@ -1510,8 +2439,10 @@ export const CHECKS = {
   "conflict-markers": { description: "no unresolved <<<<<<< / >>>>>>> in tracked text", run: checkConflictMarkers },
   "lfs-pointers": { description: "apps/api/seeds/*.sql are not unfetched LFS pointers", run: checkLfsPointers },
   "public-env": { description: "EXPO_PUBLIC_* names are never secrets", run: checkPublicEnv },
+  "public-env-passthrough": { description: ".env.example's EXPO_PUBLIC_* block vs what deploy.yml passes to the export", run: checkPublicEnvPassthrough },
+  "csp-script-hash": { description: "CSP 'sha256-…' sources vs the inline scripts they authorise", run: checkCspScriptHash },
   "gh-repo-context": { description: "workflow steps running `gh` can resolve the repo", run: checkGhRepoContext },
-  "shell-syntax": { description: "bash -n on every *.sh under tools/ and .github/", run: checkShellSyntax },
+  "shell-syntax": { description: "bash -n on every workflow `run:` block and every *.sh under tools/ and .github/", run: checkShellSyntax },
 };
 
 // ── CLI ────────────────────────────────────────────────────────────────
@@ -1541,7 +2472,7 @@ function colorize(text, useColor, ...styles) {
 function printHuman(results, useColor) {
   for (const { name, status, details } of results) {
     const style = STATUS_STYLE[status];
-    const line = `${colorize(style.label.padEnd(5), useColor, ANSI.bold, style.color)} ${name.padEnd(18)} ${details[0] ?? ""}`;
+    const line = `${colorize(style.label.padEnd(5), useColor, ANSI.bold, style.color)} ${name.padEnd(22)} ${details[0] ?? ""}`;
     console.log(line);
     for (const detail of details.slice(1)) {
       console.log(`         ${detail}`);
@@ -1594,7 +2525,7 @@ function main(argv) {
 
   if (args.list) {
     for (const [name, { description }] of Object.entries(CHECKS)) {
-      console.log(`${name.padEnd(18)} ${description}`);
+      console.log(`${name.padEnd(22)} ${description}`);
     }
     return 0;
   }

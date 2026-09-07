@@ -165,9 +165,14 @@ already describe in the fixed tense.
   the duplicate `409` now return the same `201` the success path returns, having written and sent
   nothing. Its client half — the helpful "that's your own keepsake" message, checked in `apps/web`
   against the owner address the device already knows — is still to do.
-- **More checks that could not fail:** #166 (preflight's shell-syntax check has never examined a
-  byte of shell), #175, #176 — all three land with PR #198. Instances of `AGENTS.md`'s table found
-  in a single pass — the table should be read as a pattern, not a closed list. **#191 is fixed**
+- **More checks that could not fail:** all closed. **#166, #175 and #176 are fixed** (PR #198):
+  preflight's `shell-syntax` now parses the workflow `run:` blocks that hold all this repo's shell
+  and fails rather than skips when it finds none; `cron-triggers` reads `cron/registry.ts` and
+  asserts the three-way agreement two documents already claimed; and `verify-public-env` derives
+  its expectations from `.env.example` instead of from the environment that forgot the variable.
+  **#194 is fixed** in the same PR — the CSP script hashes are now computed from the script they
+  authorise. Six instances of `AGENTS.md`'s table found in a single pass; the table is now at
+  eleven rows and should be read as a pattern, not a closed list. **#191 is fixed**
   (#209): `/health` gives `ASSETS` a real read and reports `VECTORIZE` as `ok`/`error`/`off`
   rather than not looking at it at all. **#173 and #181 are fixed**
   (2026-09-07): the consent banner was never scanned by axe, because every a11y context seeded a
@@ -193,8 +198,11 @@ already describe in the fixed tense.
   `replaceListingAspects`) are still unbatched. **#184 is fixed in PR #197** — the report
   auto-hide decides on the count returned by its own `UPDATE … RETURNING`, so concurrent reports
   trip the threshold instead of each reading zero.
-- **Ops and backup:** #164 (the documented D1 backup omits `listing_aspects`, and
-  `aspects_backfilled_at` makes the loss unrecoverable), #178 (**fixed** — `orphanSweep` refuses
+- **Ops and backup:** both closed. **#164** (PR #198): the documented D1 backup omitted
+  `listing_aspects`, and because `aspects_backfilled_at` *is* in the export the loss was
+  unrecoverable — `restore.md`'s `--table` list now includes it, and preflight's new
+  `backup-tables` check compares that list against the tables the migrations create, so the next
+  migration that adds a table fails the build instead of the backup. #178 (**fixed** — `orphanSweep` refuses
   to delete a photo the backup bucket does not have, so the ordering no longer rests on two
   independent schedulers; still unguarded in production until #157 creates the bucket).
 

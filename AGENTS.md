@@ -118,7 +118,7 @@ environment secrets, which no session can read back (the GitHub secrets API retu
 
 **A passing test is not evidence. Verify the artifact.**
 
-This project has shipped seven separate checks that could not fail:
+This project has shipped eleven separate checks that could not fail:
 
 | What looked fine | What was actually true |
 |---|---|
@@ -129,6 +129,10 @@ This project has shipped seven separate checks that could not fail:
 | A rate limiter declared in every environment | It was called from nowhere. 320 parallel requests, 320 successes. |
 | `tools/preflight/preflight.test.mjs` — 55 tests whose whole job is proving each preflight check can still fail | Nothing ever ran them. `tools/*` are workspace packages, but `pnpm test`'s runner only invoked the preflight *binary* and CI's `test-packages` filtered on `./packages/*`. The tests that guard the guards had never executed once. Found while adding the 56th (#99). |
 | Three commits merged to `main`, nothing red in the Actions tab | Not a check that could not fail — a check that silently *did not run*. CI's concurrency group was one bucket for `main`, so each merge cancelled the previous merge's run; `cancelled` is neither red nor green, nothing reads it, and `deploy.yml` shipped each of those commits to preview anyway. The merged *combination* — the one thing a PR run never tests — went out untested three times (#103). |
+| `SKIP shell-syntax  no *.sh files under tools/ or .github/` | There has never been a `.sh` file in this repository, in the tree or in history, so the check had skipped **every time it ever ran** — while all the shell that matters sits inline in workflow `run:` blocks, including the `uptime.yml` probe that is the only monitor of the live site. A new variant worth naming: its *test* was sound and passed, but only ever against a fixture tree containing an invented `.sh` file — **a test that can only fail against inputs the repo does not contain.** Fixed by parsing `run:` blocks and making "found no shell at all" a failure (#166). |
+| `PASS cron-triggers  3 cron(s) valid` | It read `wrangler.toml` and `index.ts`. `cron/registry.ts` — the file `/api/admin/health` and the daily digest actually read, and which two documents said this check tied to the other two — was never opened. Renaming a job and moving its schedule in the registry alone still reported three valid crons, naming the *old* schedules (#176). |
+| A documented, executed, verified D1 backup | The `--table` list was hard-coded and went stale when `0006_aspects.sql` landed, so no export contained any listing's aspects — and because `listings.aspects_backfilled_at` *is* in the export, every restored listing said "already done" and its aspects could never be re-derived. The restore closed its own recovery path. The runbook glob-loops the *migrations* to avoid exactly this, one paragraph away (#164). |
+| `[verify-public-env] 4 value(s) present in the bundle` | It built its expectation set by filtering `process.env`, so a variable `deploy.yml` forgot to pass was absent from the expectations too and could never be reported missing. It could only verify what had already been passed correctly — structurally blind to the shape of the bot-check incident two rows above. Three Google Ads ids shipped as `""` in every deployed bundle, and a legal document asserted the tag was live (#175). |
 
 So: when you add a guard, **break the code and watch the guard fail**, then restore. Say in the
 issue comment which one you broke. This applies to observability too, and is why
@@ -140,7 +144,7 @@ deployed URL, read the actual bytes, take a viewport screenshot. Do not screensh
 `captureBeyondViewport`; that is how a page nobody could scroll looked perfect for a week.
 
 **And one more, #66: "verified on preview" was never safe to say.** `deploy.yml`'s own
-"Verify /health reports this commit" step is not one of the seven above — it's correct at the
+"Verify /health reports this commit" step is not one of the eleven above — it's correct at the
 moment it runs. What was worthless was trusting it a minute later, because preview was one shared
 Worker that every open PR deployed to, so another session's deploy could land between CI's check
 and whatever you did next. This happened for real verifying #14 — a probe ran 90 seconds after an
@@ -253,9 +257,14 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
 - **A new cron is three edits, and one of them changes an unrelated test.** Name, schedule and
   staleness threshold live together in `apps/api/src/cron/registry.ts`; `wrangler.toml`'s
   `[triggers] crons` has to restate the schedule because Cloudflare reads that file, and
-  `index.ts`'s `scheduled()` switch has to match the literal string (preflight's `cron-triggers`
-  check enforces the `wrangler.toml` ↔ `scheduled()` pair only — it never reads `registry.ts`,
-  so a job added to `CRON_JOBS` that nothing dispatches still passes it clean, #176). The part
+  `index.ts`'s `scheduled()` switch has to match the literal string. Preflight's `cron-triggers`
+  check now enforces all three: every registry `cron` must be a trigger that resolves for every
+  env block, every registry `name` must be the literal string `scheduled()` hands `runCron`
+  (that argument *is* the heartbeat key `cron:last:<name>`), and `staleAfterMs` must exceed the
+  schedule's own interval. It used to read only the `wrangler.toml` ↔ `scheduled()` pair while
+  two documents claimed otherwise, so a job renamed or rescheduled in `CRON_JOBS` alone passed it
+  clean (#176). It compares *declarations*: a job correctly declared everywhere that still never
+  writes its heartbeat at runtime is a different bug, and not one this check can see. The part
   that surprises people: `GET /api/admin/health` derives `ok` from
   **every** job in the registry, so adding one turns `ok: true` into `ok: false` in any test that
   seeds only the heartbeats it knew about. That is the guard working — a job nothing watches is

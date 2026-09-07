@@ -18,25 +18,33 @@ export type Config = {
    * as a valid token for enabling submit), so the flow still works before
    * it exists. */
   turnstileSiteKey: string;
-  /**
-   * Google Ads tag id (`AW-…`). Public by design — it is visible in the page
-   * source of every site that runs the tag; that is how the product works.
+  /*
+   * There were three Google Ads fields here — `googleAdsId`,
+   * `googleAdsGiveLabel`, `googleAdsRequestLabel`, each `process.env.
+   * EXPO_PUBLIC_GOOGLE_ADS_* ?? ""`. **Removed 2026-09-07, Kiarash's
+   * decision: no Google Ads for now** (issue #175).
    *
-   * Read here AND emitted as `<meta name="ks-google-ads-id">` by
-   * `app/+html.tsx`, because `/consent.js` is a static file that owns the
-   * loading and cannot see `process.env`. The value reaching the bundle is
-   * also what makes `scripts/verify-public-env.mjs` pass: a variable that
-   * only ever appeared in the static HTML shell would not be found in
-   * `dist/_expo/static/js/web/*.js` and would fail that check.
+   * They were read here for the whole life of the feature while
+   * `deploy.yml`'s export step passed none of them, so all three inlined as
+   * `""` in every deployed bundle and `adsEvents.ts` returned early on every
+   * call. A `?? ""` fallback is what made that invisible: an unconfigured
+   * value and a forgotten one are the same empty string, and nothing
+   * distinguished them.
    *
-   * Empty means Google Ads is not configured: `/consent.js` loads nothing and
-   * `adsEvents.ts` sends nothing, in any environment, whatever the visitor
-   * consented to.
+   * `/consent.js`'s advertising category is deliberately still there and
+   * still tested — it is unfed, not removed. It keys off
+   * `<meta name="ks-google-ads-id">`, which `app/+html.tsx` and every
+   * `apps/site` page now emit with a hardcoded empty `content`. That is the
+   * loader's own kill switch: it fails the `/^(AW|G|GT)-/` test and returns
+   * before touching the network. Left declared-and-empty rather than deleted
+   * so the pages stay in sync with consent.js's provider registry, which
+   * `test/guards/privacyPolicy.test.ts` enforces.
+   *
+   * Turning ads back on means restoring these fields, `.env.example`'s block,
+   * `deploy.yml`'s env keys and the GitHub Environment values *together* —
+   * and re-reading `docs/legal-considerations.md`'s Rhode Island paragraph,
+   * which turns on whether a tag actually loads.
    */
-  googleAdsId: string;
-  /** Conversion labels, paired with `googleAdsId` to form gtag's `send_to`. */
-  googleAdsGiveLabel: string;
-  googleAdsRequestLabel: string;
   /**
    * Cloudflare Web Analytics beacon token. Public by design (it is in the
    * `data-cf-beacon` attribute on every page that runs it) — hence its place
@@ -56,9 +64,6 @@ const rawEnv = process.env.EXPO_PUBLIC_ENV;
 export const config: Config = {
   siteUrl: process.env.EXPO_PUBLIC_SITE_URL ?? "",
   turnstileSiteKey: process.env.EXPO_PUBLIC_TURNSTILE_SITE_KEY ?? "",
-  googleAdsId: process.env.EXPO_PUBLIC_GOOGLE_ADS_ID ?? "",
-  googleAdsGiveLabel: process.env.EXPO_PUBLIC_GOOGLE_ADS_GIVE_LABEL ?? "",
-  googleAdsRequestLabel: process.env.EXPO_PUBLIC_GOOGLE_ADS_REQUEST_LABEL ?? "",
   cfWebAnalyticsToken: process.env.EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN ?? "",
   env: isEnv(rawEnv) ? rawEnv : "development",
 };

@@ -133,8 +133,25 @@ cd apps/api
 pnpm exec wrangler d1 export keepsake-db-production --env production --remote --no-schema \
   --output "keepsake-$(date -u +%Y%m%dT%H%M%SZ).sql" -y \
   --table owners --table listings --table photos --table requests --table reports \
-  --table moderation_events --table recovery_tokens --table email_events
+  --table moderation_events --table recovery_tokens --table email_events \
+  --table listing_aspects
 ```
+
+**This list is enforced, not trusted** (issue #164). `node tools/preflight/preflight.mjs --only
+backup-tables` compares the `--table` names above against the tables
+`apps/api/migrations/*.sql` actually create, minus the exclusions below, and fails the build on
+any difference. Before that check existed the list had already gone stale: `listing_aspects`
+arrived in `0006_aspects.sql`, nobody re-checked, and **every export made by following this
+runbook came back with no aspects for any listing** — no shelves
+(`GET /api/feed/shelves` aggregates that table), degraded embeddings (`embeddingText()` includes
+aspects), and nothing on any listing page. Worse, the loss was permanent: `listings` *is* in the
+export and it carries `aspects_backfilled_at`, and the backfill only considers rows where that
+column is null, so every restored listing said "already done" and its aspects could never be
+re-derived. The recovery path was closed by the restore itself.
+
+That is the same hazard the migration loop below is written to avoid, one paragraph apart. A
+hard-coded list going stale once is a typo; going stale twice is a missing guard, so there is now
+a guard.
 
 - `--no-schema` is deliberate: the export contains **no `CREATE INDEX` and no `CREATE TRIGGER`**
   (verified — zero of each in the file). Importing a schema-ful export would give you tables with
@@ -144,7 +161,13 @@ pnpm exec wrangler d1 export keepsake-db-production --env production --remote --
   reproducible from `apps/api/seeds/postal_codes.sql`, and re-seeding it is one command
   (see below).
 - `listings_fts*` and `_cf_KV` are excluded because they are derived or internal. FTS is rebuilt
-  from `listings`, which is in the export.
+  from `listings`, which is in the export. `d1_migrations` is wrangler's own ledger and is
+  excluded for the same reason `--no-schema` is: migrations own the schema.
+- **Every other table the migrations create belongs in the list.** If you add one, add it here in
+  the same pull request — `backup-tables` will fail CI until you do, and it names the table.
+  If a new table genuinely should not be exported, add it to `BACKUP_EXCLUDED_TABLES` in
+  `tools/preflight/preflight.mjs` *and* write the reason into this section; the check requires
+  both, because an exclusion nobody wrote down is what #164 was.
 - Measured on preview: 11 KB, about 3 seconds. On production it stays small for a long time —
   this is text, and the photos (the actual bulk) live in R2.
 
