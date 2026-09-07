@@ -446,13 +446,16 @@ describe("sendMail failure reporting", () => {
     return { kind: "new_request", to, subject: "s", html: "<p>h</p>", text: "t" };
   }
 
-  it("returns the provider's raw text as `detail` and keeps `reason` a stable code", async () => {
+  it("returns the provider's text as `detail`, recipient scrubbed, and keeps `reason` a stable code", async () => {
     installThrowingEmail(REFUSAL);
     const result = await sendMail(env as unknown as Env, testMessage("recipient@gmail.com"));
 
     expect(result.sent).toBe(false);
     expect(result.reason).toBe("send_failed");
-    expect(result.detail).toBe(REFUSAL);
+    // The sentence, whole — minus the identifier. #190.
+    expect(result.detail).toBe(
+      "destination address not verified: <recipient> is not a verified destination address for this Email Routing zone",
+    );
   });
 
   /**
@@ -479,7 +482,25 @@ describe("sendMail failure reporting", () => {
     expect(second.detail).not.toBe(result.detail);
   });
 
-  it("writes the code, the raw detail and the recipient's domain to email_events", async () => {
+  /**
+   * Issue #190, and the assertion this test exists to have *inverted*.
+   *
+   * It used to read `expect(row?.error_detail).toBe(REFUSAL)` — two lines
+   * above `expect(row?.to_hash).not.toContain("@")`. The suite was enforcing
+   * that the recipient's plaintext address is stored in the same row whose
+   * hash is defended immediately below it: not a gap in coverage, but
+   * coverage pointed the wrong way, which is why it would survive an ordinary
+   * review. Inverting it and watching it fail against the unmodified code was
+   * the proof that the leak was real:
+   *
+   *     AssertionError: expected 'destination address not verified: rec…'
+   *       not to contain 'recipient@gmail.com'
+   *
+   * The recipient here is `Recipient@GMAIL.com` while the provider quotes
+   * `recipient@gmail.com`, so this also pins the case-insensitive match — a
+   * provider echoing a normalised form must not slip past.
+   */
+  it("scrubs the recipient out of error_detail while keeping the diagnosis", async () => {
     installThrowingEmail(REFUSAL);
     const result = await sendMail(env as unknown as Env, testMessage("Recipient@GMAIL.com"));
 
@@ -490,11 +511,37 @@ describe("sendMail failure reporting", () => {
 
     expect(row?.ok).toBe(0);
     expect(row?.error).toBe("send_failed");
-    expect(row?.error_detail).toBe(REFUSAL);
+
+    // The address is gone — in any casing.
+    expect(row?.error_detail ?? "").not.toContain("recipient@gmail.com");
+    expect((row?.error_detail ?? "").toLowerCase()).not.toContain("recipient@gmail.com");
+    expect(row?.error_detail ?? "").not.toContain("@gmail.com");
+
+    // ...and the diagnosis is not. This is the half that would answer #6, so
+    // "scrubbed" must not have quietly become "blanked".
+    expect(row?.error_detail).toContain("<recipient>");
+    expect(row?.error_detail).toContain("is not a verified destination address");
+
     // Lowercased, and the domain only — `to_hash` stays the one column that
     // identifies *who* was mailed.
     expect(row?.to_domain).toBe("gmail.com");
     expect(row?.to_hash).not.toContain("@");
+  });
+
+  /**
+   * The backstop. If the provider quotes an address that is *not* the one we
+   * sent to — a forwarding target, an envelope sender — step 1 of the scrub
+   * cannot match it by string equality, and #170's `redactString` has to
+   * catch it by shape. The domain survives on purpose: it names a mail
+   * provider, not a person.
+   */
+  it("also scrubs an address the provider quotes that is not the recipient", async () => {
+    installThrowingEmail("forwarding loop: someone-else@yahoo.com refused relay");
+    const result = await sendMail(env as unknown as Env, testMessage("recipient@gmail.com"));
+
+    expect(result.detail).not.toContain("someone-else@yahoo.com");
+    expect(result.detail).toContain("@yahoo.com");
+    expect(result.detail).toContain("refused relay");
   });
 
   it("records the domain on a successful send too, so a failure ratio has a denominator", async () => {
