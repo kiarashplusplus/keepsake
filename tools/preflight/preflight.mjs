@@ -938,6 +938,255 @@ function checkIpDigest(ctx) {
   return { status: "pass", details: [`${scanned} file(s) scanned under ${API_SRC_DIR}; IP digests all rotate daily via ${DAILY_DIGEST_FN}()`] };
 }
 
+// ── var-usage ─────────────────────────────────────────────────────────────
+//
+// Issue #128. `env-parity` above compares four copies of one list —
+// `.env.example` and the three `[vars]` blocks — and they can agree perfectly
+// while agreeing with nothing the Worker actually does. Two failures live in
+// that blind spot, and this repo has met both:
+//
+//   - **Read by the code, declared nowhere.** #92 added per-IP daily ceilings
+//     to the report path and the two mail-sending routes, read through a code
+//     fallback. Had the `[vars]` lines been forgotten, nothing would have
+//     looked wrong — the fallback is the same number — but the two ceilings
+//     most likely to be wanted *during* an incident (a report flood is a
+//     takedown vector at three reports; a mail runaway spends deliverability
+//     reputation on a `p=reject` domain) could not have been turned down
+//     without a code deploy. They were in fact declared; #128 was filed
+//     against a checkout from 45 minutes before that merge. Nothing here
+//     could have answered that question, which is the actual defect.
+//   - **Declared everywhere, read by nobody.** `MAX_PHOTOS` and
+//     `IMAGE_TRANSFORMS_ENABLED` sat in all three blocks referencing nothing
+//     until the 2026-09-06 launch audit removed them by eye. A knob that
+//     cannot change behavior is worse than no knob: someone reaches for it
+//     mid-incident and it does nothing, and reports the incident handled.
+//
+// A third rule keeps the first two honest. `parseIntVar` degrading to a code
+// fallback is correct — a malformed budget should not 500 the Worker — but it
+// also means a fallback that disagrees with `[vars]` makes the declared number
+// a lie about what runs when the var is missing or mistyped. So every fallback
+// this check can resolve must equal the top-level `[vars]` value.
+//
+// **Resolving the names is the whole difficulty**, because not every read is a
+// member access. `dailyBudget()` reads `c.env[options.ipDailyLimitVar]`, so
+// none of the five `*_IP_DAILY_BUDGET` names appears as `env.X` anywhere:
+// grepping for `env.REPORT_IP_DAILY_BUDGET` finds nothing whether or not it is
+// declared, which is how #128 came to be filed against a var already sitting
+// in all three blocks. Four sources, each an existing convention in the code:
+//
+//   1. `env.NAME` / `c.env.NAME` — the direct member read.
+//   2. `parseIntVar("NAME", …)` — the name is that helper's first argument,
+//      passed precisely so a failed parse can say which var it was.
+//   3. Members of a `type …Var = "A" | "B"` string-literal union
+//      (`IpDailyLimitVar` in `src/middleware/rateLimit.ts`).
+//   4. `…Var: "NAME"` properties at the call sites that feed those unions.
+//
+// The gap that leaves is a computed `env[expr]` whose key this check cannot
+// read — and an unreadable key would make it *under*-report, i.e. fail silent,
+// which is the failure mode this repo keeps finding. So that gap is itself a
+// failure: a computed access must name what it is reaching for, either a var
+// (`…Var`, whose literals rules 3 and 4 collect) or a binding (`…binding…`,
+// exempt — bindings are `[[…]]` tables, not `[vars]`, and `assertBindings`
+// plus `wrangler types` cover those). Anything else fails and asks to be
+// named. Secrets are excluded from rule 1 by `.env.example`'s `# secrets:`
+// block: they are read exactly like a var but set with `wrangler secret put`,
+// and `env-parity` already fails if one appears in `[vars]`.
+const VAR_TOKEN = String.raw`[A-Z][A-Z0-9_]{2,}`;
+// `(?<!process\.)` so a Node-side `process.env.CI` could never read as a
+// Worker var; nothing under apps/api/src does that today.
+const ENV_MEMBER_RE = new RegExp(String.raw`(?<!process\.)\benv\.(${VAR_TOKEN})\b`, "g");
+const PARSE_INT_VAR_NAME_RE = new RegExp(String.raw`parseIntVar\(\s*"(${VAR_TOKEN})"`, "g");
+const VAR_UNION_RE = /type\s+[A-Za-z_$][\w$]*Var\s*=([^;]*);/g;
+const VAR_PROPERTY_RE = new RegExp(String.raw`[A-Za-z_$][\w$]*Var\s*:\s*"(${VAR_TOKEN})"`, "g");
+const COMPUTED_ENV_RE = /(?<!process\.)\benv\[([^\]]*)\]/g;
+const QUOTED_VAR_RE = new RegExp(String.raw`"(${VAR_TOKEN})"`, "g");
+const CONST_DECL_RE = /(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::\s*[^=;]+)?=\s*([^;\n]+)/g;
+// `binding = "KV"` / `name = "RL_READ"` — the `[[…]]` tables `parseToml`
+// deliberately drops, collected straight off the text so bindings are never
+// mistaken for undeclared vars.
+const TOML_BINDING_RE = /^\s*(?:binding|name)\s*=\s*"([A-Z][A-Z0-9_]*)"/gm;
+
+/** Strip whole-line comments the same way `checkModels`/`checkIpDigest` do.
+ * Prose in this repo names vars constantly (`env.MOCK_AI === "1"` appears in
+ * three doc comments), and counting a comment as a read would let a var that
+ * nothing calls pass rule 2. */
+function stripCommentLines(text) {
+  return text
+    .split("\n")
+    .map((line) => (/^\s*(\/\/|\*|\/\*)/.test(line) ? "" : line.replace(/\/\/.*$/, "")))
+    .join("\n");
+}
+
+/** Split the argument list of a call whose `(` is at `open`, on top-level
+ * commas. Returns null if the parens never balance. Hand-rolled rather than
+ * regexed because `parseIntVar(name, c.env.X as string | undefined, FALLBACK)`
+ * is written across three lines in `src/env.ts`. */
+export function callArguments(text, open) {
+  let depth = 0;
+  let start = open + 1;
+  const args = [];
+  for (let i = open; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === "(" || ch === "[" || ch === "{") depth += 1;
+    else if (ch === ")" || ch === "]" || ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        args.push(text.slice(start, i).trim());
+        return args;
+      }
+    } else if (ch === "," && depth === 1) {
+      args.push(text.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  return null;
+}
+
+/** Resolve a fallback expression to a number, or `undefined` when it is not
+ * something this check can read (`options.fallbackIpDailyLimit` inside
+ * `dailyBudget` itself, say — the call sites supply the real value and are
+ * matched separately). Handles an integer literal, a product of integer
+ * literals (`5 * 1024 * 1024`), and an identifier declared as either, looked
+ * up in the file first and then across `apps/api/src` so an imported constant
+ * like `DEFAULT_EMAIL_IP_DAILY_BUDGET` resolves. */
+export function resolveNumericExpr(expr, localConsts, globalConsts, seen = new Set()) {
+  const trimmed = (expr ?? "").trim().replace(/;$/, "");
+  if (trimmed === "") return undefined;
+  if (/^[\d_]+$/.test(trimmed)) return Number(trimmed.replace(/_/g, ""));
+  if (/^[\d_\s*]+$/.test(trimmed) && trimmed.includes("*")) {
+    const parts = trimmed.split("*").map((p) => Number(p.trim().replace(/_/g, "")));
+    if (parts.every((n) => Number.isFinite(n))) return parts.reduce((a, b) => a * b, 1);
+  }
+  if (/^[A-Za-z_$][\w$]*$/.test(trimmed)) {
+    if (seen.has(trimmed)) return undefined;
+    seen.add(trimmed);
+    const next = localConsts?.get(trimmed) ?? globalConsts.get(trimmed);
+    if (next === undefined) return undefined;
+    return resolveNumericExpr(next, localConsts, globalConsts, seen);
+  }
+  return undefined;
+}
+
+function checkVarUsage(ctx) {
+  const wranglerText = ctx.readText(WRANGLER_PATH);
+  if (wranglerText === null) return { status: "skip", details: [`${WRANGLER_PATH} not present`] };
+  if (!ctx.exists(API_SRC_DIR)) return { status: "skip", details: [`${API_SRC_DIR} not present`] };
+  const files = ctx.walk(API_SRC_DIR).filter((f) => /\.(ts|tsx|js|mjs)$/.test(f) && !isTestFile(f));
+  if (files.length === 0) return { status: "skip", details: [`${API_SRC_DIR} has no source files yet`] };
+
+  const toml = parseToml(wranglerText);
+  const declared = new Map(Object.entries(toml.vars ?? {}));
+  if (declared.size === 0) return { status: "skip", details: [`${WRANGLER_PATH} has no top-level [vars]`] };
+
+  const bindings = new Set([...wranglerText.matchAll(TOML_BINDING_RE)].map((m) => m[1]));
+  const envExampleText = ctx.readText(ENV_EXAMPLE_PATH);
+  const secrets = envExampleText === null ? new Set() : parseEnvExample(envExampleText).secretNames;
+
+  const details = [];
+  // name -> "file:line" of the first read, so a failure can point at one.
+  const readAt = new Map();
+  const noteRead = (name, where) => {
+    if (!readAt.has(name)) readAt.set(name, where);
+  };
+  const lineOf = (text, index) => text.slice(0, index).split("\n").length;
+
+  const globalConsts = new Map();
+  const sources = new Map();
+  for (const file of files) {
+    const text = stripCommentLines(ctx.readText(file) ?? "");
+    sources.set(file, text);
+    for (const m of text.matchAll(CONST_DECL_RE)) {
+      if (!globalConsts.has(m[1])) globalConsts.set(m[1], m[2]);
+    }
+  }
+
+  // (name, resolvable fallback expression, where) triples, collected from
+  // `parseIntVar` calls and from the option objects that feed `dailyBudget`.
+  const fallbacks = [];
+
+  for (const [file, text] of sources) {
+    const localConsts = new Map([...text.matchAll(CONST_DECL_RE)].map((m) => [m[1], m[2]]));
+
+    for (const m of text.matchAll(ENV_MEMBER_RE)) noteRead(m[1], `${file}:${lineOf(text, m.index)}`);
+    for (const m of text.matchAll(VAR_PROPERTY_RE)) noteRead(m[1], `${file}:${lineOf(text, m.index)}`);
+    for (const union of text.matchAll(VAR_UNION_RE)) {
+      for (const member of union[1].matchAll(QUOTED_VAR_RE)) {
+        noteRead(member[1], `${file}:${lineOf(text, union.index)}`);
+      }
+    }
+
+    for (const m of text.matchAll(PARSE_INT_VAR_NAME_RE)) {
+      const where = `${file}:${lineOf(text, m.index)}`;
+      noteRead(m[1], where);
+      const args = callArguments(text, text.indexOf("(", m.index));
+      if (args !== null && args.length >= 3) fallbacks.push({ name: m[1], expr: args[2], where, localConsts });
+    }
+
+    // `dailyBudget({ … ipDailyLimitVar: "REPORT_IP_DAILY_BUDGET",
+    // fallbackIpDailyLimit: DEFAULT_REPORT_IP_DAILY_BUDGET })` — the name and
+    // the fallback are siblings in one object literal, so pair them within it.
+    for (const m of text.matchAll(VAR_PROPERTY_RE)) {
+      const close = text.indexOf("}", m.index);
+      const window = text.slice(m.index, close === -1 ? m.index + 200 : close);
+      const fallback = /fallback[A-Za-z_$][\w$]*\s*:\s*([^,}\n]+)/.exec(window);
+      if (fallback) {
+        fallbacks.push({ name: m[1], expr: fallback[1], where: `${file}:${lineOf(text, m.index)}`, localConsts });
+      }
+    }
+
+    for (const m of text.matchAll(COMPUTED_ENV_RE)) {
+      const key = m[1].trim();
+      if (/Var\b/.test(key) || /binding/i.test(key)) continue;
+      details.push(
+        `${file}:${lineOf(text, m.index)}: computed env[${key}] — this check cannot tell which var that reads, ` +
+          `so it would under-report. Name the key through a \`…Var\` type (like IpDailyLimitVar) or a \`…binding…\` identifier.`,
+      );
+    }
+  }
+
+  for (const [name, where] of [...readAt].sort()) {
+    if (declared.has(name) || bindings.has(name) || secrets.has(name)) continue;
+    details.push(
+      `${name}: read at ${where} but declared in no [vars] block of ${WRANGLER_PATH} — ` +
+        `it runs at the code fallback and cannot be changed without a deploy`,
+    );
+  }
+
+  for (const name of [...declared.keys()].sort()) {
+    if (readAt.has(name)) continue;
+    details.push(
+      `${name}: declared in ${WRANGLER_PATH} but read nowhere under ${API_SRC_DIR} — ` +
+        `configuration that cannot change behavior (see MAX_PHOTOS/IMAGE_TRANSFORMS_ENABLED, removed 2026-09-06)`,
+    );
+  }
+
+  let compared = 0;
+  for (const { name, expr, where, localConsts } of fallbacks) {
+    const declaredValue = declared.get(name);
+    if (declaredValue === undefined) continue; // already reported above
+    const fallbackValue = resolveNumericExpr(expr, localConsts, globalConsts);
+    if (fallbackValue === undefined) continue;
+    const declaredNumber = Number.parseInt(declaredValue, 10);
+    if (!Number.isFinite(declaredNumber)) continue;
+    compared += 1;
+    if (fallbackValue !== declaredNumber) {
+      details.push(
+        `${name}: ${WRANGLER_PATH} [vars] declares ${declaredNumber} but ${where} falls back to ${fallbackValue} — ` +
+          `the declared number is not what runs when the var is unset or unparseable`,
+      );
+    }
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+  return {
+    status: "pass",
+    details: [
+      `${declared.size} var(s) in ${WRANGLER_PATH} [vars]: all read under ${API_SRC_DIR}, ` +
+        `all reads declared, ${compared} code fallback(s) equal to the declared value`,
+    ],
+  };
+}
+
 const PACKAGES_DIR = "packages";
 
 function exportTargets(value) {
@@ -1252,6 +1501,7 @@ export const CHECKS = {
   migrations: { description: "apps/api/migrations/*.sql naming, apply order and terminators", run: checkMigrations },
   "migration-drift": { description: "no landed migration is renamed/edited/deleted (git)", run: checkMigrationDrift },
   "env-parity": { description: ".env.example vs wrangler.toml [vars] / [env.*.vars]", run: checkEnvParity },
+  "var-usage": { description: "wrangler.toml [vars] vs what apps/api/src reads and falls back to", run: checkVarUsage },
   "cron-triggers": { description: "every tier resolves valid crons, all handled by scheduled()", run: checkCronTriggers },
   models: { description: '"@cf/" model ids confined to apps/api/src/models.ts', run: checkModels },
   "ip-digest": { description: "client-IP hashes rotate daily via lib/digest.ts's dailyIpDigest", run: checkIpDigest },
