@@ -178,6 +178,8 @@ The accessibility specs carry **no exclusions**. If your change fails them, it i
 - `docs/design/moderation.md` — how moderation works and two measured model weaknesses.
 - `docs/runbooks/launch-audit.md` — 18 findings, several still open.
 - `docs/legal-considerations.md` — compliance research, with eight questions marked for a lawyer.
+- `docs/legal-entity-and-insurance.md` — why Keepsake is a sole proprietorship and not an LLC
+  (#108), what has to be bought and filed because of that, and what would reverse it.
 - `docs/runbooks/` — deploy, restore, migrations, admin, geodata, uk-block, issue-workflow.
 
 ## Writing for Kiarash

@@ -18,6 +18,7 @@ import {
   uploadPhoto,
 } from "./helpers.js";
 import { randomTokenRaw } from "../src/lib/tokens.js";
+import { RECOVER_TTL_MS } from "../src/routes/recover.js";
 import { sha256Hex } from "../src/lib/digest.js";
 import { ulid } from "../src/lib/ids.js";
 
@@ -166,6 +167,44 @@ describe("POST /api/recover + POST /api/recover/:token", () => {
     // The recovery token itself is single-use.
     const secondExchange = await SELF.fetch(`http://x/api/recover/${recoverToken}`, { method: "POST" });
     expect(secondExchange.status).toBe(401);
+  });
+
+  // The email tells the reader when their link stops working. That sentence
+  // used to carry its own literal "30 minutes" while the lifetime it
+  // described lived in RECOVER_TTL_MS one module away, so shortening the TTL
+  // would have left every recovery email making a false promise — the same
+  // published-claim drift the privacy-policy guard in apps/web exists for,
+  // with no guard on this side. Asserts against the row's real expires_at,
+  // not just the constant, so the mail, the code and the database have to
+  // agree on one number.
+  it("states the token's real lifetime in the email it sends", async () => {
+    const sent = installFakeEmail();
+    const ownerToken = freshOwnerToken();
+    await registerOwner(ownerToken);
+    const now = Date.now();
+    await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE token_hash = ?")
+      .bind("ttl-prose@keepsake.ing", now, await sha256Hex(ownerToken))
+      .run();
+
+    const res = await SELF.fetch("http://x/api/recover", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "ttl-prose@keepsake.ing" }),
+    });
+    expect(res.status).toBe(200);
+    expect(sent).toHaveLength(1);
+
+    const row = await env.DB.prepare(
+      "SELECT expires_at, created_at FROM recovery_tokens WHERE purpose = 'recover' ORDER BY created_at DESC LIMIT 1",
+    ).first<{ expires_at: number; created_at: number }>();
+    expect(row).toBeTruthy();
+    expect((row as { expires_at: number; created_at: number }).expires_at - (row as { created_at: number }).created_at).toBe(
+      RECOVER_TTL_MS,
+    );
+
+    const minutes = Math.round(RECOVER_TTL_MS / 60_000);
+    expect(sent[0]?.text).toContain(`expires in ${minutes} minutes`);
+    expect(sent[0]?.html).toContain(`expires in ${minutes} minutes`);
   });
 });
 

@@ -22,28 +22,45 @@ is a real site with real visitors possible, not a staging exercise.
 - `PRODUCTION_LIVE=true` is set, so `uptime.yml` now genuinely probes production every 15 minutes
   rather than only checking that it *isn't* answering.
 
-**In flight** — re-checked against `main` at `7307f06` while refreshing #51.
-- **PR #114** (semantic search, #38) — open and out of draft; it **supersedes #101**, which stays
-  draft. It is the only remaining item of the Labeling & search milestone. Its own latest comment
-  reports the three Vectorize indexes exist, the `REAL_AI=1` block ran against real Workers AI,
-  and the flag is on — so it is no longer the inert PR the entry below described. Its base is
-  `cc868c8`, three merges behind `main`.
-- **PR #139** (#135, #136) — **merged as `2108d37`** while this refresh was being written. It
-  closed the distance between "aspects are persisted and indexed" and "a visitor sees anything
-  other than `OTHER`": the prompt now reads the object's own markings first, `features/item/
-  AspectList` renders the result under the story, and the category list went from five to twelve.
-  Its two deliberate leftovers both touch **live production rows** and neither is filed: the
-  fishing-line spool keeps its single `material: braided` row, so `POST /api/admin/backfill-aspects`
-  skips it (the job skips any listing that already has rows), and nothing re-runs a suggestion to
-  re-categorise an existing listing off the new prompt.
+**In flight** — re-checked against `main` at `97eed3e`.
+- Nothing from the **Labeling & search** milestone. #38 was the last of its six issues and merged
+  in #114; the milestone is complete as code. What it still owes is an *operational* step, below.
 
-**Landed since the list above was last written** (kept per rule 7 rather than deleted):
+**Do this on the first deploy that carries `97eed3e`.** Semantic search is on
+(`SEMANTIC_SEARCH = "1"` in all three env blocks) and the `[[vectorize]]` bindings are live. Two
+consequences worth watching for rather than assuming away:
+- An uncommented binding naming an index that does not exist **fails the Worker upload**, taking
+  every deploy of this Worker with it, search-related or not. The three indexes are recorded as
+  confirmed present at 768/cosine by the one session that held a Vectorize credential; no session
+  since has been able to re-observe that. The deploy is where it gets tested for real.
+- `reembedListing` runs on create, on edit, and on each row the #37 aspects backfill touches —
+  there is no vector-only backfill. Every listing that exists today predates the feature, so run
+  `POST /api/admin/backfill-aspects` after the deploy. `docs/runbooks/deploy.md` → "Vectorize /
+  semantic search" has the detail, including the one listing that job will skip until its existing
+  `material: braided` row is cleared.
+
+**Landed since this list was last written** (kept per rule 7 rather than deleted):
 - **PR #100** (aspect backfill, #37) merged as `de75c67`; **PR #107** merged as `6412c7f`. The
   ordering constraint that entry carried was honoured — `0009_aspects_backfill.sql` kept its
   sequential name, and preflight's `migrations` rule reads the tree as "9 legacy 0001-contiguous,
   1 timestamped", so nothing was renamed under a database that had already applied it.
-- **PR #101**'s red preflight (`models`, a `@cf/` id in a doc comment) was fixed inside #114 by
-  naming `MODELS.embedding` instead of pasting the literal.
+- **PR #139** (#135, #136) merged as `2108d37` — the prompt now reads the object's own markings
+  first, `features/item/AspectList` renders aspects under the story, and the category list went
+  from five to twelve. Its two deliberate leftovers touch **live production rows** and are tracked
+  nowhere: the fishing-line spool keeps its single `material: braided` row, so the backfill skips
+  it, and nothing re-runs a suggestion to re-categorise an existing listing off the new prompt.
+- **PR #114** (semantic search, #38) merged as `97eed3e`, superseding the draft #101. It shipped
+  *on*, not inert as an earlier version of this entry said — a credential arrived mid-day, the
+  indexes were confirmed, the `REAL_AI=1` block ran once, and `MIN_SCORE` was re-derived to 0.5
+  from a real-model run whose central finding is that true-match and off-corpus scores **overlap**,
+  so ranking does the relevance work and the threshold is only a floor.
+  Two things the pre-merge review caught, both of the same shape: **the #37 backfill never
+  re-embedded anything** despite `reembed.ts` saying it should (it landed first, so nothing did),
+  and **four comments across the branch still asserted the feature was off** after it had been
+  turned on — including the runbook's reasoning that no vector backfill would ever be needed
+  because production's catalogue was empty, which #135 had already disproved. Confident prose
+  ages badly next to a flag; that is row six of `AGENTS.md`'s table wearing a different hat, and
+  it is now the third time it has been written down on this feature.
 
 **Open and genuinely blocked on a human**: #6 (read an inbox), #31 (a lawyer), #42 (walk it on a
 phone), #47 (`/health` on the apex plus the first real listing), #94 (a zone cache-purge token),
@@ -246,9 +263,9 @@ neither issue touches the suggestion endpoint's own model-facing behavior.
 
 ### 2026-09-07 — Labeling & search (#51): five of six items landed, checked as a combination
 
-The milestone's six issues merged as five separate pull requests over one day, each verified on its
-own branch. Nobody had run the combination since, so this is that run, against `main` at `7307f06`
-with no local changes:
+The milestone's six issues merged as six separate pull requests over one day, each verified on its
+own branch. Nobody had run the combination since, so this is that run — first against `main` at
+`7307f06` (five items; #38 was still open in #114), then re-run after #114 merged:
 
 | | Landed as | Where it lives on `main` |
 |---|---|---|
@@ -257,12 +274,17 @@ with no local changes:
 | #37 backfill from cover photos | #100 (`0009_aspects_backfill.sql`) | `src/backfill/aspects.ts`, `aspects_backfilled_at` distinguishes "no aspects" from "never tried" |
 | #39 shelves with a floor | #98 | `routes/feed.ts` `/shelves` + `shelfMinItems(env)`, `features/feed/AspectShelves.tsx` |
 | #40 zero-aspect listings still surface | #98 | asserted on **both** sides: `apps/api/test/aspects.test.ts` (default feed + broad FTS) and `apps/web/test/app/index.test.tsx` (renders in the grid while a shelf it can't join is on screen) |
-| #38 semantic search | **not landed** | PR #114, open |
+| #38 semantic search | #114 | `src/search/{embedding,vectorize,search,reembed}.ts` behind `SEMANTIC_SEARCH`, FTS5 kept as the fallback |
 
-Result: `pnpm lint` 0 errors · `pnpm -r typecheck` clean · API 376/376 · web 304/304 ·
+Result at `7307f06`: `pnpm lint` 0 errors · `pnpm -r typecheck` clean · API 376/376 · web 304/304 ·
 `pnpm --filter @keepsake/web e2e` **82/82**, mobile and desktop · preflight all pass except
-`lfs-pointers`, which is this sandbox having no `git-lfs`, not a repository fault. Re-run after
-merging `2108d37` (#139) in, since that landed mid-check.
+`lfs-pointers`, which is this sandbox having no `git-lfs`, not a repository fault. Re-run at
+`2108d37` after #139 landed mid-check, and again on #114's merged head before merging it (API
+397 passed / 3 skipped, web 316, two full CI runs green including e2e).
+
+The three skips are the `REAL_AI=1` block and are expected: CI sets no `CLOUDFLARE_API_TOKEN`, so
+that block is skipped everywhere except a run someone starts by hand with a credential. It has
+been run exactly once, by the session that had one.
 
 Two things worth carrying, neither of them a regression:
 
@@ -277,3 +299,9 @@ Two things worth carrying, neither of them a regression:
   including the floor and the cache TTL) and in jsdom (`test/app/index.test.tsx`), but no
   `e2e/*.spec.ts` mentions a shelf — `browse.spec.ts` predates them. The 82 green e2e specs
   therefore say nothing about a shelf rendering in a real browser.
+- **The same gap, one layer down, was real rather than theoretical.** #37's backfill and #38's
+  re-embedding were each green on their own branch and did not meet: the backfill wrote aspects
+  and never embedded them, so the only path that reaches pre-existing listings left them out of
+  vector search entirely. Nothing failed, because nothing tested the pair. Found by reading #114
+  against `main` before merging it, not by a test — which is the argument for merging early that
+  `docs/runbooks/issue-workflow.md` already makes, arriving a second time.

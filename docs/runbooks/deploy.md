@@ -105,6 +105,115 @@ rather than failing if it isn't working yet).
 DNS: point `keepsake.ing` at the Worker via a route/custom domain in the Cloudflare dashboard,
 once `wrangler deploy --env production` has run at least once.
 
+## Vectorize / semantic search (issue #38) — DONE, on in every environment
+
+Semantic search (`SEMANTIC_SEARCH`) is **on** in every deployed environment — preview and production — as of
+**2026-09-07**. This section is now the operating and rollback notes, not an
+errand. The history is kept because two of its warnings are still live.
+
+### What was actually verified, and how
+
+All three questions this section used to list as unanswerable were answered
+with a real credential (a token with `Vectorize` · Account · `Edit`, plus
+Workers AI):
+
+| Question | Answer | Evidence |
+| --- | --- | --- |
+| Do the indexes exist? | **Yes** | Vectorize API lists `keepsake-listings-{dev,preview,production}`, all `dimensions: 768, metric: cosine`. |
+| Does the real model work? | **Yes** | `REAL_AI=1` suite run for the first time: 370 passed, 0 skipped. Returns 768-dim, non-degenerate vectors. |
+| Does the round trip work? | **Yes** | embed → upsert → query against the real **dev** index returned the correct nearest neighbour (0.7305) ahead of the decoy (0.4695). Probe vectors deleted. |
+
+Re-run the gated block any time with:
+
+```sh
+CLOUDFLARE_API_TOKEN=… REAL_AI=1 pnpm --filter @keepsake/api test
+```
+
+Without a token that command fails loudly rather than passing on mocks — that
+is deliberate (`remoteBindings` in `vitest.config.ts` follows `REAL_AI`).
+
+### `MIN_SCORE`
+
+Re-derived from measurement, not taste: **0.5**. Full run and reasoning in
+`docs/design/min-score-calibration.md`; reproduce with
+`node tools/calibrate-min-score.mjs`.
+
+The one thing to know before touching it: **the true-match and off-corpus score
+distributions overlap** (true matches down to 0.5693, off-corpus junk up to
+0.6151), so no cutoff separates them. `MIN_SCORE` is a floor that lets the FTS
+fallback fire on an empty or degenerate index — it is *not* a relevance
+classifier, and raising it toward 0.62 to "improve precision" trades a graceful
+fallback for silently dropped matches. Two tests in `test/search.test.ts` pin it
+to the justified band and fail if it moves out either side.
+
+The previous value, 0.3, was below every score this model produces for anything
+at all, which made the "nothing cleared the bar" fallback unreachable.
+
+### Listings that predate the feature — do this after the first deploy
+
+`reembedListing` runs on listing **create**, listing **edit**
+(`routes/listings.ts`), and each listing the **#37 aspects backfill** touches
+(`src/backfill/aspects.ts`). There is no vector-only backfill and no admin
+endpoint that drives one directly.
+
+So a listing written while `SEMANTIC_SEARCH` was `"0"` has no vector and is
+invisible to vector search until something writes it again.
+
+**This applies to production right now.** The comment this section used to
+carry said the flag was flipped while the production catalogue was still empty,
+so no backfill would ever be needed. That was not true: #135 measured a real
+production listing (the KastKing fishing-line spool,
+`01M1XP7SYFDR05M1CPAH0020EE`) against production's own `GET /api/feed` hours
+before this merged, and the feature has never been deployed anywhere. Every
+listing that exists today therefore predates it.
+
+After the first deploy that carries this, run the aspects backfill — it now
+embeds each listing it processes:
+
+```sh
+curl -X POST https://<host>/api/admin/backfill-aspects -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+Note the one listing that needs a nudge first: the spool already has a
+`listing_aspects` row (`material: braided`), and the job skips any listing that
+already has rows (#139 flagged the same thing for its new prompt), so it will
+not be reached until that row is cleared. Everything else with no aspects is
+picked up on the first pass.
+
+**If you switch the flag off while listings are being created**, switching it
+back on means running that backfill again for the gap — or writing a
+vector-only one (model it on `src/backfill/aspects.ts`: batched,
+budget-respecting, resumable, idempotent).
+
+### Rolling back
+
+`SEMANTIC_SEARCH = "0"` in the relevant `wrangler.toml` env block and deploy.
+That is a complete rollback: the flag is checked before any embedding or
+Vectorize call on both the read and write paths, so with it off no AI budget is
+spent and `GET /api/feed?q=` is exactly the FTS5 search `main` has always
+served. There is a test asserting that equivalence against a no-binding control.
+
+Do **not** roll back by re-commenting the `[[vectorize]]` bindings. The flag is
+the kill switch; the binding is not. Note the asymmetry that made this section
+so cautious originally: an uncommented binding naming an index that does *not*
+exist fails the Worker upload and takes down **every** deploy of this Worker,
+including changes unrelated to search. The indexes are confirmed to exist now,
+so the bindings are safe — but if anyone ever deletes one, deploys break rather
+than search degrading.
+
+Index config cannot be altered after creation. Changing `MODELS.embedding` to a
+model of a different width means deleting and recreating all three indexes, and
+re-embedding everything in them.
+
+### Privacy
+
+`apps/site/public/privacy.html`'s "Search by meaning" section says the feature
+**is running**, that the vectors are stored with Cloudflare beside the listing
+id, and that deleting a listing deletes them.
+`apps/web/test/guards/privacyPolicy.test.ts` (#88) asserts those sentences and
+fails the build if they disappear. If the feature is ever switched off for good,
+the policy and that guard have to change together.
+
 ## Secrets
 
 Set per environment, never committed (see root `.env.example`'s `# secrets:` block):
