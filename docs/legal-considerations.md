@@ -33,8 +33,23 @@ stays an honest record of what was found and when:**
   statute-vs-hazard-only column preserved.
 - **Privacy page overclaims (recommendations 4-5): done** — see `apps/site/public/privacy.html`'s
   IP-hash, email-forwarding, and GPC sections.
-- **Controller name and postal address (recommendation 2): blocked on Kiarash.** The page names him
-  as controller; the postal address is a `TODO(kiarash)` placeholder in the HTML, not invented.
+- **Controller name and postal address (recommendation 2 / issue #26): resolved — no address
+  needed, now that the UK is blocked.** The premise behind recommendation 2 was
+  `COUNTRIES = ["US","CA","GB"]`; that's stale. As of 2026-09-06, `COUNTRIES` is `["US","CA"]`
+  (`packages/contracts/src/geo.ts`) and a UK visitor is 451'd before reaching any route
+  (`apps/api/src/middleware/ukBlock.ts`), so UK GDPR Art. 13's postal-address requirement no
+  longer has a UK data subject to attach to. Checked the two regimes that remain in scope
+  directly rather than assuming the gap carries over: **PIPEDA**'s openness/accountability
+  principle (Sched. 1, cl. 4.8) asks for a named accountable person and a way to reach them —
+  satisfied by naming Kiarash and a personally-read `hello@keepsake.ing` — not a literal mailing
+  address on top of that; nothing in **Rhode Island's RIDTPPA** §6-48.1-3(a) content
+  requirements (already satisfied by the "Categories of information we collect" section, #60,
+  independent of the still-open "is this commercial" question tracked in #31/#34 Q3) or the
+  **Texas/Nebraska** small-business exemptions asks for a postal address either. `privacy.html`'s
+  "Who runs this" section now says this plainly (named individual controller, no company, no
+  public mailing address, and why), and the "not a company" one-liner was added near the Texas
+  footer credit on both `privacy.html` and `terms.html`. This is analysis, not a lawyer's
+  opinion — logged as a closed issue with reasoning, not a silent "N/A."
 - **Requester data removal (launch-audit's open item, not numbered above): done.** See
   `POST /api/requests/withdraw` and `docs/design/identity.md`'s "Request withdrawal" section.
 - **Location precision (issue #62): confirmed and disclosed.** Traced the code: `CreateListingInput`
@@ -72,9 +87,39 @@ stays an honest record of what was found and when:**
   (`AgeAttestationCheckbox`) lives in `apps/web` (`app/give/review.tsx`,
   `src/features/request/RequestSheet.tsx`), not `apps/site`. Left un-implemented; see the issue
   comment for proposed neutral wording.
-- Everything else below — Montana's targeting-language ambiguity, in-person safety copy, the Article
-  27 representative question, the eight lawyer questions — is **still open**, unchanged from the
-  original research.
+- **Montana minors / Rhode Island commercial-website provisions (issue #31): checked against the
+  live site, still advisory, unresolved on purpose.** Neither statute's applicability is something
+  to resolve by inference, per the research's own instruction that "a lawyer's five-minute read is
+  worth more than my inference here" — this pass only updates what the *site* actually does today,
+  so the lawyer question in #34 Q3 is answerable rather than abstract:
+  - **Montana** (§§30-14-2811, -2818, -2819): the live site is general-audience, not
+    minor-targeted — no marketing, copy, or feature is aimed at anyone under 18. Both
+    create-listing and create-request require a self-declared 18+ attestation
+    (`AgeAttestationSchema`/`MINIMUM_AGE`, recorded server-side as `age_attested_at`), and the
+    giver-side "actual knowledge a user is a minor" takedown path is real code today
+    (`POST /admin/owners/:id/ban`, see #61's status for the requester-side gap). None of that
+    resolves the statute's own unverified question — whether the duty of care attaches to
+    incidental Montana visitors on a US-wide site, or only to services that target minors
+    specifically — but it's the strongest fact pattern available regardless of how that
+    targeting-language question resolves, and it overlaps with #61's takedown-rule work (referenced
+    here, not duplicated — #61 owns `docs/runbooks/**`/admin-UI territory).
+  - **Rhode Island** (§6-48.1-3(a)): the live site now runs a consent-gated Google Ads tag
+    (`privacy.html`'s "Advertising" consent group, `www.googletagmanager.com`, off until the
+    visitor opts in) — ad infrastructure that didn't exist when the original research called this
+    "genuinely unsettled." Revenue is still zero, and whether ad-tag presence without confirmed ad
+    spend crosses RIDTPPA's undefined "commercial website" line is exactly the open question, not
+    something this pass can settle. What *is* settled: if RI is ever found to apply, the
+    §6-48.1-3(a) content disclosure itself is very likely already compliant — the "Categories of
+    information we collect" section (#60) covers it — so the only live lawyer question is the
+    applicability gate, not what to disclose once it applies.
+  - Both are captured concretely (not just named) in #34 Q3, referencing the facts above rather
+    than the original research's more abstract framing. #31 stays open, advisory, labeled
+    `blocked-on-kiarash` — closing it for real needs an actual lawyer's answer on applicability, not
+    further inference.
+- Everything else below — in-person safety copy (issue #32's safety-guidance half is now done; see
+  `terms.html`'s "Meeting up safely" section and `RequestSheet.tsx`; the indemnification clause
+  itself waits on #63), the Article 27 representative question, and the eight lawyer questions — is
+  **still open**, unchanged from the original research except where noted above.
 
 ---
 
@@ -378,13 +423,16 @@ maintain:
 - **Buy Nothing Project**: same public-place/bring-a-friend guidance, community-guideline based
   rather than contractual.
 
-**Concrete gap for Keepsake**: the current terms disclaim responsibility after the fact ("use good
-judgment when arranging to meet a stranger") but don't proactively coach either party the way every
-comparable product does, and don't carry an indemnification clause. Given the product's explicit
-premise — a stranger comes to your door or a meeting point for something with sentimental framing,
-which likely makes the request note *more* personal than a "want a used couch" listing, not less —
-adding explicit meeting-safety copy in the request/choose flow (not just the terms) and a mutual
-indemnification clause is worth doing regardless of what any statute requires.
+**Concrete gap for Keepsake — safety-guidance half closed (issue #32), indemnification half still
+open (issue #63):** the terms now carry a "Meeting up safely" section (public/well-lit location,
+bring a friend or tell someone the plan, keep contact inside Keepsake's request messages, a
+no-contact/doorstep option, and permission to back out), and `RequestSheet.tsx` shows the same
+guidance in the request form and again in the post-send confirmation — not just buried in a legal
+document nobody reads before meeting a stranger. The mutual indemnification clause deliberately
+was **not** drafted here: #63 established that "mutual" isn't actually the Olio model (Olio's is
+one-directional, users→Olio) and that choosing among the three possible shapes (Keepsake-only,
+genuinely mutual, or user-to-user) is a product-posture call for Kiarash, not something to
+pre-empt by drafting text against the wrong shape.
 
 ## Privacy notice checklist
 
@@ -392,9 +440,9 @@ Checked against `apps/site/public/privacy.html` as it reads today (last updated 
 
 | Element | Required by | Present today? |
 |---|---|---|
-| Controller identity (name of the responsible person/entity) | UK GDPR Art. 13(1)(a) | **No** — only an email address, no name |
-| Controller contact details / postal address | UK GDPR Art. 13(1)(a) | **No** |
-| UK representative (if Art. 27 applies) | UK GDPR Art. 27(1) | **No** — and whether one is required is itself unresolved, see above |
+| Controller identity (name of the responsible person/entity) | UK GDPR Art. 13(1)(a) | **Yes** — "Who runs this" names Kiarash as the individual controller |
+| Controller contact details / postal address | UK GDPR Art. 13(1)(a) | **N/A as of issue #26** — Art. 13 no longer has a UK data subject to attach to (UK blocked, see `docs/runbooks/uk-block.md`); a working contact (email, personally read) is given, and no postal address is required by PIPEDA, Rhode Island, or Texas/Nebraska either — see the 2026-09-06 status update above |
+| UK representative (if Art. 27 applies) | UK GDPR Art. 27(1) | **Moot for now** — no UK data subjects to represent while the geo-block holds; #34 Q1 keeps this live for if the block is ever lifted |
 | Purposes of processing | UK GDPR Art. 13(1)(c) | **Yes** — device key, optional email, request contact info, photos, screening, rate limiting are each described |
 | Legal basis for processing | UK GDPR Art. 13(1)(c) | **No** — no lawful-basis language (e.g., legitimate interest, consent) is used anywhere |
 | Categories of recipients / third parties | UK GDPR Art. 13(1)(e) | **Partial** — Cloudflare (R2, AI screening, analytics, and — since issue #14 replaced Sentry with Workers Logs — error diagnostics too) and Google (ads) are named; Turnstile and Resend are used per the code but not named on the page (per launch-audit §7) |

@@ -59,17 +59,34 @@
 
         <h2>Who runs this</h2>
         <p>
-          Keepsake is run by one person, Kiarash, not a company. He's the controller for the
-          purposes of this policy — the one responsible for what's described here, and the one
-          you'd contact or complain to.
+          Keepsake is run by one person, Kiarash, operating as an individual — not through a
+          company or any other entity. He's the controller for the purposes of this policy: the
+          one accountable for what's described here, and the one you'd contact, complain to, or
+          send a rights request to. Reach him at
+          <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a> — that inbox is read
+          personally, not by a support team.
         </p>
-        <!-- The UK is geo-blocked (docs/runbooks/uk-block.md), so UK GDPR Art. 13's
-             controller-address requirement does not apply. Canada is still served, and
-             CASL's sender-identification rules are the open question — they are usually
-             read to require a mailing address in commercial electronic messages, but every
-             email Keepsake sends is transactional. Unresolved; see issue #26. Naming a
-             person and giving a working contact is kept regardless, because it is the
-             honest thing on a page about trust. -->
+        <p>
+          We don't publish a mailing address. That's a considered choice, not an omission: the UK
+          is the one jurisdiction whose law would otherwise require one (UK GDPR Art. 13), and
+          Keepsake doesn't serve the UK — see <a href="/terms">Terms</a>. Canadian and U.S. privacy
+          law, which do still apply, ask for an accountable person and a working way to reach them,
+          which the paragraph above already gives you; none of it requires a physical address on
+          top of that. If Keepsake ever expands somewhere that changes this, this section will
+          change with it.
+        </p>
+        <!-- Reasoning for the paragraph above, and why it's safe to state plainly rather than
+             hedge: docs/legal-considerations.md's 2026-09-06 status update, issue #26. Short
+             version — COUNTRIES is ["US","CA"] (packages/contracts/src/geo.ts) and a UK visitor
+             is 451'd before reaching any route (apps/api/src/middleware/ukBlock.ts), so UK GDPR
+             Art. 13's postal-address requirement no longer has a UK user to attach to. PIPEDA's
+             openness/accountability principle (Sched. 1, 4.8) asks for a named accountable person
+             and a way to reach them — satisfied by "Kiarash" + a personally-read inbox — not a
+             literal street address; nothing in Rhode Island's RIDTPPA content requirements
+             (already met via the "Categories of information we collect" section below, #60) or
+             Texas/Nebraska's small-business exemptions asks for one either. This is analysis, not
+             a lawyer's opinion — if that ever needs revisiting, it's a due-diligence question for
+             counsel, not a reason to invent an address here. -->
 
         <h2>No accounts, just a device key</h2>
         <p>
@@ -299,7 +316,7 @@
           <button type="button" data-ks-consent>Privacy choices</button>
           <span>Data: postal codes © GeoNames, CC BY 4.0</span>
         </nav>
-        <span class="footer-aside">Made in Texas</span>
+        <span class="footer-aside">Made in Texas, by one person — not a company.</span>
         </div>
       </div>
     </footer>
