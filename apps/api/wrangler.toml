@@ -503,14 +503,31 @@ ENVIRONMENT = "production"
 # (belt-and-braces, and it fires even if nobody happens to hit the site in
 # the interim) — same failure, two layers, neither able to skip the other.
 COMMIT_SHA = "dev"
-# Estimated for real launch-day traffic (issue #18), not measured — there is
-# no production traffic yet to size against, which is the same gap the
-# launch audit called out for the old, identical-everywhere numbers. Revisit
-# once there's real usage to look at. See the top-level `[vars]` comment
-# above for why MOD_IMAGE_DAILY_BUDGET reads much higher than before for the
-# same real capacity (it's now per-photo, not per-listing).
-MOD_TEXT_DAILY_BUDGET = "5000"
-MOD_IMAGE_DAILY_BUDGET = "15000"
+# Raised 4x on 2026-09-07 (Kiarash's call), from 5000/15000. Not because
+# more traffic is expected — because these were sized *near* an estimate of
+# launch-day traffic, and that is the wrong thing for them to be. They are
+# runaway protection: Workers AI meters its own allocation regardless of
+# what is set here, so the only thing a tight number buys is the chance of
+# hitting it. And the cost of hitting it is not a throttle, it is an
+# outage with a bad shape — `moderation/pipeline.ts` leaves every listing
+# that arrives after the budget is spent sitting in `pending`, invisible to
+# the feed, until the counter rolls at midnight UTC. A giver who posted at
+# 14:00 sees nothing happen for ten hours and has no way to tell whether
+# they did something wrong. So the number should sit far past any plausible
+# day and catch only a scraper or a retry loop, which is what it was for.
+#
+# Still estimated rather than measured (issue #18) — there is no production
+# traffic yet to size against, which is exactly why the safe direction is
+# up. Revisit with real usage. See the top-level `[vars]` comment above for
+# why MOD_IMAGE_DAILY_BUDGET reads so much higher than the text one for the
+# same real capacity (it is charged per photo, not per listing).
+#
+# `[env.preview]` above is deliberately left at 2000/6000: preview is
+# allowlisted QA traffic, nobody's listing is stranded there in a way that
+# matters, and a low ceiling there is a cheap way to find out this code path
+# still works.
+MOD_TEXT_DAILY_BUDGET = "20000"
+MOD_IMAGE_DAILY_BUDGET = "60000"
 SUGGEST_DAILY_BUDGET = "1000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
