@@ -90,6 +90,20 @@ When you say go, I will:
    was fully indexable until 2026-09-06 (launch audit finding 2); this is the one-command check
    that it still is not.
 
+## 7. ~~Cache-purge token for global photo purge (#94)~~ ✅ DONE 2026-09-07
+
+Nothing for you here — recorded because #94 was `blocked-on-kiarash` on exactly this and no longer
+is. Minted **`keepsake-cache-purge`** (id `1dc0212c…`), one permission — `Zone → Cache Purge` — on
+the `keepsake.ing` zone and nothing else, and stored it as the Worker secret
+`CF_CACHE_PURGE_TOKEN` on both `keepsake-preview` and `keepsake-production`. Proven live rather
+than assumed: it purges `keepsake.ing`, it is refused on another zone on this account and refused
+on DNS reads, and one purge call cleared a photo cached at two different colos at once. Full
+measurements, including the two ways this is easy to false-pass, in
+`docs/runbooks/deploy.md#the-cache-purge-token-94`.
+
+The code that calls the purge API is still unwritten — that half of #94 is open and needs no
+credential from you.
+
 ---
 
 ## Guardrails already in place (so you do not have to worry about this)

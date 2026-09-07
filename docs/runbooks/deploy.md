@@ -167,6 +167,60 @@ account gets to use the Keepsake site key too. The alternative is accepting that
 with Turnstile unenforced, which makes them unusable for verifying exactly the write paths most
 worth verifying.
 
+## The cache-purge token (#94)
+
+`purgePhotoCache` (`apps/api/src/lib/photoCache.ts`) calls `caches.default.delete()`, which only
+ever reaches the colo executing that request — `caches.default` is per-data-center, not one cache
+shared across Cloudflare's network. Purging every colo at once needs the zone-level
+`POST /zones/:id/purge_cache` API, which needs a zone (`keepsake.ing`, done — #46) and a token
+scoped to it. This is that token. **No code reads it yet**: #94's implementation is still open, and
+this is a deliberate, temporary exception to the "configuration that cannot change behavior is
+worse than no configuration" rule in `apps/api/wrangler.toml`'s `[vars]` — the credential is
+provisioned and *proven* ahead of the code so the implementation has something known-good to build
+against instead of a credential nobody has ever exercised.
+
+- Cloudflare token **`keepsake-cache-purge`** (id `1dc0212c…`), one policy: `Zone → Cache Purge`,
+  resource **`keepsake.ing` only** (zone `dcc1fb09eeeba27a343fc1d98aff9094`). It is zone-scoped,
+  not account-scoped — unlike `keepsake-pr-preview` above it cannot see any other zone on this
+  account.
+- Stored as the Worker secret **`CF_CACHE_PURGE_TOKEN`** on both `keepsake-preview` and
+  `keepsake-production` (2026-09-07), not as a GitHub Environment secret: the purge call runs
+  inside the Worker at request time, not in CI.
+- **`CF_ZONE_ID` is deliberately not set yet.** The zone id is `dcc1fb09eeeba27a343fc1d98aff9094`
+  and it is not a secret, so it belongs in each `[vars]` block — added by the same commit that
+  reads it, not before.
+
+Scope was proven with negative controls, not just `GET /user/tokens/verify` (which only says a
+token is active, never what it can do):
+
+| Operation | Result |
+|---|---|
+| `POST /zones/dcc1fb09…/purge_cache` (keepsake.ing) | works |
+| same call against another zone on this account (`tts.gallery`) | **refused** (10000) |
+| `GET /zones/dcc1fb09…/dns_records` | **refused** (10000) |
+
+### What zone purge does and does not reach — measured 2026-09-07
+
+The API returning `"success": true` is *not* evidence a purge happened. Both results below come
+from the same token and the same request body against the same zone:
+
+- **Worker `caches.default` entries: purged globally.** Warmed
+  `https://preview.keepsake.ing/i/<id>/full` to `CF-Cache-Status: HIT` at two colos (MXP and FRA,
+  distinct `cf-ray` suffixes and independently-advancing `age` values — 152–162 s and 118–127 s —
+  so genuinely two separate entries, not one). One purge-by-URL call from one place; the first
+  observation at *each* colo afterwards was a fresh response (no `CF-Cache-Status`, no `age`),
+  exactly one per colo, then re-warm. This is the behavior #94 needs.
+- **Workers Assets responses: not purged at all.** The same call against
+  `/_expo/static/js/web/entry-<hash>.js` returned `"success": true` and changed nothing — 30/30
+  `HIT` over 90 s at both colos with the URL otherwise untouched. Static assets are served by the
+  Assets system, whose cache `purge_cache` does not own. Do not use an asset URL to smoke-test
+  this token; it will read as a silent failure.
+
+Assert on cache identity (`CF-Cache-Status`/`age` resetting), never on a 404. `GET /i/:id/:variant`
+re-reads the listing from D1 and 404s *before* it consults the cache, so "delete the photo, then
+fetch it from another colo and expect 404" passes whether or not anything was purged — it has no
+negative control. That is a separate false pass from the one the one-hour `max-age` causes.
+
 ## What a deploy actually does
 
 1. `pnpm install --frozen-lockfile`
