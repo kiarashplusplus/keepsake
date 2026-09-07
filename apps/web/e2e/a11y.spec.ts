@@ -12,11 +12,29 @@
  * on every SPA route, the faded step numerals, and three text colours on the
  * marketing page) have since been fixed, so nothing is excluded any more and
  * a regression in any of them fails here.
+ *
+ * Two things this file did NOT cover until issue #173, both of which are the
+ * project's own failure mode rather than an ordinary gap — the suite was
+ * green over ground it had never walked, and two comments in the tree said
+ * otherwise:
+ *
+ *  - The consent banner. Every scan here takes its context from
+ *    `./support/fixtures`, whose `context` fixture seeds a consent decision
+ *    precisely so the banner stays out of the way — so the first interactive
+ *    element every new visitor meets was structurally invisible to axe. The
+ *    "consent banner" block at the bottom builds its own unseeded contexts
+ *    (the way `consent.spec.ts` does) so the banner is genuinely in the DOM.
+ *  - Dark mode. `[data-theme="dark"]` is a second, complete colour system and
+ *    no scan had ever run under it. The "dark mode" block below does, and
+ *    asserts `data-theme` really is `dark` before scanning, so it cannot
+ *    quietly pass by having scanned the light palette twice.
  */
 import { AxeBuilder } from "@axe-core/playwright";
 import { test, expect } from "./support/fixtures";
-import { ADMIN_TOKEN, createApprovedListing, hideListingAsAdmin, uniqueTitle } from "./support/api";
-import type { Page } from "@playwright/test";
+import { ADMIN_TOKEN, createApprovedListing, freshClientIp, hideListingAsAdmin, uniqueTitle } from "./support/api";
+import { seedVisited } from "./support/visited";
+import { BASE_URL } from "./support/constants";
+import type { Browser, Page } from "@playwright/test";
 
 // axe reads computed colours at one instant, and both codebases fade content
 // in on load (`apps/site`'s `.fade-up`, the app's own `MotionProvider`), so a
@@ -144,4 +162,109 @@ test("the Observatory panel has no serious or critical accessibility violations"
   await expect(page.getByRole("tablist", { name: "Observatory window" })).toBeVisible();
 
   expect(await blockingViolations(page)).toEqual([]);
+});
+
+/**
+ * A context that has NOT answered the banner.
+ *
+ * `openFreshContext()` in `support/fixtures.ts` is no good here: it seeds a
+ * decision too, for the same reason the shared fixture does. This seeds the
+ * "has visited before" flag only, so `/` is the feed rather than the
+ * new-visitor explainer (issue #44) — a fresh consent decision has nothing to
+ * do with whether this device has been here before, and conflating them would
+ * put these assertions on the wrong page.
+ */
+async function openWithBanner(browser: Browser, colorScheme: "light" | "dark") {
+  const context = await browser.newContext({
+    baseURL: BASE_URL,
+    colorScheme,
+    reducedMotion: "reduce",
+    extraHTTPHeaders: { "CF-Connecting-IP": freshClientIp() },
+  });
+  await seedVisited(context);
+  const page = await context.newPage();
+  await page.goto("/");
+  await expect(page.locator("#ks-consent")).toBeVisible();
+  return { context, page };
+}
+
+test.describe("the consent banner", () => {
+  // ~15 elements no scan in this file could reach before #173: a `role="region"`
+  // overlay pinned at `bottom:0; z-index:9999`, two equally-weighted buttons, a
+  // disclosure button carrying `aria-expanded`/`aria-controls`, and four
+  // checkbox rows each depending on a `for`/`id` pairing built by
+  // `categoryRow()` in `public/consent.js`.
+  for (const colorScheme of ["light", "dark"] as const) {
+    test(`has no serious or critical accessibility violations in ${colorScheme} mode`, async ({ browser }) => {
+      const { context, page } = await openWithBanner(browser, colorScheme);
+
+      // The banner's card is deliberately the same cream index card in both
+      // themes (see `public/consent.js`), but the page behind it is not — and
+      // a scan that had silently run against the light palette twice would be
+      // exactly the kind of check that cannot fail.
+      expect(await page.evaluate(() => document.documentElement.dataset.theme ?? null)).toBe(colorScheme);
+
+      // As a visitor first meets it: the two-button bar, closed.
+      expect(await blockingViolations(page)).toEqual([]);
+
+      // And again with the preferences open, which is where the four checkbox
+      // rows and the Save control live — markup that gets a free pass by
+      // never being on screen during a scan.
+      await page.locator("#ks-consent-customise").click();
+      await expect(page.locator("#ks-consent-panel")).toBeVisible();
+      await expect(page.locator("#ks-consent-customise")).toHaveAttribute("aria-expanded", "true");
+
+      expect(await blockingViolations(page)).toEqual([]);
+      await context.close();
+    });
+  }
+});
+
+test.describe("dark mode", () => {
+  // `[data-theme="dark"]` is a whole second colour system and nothing had ever
+  // scanned it (#173). These mirror the light scans above rather than adding
+  // new pages: the point is the palette, not the markup.
+  test.use({ colorScheme: "dark" });
+
+  async function expectDark(page: Page): Promise<void> {
+    // The app's pre-hydration script in `app/+html.tsx` resolves the default
+    // "system" mode from `prefers-color-scheme`, which is what `colorScheme`
+    // above sets. Asserting it here is what stops this block from passing by
+    // scanning the light palette a second time.
+    expect(await page.evaluate(() => document.documentElement.dataset.theme ?? null)).toBe("dark");
+  }
+
+  test("the feed has no serious or critical accessibility violations in dark mode", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByLabel("Search")).toBeVisible();
+    await expectDark(page);
+
+    expect(await blockingViolations(page)).toEqual([]);
+  });
+
+  test("the give flow has no serious or critical accessibility violations in dark mode", async ({ page }) => {
+    await page.goto("/give");
+    await expect(page.getByText("Show us the keepsake.")).toBeVisible();
+    await expectDark(page);
+
+    expect(await blockingViolations(page)).toEqual([]);
+  });
+
+  test("an item page has no serious or critical accessibility violations in dark mode", async ({ page, request }) => {
+    const listing = await createApprovedListing(request, { title: uniqueTitle("Enamel pin") });
+
+    await page.goto(`/item/${listing.id}`);
+    await expect(page.getByText(listing.title, { exact: true })).toBeVisible();
+    await expectDark(page);
+
+    expect(await blockingViolations(page)).toEqual([]);
+  });
+
+  test("the new-visitor explainer has no serious or critical accessibility violations in dark mode", async ({ page }) => {
+    await page.goto("/welcome");
+    await expect(page.getByText("No accounts. No money.")).toBeVisible();
+    await expectDark(page);
+
+    expect(await blockingViolations(page)).toEqual([]);
+  });
 });
