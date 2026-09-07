@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RESERVED_EMAIL_DOMAIN_MESSAGE } from "../src/common";
 import { CreateListingInput, MODERATION_REASONS } from "../src/listing";
+import { MAX_PHOTOS } from "../src/photo";
 
 const validPhotoIds = ["01ARZ3NDEKTSV4RRFFQ69G5FAV"];
 
@@ -27,9 +28,20 @@ describe("CreateListingInput", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects 6 photo ids (max is 5)", () => {
-    const sixPhotos = Array.from({ length: 6 }, () => validPhotoIds[0]);
-    const result = CreateListingInput.safeParse(validInput({ photo_ids: sixPhotos }));
+  // Written against MAX_PHOTOS rather than a literal 5 on purpose: the give
+  // flow sizes its photo picker from that constant, so the pair of cases
+  // below is what holds the client's idea of the cap and the server's
+  // validation of it to the same number. A literal here would keep passing
+  // while the two drifted — raise MAX_PHOTOS and the UI would offer a slot
+  // the create call rejects.
+  it(`accepts exactly MAX_PHOTOS (${MAX_PHOTOS}) photo ids`, () => {
+    const maxPhotos = Array.from({ length: MAX_PHOTOS }, () => validPhotoIds[0]);
+    expect(CreateListingInput.safeParse(validInput({ photo_ids: maxPhotos })).success).toBe(true);
+  });
+
+  it(`rejects one more than MAX_PHOTOS (${MAX_PHOTOS + 1}) photo ids`, () => {
+    const tooMany = Array.from({ length: MAX_PHOTOS + 1 }, () => validPhotoIds[0]);
+    const result = CreateListingInput.safeParse(validInput({ photo_ids: tooMany }));
     expect(result.success).toBe(false);
   });
 

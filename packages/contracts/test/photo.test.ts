@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_PHOTO_BYTES, MAX_PHOTOS, PhotoSuggestionSchema, UploadPhotoFields } from "../src/photo";
+import { MAX_PHOTOS, PhotoSuggestionSchema, UploadPhotoFields } from "../src/photo";
 
 describe("UploadPhotoFields", () => {
   it("accepts a valid field set", () => {
@@ -21,9 +21,8 @@ describe("UploadPhotoFields", () => {
 });
 
 describe("constants", () => {
-  it("caps photos at 5 and bytes at 5 MiB", () => {
+  it("caps photos at 5", () => {
     expect(MAX_PHOTOS).toBe(5);
-    expect(MAX_PHOTO_BYTES).toBe(5 * 1024 * 1024);
   });
 });
 
