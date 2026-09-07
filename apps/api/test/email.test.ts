@@ -127,11 +127,15 @@ describe("POST /api/me/email + GET /api/me/email/verify", () => {
     expect(verified.email_verified).toBe(true);
   });
 
-  // The same fix from the other side: a token that predates the address
-  // column (or was minted by `POST /api/listings`, which does not record
-  // one) carries `email IS NULL`. It must still be refused once the address
-  // has moved on — otherwise the migration only half-lands and every link
-  // already in flight at deploy time keeps the old behaviour for 24 hours.
+  // The same fix from the other side: a token minted before migration
+  // 20260907181446 added the address column carries `email IS NULL`. It must
+  // still be refused once the address has moved on — otherwise the migration
+  // only half-lands and every link already in flight at deploy time keeps the
+  // old behaviour for 24 hours. Since #202 every mint site in the Worker
+  // records an address, so this row can no longer be produced by any route —
+  // it is inserted by hand here on purpose, because pre-migration rows exist
+  // in the deployed databases and condition 2 is the only thing that refuses
+  // them.
   it("refuses a NULL-address (legacy) verify token once the address has changed", async () => {
     const sent = installFakeEmail();
     const token = freshOwnerToken();
@@ -165,10 +169,15 @@ describe("POST /api/me/email + GET /api/me/email/verify", () => {
   // The read-side half of #167 on its own, with no help from the write-side
   // invalidation in `POST /api/me/email`. `POST /api/listings` also changes
   // `owners.email` and mints a verify token, and it does *not* invalidate
-  // outstanding ones (that file is owned by another session on this branch).
-  // So this drives the whole sequence through that route: two listings, two
-  // addresses, then click the first link. Only `GET /email/verify`'s
-  // "a newer verify_email token exists for this owner" rule can refuse it.
+  // outstanding ones. So this drives the whole sequence through that route:
+  // two listings, two addresses, then click the first link, with nothing but
+  // `GET /email/verify` standing in the way.
+  //
+  // Since #202 both of that route's tokens record their address, so the stale
+  // link is now refused twice over — condition 1 (the recorded address is no
+  // longer the one on file) and condition 2 (a newer token exists). The test
+  // above is the one that isolates condition 2, against the pre-migration row
+  // shape that is the only thing still relying on it.
   it("refuses a superseded verify link even when nothing invalidated it on write (listing-create path)", async () => {
     const sent = installFakeEmail();
     await seedStandardPostalCodes();
@@ -201,8 +210,8 @@ describe("POST /api/me/email + GET /api/me/email/verify", () => {
     await createListingWithEmail("second-correct@keepsake.ing", "A tin lunchbox");
     expect(sent).toHaveLength(2);
 
-    // Neither token records an address (that route does not write one), so
-    // this is the "newer token exists" rule alone doing the work.
+    // Refused, and — since #202 — refused on the strength of the recorded
+    // address as well as the newer token.
     const staleRes = await SELF.fetch(staleLink as string, { redirect: "manual" });
     expect(staleRes.headers.get("Location")).toBe("http://localhost:8787/mine?verified=0&reason=invalid");
 
@@ -216,6 +225,63 @@ describe("POST /api/me/email + GET /api/me/email/verify", () => {
     const goodLink = sent[1]?.text.match(/https?:\/\/\S+/)?.[0];
     const goodRes = await SELF.fetch(goodLink as string, { redirect: "manual" });
     expect(goodRes.headers.get("Location")).toBe("http://localhost:8787/mine?verified=1");
+  });
+
+  // Issue #202. The listing-create mint site used to insert `email` as NULL
+  // and stay correct only through condition 2 — "a newer `verify_email` token
+  // exists for this owner" — which holds because every writer of
+  // `owners.email` mints a token immediately after writing it. Load-bearing,
+  // undocumented, and one edit away from reopening #167 with nothing failing.
+  //
+  // So this moves the address *without* minting a token, which is exactly
+  // what a fourth writer of that column would do if someone added one: the
+  // fallback has nothing to find, and only the address recorded on the token
+  // can refuse the link. Before the fix this redeemed and stamped
+  // `email_verified` on an address the clicker never proved.
+  it("refuses a listing-create verify link on the recorded address alone, with no newer token to lean on", async () => {
+    const sent = installFakeEmail();
+    await seedStandardPostalCodes();
+    const token = freshOwnerToken();
+    const photo = await readOk<PublicPhoto>(await uploadPhoto({ token }));
+
+    const created = await SELF.fetch("http://x/api/listings", {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "A quiet teacup",
+        story: "This was my grandmother's favorite thing, and I'd love for it to find a new home.",
+        category: "home_kitchen",
+        country: "US",
+        postal_code: "02144",
+        photo_ids: [photo.id],
+        email: "typed-wrong@keepsake.ing",
+        date_of_birth: "1990-01-01",
+      }),
+    });
+    expect(created.status).toBe(201);
+    expect(sent).toHaveLength(1);
+    const link = sent[0]?.text.match(/https?:\/\/\S+/)?.[0];
+    expect(link).toBeTruthy();
+
+    // The address really is on the token — the two lines this issue is about.
+    const minted = await env.DB.prepare(
+      "SELECT email FROM recovery_tokens WHERE purpose = 'verify_email' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+    ).first<{ email: string | null }>();
+    expect(minted?.email).toBe("typed-wrong@keepsake.ing");
+
+    // The address moves with no token minted behind it, so condition 2 finds
+    // nothing newer and condition 1 is the only rule left.
+    await env.DB.prepare("UPDATE owners SET email = ? WHERE email = ?").bind("someone-else@keepsake.ing", "typed-wrong@keepsake.ing").run();
+    expect(sent).toHaveLength(1);
+
+    const res = await SELF.fetch(link as string, { redirect: "manual" });
+    expect(res.headers.get("Location")).toBe("http://localhost:8787/mine?verified=0&reason=invalid");
+
+    const me = await readOk<{ email: string; email_verified: boolean }>(
+      await SELF.fetch("http://x/api/me", { headers: authHeaders(token) }),
+    );
+    expect(me.email).toBe("someone-else@keepsake.ing");
+    expect(me.email_verified).toBe(false);
   });
 
   // The write-side half of #167, asserted on the table rather than through
