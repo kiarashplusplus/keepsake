@@ -20,6 +20,7 @@ function item(id: string): AdminQueueItem {
     admin1: "MA",
     country: "US",
     photos: [],
+    aspects: [],
     published_at: 0,
     postal_code: "02144",
     moderation_reason: null,

@@ -37,6 +37,7 @@ function baseListing() {
     admin1: "MA",
     country: "US" as const,
     photos: [],
+    aspects: [],
     published_at: 0,
   };
 }

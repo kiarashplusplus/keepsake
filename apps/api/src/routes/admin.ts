@@ -37,7 +37,7 @@ import { adminAuth } from "../middleware/adminAuth.js";
 import { burst } from "../middleware/rateLimit.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { decodeKeysetCursor, encodeKeysetCursor } from "../lib/cursor.js";
-import { fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
+import { fetchAspectRows, fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
 import { serializeOwnerListing, type ListingRow } from "../lib/serialize.js";
 import { sendMail } from "../email/sendMail.js";
 import { adminTest as adminTestTemplate } from "../email/templates/adminTest.js";
@@ -91,7 +91,8 @@ async function fetchOwnerListingOrNull(env: Env, id: string): Promise<OwnerListi
   const row = await fetchListingRow(env, id);
   if (!row) return null;
   const photos = await fetchPhotoRows(env, id);
-  return serializeOwnerListing(row, photos);
+  const aspects = await fetchAspectRows(env, id);
+  return serializeOwnerListing(row, photos, aspects);
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +151,8 @@ adminRoutes.get("/queue", validateQuery(AdminQueueQuery), async (c) => {
   const items: AdminQueueItem[] = [];
   for (const row of rows) {
     const photos = await fetchPhotoRows(c.env, row.id);
-    const ownerListing = serializeOwnerListing(row, photos);
+    const aspects = await fetchAspectRows(c.env, row.id);
+    const ownerListing = serializeOwnerListing(row, photos, aspects);
 
     const ownerRow = await c.env.DB.prepare(
       "SELECT id, email, email_verified_at, banned_at FROM owners WHERE id = ?",

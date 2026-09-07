@@ -27,7 +27,7 @@ import { moderateListing } from "../moderation/pipeline.js";
 import { purgePhotoCache } from "../lib/photoCache.js";
 import { containsContactInfo } from "../moderation/contactInfo.js";
 import { serializeOwnerListing, serializePublicListing } from "../lib/serialize.js";
-import { fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
+import { fetchAspectRows, fetchListingRow, fetchPhotoRows, replaceListingAspects } from "../lib/listingsDb.js";
 
 type Vars = { owner: OwnerRow; validatedBody: unknown };
 export const listingRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -114,6 +114,11 @@ listingRoutes.post(
         .run();
     }
 
+    // `input.aspects` defaults to `[]` (CreateListingInput), never
+    // undefined, so this always runs — a brand-new listing with no
+    // confidently-read aspects gets zero rows, not a skipped write.
+    await replaceListingAspects(c.env, id, input.aspects);
+
     if (input.email) {
       await c.env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = NULL WHERE id = ?")
         .bind(input.email, owner.id)
@@ -137,7 +142,8 @@ listingRoutes.post(
     const row = await fetchListingRow(c.env, id);
     if (!row) return fail(c, "internal", "Listing failed to save.", 500);
     const photos = await fetchPhotoRows(c.env, id);
-    return ok(c, serializeOwnerListing(row, photos), 201);
+    const aspects = await fetchAspectRows(c.env, id);
+    return ok(c, serializeOwnerListing(row, photos, aspects), 201);
   },
 );
 
@@ -216,12 +222,25 @@ listingRoutes.patch("/:id", ownerAuth(), validateBody(UpdateListingInput), async
     }
   }
 
+  // `UpdateListingInput.aspects` is a plain `.optional()` override, not the
+  // usual `.partial()` treatment (see the contract's own comment on why) —
+  // an `aspects` key genuinely absent from the request body parses to
+  // `undefined` here, distinct from an explicit `[]`, which is truthy
+  // (arrays always are) and does replace. Only overwrite when the client
+  // actually sent something, the same rule `input.photo_ids` above already
+  // follows: a re-submit that never touched aspects must not silently wipe
+  // them.
+  if (input.aspects) {
+    await replaceListingAspects(c.env, id, input.aspects);
+  }
+
   c.executionCtx.waitUntil(moderateListing(c.env, id, nextVersion, clientIPFrom(c.req.raw)));
 
   const updatedRow = await fetchListingRow(c.env, id);
   if (!updatedRow) return fail(c, "internal", "Listing failed to save.", 500);
   const photos = await fetchPhotoRows(c.env, id);
-  return ok(c, serializeOwnerListing(updatedRow, photos));
+  const aspects = await fetchAspectRows(c.env, id);
+  return ok(c, serializeOwnerListing(updatedRow, photos, aspects));
 });
 
 // ---------------------------------------------------------------------------
@@ -278,7 +297,8 @@ listingRoutes.post("/:id/given", ownerAuth(), async (c) => {
   const updatedRow = await fetchListingRow(c.env, id);
   if (!updatedRow) return fail(c, "internal", "Listing failed to save.", 500);
   const photos = await fetchPhotoRows(c.env, id);
-  return ok(c, serializeOwnerListing(updatedRow, photos));
+  const aspects = await fetchAspectRows(c.env, id);
+  return ok(c, serializeOwnerListing(updatedRow, photos, aspects));
 });
 
 listingRoutes.post("/:id/withdraw", ownerAuth(), async (c) => {
@@ -298,7 +318,8 @@ listingRoutes.post("/:id/withdraw", ownerAuth(), async (c) => {
   const updatedRow = await fetchListingRow(c.env, id);
   if (!updatedRow) return fail(c, "internal", "Listing failed to save.", 500);
   const photos = await fetchPhotoRows(c.env, id);
-  return ok(c, serializeOwnerListing(updatedRow, photos));
+  const aspects = await fetchAspectRows(c.env, id);
+  return ok(c, serializeOwnerListing(updatedRow, photos, aspects));
 });
 
 listingRoutes.post("/:id/relist", ownerAuth(), async (c) => {
@@ -329,7 +350,8 @@ listingRoutes.post("/:id/relist", ownerAuth(), async (c) => {
   const updatedRow = await fetchListingRow(c.env, id);
   if (!updatedRow) return fail(c, "internal", "Listing failed to save.", 500);
   const photos = await fetchPhotoRows(c.env, id);
-  return ok(c, serializeOwnerListing(updatedRow, photos));
+  const aspects = await fetchAspectRows(c.env, id);
+  return ok(c, serializeOwnerListing(updatedRow, photos, aspects));
 });
 
 // ---------------------------------------------------------------------------
@@ -342,7 +364,8 @@ listingRoutes.get("/:id", burst("RL_READ"), async (c) => {
     return fail(c, "not_found", "Listing not found.", 404);
   }
   const photos = await fetchPhotoRows(c.env, id);
-  return ok(c, serializePublicListing(row, photos));
+  const aspects = await fetchAspectRows(c.env, id);
+  return ok(c, serializePublicListing(row, photos, aspects));
 });
 
 // ---------------------------------------------------------------------------

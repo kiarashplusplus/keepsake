@@ -15,7 +15,7 @@ import { turnstile } from "../middleware/turnstile.js";
 import { burst } from "../middleware/rateLimit.js";
 import { validateBody } from "../middleware/validate.js";
 import { serializeOwnerListing } from "../lib/serialize.js";
-import { fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
+import { fetchAspectRows, fetchAspectRowsForListings, fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
 import type { ListingRow } from "../lib/serialize.js";
 import { requireParam } from "../lib/params.js";
 import { ulid } from "../lib/ids.js";
@@ -103,10 +103,14 @@ meRoutes.get("/listings", ownerAuth(), async (c) => {
     .bind(owner.id)
     .all<ListingRow>();
 
+  const aspectsByListing = await fetchAspectRowsForListings(
+    c.env,
+    rows.map((row) => row.id),
+  );
   const items = [];
   for (const row of rows) {
     const photos = await fetchPhotoRows(c.env, row.id);
-    items.push(serializeOwnerListing(row, photos));
+    items.push(serializeOwnerListing(row, photos, aspectsByListing.get(row.id) ?? []));
   }
   return ok(c, items);
 });
@@ -119,7 +123,8 @@ meRoutes.get("/listings/:id", ownerAuth(), async (c) => {
     return fail(c, "not_found", "Listing not found.", 404);
   }
   const photos = await fetchPhotoRows(c.env, id);
-  const ownerListing = serializeOwnerListing(row, photos);
+  const aspects = await fetchAspectRows(c.env, id);
+  const ownerListing = serializeOwnerListing(row, photos, aspects);
 
   const { results: requestRows } = await c.env.DB.prepare(
     "SELECT id, note, email, phone, status, created_at FROM requests WHERE listing_id = ? ORDER BY created_at",
