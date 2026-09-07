@@ -80,7 +80,7 @@ deployed URL, read the actual bytes, take a viewport screenshot. Do not screensh
 `captureBeyondViewport`; that is how a page nobody could scroll looked perfect for a week.
 
 **And one more, #66: "verified on preview" was never safe to say.** `deploy.yml`'s own
-"Verify /health reports this commit" step is not one of the six above — it's correct at the
+"Verify /health reports this commit" step is not one of the seven above — it's correct at the
 moment it runs. What was worthless was trusting it a minute later, because preview was one shared
 Worker that every open PR deployed to, so another session's deploy could land between CI's check
 and whatever you did next. This happened for real verifying #14 — a probe ran 90 seconds after an
@@ -179,4 +179,3 @@ He reads the closing comment, not the diff. Say what changed, how you proved it,
 not do. If a test passed but you did not verify the real thing, say that. He has repeatedly caught
 problems by looking at the actual product on his phone; the fastest way to lose his trust is to
 report success for something that was never observed working.
-
