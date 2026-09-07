@@ -48,7 +48,7 @@
     <main id="main">
       <div class="page-header wrap">
         <h1>Privacy</h1>
-        <p class="updated">Last updated September 2026</p>
+        <p class="updated">Last updated 7 September 2026 — see <a href="#changes">what changed</a></p>
       </div>
 
       <div class="prose-content prose">
@@ -101,7 +101,9 @@
           You can add an email address when you give something. We store it only to notify you
           when someone asks for your keepsake and to help you recover access to your dashboard if
           you lose your device key. We never use it for marketing, and it's never shown publicly on
-          the site.
+          the site. You can take it back off at any time yourself, from
+          <a href="/mine/email">keepsake.ing/mine/email</a> — see "Your rights" below for what that
+          does and how long we hold it if you don't.
         </p>
         <p>
           It is shared privately, though, in one case: if you choose a request, we send your email
@@ -273,49 +275,89 @@
           story, photos, tags, category, and postcode-level location of a listing you post — the
           title, category and tags may be the ones a model read off your photo, see "Autofill
           from your photo" above. Separately, we keep a short-lived, hashed record of your IP
-          address for abuse prevention (see "Rate limiting" above). We don't sell any of it, to
-          anyone, for any reason — see the section above. Kiarash, named under "Who runs this"
-          above, is the controller for all of it.
+          address for abuse prevention (see "Rate limiting" above).
+        </p>
+        <p>
+          Two more categories reach us and are then thrown away rather than kept, which we list
+          here anyway because they are still collected. The first is your date of birth: the age
+          gate on the give form and the request form asks for it, it travels to us with that
+          submission, it is checked once against our minimum age, and it is discarded — all we
+          keep is a timestamp recording that the check passed (see "Minimum age" below). The
+          second is your device's exact coordinates, but only if you use "Use my location" to
+          search rather than to post: they come with that one search request and aren't stored
+          (see "Location" above).
+        </p>
+        <p>
+          We don't sell any of it, to anyone, for any reason — see the section above. Kiarash,
+          named under "Who runs this" above, is the controller for all of it.
         </p>
 
         <h2>Your rights: access, deletion, and portability</h2>
         <p>
           Because there's no account to log into, most of this is already self-service. You can
-          delete a listing (and its photos) at any time from your dashboard. If you asked for
-          someone's keepsake, the confirmation email you received has a link to withdraw that
-          request and erase your note, email, and phone number — see "What a requester shares"
-          above for the one thing that link can't undo (a chosen request whose contact info the
-          giver already has by email).
+          delete a listing (and its photos) at any time from your dashboard. Your email address is
+          self-service too: on the device that holds your key, open your dashboard and follow
+          "Your email" to <a href="/mine/email">keepsake.ing/mine/email</a>, where a
+          <strong>Remove</strong> button erases the address from our records on the spot — you
+          don't have to write to us and wait. If you asked for someone's keepsake, the
+          confirmation email you received has a link to withdraw that request and erase your note,
+          email, and phone number — see "What a requester shares" above for the one thing that
+          link can't undo (a chosen request whose contact info the giver already has by email).
         </p>
         <p>
           For anything that isn't self-service — seeing a copy of what we hold about you (access),
-          getting it in a portable form, or removing your email or anything else on this page —
-          write to <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a> and we'll take care
-          of it. There's one operator and no account system behind this, so these are manual
-          requests we handle by hand, not an automated export button, but we'll get you an answer.
+          getting it in a portable form, or removing anything on this page you can't remove
+          yourself — write to <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a> and we'll
+          take care of it. There's one operator and no account system behind this, so these are
+          manual requests we handle by hand, not an automated export button, but we'll get you an
+          answer.
         </p>
         <p>
           What we keep and for how long: your device key, preferences, and last search location
           live in your own browser's storage, not ours, until you clear them. Photos and listing
           text live for as long as the listing exists, plus 30 days if it's rejected, withdrawn, or
           hidden. Request notes/emails/phone numbers live until the request is withdrawn (see
-          above) or you ask us to remove them. Your own email, if you added one, stays on file
-          tied to your device key — being inactive doesn't delete it — until you ask us to remove
-          it. A link we send to verify an email or recover your dashboard expires in 24 hours (or
-          30 minutes for a recovery link) and the record of it is cleared within a further week.
+          above) or you ask us to remove them. A link we send to verify an email or recover your
+          dashboard expires in 24 hours (or 30 minutes for a recovery link) and the record of it is
+          cleared within a further week.
           Rate-limit hashes expire automatically after 48 hours (see "Rate limiting" above), and
           moderation and email-delivery logs are kept for 90 days as an abuse-prevention audit
           trail.
         </p>
+        <p>
+          Your own email is the one thing on that list with no expiry date, and it's worth stating
+          without hedging. If you add an email address, we keep it indefinitely, tied to your
+          device key. There is no dormancy window, no inactivity timer, and no cleanup job that
+          removes it: not opening Keepsake for a year, or five, deletes nothing. It is kept
+          because it is the only way back to your listings if you lose your device key, and losing
+          it silently to a timer would defeat the point of having offered it. It goes when you
+          remove it — the <strong>Remove</strong> button described above, or by asking us — and
+          not before.
+        </p>
 
         <h2>Minimum age</h2>
         <p>
-          Keepsake asks everyone posting or requesting a keepsake to confirm they're 18 or older —
-          see <a href="/terms">Terms</a> for why. We can't verify anyone's age; the point of asking
-          is a documented, honest basis for acting the moment we actually learn — through a report,
-          a listing, or a request — that someone using Keepsake is a minor. Acting on that means
-          removing the listing or request involved, and, when it's a giver, banning the device key
-          that posted it.
+          You have to be 18 or older to post a keepsake or ask for one — see
+          <a href="/terms">Terms</a> for why. The form doesn't ask you to tick a box that states
+          its own right answer. It asks a neutral question instead: your date of birth, typed as
+          <code>YYYY-MM-DD</code>.
+        </p>
+        <p>
+          What happens to that date, exactly. It is sent to us along with the listing or the
+          request — we're saying so plainly rather than implying it never leaves your browser —
+          and there it is checked once, against nothing but our minimum age. Then it is dropped.
+          No column in our database holds a date of birth and no code path writes it to one,
+          copies it into a log, or passes it to anyone else. The only trace kept is a timestamp
+          on that listing or request recording that the check passed on that day. On your side of
+          the wire it is just as short-lived: unlike the rest of a draft listing, the field is
+          never saved into your browser's storage, so it's gone when you post or leave the page.
+        </p>
+        <p>
+          None of this verifies anyone's age — a date you type is a self-declaration, not an
+          age-verification system. Asking it neutrally is what gives us a documented, honest basis
+          for acting the moment we actually learn — through a report, a listing, or a request —
+          that someone using Keepsake is a minor. Acting on that means removing the listing or
+          request involved, and, when it's a giver, banning the device key that posted it.
         </p>
 
         <h2>Other services we rely on</h2>
@@ -331,6 +373,28 @@
           before anything is written. None of them receive your photos or story text beyond what's
           needed to run the service itself.
         </p>
+
+        <section id="changes">
+          <h2>What changed</h2>
+          <p>
+            A date at the top of a policy tells you something moved but not what, so this is the
+            record. It's kept by hand, newest first, and it starts the day we started keeping it —
+            there's no entry here for anything before that date.
+          </p>
+          <p>
+            <strong>7 September 2026.</strong> Three corrections, all of them the page catching up
+            with the code rather than a change in what Keepsake does. "Minimum age" described a
+            checkbox confirming you're 18 or older; the form now asks for a date of birth instead,
+            so that section says so and spells out that the date is checked and then discarded,
+            with only a timestamp kept — and "Categories of information we collect" now lists it.
+            A new "Autofill from your photo" section discloses the second AI model, the one that
+            reads your first photo to fill in the give form, which the page had only ever described
+            as safety screening. "Rate limiting" no longer implies the daily hash of your IP
+            address is unbreakable; it says what the hashing does and doesn't buy you. The email
+            retention rule is unchanged and now stated plainly, alongside the self-service button
+            that removes it.
+          </p>
+        </section>
 
         <h2>Questions</h2>
         <p>
