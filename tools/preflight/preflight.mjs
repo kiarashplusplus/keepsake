@@ -193,7 +193,7 @@ const MIGRATIONS_DIR = "apps/api/migrations";
 
 // Two accepted filename forms, both `<digits>_slug.sql`:
 //
-//   0001_init.sql              legacy, four-digit sequential (0001..0008 on main)
+//   0001_init.sql              legacy, four-digit sequential (0001..0009 on main)
 //   20260907143012_slug.sql    current, a UTC timestamp: YYYYMMDDHHMMSS
 //
 // Why two. D1 records applied migrations in `d1_migrations` **by filename**,

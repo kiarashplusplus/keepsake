@@ -37,7 +37,7 @@ Routing's, and authenticates nothing we send. Don't "fix" a sending problem by e
 ### Inbound (2026-09-07)
 
 Until this date the apex had **no MX at all**, so every reply to `hello@keepsake.ing` bounced. That
-was a real gap rather than a cosmetic one: `hello@keepsake.ing` is the `From` on all six templates,
+was a real gap rather than a cosmetic one: `hello@keepsake.ing` is the `From` on all seven templates,
 and `chosen` is the only one that sets reply-to elsewhere (the giver). A requester hitting reply on
 any *other* message — including the request confirmation that asks them to wait to hear back — got
 a bounce from the domain that had just written to them.
@@ -119,8 +119,10 @@ no markup in a header to escape. That left the listing title interpolated raw in
 
 Both layers earn their place: the schema is the front door, but a title reaches a subject from a
 D1 row rather than from freshly validated input, so a row written before that check still flows
-through the runtime path. If you add a template, run its subject through `sanitizeSubject` —
-`recover.ts` and `verifyEmail.ts` are exempt only because their subjects are static.
+through the runtime path. If you add a template, run its subject through `sanitizeSubject`. **There are no exemptions**:
+`recover.ts:33` and `verifyEmail.ts:15` wrap their static subjects too, `templates/shared.ts`
+states the rule as enforced rather than advisory, and `test/emailSubjects.test.ts` enumerates the
+directory and fails any `subject:` site that is unwrapped or missing the import.
 
 ## M3 status (API side)
 
@@ -134,8 +136,8 @@ or the send itself throwing all fall through to a `[email:stub]` log and `{ sent
 in `email_events` (migration `0004_email_events.sql`), keyed by `sha256(lowercased address)`
 (`to_hash`) — never the raw address.
 
-Six templates in `src/email/templates/*.ts` (`verifyEmail`, `newRequest`, `requestReceived`,
-`chosen`, `recover`, `adminTest`), sharing `templates/shared.ts`'s table-based HTML shell styled
+Seven templates in `src/email/templates/*.ts` (`verifyEmail`, `newRequest`, `requestReceived`,
+`chosen`, `recover`, `adminTest`, `dailyDigest`), sharing `templates/shared.ts`'s table-based HTML shell styled
 with `@keepsake/tokens/colors`'
 *light* palette only (email clients don't reliably honor `prefers-color-scheme`). Each ends with
 the one-line footer "Keepsake · keepsake.ing · you're getting this because …", the reason varying

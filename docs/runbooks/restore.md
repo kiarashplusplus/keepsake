@@ -276,8 +276,11 @@ Full details, including regenerating from GeoNames, in [geodata.md](geodata.md).
 ## After any restore
 
 - `curl -s <site>/health | jq` — bindings and D1 reachable.
-- `GET /api/admin/health` — `postal_codes_count > 0`, and `cron_last_run` fresh for both jobs
-  (`ok` is false if either heartbeat is stale; see `docs/runbooks/admin.md`).
+- `GET /api/admin/health` — `postal_codes_count > 0`, and `cron_last_run` fresh for all **three**
+  jobs (`moderationRetry`, `orphanSweep`, `dailyDigest`). `ok` is false if any heartbeat is stale,
+  if postcodes are missing, or if auto-hidden reports are awaiting review; see
+  `docs/runbooks/admin.md`. Note `dailyDigest` never writes its heartbeat today, so `ok` is
+  currently `false` regardless (#165) — do not read that as a failed restore.
 - Search still works: `GET /api/feed?q=<a word you know is in a listing>` returns it. This is the
   one thing a restore can break silently, because an empty FTS index looks exactly like "no
   results".
@@ -289,7 +292,8 @@ Full details, including regenerating from GeoNames, in [geodata.md](geodata.md).
 ## R2 photo backup
 
 Issue #17. Before this section existed, `wrangler.toml` declared the photo bucket with nothing
-but `binding` and `bucket_name`, and a bug in any of `orphanSweep`'s three delete predicates
+but `binding` and `bucket_name`, and a bug in either of `orphanSweep`'s two photo-deleting sweeps
+(`sweepOrphanPhotos`, `sweepTerminalListingPhotos` — the other three sweeps touch D1 rows only)
 (`apps/api/src/cron/orphanSweep.ts`) destroyed a photo with no way back — D1 Time Travel restores
 the `photos` row, but the bytes it points at stay gone forever.
 
