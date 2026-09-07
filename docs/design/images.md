@@ -5,8 +5,10 @@ sweep (launch audit finding 15) and `burst("RL_READ")` on `/i/:id/:variant` (fin
 
 Every listing has 1–5 photos, each stored as two R2 objects (`photos/<id>/full.jpg` ≤2048px,
 `photos/<id>/thumb.jpg` ≤640px) plus a D1 `photos` row carrying `width`, `height`, `blurhash`,
-and `moderation_status`. The thumb — not the full image — is what the moderation vision model
-and the masonry grid both use; cheaper and plenty of signal for either job.
+and `moderation_status`. The masonry grid uses the thumb; **the moderation vision model looks at
+both**, one call each, because the two objects are two independent client uploads and neither is
+derived from the other — moderating only the thumb meant `/i/:id/full` published bytes no model
+had seen (#161, fixed 2026-09-07; see `docs/design/moderation.md` step 4 for the cost).
 
 ## Client-side pipeline (`apps/web/src/lib/images/`)
 

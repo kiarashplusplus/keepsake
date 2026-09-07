@@ -80,10 +80,30 @@ export interface UploadPhotoOptions {
   blurhash?: string;
 }
 
+/**
+ * Uploads a photo the way an honest client does: **the same bytes for both
+ * variants**, standing in for a `full` and a `thumb` produced from one
+ * source image.
+ *
+ * This helper used to default `full` to `fakeJpegBytes()` (32 bytes) and
+ * `thumb` to `fakeJpegBytes(16)` — two byte sequences no single source
+ * image could have produced — so every test in this suite had been
+ * demonstrating #161's attack shape by accident, with nothing objecting.
+ * The default now models a real client; a test that wants mismatched
+ * variants passes `fullBytes`/`thumbBytes` explicitly and is saying so on
+ * purpose (see `moderationVariants.test.ts`).
+ *
+ * Note what this helper still cannot do, and what the server therefore
+ * still cannot check: nothing here or in `PUT /api/photos` decodes an
+ * image, so "these two files came from one source" is not verifiable
+ * server-side. That is why #161 is fixed by moderating both variants
+ * rather than by rejecting mismatched ones.
+ */
 export async function uploadPhoto(options: UploadPhotoOptions): Promise<Response> {
   const form = new FormData();
-  form.set("full", fakeFile(options.fullBytes ?? fakeJpegBytes(), "full.jpg", "image/jpeg"));
-  form.set("thumb", fakeFile(options.thumbBytes ?? fakeJpegBytes(16), "thumb.jpg", "image/jpeg"));
+  const fullBytes = options.fullBytes ?? fakeJpegBytes();
+  form.set("full", fakeFile(fullBytes, "full.jpg", "image/jpeg"));
+  form.set("thumb", fakeFile(options.thumbBytes ?? fullBytes, "thumb.jpg", "image/jpeg"));
   form.set("width", String(options.width ?? 800));
   form.set("height", String(options.height ?? 600));
   form.set("blurhash", options.blurhash ?? "LEHV6nWB2yk8pyo0adR*.7kCMdnj");
