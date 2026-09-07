@@ -25,8 +25,10 @@ paperwork is owed somewhere.
   decision, including what's verified vs. not.
 - `docs/runbooks/uk-block.md` — the decision record and the code-level mechanics of the block
   itself.
-- Issue #30 (`kiarashplusplus/keepsake`) — the tracking placeholder this checklist exists to back
-  up.
+- Issue #30 (`kiarashplusplus/keepsake`) — the tracking placeholder this checklist existed to back
+  up. **#30 is closed**, and closing it did not answer anything: the block is what closed it. This
+  file is now the only tracker for the work in sections 1–6, which is the reason to work from the
+  file rather than from a search of open issues.
 - Issue #34 — the lawyer-questions tracking issue. Q1 (Article 27 representative), Q4 (Age
   Appropriate Design Code) and Q6 (Ofcom record-keeping exemption) are the three UK questions
   explicitly noted there as moot under the geo-block but live again the moment it's lifted. Q1 is

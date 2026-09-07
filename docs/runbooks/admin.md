@@ -1,9 +1,13 @@
 # Runbook: admin
 
-Status: `[DONE]` (API side, 2026-09-06) — `src/routes/admin.ts` + `src/middleware/adminAuth.ts`,
-tests in `test/admin.test.ts`, `test/adminAuth.test.ts`, `test/ownerAuth.test.ts`,
-`test/orphanSweep.test.ts`. The `/admin` web page itself is a separate,
-not-yet-started piece of M4/M5 — everything below is the API a future admin page (or `curl`) talks to.
+Status: `[DONE]`, both halves. API side 2026-09-06 — `src/routes/admin.ts` +
+`src/middleware/adminAuth.ts`, tests in `test/admin.test.ts`, `test/adminAuth.test.ts`,
+`test/ownerAuth.test.ts`, `test/orphanSweep.test.ts`. **The `/admin` page exists too**
+(`apps/web/app/admin.tsx` + `src/features/admin/`: token gate, queue cards, bulk actions, reason
+sheet, stats strip, and the Observatory panel from #150) — this line used to say it was "a
+separate, not-yet-started piece of M4/M5", which stopped being true when #11 shipped the queue.
+Everything below is the API; the page is a client of it, and `curl` remains a first-class way to
+drive every one of these routes.
 
 Kiarash is the only admin. Auth is a single secret (`ADMIN_TOKEN`), sent as
 `Authorization: Bearer <ADMIN_TOKEN>` and compared constant-time — there is no admin user table

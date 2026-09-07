@@ -1,6 +1,9 @@
 # Feed
 
-Status: `[QA]` (M2 API side implemented; needs a real preview smoke test — feed browse, search, and radius against the live postal_codes seed — per M2 DoD).
+Status: `[DONE]` — M2's DoD was walked against the live preview stack on 2026-09-06 (feed,
+FTS search, postcode radius, item unfurl). Since then the endpoint also grew semantic search
+behind `SEMANTIC_SEARCH` (#38, `docs/design/min-score-calibration.md`) and aspect shelves (#39),
+with FTS5 kept as the fallback.
 
 `GET /api/feed?cursor&category&q&country&postal&lat&lng&radius&limit` serves three modes off one
 endpoint: plain keyset (newest-first) when no location or query is given, FTS5 `q=` search, or
@@ -36,8 +39,11 @@ should call FTS5 directly.
   loads** — not CSS columns (re-flows on append) and not FlashList (no benefit on web). Pages of
   24, intersection-observer load-more.
 - Card, the one signature moment repeated everywhere: photo (blurhash placeholder) → **one line
-  of the story in Fraunces italic** (`storyExcerpt` token) → title in Inter → `place · distance`
-  caption. Warm-tinted shadow, hairline border — never a flat, colorless card.
+  of the story in Fraunces italic** (`storyExcerpt` token) → title → `place · distance` caption.
+  Under v3 the card is a `Print` — white frame, taped corners, a deterministic per-id tilt, and
+  Courier Prime for every caption and label. (This paragraph used to say "title in Inter"; Inter
+  was removed from `packages/tokens` entirely by v3 — see
+  [`design-system.md`](./design-system.md#v3--polaroids-on-a-table-2026-09-06).)
 
 ## M2 status (API side)
 

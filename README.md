@@ -8,9 +8,10 @@ a note and an email, and the giver picks who gets it. No money, no bidding, no a
 Identity is a device-bound secret token minted the first time you post, not a signup; an
 optional verified email exists only for notifications and recovering your listings if you lose
 the device. Every listing is pre-screened by open models before it's public — borderline cases
-are held for a human to approve rather than auto-approved or auto-rejected. It's meant to feel
-like a warm keepsake box: a story excerpt in italic serif on every card, paper grain, a breathing
-wax seal while a listing is under review.
+are held for a human to approve rather than auto-approved or auto-rejected. The identity is
+**v3 "Polaroids on a table"**: every listing is an instant-film print taped down at a slight
+tilt on a kraft-paper table, and a red rubber stamp is the one accent
+([`docs/design/design-system.md`](./docs/design/design-system.md)).
 
 ## Stack
 
@@ -19,9 +20,11 @@ wax seal while a listing is under review.
   [`docs/platform-differences.md`](./docs/platform-differences.md)).
 - **API**: Cloudflare Workers (Hono) + D1 + R2 + KV + Workers AI (moderation) + Cloudflare Email
   Service + Turnstile + rate-limit bindings.
-- **Data**: Postcode + radius search over US/Canada/UK, backed by a GeoNames postal-code table
-  bundled straight into D1 — no geocoding API (see
-  [`docs/runbooks/geodata.md`](./docs/runbooks/geodata.md)).
+- **Data**: Postcode + radius search over **US and Canada**, backed by a GeoNames postal-code
+  table bundled straight into D1 — no geocoding API (see
+  [`docs/runbooks/geodata.md`](./docs/runbooks/geodata.md)). The seed still carries GB rows and
+  the builder still knows the GB rule, but the UK is geo-blocked on purpose
+  ([`docs/runbooks/uk-block.md`](./docs/runbooks/uk-block.md)).
 - **Tooling**: pnpm workspaces, TypeScript 5.9 strict, ESLint 9 flat config with a barrel-import
   ban (see [`docs/design/README.md#barrel-ban`](./docs/design/README.md#barrel-ban)).
 
@@ -37,7 +40,9 @@ tools/preflight/    Zero-dependency CI checks that don't need a running Worker
 tools/geodata/      Builds the bundled postal-code seed from GeoNames
 tools/readable-test-runner.mjs   Runs every package's tests, non-fail-fast, with a summary table
 docs/design/        Status of record for the build (milestones, per-topic docs)
-docs/runbooks/      Deploy, incident, admin, geodata
+docs/runbooks/      deploy, restore, migrations, admin, incident, geodata, uk-block,
+                    uk-reentry-checklist, issue-workflow, launch-audit, kiarash-checklist,
+                    verify-production
 ```
 
 ## Getting started
@@ -75,4 +80,8 @@ Full detail — including why this looks like a corrupt seed rather than a missi
   design system, ops).
 - [`docs/platform-differences.md`](./docs/platform-differences.md) — cross-platform traps
   (shadows, keyboard/`position: fixed`), most relevant the day a native target is added.
-- [`docs/runbooks/`](./docs/runbooks/) — deploy, incident, admin, geodata.
+- [`docs/product-decisions.md`](./docs/product-decisions.md) — the product decisions this
+  build rests on, each with what would change the answer. Read before reopening one.
+- [`docs/runbooks/`](./docs/runbooks/) — deploy, restore, migrations, admin, incident, geodata,
+  the UK block and its re-entry checklist, the issue workflow, and the post-deploy production
+  verification.

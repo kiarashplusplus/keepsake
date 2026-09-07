@@ -1,6 +1,12 @@
 # Email
 
-Status: `[QA]` (M3 API side implemented; a real send from `hello@keepsake.ing` on preview per M3 DoD is still owed — see plan Risk #1).
+Status: `[DONE]` — M3 shipped, Cloudflare Email Service is onboarded (`hello@keepsake.ing`,
+quota 1000/day, DNS configured 2026-09-06), and preview has sent real mail with
+`email_events.provider=cf, ok=1`. Production runs `EMAIL_MODE=live` for all recipients (#43).
+**Read "Why a provider switch exists at all" below as history, not as an open risk** — the Risk #1
+it names was closed by that onboarding. What acceptance does *not* prove is delivery: there is no
+bounce webhook and no complaint feedback loop, so `ok = 1` means the provider took the message
+(#6, closed 2026-09-07).
 
 Cloudflare Email Service `send_email` binding is the primary transport, sending from
 `hello@keepsake.ing`; Resend is a fallback behind the same `sendMail()` interface, selected by

@@ -233,10 +233,23 @@ nothing to provision before it's live. See `docs/design/ops.md#observability`.
 Environments → preview/production), used only by `deploy.yml` to run `wrangler` in CI — they are
 not Worker secrets and are never passed to `wrangler secret put`.
 
-## The per-PR preview token (#73)
+## The per-PR preview token (#73) — provisioned, then not used
 
-`deploy.yml` does not use this yet — it exists so the per-PR preview Workers decided in #73 have a
-credential that can actually stand them up. It is a **second, separate** token from
+**Read the decision history before reaching for this.** #73 was decided twice on 2026-09-07: first
+for per-PR preview Workers (option 1), which is why this token exists and was verified; then
+**reversed to main-only preview deploys, per-PR Workers declined**, which is what shipped in #107
+and is what `deploy.yml` does today. The token below is therefore *stranded capability* — real,
+verified, rolled, sitting in a GitHub environment secret, and used by nothing. Nothing uses it and
+nothing is waiting on it.
+
+Kept rather than revoked because the reversal was a cost call (the CI work to provision and tear
+down, not the resources), not a discovery that the approach doesn't work — so if per-PR previews
+are ever revisited, this section is the measurement that need not be repeated. See
+[`docs/product-decisions.md`](../product-decisions.md). If the answer stays no, the honest cleanup
+is to revoke `keepsake-pr-preview` and delete the secret rather than leave a create-and-delete
+credential live for a feature nobody is building.
+
+`deploy.yml` does not use this. It is a **second, separate** token from
 `keepsake-ci-deploy` (which stays exactly as narrow as it was, and is what
 `CLOUDFLARE_API_TOKEN` still holds): a per-PR job has to *create and delete* resources, not just
 write to two known ones, so its blast radius is genuinely larger and it is kept in its own
@@ -275,7 +288,7 @@ assumption:
   limit; the real cost of per-PR previews is the CI work to provision and tear them down, not the
   resources themselves.
 
-**Still not solved by this token: Turnstile.** Widget hostnames are not in its scope (it can read
+**Still not solved by this token, and moot while per-PR previews stay declined: Turnstile.** Widget hostnames are not in its scope (it can read
 widgets, not write them), so a `keepsake-pr-<n>.leapkg.workers.dev` origin is not an allowed
 hostname on the `Keepsake` widget and every write path there would fail `turnstile_failed`. That
 is a one-time dashboard action rather than a per-PR one, because Turnstile hostnames cover

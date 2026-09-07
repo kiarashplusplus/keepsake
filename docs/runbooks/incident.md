@@ -1,6 +1,8 @@
 # Runbook: incident
 
-Status: current for M0; expand as M4 observability (Workers Logs, admin queue) lands.
+Status: current. M4's observability landed — Workers Logs, the admin queue, `/api/admin/health`,
+the report-pressure alert and (since #150) the Observatory and the daily digest are all live and
+described below.
 
 ## First, check `/health`
 
@@ -8,9 +10,14 @@ Status: current for M0; expand as M4 observability (Workers Logs, admin queue) l
 curl -s https://keepsake.ing/health | jq
 ```
 
-`{ok, commit, env, checks}` — asserts DB/BUCKET/KV/AI/EMAIL/ASSETS bindings. `EMAIL: degraded`
-is expected-and-known if Cloudflare Email Service onboarding hasn't landed yet (see
-`docs/runbooks/deploy.md`); any other binding degraded or `ok: false` is a real incident.
+`{ok, commit, env, checks}` — asserts DB/BUCKET/KV/AI/EMAIL/ASSETS bindings, with D1/R2/KV doing
+real reads rather than presence checks (#15). Email Service onboarding **is** done (2026-09-06), so
+`EMAIL: degraded` is no longer an expected steady state on either tier — treat it as a real
+incident like any other degraded binding. `ok: false` returns HTTP 503.
+
+If every path answers `503` naming `COMMIT_SHA`, that is the production guard, not an outage:
+someone ran `wrangler deploy --env production` without `--var COMMIT_SHA:$(git rev-parse HEAD)`.
+Redeploy with the flag — see [deploy.md](deploy.md#manual-deploys-and-commit_sha-issue-24).
 
 ## Common failure modes and where to look
 
@@ -246,6 +253,23 @@ before raising any limit.
 ## Escalation
 
 There is no on-call rotation — Kiarash is the only admin (`ADMIN_TOKEN`, one secret). If the
-admin token is compromised, rotate it immediately with `wrangler secret put ADMIN_TOKEN --env
-production` and check `moderation_events` for any `admin`-kind events since the suspected
-compromise window.
+admin token is compromised, check `moderation_events` for any `admin`-kind events since the
+suspected compromise window, and rotate — **which is two steps now, not one**:
+
+```sh
+wrangler secret put ADMIN_TOKEN --env production   # what the Worker accepts
+# then edit the table in AGENTS.md → "Admin tokens" in the same breath, and commit
+```
+
+Since 2026-09-07 both tiers' tokens are written down in `AGENTS.md` on purpose (see
+[admin.md](admin.md#where-a-session-gets-the-token)), so rotating only the Worker secret leaves
+every session — local, phone and claude.ai — holding a dead token, and rotating only the file
+leaves the live one valid. The old value stays in git history either way: rotation makes it
+useless, it does not erase it. Rotating also invalidates every open admin browser session
+immediately, which is expected after a suspected leak, not a bug.
+
+One consequence worth stating in an incident: **there are no scopes.** The same string that reads
+the Observatory can hide listings, ban owners, and read a requester's email address and phone
+number, so a leaked production token is a personal-data exposure — go to
+[Data breach (PIPEDA)](#data-breach-pipeda--a-suspected-exposure-of-personal-data) above, do not
+treat it as availability-only.

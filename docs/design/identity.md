@@ -1,6 +1,8 @@
 # Identity
 
-Status: `[QA]` (M1 minted the token; M3 recovery implemented on the API side — see "M3 status" below).
+Status: `[DONE]` — M1 mints the token, M3's recovery and email-verification paths are
+implemented and tested (see "M3 status" below), and both were exercised end to end on preview on
+2026-09-06 (link delivered, clicked, verified, token consumed once).
 
 No accounts. A giver's identity is a device-bound secret token; an optional verified email exists
 only for notifications and dashboard recovery — losing the device without one means losing the

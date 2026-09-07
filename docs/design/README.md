@@ -16,40 +16,62 @@ is a real site with real visitors possible, not a staging exercise.
   still **manual** — `workflow_dispatch` — so merging to `main` does not ship the public site.
 - `preview.keepsake.ing` deploys from **`main` only**; pull requests deploy nowhere (#73, which
   also resolved #66). Verify a branch with `pnpm --filter @keepsake/web e2e`, not on preview.
-- Production email is `live` for all recipients (#43). **What that rests on is still unproven**:
-  delivery to any address other than Kiarash's has never been observed arriving (#6). That is the
-  single most important open fact in this file.
-- `PRODUCTION_LIVE=true` is set, so `uptime.yml` now genuinely probes production every 15 minutes
-  rather than only checking that it *isn't* answering.
+- Production email is `live` for all recipients (#43). **#6 — the issue that carried "delivery to
+  an address that is not Kiarash's has never been observed arriving" — was closed on 2026-09-07 at
+  08:54 UTC.** This bullet used to call that the single most important open fact in the file; it is
+  no longer an open *issue*, and that is the honest limit of what can be said here. Nothing in the
+  repository records the inbox actually being read: the last comment on #6, thirteen minutes before
+  it closed, says "Issue stays open, stays a launch blocker, until someone reads that inbox," and
+  the close carries no comment. Treat delivery as **probably** proven and ask Kiarash, rather than
+  either repeating the old claim or asserting a test that has no written result. What is
+  structurally true either way, and unchanged: `email_events.ok = 1` records that the provider
+  accepted the message, and there is no bounce webhook and no complaint feedback loop behind it.
+- `PRODUCTION_LIVE=true` is set, so `uptime.yml` genuinely probes production every 15 minutes
+  rather than only checking that it *isn't* answering. That probe is also the one way an agent
+  container can observe the live site at all (egress `403`s `CONNECT keepsake.ing:443`): it prints
+  the commit each tier is serving, every 15 minutes, in a log anyone can read.
 - **The Observatory is live on preview** (#150, PR #151): `GET /api/admin/observatory` and an
   `/admin` → Observatory panel, plus a daily digest cron at 00:07 UTC. Its D1 half — funnel, queue
   ages, per-day series — needs no credential; its Cloudflare half reads edge analytics and the
   Worker's own log lines through `CF_OBSERVATORY_TOKEN`, a read-only token scoped to exactly
   `Account Analytics Read` + `Workers Observability Read`. That secret is set on **both** tiers and
   the panels were verified returning real data on preview at `3534a94`. Production has the secret
-  but not yet the code — it ships on the next manual dispatch.
+  but not yet the code — see the tier drift below.
 
-**In flight** — re-checked against `main` at `3534a94`.
-- Nothing from the **Labeling & search** milestone. #38 was the last of its six issues and merged
-  in #114; the milestone is complete as code. What it still owes is an *operational* step, below.
-- Production is **behind `main` by the whole of this batch** — semantic search (#114), the
-  constants sweep (#143), the raised AI budgets (#146), the labeling milestone note (#148) and the
-  Observatory (#151). That is the manual gate working as designed, not drift, but it means the
-  next `workflow_dispatch` ships all of it at once and deserves reading as one release rather than
-  five.
+**Tier drift — observed, not inferred, at 2026-09-07 15:46 UTC**
+([uptime run 34139983362](https://github.com/kiarashplusplus/keepsake/actions/runs/34139983362)):
 
-**Do this on the first deploy that carries `97eed3e`.** Semantic search is on
-(`SEMANTIC_SEARCH = "1"` in all three env blocks) and the `[[vectorize]]` bindings are live. Two
-consequences worth watching for rather than assuming away:
-- An uncommented binding naming an index that does not exist **fails the Worker upload**, taking
-  every deploy of this Worker with it, search-related or not. The three indexes are recorded as
-  confirmed present at 768/cosine by the one session that held a Vectorize credential; no session
-  since has been able to re-observe that. The deploy is where it gets tested for real.
-- `reembedListing` runs on create, on edit, and on each row the #37 aspects backfill touches —
-  there is no vector-only backfill. Every listing that exists today predates the feature, so run
-  `POST /api/admin/backfill-aspects` after the deploy. `docs/runbooks/deploy.md` → "Vectorize /
-  semantic search" has the detail, including the one listing that job will skip until its existing
-  `material: braided` row is cleared.
+| Tier | Serving | Means |
+|---|---|---|
+| preview | `454ab9a` | the newest commit on `main` at that moment |
+| production | `7afeb92` | five commits back |
+
+Production **has** semantic search (#114/`97eed3e`), the constants sweep (#143), the raised AI
+budgets (#146) and the labeling-milestone note (#148) — this section previously said it was behind
+by that whole batch, and it has since caught up on all of it. What production does **not** have:
+the Observatory (#151), `POST /api/admin/listings/:id/resuggest` (#149), the zero-filled edge
+series (#153) and the two docs commits. That is the manual gate working as designed, not drift to
+panic about — but two of those absences have operational consequences right now, below.
+
+**Two errands that are now due, because production already carries `97eed3e`.** Semantic search is
+on (`SEMANTIC_SEARCH = "1"` in all three env blocks) and the `[[vectorize]]` bindings are live;
+production deployed that code and did not fall over, which retires the "an uncommented binding
+naming a missing index fails the Worker upload" worry as a *deploy* risk (the three indexes are
+therefore real, at least as far as upload cares) without retiring it as a rule — deleting an index
+still breaks every deploy of this Worker, search-related or not.
+
+1. **Run the aspects backfill against production.** `reembedListing` fires on create, on edit, and
+   on each row the #37 backfill touches; there is no vector-only backfill. Every production listing
+   predates the feature, so until this runs, production's vector index is empty and `?q=` silently
+   falls through to FTS5 — working, but not the feature that was shipped.
+   `POST /api/admin/backfill-aspects`, repeat until `.data.remaining` is 0.
+   `docs/runbooks/deploy.md` → "Vectorize / semantic search" has the detail.
+2. **The fishing-line spool is still stuck, and the tool that fixes it is not deployed.** The
+   backfill skips any listing that already has `listing_aspects` rows, and the spool has one
+   (`material: braided`), so it is not a backfill candidate and never will be.
+   `POST /api/admin/listings/:id/resuggest` (#149) is the path built for exactly this — and it is
+   in `94c7946`, which production does not have. So: dispatch a production deploy first, then
+   `resuggest` the spool, then run the backfill for everything else.
 
 **Landed since this list was last written** (kept per rule 7 rather than deleted):
 - **PR #100** (aspect backfill, #37) merged as `de75c67`; **PR #107** merged as `6412c7f`. The
@@ -74,13 +96,34 @@ consequences worth watching for rather than assuming away:
   ages badly next to a flag; that is row six of `AGENTS.md`'s table wearing a different hat, and
   it is now the third time it has been written down on this feature.
 
-**Open and genuinely blocked on a human**: #6 (read an inbox), #31 (a lawyer), #42 (walk it on a
-phone), #47 (`/health` on the apex plus the first real listing), #94 (a zone cache-purge token),
-#105 (whether Cloudflare Access should gate preview).
+**Open issues — re-read against GitHub on 2026-09-07, because the two lists that used to sit here
+had gone stale in the direction that flatters the project.** Four of the six "blocked on a human"
+issues (#6, #31, #94) and one of the two "workable by anyone" (#103) had been closed; four open
+issues nothing in `docs/` mentioned at all were missing.
 
-**Open and workable by anyone**: #103 (CI on `main` is cancelled by back-to-back merges, so
-merged commits reach preview with no completed run), #104 (`wrangler dev` dies mid-e2e with no
-diagnostic and the restart wrapper hides it).
+*Blocked on a human:*
+- **#42** — walk the app on a phone. Never done on the live apex.
+- **#47** — `/health` on the apex plus the first real listing. [verify-production.md](../runbooks/verify-production.md)
+  is the copy-pasteable form; §1–§4 need a human on an ordinary network, §5 needs a real keepsake.
+- **#105** — whether Cloudflare Access should gate `preview.keepsake.ing`. Preview is open to the
+  internet today; `noindex` keeps it out of search but does not keep anyone out.
+- **#142** — bind general-liability cover and file the Harris County assumed-name certificate. The
+  two paper halves of the #108 sole-proprietor decision, which is only the conservative choice if
+  they actually happen.
+
+*Workable by anyone:*
+- **#104** — `wrangler dev` dies mid-e2e with no diagnostic and `serve.mjs`'s restart hides it.
+- **#116** — the `adminAuth` brute-force test is flaky again on unmodified `main`. **Note the
+  supersession**: `AGENTS.md` and several docs still explain this flake by pointing at #65, which
+  is closed; #116's own title says #65 either regressed or was never fixed at the cause.
+- **#145** — DNSSEC is disabled on the `keepsake.ing` zone.
+- **#147** — an api-only pull request never runs `e2e`, because the job is scoped by
+  `dorny/paths-filter` like everything else. This is the mirror image of row four of `AGENTS.md`'s
+  "checks that could not fail" table, and it is currently un-mirrored in `docs/design/ops.md`
+  except where this pass added it.
+
+*Tracking issues, open by design*: #49 (launch blockers), #50 (legal & compliance), #52
+(production cutover). They stay open until every child does.
 
 **The lesson worth carrying, because it is now row six of `AGENTS.md`'s table.** Two separate
 alerting/verification paths turned out never to have executed: `tools/preflight/preflight.test.mjs`
@@ -171,6 +214,9 @@ instead of before it.
 
 ## Topic docs
 
+- [**Product decisions**](../product-decisions.md) — the choices this build rests on, each with
+  what it cost and what would change the answer. Read a row before reopening the decision it
+  names; add a row when you make one.
 - [Moderation](./moderation.md)
 - [Identity](./identity.md)
 - [Email](./email.md)

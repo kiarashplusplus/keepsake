@@ -1,6 +1,9 @@
 # Moderation
 
-Status: `[QA]` (M1 API side implemented; needs a real Workers AI run on preview per M1 DoD — see "M1 status" below).
+Status: `[DONE]` — the pipeline has run against real Workers AI on preview since 2026-09-05;
+the measurements and the two model weaknesses they turned up are in "Real-stack findings" and
+"The vision model was copying our example" below. Read the `[QA]`-era caveats inside "M1 status"
+as the record of what was unproven then, not as what is unproven now.
 
 Open models pre-screen every listing before it's public. Minimal prohibited list: auto-reject
 only clear illegality; anything borderline is held for Kiarash, the sole admin, to approve.
@@ -43,9 +46,14 @@ AI throws→pending, budget 0→pending/budget, stale version→no approval, cro
 
 ## Open risk
 
-Vision model cost/latency/JSON discipline is unmeasured until M1 runs against real traffic; the
-fallback is `MODELS.imageVision → @cf/meta/llama-4-scout-17b-16e-instruct` if parse failures
-exceed a few percent (plan Risk #4).
+**Measured, not open, as of 2026-09-05** — see "Real-stack findings" below: ~2.3–4 s and ~15
+neurons per 640px thumb, and Workers AI returns `response` as a parsed object when the model emits
+JSON. The fallback stands if that ever changes: `MODELS.imageVision →
+@cf/meta/llama-4-scout-17b-16e-instruct` if parse failures exceed a few percent (plan Risk #4).
+
+What *is* still open is the text side: Llama Guard 3 judges descriptions of objects leniently, so
+`review` will rarely fire from text alone (same section). That is accepted, not fixed — the vision
+pass and the report button carry borderline cases.
 
 ## M1 status (API side)
 

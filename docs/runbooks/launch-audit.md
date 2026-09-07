@@ -20,6 +20,22 @@ true on 2026-09-06, including the sentences that are no longer true; this header
 each of them to what closed it. Where a finding already carries its own inline **Superseded** note,
 that note came first and this table agrees with it.
 
+> **Re-checked against GitHub on 2026-09-07, later the same day.** Everything below that said
+> "fix merged, issue open" is now **closed**: #86, #87, #88, #89, #90, #91, #92 and #106 all
+> closed, as did **#6** (finding 3 — see the caveat in
+> [`docs/design/README.md`](../design/README.md#where-this-stands--2026-09-07): the close carries
+> no comment, and nothing in the repo records the inbox being read), **#94** (the zone cache-purge
+> token) and **#103**. The tables below are left as they were written, per rule 7; read this
+> paragraph as the overlay. **All 18 findings and every remainder are now closed as issues.** What
+> is still owed is verification, not code: **#47** (the live re-measurement of finding 1, plus the
+> first real listing on the apex) and **#42**.
+>
+> One dangling reference: finding 2's superseded note points at **issue #85** ("whether anything
+> indexed during the window before this landed needs a Search Console removal"). #85 has been
+> **deleted** from GitHub (`410 This issue was deleted`), so that question is now tracked nowhere.
+> It is small and probably moot — preview was indexable for at most a day — but it is not
+> "handled", and this is the only place it is written down.
+
 **Source, and what "closed" means here.** The mapping is taken from
 [#49's full reconciliation comment of 2026-09-07](https://github.com/kiarashplusplus/keepsake/issues/49#issuecomment-5565544019),
 which re-checked all 18 findings by reading the cited files on `main` rather than trusting closing
@@ -75,11 +91,20 @@ issue open".
 
 ### What is still owed
 
-- **#6** — the one real launch blocker: production email proven to reach a stranger.
+*As written 2026-09-07 morning, then corrected the same evening — the corrections are the point:*
+
+- ~~**#6** — the one real launch blocker: production email proven to reach a stranger.~~ **Closed
+  08:54 UTC**, with no closing comment and no recorded result for the inbox check its own last
+  comment demanded. Not reopened here; flagged in `docs/design/README.md` so nobody re-derives
+  either the old claim or a proof that was never written down.
 - Finding 1's live re-measurement, and the rest of the post-cutover checks that need a real
-  network: [verify-production.md](verify-production.md), tracked by **#47**.
-- The open remainders above (#86-#92, #106) whose fixes are merged but whose issues have not been
-  closed out.
+  network: [verify-production.md](verify-production.md), tracked by **#47**. **Still owed** — this
+  is the one line in this section that has not changed.
+- ~~The open remainders above (#86-#92, #106) whose fixes are merged but whose issues have not been
+  closed out.~~ All closed.
+- **New, and not from this audit**: #116 (the `adminAuth` flake is back on unmodified `main`, so
+  #65's fix did not hold), #145 (DNSSEC off on the zone), #147 (an api-only pull request never runs
+  `e2e`).
 
 ---
 

@@ -1,7 +1,10 @@
 # Ops
 
-Status: `[IN PROGRESS]` (preflight + CI landed in M0; Worker-side observability + admin API +
-orphan sweep landed in M4 2026-09-06, see below; web-side Analytics/runbooks/e2e are still M4–M5).
+Status: `[DONE]` for M0–M4 — preflight and CI landed in M0; Worker-side observability, the admin
+API and the orphan sweep landed in M4 (2026-09-06, see below); Playwright `e2e`, Web Analytics,
+the `/admin` page and the runbooks have all landed since. What is *not* done is push alerting:
+nothing wakes anyone up, by design and by omission both — see "Observability" below and
+[`docs/product-decisions.md`](../product-decisions.md).
 
 ## CI shape
 
@@ -9,22 +12,41 @@ orphan sweep landed in M4 2026-09-06, see below; web-side Analytics/runbooks/e2e
 always runs regardless (cheapest, catches the most); `lint`/`typecheck` skip on docs-only
 changes; `test-packages`/`test-api`/`test-web` are scoped to their area (plus `packages`, since a
 shared-package change can break either app); `build-web` and `e2e` cascade-skip automatically
-whenever what they depend on skipped. See `.github/workflows/ci.yml`. `e2e` is wired up but
-`if: false` until Playwright specs exist (M4).
+whenever what they depend on skipped. See `.github/workflows/ci.yml`.
+
+**`e2e` runs.** This paragraph used to end "`e2e` is wired up but `if: false` until Playwright
+specs exist (M4)" — that stopped being true when the suite landed, and the sentence outlived it.
+The job now runs `pnpm --filter @keepsake/web e2e` (84 specs, mobile and desktop) on every pull
+request that touches what it depends on. Two live caveats: it is gated by the same `changes`
+scoping as everything else, so an **api-only** pull request never runs it (#147, open — the exact
+mirror of the "the e2e job had never once executed" row in `AGENTS.md`'s table), and each merge to
+`main` gets its own CI run only because #103 changed the concurrency group — pushes now key on
+`github.run_id` with `cancel-in-progress: false`, so back-to-back merges queue instead of
+cancelling each other. Before that, `cancelled` is neither red nor green, nothing reads it, and
+three merged commits shipped to preview untested.
 
 ## Deploy
 
-`.github/workflows/deploy.yml` runs on every PR and every push to `main` (→ `preview` in both
-cases) and, separately, on a manual `workflow_dispatch` where a human picks `production` — merging
-to `main` never ships production by itself (fixed 2026-09-07, issue #13; this previously said
-"push to main → production", which matched neither `deploy.yml`'s actual trigger logic nor
-`docs/runbooks/deploy.md`). Gated on `vars.DEPLOY_ENABLED == 'true'` so it's inert until the
-Cloudflare resources exist. Steps: export the web bundle with that environment's
-`EXPO_PUBLIC_*` vars baked in → apply D1 migrations `--remote` → `wrangler deploy` with
-`--var COMMIT_SHA:<sha>` → `curl /health` and assert `.commit == github.sha` → comment the
-preview URL on PRs. See [`docs/runbooks/deploy.md`](../runbooks/deploy.md) for the manual setup
-steps (secrets, D1/R2/KV creation, Turnstile, Email Service onboarding), the real
-`wrangler rollback` invocation, and the `COMMIT_SHA` fallback's contract.
+`.github/workflows/deploy.yml` runs on **every push to `main`** (→ `preview`) and, separately, on
+a manual `workflow_dispatch` where a human picks `production` — merging to `main` never ships
+production by itself (fixed 2026-09-07, issue #13; this previously said "push to main →
+production", which matched neither `deploy.yml`'s actual trigger logic nor
+`docs/runbooks/deploy.md`).
+
+**Pull requests deploy nowhere** (#73, which also resolved #66). This paragraph said "every PR and
+every push to `main`" until 2026-09-07 and was wrong for exactly as long as the trigger had been
+gone; verify a branch with `pnpm --filter @keepsake/web e2e` instead, and see
+`docs/runbooks/deploy.md#verifying-against-preview`.
+
+Gated on `vars.DEPLOY_ENABLED == 'true'` so it's inert until the Cloudflare resources exist.
+Steps: export the web bundle with that environment's `EXPO_PUBLIC_*` vars baked in → apply D1
+migrations `--remote` → `wrangler deploy` with `--var COMMIT_SHA:<sha>` → `curl /health` and
+assert `.commit == github.sha`. (A fifth step used to comment the preview URL on the pull request;
+it went with the `pull_request:` trigger.)
+
+See [`docs/runbooks/deploy.md`](../runbooks/deploy.md) for the manual setup steps (secrets,
+D1/R2/KV creation, Turnstile, Email Service onboarding), the real `wrangler rollback` invocation,
+and the `COMMIT_SHA` fallback's contract.
 
 ## Preflight
 

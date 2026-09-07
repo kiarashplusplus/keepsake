@@ -1,6 +1,7 @@
 # Images
 
-Status: `[TODO]` (M1).
+Status: `[DONE]` (M1), with two later additions folded in below: the terminal-listing photo
+sweep (launch audit finding 15) and `burst("RL_READ")` on `/i/:id/:variant` (finding 9).
 
 Every listing has 1–5 photos, each stored as two R2 objects (`photos/<id>/full.jpg` ≤2048px,
 `photos/<id>/thumb.jpg` ≤640px) plus a D1 `photos` row carrying `width`, `height`, `blurhash`,

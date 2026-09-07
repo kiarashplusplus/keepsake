@@ -1,13 +1,22 @@
 # Design system
 
-Status: `[IN PROGRESS]` (tokens + contrast test landed in M0; primitives are M0–M2).
+Status: `[DONE]` for the identity — **v3 "Polaroids on a table"** is what ships today; jump to
+[v3](#v3--polaroids-on-a-table-2026-09-06), which is the only section on this page that describes
+the current product.
 
 `packages/tokens` (plain TS constants, subpath exports `/colors /spacing /radii /typography
-/motion`) plus `apps/web/src/ui` (the primitives). "Warm keepsake box" feel: story excerpt in
-italic serif on every card, a breathing wax-seal while a listing is under review, paper grain and
-warm shadows in both modes.
+/motion /contrast`) plus `apps/web/src/ui` (the primitives). Objects photographed and laid out on
+a tabletop: every listing is an instant-film print, white frame and black caption, taped down at a
+few tilted degrees, and the one accent is a red rubber stamp.
 
-## Colors
+**The four sections that follow (Colors, Typography, Motion, Primitives) describe v1 and are
+superseded.** They are kept per rule 7 of [`README.md`](./README.md#agent-operating-rules) —
+two identities were rejected here and the record of what was tried is worth more than a tidy
+page — but do not build against them: the terracotta palette flipped across light/dark, Inter is
+gone from `packages/tokens` entirely, and `PaperGrain`/`Seal`/`TagCard` were replaced by
+`KraftTable`/`Stamp`/`Print`. Everything true today is in the v3 section.
+
+## v1 Colors — SUPERSEDED by v3
 
 Three-way rule ported from Bayan: `accent` (decorative — fills, buttons) / `accentText`
 (readable on the page background) / `onAccent` (readable on the accent color itself). Unlike
@@ -17,7 +26,7 @@ against every ground token by `packages/tokens/test/contrast.test.ts` (WCAG AA, 
 that regresses contrast fails `pnpm --filter @keepsake/tokens test`, not a design review months
 later. Grounds are never pure `#000`/`#FFF` — dark mode's `bg` is `#171310`, a warm near-black.
 
-## Typography
+## v1 Typography — SUPERSEDED by v3
 
 Fraunces (variable, `opsz` axis) for display text and the story itself; Inter for UI chrome.
 `storyExcerpt` (Fraunces Italic, 17/24) is the one line repeated on every card — the single most
@@ -26,7 +35,7 @@ stories rather than a marketplace grid. Logical properties only (`textAlign: "st
 `marginStart`/`marginEnd`) so RTL is a locale flip, not a rewrite, even though the product is
 English-only today.
 
-## Motion
+## v1 Motion — SUPERSEDED by v3
 
 `motion.ts`: `spring {damping:18, stiffness:180}`, `sealBreathMs 2400` for the wax seal,
 `standardMs 300`. `MotionProvider` reads `prefers-reduced-motion` **once**, and `useMotion()`
@@ -34,7 +43,11 @@ returns already-folded tokens — durations zeroed, springs stiffened, the seal 
 individual component re-checks the media query; the fold happens in exactly one place
 (`motionSafe()`, tested directly in `contrast.test.ts`'s neighbor).
 
-## Primitives (`apps/web/src/ui`)
+## v1 Primitives (`apps/web/src/ui`) — SUPERSEDED by v3
+
+The list below is the M0–M2 set. Today's `apps/web/src/ui` also carries `Page`, `Print`,
+`KraftTable`, `Stamp`, `DateField`, `Eyebrow`, `FieldFrame`, `PencilRule` and `StepNumerals`,
+and no longer carries `PaperGrain` or `Seal`.
 
 `Text`, `Surface`/`Card`, `Button` (primary/secondary/ghost, 44px targets), `IconButton`,
 `Input`/`TextArea`, `Chip`, `Sheet` (focus trap + Escape), `Toast`, `Skeleton`, `EmptyState`,

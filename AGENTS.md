@@ -27,8 +27,14 @@ The product is the story. Anything that makes a listing feel like a classified a
   apex is the only way in (#46, 2026-09-07). Production deploys stay **manual**
   (`workflow_dispatch` from the Actions tab, choosing `production`) because GitHub's
   required-reviewer gate is a paid feature on private repos — merging to `main` does **not** ship
-  the public site. Email is `live` there for all recipients (#43), and note what that still
-  rests on: delivery to any address other than Kiarash's has never been observed arriving (#6).
+  the public site, so **production runs behind `main` routinely**. Never assume a merged fix is on
+  the live site: `uptime.yml` prints the commit each tier serves every 15 minutes, and reading that
+  log is the only observation of production an agent container can make. At 2026-09-07 15:46 UTC it
+  was five commits back.
+  Email is `live` there for all recipients (#43). #6, which carried "delivery to any address other
+  than Kiarash's has never been observed arriving", was **closed on 2026-09-07 with no closing
+  comment and no written result** — read `docs/design/README.md` before repeating either the old
+  claim or a proof nobody recorded.
   The preview Worker's `workers.dev` hostnames, unlike production's, are still enabled (#105).
 - **Ask the Observatory before guessing** (#150). `GET /api/admin/observatory` — or `/admin` →
   Observatory — answers "is anything stuck" in one call: the give→get funnel, how long the
@@ -198,7 +204,9 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
   - `test/adminAuth.test.ts`'s brute-force case can time out at 30 s when the root runner fans API
     and web out concurrently on a loaded machine. Measured on both `main` and a feature branch with
     no difference, so it is load, not a regression — the flake its own comment and #65 describe.
-    Re-run it alone before believing it.
+    Re-run it alone before believing it. **#65 is closed and the flake is back**: #116 (open) says
+    it either regressed or was never fixed at the cause, so treat "#65 explains it" as the old
+    answer, not the current one.
 - **The admin tokens are in this file** (see "Admin tokens" below), so no session — local, phone
   or claude.ai — needs to source anything to call `/api/admin/*`. Every other credential still
   lives outside the repo: Cloudflare tokens are Worker secrets or GitHub environment secrets, and
@@ -249,8 +257,12 @@ The accessibility specs carry **no exclusions**. If your change fails them, it i
 - `docs/legal-considerations.md` — compliance research, with eight questions marked for a lawyer.
 - `docs/legal-entity-and-insurance.md` — why Keepsake is a sole proprietorship and not an LLC
   (#108), what has to be bought and filed because of that, and what would reverse it.
+- `docs/product-decisions.md` — the register of product decisions this build rests on, each with
+  what it costs and what would change the answer. Read it before reopening one, and add a row when
+  you make one.
 - `docs/runbooks/` — deploy, restore, migrations, admin (incl. the Observatory and the daily
-  digest), incident, geodata, uk-block, issue-workflow.
+  digest), incident, geodata, uk-block, uk-reentry-checklist, issue-workflow, launch-audit,
+  kiarash-checklist, verify-production.
 
 ## Writing for Kiarash
 

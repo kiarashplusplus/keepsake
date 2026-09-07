@@ -174,7 +174,12 @@ pnpm exec wrangler d1 create keepsake-db-production-restore
 #    the listings_fts triggers that the export does not carry.
 #    (`d1 migrations apply` needs a binding in wrangler.toml; executing the files
 #    directly by database name needs no config edit, which is what you want mid-incident.)
-for f in migrations/0001_init.sql migrations/0002_geo.sql migrations/0003_fts.sql migrations/0004_email_events.sql; do
+#    Glob every migration rather than naming them: this loop was written when there
+#    were four, and a hard-coded list silently restores an OLD SCHEMA the moment a
+#    fifth lands. `ls` sorts 0001..0009 ahead of the 14-digit timestamps, which is
+#    the same order wrangler applies them in (docs/runbooks/migrations.md).
+for f in $(ls migrations/*.sql | sort); do
+  echo "applying $f"
   pnpm exec wrangler d1 execute keepsake-db-production-restore --remote --file "$f" -y
 done
 
@@ -190,6 +195,13 @@ pnpm exec wrangler d1 execute keepsake-db-production-restore --remote \
 pnpm exec wrangler d1 execute keepsake-db-production-restore --remote \
   --command "SELECT (SELECT COUNT(*) FROM listings) AS listings, (SELECT COUNT(*) FROM owners) AS owners, (SELECT COUNT(*) FROM postal_codes) AS postal_codes"
 ```
+
+**Check the count before moving on:** `ls migrations/*.sql | wc -l` and the number of lines the
+loop printed must agree. When this section was first written the tree held four migrations and the
+loop named all four by hand; the tree holds ten today (`0001`–`0009` plus one timestamped), and a
+restore that applied only the original four would come back missing `listing_aspects`,
+`requests.notify_failed_reason` and the email-event diagnostic columns — with every query against
+them failing at runtime rather than at restore time.
 
 **FTS needs no separate step on this path.** `listings_fts` is an external-content FTS5 table fed
 by `AFTER INSERT/UPDATE/DELETE` triggers on `listings` (`migrations/0003_fts.sql`), and step 2
@@ -395,12 +407,21 @@ wrangler r2 bucket lifecycle add keepsake-photos-production-backup expire-after-
 node tools/backup-photos.mjs --env production
 ```
 
-**No cron runs this automatically yet.** `.github/workflows/backup-photos.yml` (added alongside
-this document) runs `tools/backup-photos.mjs` for both environments on a schedule, but GitHub does
-not evaluate `schedule:` triggers (or allow `workflow_dispatch`) for a workflow file that has never
-been merged to the default branch — confirmed directly: `gh workflow run backup-photos.yml --ref
-give-flow-fixes` returns `HTTP 404: workflow backup-photos.yml not found on the default branch`,
-the same wall `.github/workflows/uptime.yml` hit before it was merged. That is why this section's
-proof is a direct, by-hand run of the script rather than a green Actions run — there is no green
-Actions run possible yet. Confirm the schedule actually fires at least once after this branch
-merges (`gh run list --workflow=backup-photos.yml`) before trusting it unattended.
+**The cron fires, and its production leg has not yet proved anything.**
+`.github/workflows/backup-photos.yml` runs `tools/backup-photos.mjs` for both tiers at 03:00 UTC,
+before `orphanSweep`'s own 03:17. It has fired once on its `schedule:` trigger —
+[run 34079182574](https://github.com/kiarashplusplus/keepsake/actions/runs/34079182574),
+2026-09-07 03:18 UTC, both legs green — which retires the "no green Actions run is possible yet"
+caveat this paragraph used to carry (a workflow file GitHub has never seen on the default branch
+gets neither `schedule:` nor `workflow_dispatch`; merging fixed that).
+
+**Read the production leg's green carefully, because it is the shape `AGENTS.md`'s table warns
+about.** Its log says `0 referenced key(s) in D1` — production had no `photos` rows at 03:18 that
+morning — so the job did no work, touched no bucket, and passed. It therefore does **not** prove
+`keepsake-photos-production-backup` exists; the "Production has no backup bucket yet" paragraph
+above still stands until someone creates it or a run copies a real key. Production has had at
+least one listing with photos since (#135's fishing-line spool), so the next run either copies
+bytes or fails loudly on the `put` — the script has no create-the-bucket path and
+`existsInBucket` reads a missing bucket the same as a missing object. **Read that run's log, not
+just its check mark**, and confirm `copied` is non-zero before treating production photos as
+backed up.

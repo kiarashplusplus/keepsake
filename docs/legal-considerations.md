@@ -119,9 +119,12 @@ stays an honest record of what was found and when:**
     information we collect" section (#60) covers it — so the only live lawyer question is the
     applicability gate, not what to disclose once it applies.
   - Both are captured concretely (not just named) in #34 Q3, referencing the facts above rather
-    than the original research's more abstract framing. #31 stays open, advisory, labeled
-    `blocked-on-kiarash` — closing it for real needs an actual lawyer's answer on applicability, not
-    further inference.
+    than the original research's more abstract framing. #31 was left open, advisory, labeled
+    `blocked-on-kiarash` when this was written — **it has since been closed (2026-09-07), and, like
+    #34 before it, closing it answered nothing.** No lawyer read the Montana targeting-language
+    question or the Rhode Island "commercial website" applicability gate; the research below is
+    still the whole of what is known. Recorded here for the same reason the #34 note exists: so a
+    future reader does not mistake a closed issue for an answered question.
 - **In-person safety (issue #32): done, both halves.** `terms.html`'s "Meeting up safely" section
   and `RequestSheet.tsx` cover the safety-guidance half; the one-way indemnification clause (#63's
   decision) is in `terms.html` too — see the "In-person safety" section below for detail. Everything
