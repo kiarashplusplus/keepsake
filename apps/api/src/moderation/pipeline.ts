@@ -192,10 +192,30 @@ export async function moderateListing(env: Env, listingId: string, version: numb
     return;
   }
 
+  // Issue #171: aspects are attacker-controlled free text — the client sends
+  // them, nothing requires them to have come from the suggestion call — and
+  // until now neither text gate below could see them, so the same email
+  // address that auto-rejects in the story was published verbatim as an
+  // aspect value. `routes/listings.ts` refuses them at the API boundary with
+  // a 400; this is the pipeline's own re-check, covering rows that reached
+  // `listing_aspects` some other way (a backfill, an older client) and
+  // putting the text in front of Llama Guard as well as the regex.
+  //
+  // Folded into the *story* argument rather than given a call of its own:
+  // one Workers AI call per listing is the budget this pipeline is sized
+  // for, and the aspects are a few short lines.
+  const { results: aspectRows } = await env.DB.prepare(
+    "SELECT name, value FROM listing_aspects WHERE listing_id = ? ORDER BY position",
+  )
+    .bind(listingId)
+    .all<{ name: string; value: string }>();
+  const aspectText = aspectRows.map((aspect) => `${aspect.name}: ${aspect.value}`).join("\n");
+  const storyWithAspects = aspectText.length > 0 ? `${listing.story}\n\n${aspectText}` : listing.story;
+
   // Step 1: local checks. Title/story length, category enum, and photo
   // count (1-5) are already enforced by CreateListingInput/UpdateListingInput
   // at the API boundary — only the contact-info regex needs re-checking here.
-  if (containsContactInfo(`${listing.title}\n${listing.story}`)) {
+  if (containsContactInfo(`${listing.title}\n${storyWithAspects}`)) {
     await logEvent(env, {
       listingId,
       listingVersion: version,
@@ -259,7 +279,7 @@ export async function moderateListing(env: Env, listingId: string, version: numb
 
   // Step 3: text.
   const textStart = Date.now();
-  const textVerdict = await moderateText(env, listing.title, listing.story);
+  const textVerdict = await moderateText(env, listing.title, storyWithAspects);
   await logEvent(env, {
     listingId,
     listingVersion: version,

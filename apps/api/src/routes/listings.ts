@@ -43,6 +43,36 @@ const DEFAULT_REQUEST_IP_DAILY_BUDGET = 20;
  * burst brake it is a real ceiling. */
 const DEFAULT_REPORT_IP_DAILY_BUDGET = 10;
 
+/**
+ * Issue #171. Aspects arrived as model output (#36) and were treated as
+ * trusted ever since, but `CreateListingInput`/`UpdateListingInput` accept
+ * them straight from the client like any other field — nothing requires a
+ * value to have come from the suggestion call. They were then published
+ * verbatim on `PublicListing.aspects`, grouped into browse shelves and
+ * folded into the embedding text, having passed neither the contact-info
+ * gate nor Llama Guard (both of which read only `title`/`story`). The
+ * measured consequence: the *same* email address auto-rejects in the story
+ * as `contact_in_story` and sails through as an aspect value.
+ *
+ * 48 characters of `value` is ample for an email, a phone number or a short
+ * URL, and `name` is a second uncontrolled 24-character string — so both
+ * halves are checked, not just the value.
+ *
+ * Returned as a 400 before anything is written, exactly the way the request
+ * note at `POST /api/listings/:id/requests` already handles the identical
+ * problem. `moderation/pipeline.ts` re-checks the persisted aspects too, so
+ * a row that reached the DB some other way (a backfill, an older client)
+ * is still caught — this boundary check is the one that gives the giver a
+ * useful error, not the only thing standing in the way.
+ */
+function aspectsContainContactInfo(aspects: readonly { name: string; value: string }[] | undefined): boolean {
+  if (!aspects) return false;
+  return aspects.some((aspect) => containsContactInfo(aspect.name) || containsContactInfo(aspect.value));
+}
+
+const ASPECT_CONTACT_INFO_MESSAGE =
+  "Keep contact details out of the item details — people reach you through Keepsake.";
+
 // ---------------------------------------------------------------------------
 // POST /api/listings
 // ---------------------------------------------------------------------------
@@ -64,6 +94,12 @@ listingRoutes.post(
   async (c) => {
     const owner = c.get("owner");
     const input = c.get("validatedBody") as import("@keepsake/contracts/listing").CreateListingInput;
+
+    // Issue #171 — before any write, and before the photo/postcode lookups,
+    // for the same reason the request-note check sits above its insert.
+    if (aspectsContainContactInfo(input.aspects)) {
+      return fail(c, "bad_request", ASPECT_CONTACT_INFO_MESSAGE, 400);
+    }
 
     // Every photo_id must be this owner's own orphan upload — never someone
     // else's photo, and never one already attached to a listing.
@@ -176,6 +212,12 @@ listingRoutes.patch("/:id", ownerAuth(), validateBody(UpdateListingInput), async
   }
   if (row.status === "given") {
     return fail(c, "conflict", "This keepsake has already been given and can't be edited.", 409);
+  }
+
+  // Issue #171 — same gate as create. An edit is the other way client-supplied
+  // aspect text reaches `listing_aspects` and `PublicListing.aspects`.
+  if (aspectsContainContactInfo(input.aspects)) {
+    return fail(c, "bad_request", ASPECT_CONTACT_INFO_MESSAGE, 400);
   }
 
   let place: { country: Country; code: string; place_name: string; admin1: string | null; lat: number; lng: number } | null = null;
