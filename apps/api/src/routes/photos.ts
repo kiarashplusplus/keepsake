@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { UploadPhotoFields } from "@keepsake/contracts/photo";
 import type { Env } from "../env.js";
-import { parseIntVar } from "../env.js";
+import { DEFAULT_SUGGEST_DAILY_BUDGET, parseIntVar } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
 import { extensionForSniffedType, sniffImageType } from "../lib/imageSniff.js";
@@ -23,7 +23,8 @@ const DEFAULT_UPLOAD_IP_DAILY_BUDGET = 60;
 // exhausted image-moderation budget leaves listings `pending` until midnight
 // UTC (moderation/pipeline.ts), so a burst of autofill calls must never be
 // able to spend the budget a real listing needs to finish moderating.
-const DEFAULT_SUGGEST_DAILY_BUDGET = 1000;
+// `DEFAULT_SUGGEST_DAILY_BUDGET` now lives in `../env.js` — three call sites
+// share it (see that constant's comment).
 // One giver's give flow calls this once per cover-photo change — 30/day/IP
 // is loose on purpose (see budget.ts's per-IP-is-not-a-person note) and only
 // exists to stop a single retry loop from working through the global ceiling

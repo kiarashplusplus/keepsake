@@ -260,7 +260,42 @@ curl -s -X POST "$SITE_URL/api/admin/requests/$REQUEST_ID/remove" \
 # Dashboard counters / operational health
 curl -s "$SITE_URL/api/admin/stats" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 curl -s "$SITE_URL/api/admin/health" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+
+# Re-read one listing's cover photo with the CURRENT vision prompt (#141),
+# replacing its category and aspects. Reports before/after so you can see what
+# changed. Never touches the title or the story — those are the giver's words.
+curl -s -X POST "$SITE_URL/api/admin/listings/$LISTING_ID/resuggest" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+
+# One batch of the aspects backfill (#37) — for listings that have NEVER been
+# looked at. Repeat until `.data.remaining` is 0. It deliberately skips any
+# listing that already has aspects, so it is not the tool for "the prompt
+# improved"; that is `resuggest` above.
+curl -s -X POST "$SITE_URL/api/admin/backfill-aspects" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"limit":5}' | jq
 ```
+
+## Re-reading listings after a prompt change
+
+When the vision prompt improves, existing listings keep whatever the old one said. #135 is the
+worked example: the prompt learned to read the words printed on an object, and the live listing
+for a fishing-line spool kept `category: other` and the single aspect `material: braided` that a
+weaker prompt had produced, with no path to anything better.
+
+`POST /api/admin/listings/:id/resuggest` is that path. What to know before running it:
+
+- **It costs a real vision call**, metered against the same `SUGGEST_DAILY_BUDGET` ceiling the
+  give flow's live autofill pays. A 429 means today's budget is spent, not that anything broke.
+- **It applies nothing when the model returns nothing.** `applied: false` with a `reason` means
+  the listing is untouched — a timeout must never be the thing that blanks real aspects.
+- **It only ever writes `category` and `aspects`.** The title and story are the giver's, and
+  `privacy.html` promises that "anything you type over it wins".
+- It stamps `aspects_backfilled_at`, so a listing it has touched is no longer a backfill
+  candidate.
+
+Check the result, rather than trusting the 200 — `.data.before` and `.data.after` are both in the
+response for exactly that reason.
 
 ## Verification before trusting a ban/approve action in production
 

@@ -23,17 +23,18 @@ import {
   type AdminQueueItem,
   type AdminRequestRemoveResult,
   type AdminRequestView,
+  type AdminResuggestResult,
   type AdminStats,
   type AdminTestEmailResult,
   type AdminTestErrorResult,
 } from "@keepsake/contracts/admin";
-import { LISTING_STATUSES, type ListingStatus, type OwnerListing } from "@keepsake/contracts/listing";
+import { LISTING_STATUSES, type Category, type ListingStatus, type OwnerListing } from "@keepsake/contracts/listing";
 import type { FeedPage } from "@keepsake/contracts/feed";
 import { maskEmail, type RequestStatus } from "@keepsake/contracts/request";
 import type { ReportReason } from "@keepsake/contracts/report";
 import { captureException, captureMessage } from "@keepsake/observability/capture";
 import type { Env } from "../env.js";
-import { emailProviderName, reportAutohideThreshold } from "../env.js";
+import { DEFAULT_SUGGEST_DAILY_BUDGET, emailProviderName, parseIntVar, reportAutohideThreshold } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
 import { requireParam } from "../lib/params.js";
@@ -48,11 +49,14 @@ import {
   fetchListingRow,
   fetchPhotoRows,
   fetchPhotoRowsForListings,
+  replaceListingAspects,
 } from "../lib/listingsDb.js";
 import { serializeOwnerListing, type ListingRow } from "../lib/serialize.js";
 import { recipientDomain, sendMail } from "../email/sendMail.js";
 import { adminTest as adminTestTemplate } from "../email/templates/adminTest.js";
 import { runAspectsBackfillBatch } from "../backfill/aspects.js";
+import { suggestFromPhoto } from "../suggest/suggest.js";
+import { checkAndBump } from "../moderation/budget.js";
 
 type Vars = { validatedBody: unknown; validatedQuery: unknown };
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -968,4 +972,78 @@ adminRoutes.post("/backfill-aspects", validateBody(AdminBackfillAspectsInput), a
     remaining: batch.remaining,
   };
   return ok(c, result);
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/listings/:id/resuggest
+// ---------------------------------------------------------------------------
+/**
+ * Issue #141: re-read one listing's cover photo with the *current* prompt and
+ * apply what comes back.
+ *
+ * `POST /api/admin/backfill-aspects` cannot do this and should not learn to.
+ * Its candidate query is `aspects_backfilled_at IS NULL AND NOT EXISTS
+ * (listing_aspects ...)`, which answers "has anything ever looked at this
+ * listing?" — the right question for #37, and the wrong one here. #135
+ * improved the prompt and left a live listing holding the single vague
+ * aspect an older one produced, permanently, because it already had a row.
+ *
+ * **Category and aspects only.** Not the title, not the story. The give flow
+ * pre-fills a title from a suggestion and `privacy.html` promises in these
+ * words that "anything you type over it wins"; an admin endpoint that
+ * replaced a giver's own title with a model's would make that false. Category
+ * has no picker at all (#35), so the model's answer is the only one a listing
+ * ever gets — which is exactly why it needs a way to be corrected.
+ *
+ * Costs one real vision call, metered against the same `SUGGEST_DAILY_BUDGET`
+ * ceiling live traffic pays.
+ */
+adminRoutes.post("/listings/:id/resuggest", async (c) => {
+  const id = requireParam(c, "id");
+  const row = await fetchListingRow(c.env, id);
+  if (!row) return fail(c, "not_found", "Listing not found.", 404);
+
+  const cover = await c.env.DB.prepare(
+    "SELECT r2_key_thumb, content_type FROM photos WHERE listing_id = ? AND position = 0",
+  )
+    .bind(id)
+    .first<{ r2_key_thumb: string; content_type: string }>();
+  if (!cover) return fail(c, "conflict", "Listing has no cover photo to read.", 409);
+
+  const before = { category: row.category as Category, aspects: await fetchAspectRows(c.env, id) };
+
+  const budget = await checkAndBump(c.env.KV, {
+    kind: "suggest",
+    dailyLimit: parseIntVar("SUGGEST_DAILY_BUDGET", c.env.SUGGEST_DAILY_BUDGET, DEFAULT_SUGGEST_DAILY_BUDGET),
+  });
+  if (!budget.allowed) {
+    return fail(c, "rate_limited", "Today's suggestion budget is spent. Try again tomorrow.", 429);
+  }
+
+  const result = await suggestFromPhoto(c.env, { r2_key_thumb: cover.r2_key_thumb, content_type: cover.content_type });
+  if (!result.suggestion) {
+    // Nothing is written. A timeout or two unparseable replies must never be
+    // the thing that blanks a listing's existing aspects — the listing is
+    // strictly better off keeping the old answer than losing it to a failed
+    // call.
+    const unchanged: AdminResuggestResult = { listing_id: id, applied: false, reason: result.reason, before, after: before };
+    return ok(c, unchanged);
+  }
+
+  const now = Date.now();
+  await c.env.DB.prepare("UPDATE listings SET category = ?, updated_at = ?, aspects_backfilled_at = ? WHERE id = ?")
+    .bind(result.suggestion.category, now, now, id)
+    .run();
+  // Stamping `aspects_backfilled_at` above keeps this listing out of the #37
+  // backfill's candidate set, which would otherwise be a second, dumber pass
+  // over a listing that has just had the best look available.
+  await replaceListingAspects(c.env, id, result.suggestion.aspects);
+
+  const applied: AdminResuggestResult = {
+    listing_id: id,
+    applied: true,
+    before,
+    after: { category: result.suggestion.category, aspects: await fetchAspectRows(c.env, id) },
+  };
+  return ok(c, applied);
 });
