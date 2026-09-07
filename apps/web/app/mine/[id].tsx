@@ -62,22 +62,34 @@ export default function MineDetail(): React.ReactElement {
     load();
   }, [load]);
 
-  async function runAction(action: () => Promise<unknown>): Promise<void> {
+  // Resolves `true` only when the action actually went through. It still
+  // swallows the error into `error` state — every caller but Delete stays on
+  // this page and renders it — but a caller that *leaves* the page has to be
+  // able to tell the two apart, because leaving is what destroys the error
+  // (issue #172: a failed DELETE navigated to /mine anyway, so the giver was
+  // shown a completed deletion for a listing that was still public).
+  async function runAction(action: () => Promise<unknown>): Promise<boolean> {
     setBusy(true);
     try {
       await action();
       load();
+      return true;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "That didn't go through. Try again.");
+      return false;
     } finally {
       setBusy(false);
     }
   }
 
-  function handleDelete(): void {
+  async function handleDelete(): Promise<void> {
     setConfirmDelete(false);
     if (listing === null) return;
-    void runAction(() => deleteListing(listing.id)).then(() => router.replace("/mine"));
+    const deleted = await runAction(() => deleteListing(listing.id));
+    // Only on success. On failure the giver stays here with the error line
+    // above the buttons visible, and the listing they can still see is the
+    // truth: it was not deleted.
+    if (deleted) router.replace("/mine");
   }
 
   async function handleConfirmChoose(handoffNote: string): Promise<void> {
@@ -209,7 +221,7 @@ export default function MineDetail(): React.ReactElement {
           {"This can't be undone."}
         </Text>
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.xl, marginTop: space.md }}>
-          <Button label="Delete" variant="primary" onPress={handleDelete} />
+          <Button label="Delete" variant="primary" onPress={() => void handleDelete()} />
           <Button label="Cancel" variant="link" arrow={false} onPress={() => setConfirmDelete(false)} />
         </View>
       </Sheet>

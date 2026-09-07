@@ -45,7 +45,10 @@ landed on top of the one just verified, and got a commit belonging to neither.
 runs the whole product against real `workerd` with local D1/R2/KV — the same arrangement
 production runs, including the `[assets]` binding, `/item/:id`'s HTMLRewriter OG injection, the
 SPA fallback and the moderation pipeline (`apps/web/playwright.config.ts` explains why this is
-closer to production than `expo start` ever was). CI runs it on every pull request. For a
+closer to production than `expo start` ever was). CI runs it on every pull request **that touches `apps/web`, `packages/`, `tools/`, `apps/site`
+or the root manifests** — `test-web` is gated on those filters and `build-web`/`e2e` hang off it,
+so an api-only pull request runs zero e2e specs and `ci-complete` still goes green (#147;
+`.github/workflows/ci.yml`, `tools/ci/assert-coverage.mjs`'s `api` row lists no `e2e`). For a
 one-off manual poke, `wrangler dev --local` from `apps/api/`.
 
 **Checking preview still matters after a merge**, because "the newest commit on `main`" and "the
@@ -89,8 +92,8 @@ wrangler kv namespace create KV --env production
 # → paste the returned id into wrangler.toml [env.<name>.kv_namespaces]
 
 # Apply schema, then load the postal-code seed (see docs/runbooks/geodata.md)
-wrangler d1 migrations apply keepsake-db --env preview --remote
-wrangler d1 execute keepsake-db --env preview --remote --file ../api/seeds/postal_codes.sql
+wrangler d1 migrations apply keepsake-db-preview --env preview --remote
+wrangler d1 execute keepsake-db-preview --env preview --remote --file ../api/seeds/postal_codes.sql
 ```
 
 Turnstile: create a widget per domain (preview subdomain, `keepsake.ing`) in the Cloudflare
@@ -302,8 +305,23 @@ worth verifying.
 ## What a deploy actually does
 
 1. `pnpm install --frozen-lockfile`
-2. `pnpm --filter @keepsake/web export` with that environment's `EXPO_PUBLIC_*` values baked in
-3. `wrangler d1 migrations apply keepsake-db --env <env> --remote`
+2. `pnpm --filter @keepsake/web export` with every `EXPO_PUBLIC_*` value `.env.example` declares
+   baked in. The export step used to pass four of the seven (`SITE_URL`,
+   `TURNSTILE_SITE_KEY`, `CF_WEB_ANALYTICS_TOKEN`, `ENV`) while `config.ts` read all seven, so
+   `EXPO_PUBLIC_GOOGLE_ADS_ID`, `_GIVE_LABEL` and `_REQUEST_LABEL` baked as `""` in every
+   deployed bundle with nothing failing — the guard meant to catch that built its expectations
+   from `process.env`, i.e. from the very environment that was missing them. Both halves are
+   fixed: `deploy.yml` now names all seven, `verify-public-env.mjs` derives its expected set from
+   `.env.example` and fails a deployed export when a declared name is unset, and preflight's
+   `public-env-passthrough` compares the two lists on every pull request.
+   **This step fails today**, deliberately: the three Google Ads variables are listed in the
+   workflow but are not set in either GitHub Environment, so no ads tag has ever loaded. Setting
+   them (or removing the three names from `.env.example` and `config.ts`) is the open decision —
+   leaving them declared, read, described in `docs/legal-considerations.md`, and passed by
+   nothing is the state that produced #175.
+3. `wrangler d1 migrations apply keepsake-db-<env> --env <env> --remote` — the database is named
+   per tier (`keepsake-db-preview` / `keepsake-db-production`); plain `keepsake-db` is the
+   top-level dev name only and matches neither deploy env
 4. `wrangler deploy --env <env> --var COMMIT_SHA:<sha>`
 5. `curl <site>/health` and assert `.commit == github.sha` — a deploy that doesn't match its own
    commit fails the workflow rather than silently serving stale code.

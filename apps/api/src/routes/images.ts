@@ -81,7 +81,15 @@ imageRoutes.get("/:id/:variant", burst("RL_READ"), async (c) => {
   if (!object) return fail(c, "not_found", "Not found.", 404);
 
   const headers = new Headers();
-  headers.set("Content-Type", photo.content_type);
+  // The R2 object's own type, not the `photos` row's. There is one
+  // `content_type` column and `PUT /api/photos` fills it from the **full**
+  // variant's sniff only — so a photo whose two variants differ in format
+  // (they are two independent client uploads; nothing derives one from the
+  // other) served its thumb under the full's type. Browsers sniff, so this
+  // was invisible, but the row is the wrong source of truth for a per-variant
+  // header. Falls back to the column when the object carries no type, the
+  // same shape `suggest/suggest.ts` already uses for the same reason.
+  headers.set("Content-Type", object.httpMetadata?.contentType ?? photo.content_type);
   headers.set(
     "Cache-Control",
     // Owner-preview responses (unapproved listing, valid owner token) must

@@ -2,6 +2,33 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
+import { productionRunWorkerFirst } from "./test/wranglerConfig";
+
+const wranglerTomlText = readFileSync(new URL("./wrangler.toml", import.meta.url), "utf8");
+
+// Issue #195: this list used to be restated here by hand, and had already
+// drifted — `/admin` was added to `[env.production.assets]` (issue #84) and
+// the copy was not updated, so tests ran under a precedence rule the deployed
+// Worker does not use and nothing noticed. Derive it from the one file that
+// is deployed instead. `productionRunWorkerFirst` throws if the table is
+// renamed or the list becomes the boolean form, so this fails at config time
+// rather than quietly reverting the fixture to some other rule.
+// `test/robotsConfig.test.ts` asserts the booted value still equals it, which
+// is the guard against a future session restating it again.
+//
+// Do not read this as "and now /admin is exercised under production's
+// precedence rule": measured while fixing #195, the miniflare bundled with
+// `@cloudflare/vitest-pool-workers@0.22` ignores `runWorkerFirst` outright.
+// A fixture asset at `/admin` was answered *after* the Worker ran (the
+// non-production `X-Robots-Tag` middleware had already stamped the response)
+// identically with `/admin` in the list, with it filtered out, and with the
+// list set to `[]`. So in this pool the Worker always runs first and assets
+// are only ever reached through the catch-all in `src/index.ts`. That is the
+// same limitation `test/robotsConfig.test.ts` records for `/robots.txt`, and
+// it is why the drift has to be caught by asserting on configuration:
+// nothing at runtime here can see it. Real precedence is only observable
+// against real workerd (`wrangler dev --env production`).
+const fixtureRunWorkerFirst = productionRunWorkerFirst(wranglerTomlText);
 
 // `@cloudflare/vitest-pool-workers@0.22` targets Vitest 4, which moved this
 // package from the old `defineWorkersConfig({ test: { poolOptions: { workers
@@ -62,7 +89,10 @@ export default defineConfig({
         EMAIL_MODE: "test",
         // The config guard test asserts on the real file; the workers runtime
         // has no fs, so it is read here (Node) and passed through.
-        WRANGLER_TOML_TEXT: readFileSync(new URL("./wrangler.toml", import.meta.url), "utf8"),
+        WRANGLER_TOML_TEXT: wranglerTomlText,
+        // The path list this fixture actually booted with, so a test can
+        // compare it against the deployed one (issue #195).
+        TEST_RUN_WORKER_FIRST: JSON.stringify(fixtureRunWorkerFirst),
         EMAIL_ALLOWLIST: "",
             TEST_MIGRATIONS: migrations,
             // Pinned the same way Bayan's `worker/vitest.config.ts` pins its
@@ -93,10 +123,18 @@ export default defineConfig({
             UPLOAD_IP_DAILY_BUDGET: "60",
             REPORT_IP_DAILY_BUDGET: "10",
             EMAIL_IP_DAILY_BUDGET: "10",
+            // Issue #188. Pinned at the deployed value rather than raised: a
+            // test env with a generous ceiling would let the suite pass while
+            // the real one silently dropped a person's confirmation, which is
+            // the failure mode this number is here to make visible. Tests use
+            // `freshRequesterEmail()` so unrelated cases don't share a
+            // counter.
+            REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET: "3",
             SUGGEST_IP_DAILY_BUDGET: "30",
             REPORT_AUTOHIDE_THRESHOLD: "3",
             SHELF_MIN_ITEMS: "3",
             MAX_PHOTO_BYTES: "5242880",
+            MAX_THUMB_BYTES: "786432",
             EMAIL_PROVIDER: "cf",
             EMAIL_FROM: "Keepsake <hello@keepsake.ing>",
             SITE_URL: "http://localhost:8787",
@@ -117,7 +155,7 @@ export default defineConfig({
             directory: path.join(__dirname, "test/fixtures/public"),
             binding: "ASSETS",
             notFoundHandling: "single-page-application",
-            runWorkerFirst: ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt"],
+            runWorkerFirst: fixtureRunWorkerFirst,
           },
         },
       };

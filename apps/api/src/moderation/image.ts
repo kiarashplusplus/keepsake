@@ -1,9 +1,18 @@
 /**
- * Image moderation: one Workers AI vision call per photo, run from the R2
- * **thumb** (640px — cheaper, plenty of signal), never the full image. Strict
- * JSON in, `ImageVerdictSchema` out; one retry on a parse failure before
- * giving up to `"error"` (fail-closed — the listing stays `pending` for the
- * cron to retry, never auto-approved on a parse failure).
+ * Image moderation: one Workers AI vision call per stored photo **variant**.
+ * Strict JSON in, `ImageVerdictSchema` out; one retry on a parse failure
+ * before giving up to `"error"` (fail-closed — the listing stays `pending`
+ * for the cron to retry, never auto-approved on a parse failure).
+ *
+ * This used to run from the `r2_key_thumb` object only, on the reasoning
+ * that a 640px thumbnail is cheaper and carries plenty of signal. That
+ * reasoning holds for a thumbnail *derived from* the full image, and the
+ * thumbnail is not derived from anything: `PUT /api/photos` takes `full`
+ * and `thumb` as two independent client-supplied files and stores both
+ * verbatim, and `GET /i/:id/full` publishes the one no model had looked at
+ * (#161). Both variants are served to the public, so both are moderated.
+ * `MODERATED_PHOTO_VARIANTS` is the list, and it is what the `mod_image`
+ * budget is charged per photo.
  */
 import { ImageVerdictSchema, type ImageVerdict } from "@keepsake/contracts/admin";
 import type { Env } from "../env.js";
@@ -82,29 +91,44 @@ async function callVision(env: Env, dataUri: string, extraInstruction?: string):
 }
 
 /**
- * `thumbBase64` is a bare base64 string (no data-URI prefix) — the caller
- * reads it straight off the R2 object. This function builds the
- * `data:image/jpeg;base64,...` URI the model input expects.
- */
-/**
  * Error outcome. Carries the message so the pipeline can store it in
  * `moderation_events.reason` — a bare "error" row taught us nothing when the
  * first real vision call failed on preview.
  */
 export type ImageModerationError = { readonly error: string };
 
+/**
+ * Every stored variant of a photo that is reachable through
+ * `GET /i/:id/:variant`, and therefore every variant a model has to look at
+ * before the listing can be published. Ordered `thumb` first only so the
+ * cheaper call happens first; both always run.
+ *
+ * Adding a variant here doubles nothing by itself — it multiplies the
+ * `mod_image` cost per photo, which `moderation/pipeline.ts` charges as
+ * `photos.length * MODERATED_PHOTO_VARIANTS.length`. Read that call site
+ * before growing this list.
+ */
+export const MODERATED_PHOTO_VARIANTS = ["thumb", "full"] as const;
+export type ModeratedPhotoVariant = (typeof MODERATED_PHOTO_VARIANTS)[number];
+
 export function isImageError(v: ImageVerdict | ImageModerationError): v is ImageModerationError {
   return "error" in v;
 }
 
+/**
+ * `imageBase64` is a bare base64 string (no data-URI prefix) — the caller
+ * reads it straight off the R2 object for whichever variant it is
+ * moderating. This function builds the `data:image/jpeg;base64,...` URI the
+ * model input expects.
+ */
 export async function moderateImage(
   env: Env,
-  thumbBase64: string,
+  imageBase64: string,
   contentType = "image/jpeg",
 ): Promise<ImageVerdict | ImageModerationError> {
   if (isMockAi(env)) return MOCK_PASS_VERDICT;
 
-  const dataUri = `data:${contentType};base64,${thumbBase64}`;
+  const dataUri = `data:${contentType};base64,${imageBase64}`;
 
   try {
     const first = await withTimeout(callVision(env, dataUri), TIMEOUT_MS, "imageVision");

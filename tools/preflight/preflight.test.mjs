@@ -13,6 +13,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -24,14 +25,27 @@ import {
   parseCronTriggers,
   cronExpressionProblem,
   scheduledCronCases,
+  scheduledCronDispatch,
+  parseCronRegistry,
+  cronIntervalMs,
+  tablesAfterMigrations,
+  documentedBackupTables,
+  cspHashesIn,
+  templateLiteralBody,
+  inlineScriptBodies,
   checkLfsPointers,
   lfsPointerDetail,
   resolveNumericExpr,
   callArguments,
+  extractWorkflowRunBlocks,
 } from "./preflight.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PREFLIGHT_BIN = path.join(HERE, "preflight.mjs");
+// Some checks are only meaningful against the real tree — a fixture can prove
+// the logic works and still leave the repository's own bytes unexamined,
+// which is exactly what #166 found.
+const REPO_ROOT = path.resolve(HERE, "../..");
 
 function makeTree(files) {
   const root = mkdtempSync(path.join(tmpdir(), "keepsake-preflight-"));
@@ -668,6 +682,122 @@ test("callArguments splits a call written across lines", () => {
   assert.deepEqual(args, ['"SHELF_MIN_ITEMS"', "env.SHELF_MIN_ITEMS as string | undefined", "DEFAULT_SHELF", ""]);
 });
 
+// ── backup-tables ──────────────────────────────────────────────────────
+//
+// #164: the documented `--table` list omitted `listing_aspects`, so no export
+// made by following restore.md contained any listing's aspects — and
+// `listings.aspects_backfilled_at`, which *is* in the export, made the loss
+// permanent. The list going stale once is a typo; twice is a missing guard.
+
+const BACKUP_MIGRATIONS = {
+  "apps/api/migrations/0001_init.sql": "CREATE TABLE owners (id TEXT PRIMARY KEY);\nCREATE TABLE listings (id TEXT PRIMARY KEY);\n",
+  "apps/api/migrations/0002_geo.sql": "CREATE TABLE postal_codes (code TEXT PRIMARY KEY);\n",
+  "apps/api/migrations/0003_fts.sql": "CREATE VIRTUAL TABLE listings_fts USING fts5(title, content='listings');\n",
+};
+
+function backupRunbook(tables) {
+  return `# Restore
+
+\`\`\`sh
+pnpm exec wrangler d1 export keepsake-db-production --no-schema \\
+${tables.map((t) => `  --table ${t}`).join(" \\\n")}
+\`\`\`
+
+\`postal_codes\` is excluded: it is reproducible from the bundled seed.
+`;
+}
+
+test("backup-tables: passes when the documented list covers every migration-created table", () => {
+  const result = runOne("backup-tables", {
+    ...BACKUP_MIGRATIONS,
+    "docs/runbooks/restore.md": backupRunbook(["owners", "listings"]),
+  });
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  assert.match(result.details[0], /excluding postal_codes \(documented\)/);
+  assert.match(result.details[0], /listings_fts is virtual/);
+});
+
+test("backup-tables: fails when a later migration adds a table the runbook never learned about", () => {
+  // This is #164 itself, and the break-the-guard experiment the issue asks
+  // for: a new migration, a new table, an unchanged runbook.
+  const result = runOne("backup-tables", {
+    ...BACKUP_MIGRATIONS,
+    "apps/api/migrations/0006_aspects.sql": "CREATE TABLE listing_aspects (listing_id TEXT, aspect TEXT);\n",
+    "docs/runbooks/restore.md": backupRunbook(["owners", "listings"]),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /creates "listing_aspects" but docs\/runbooks\/restore\.md's export command does not `--table` it/);
+});
+
+test("backup-tables: fails when a table is excluded with no written reason", () => {
+  const result = runOne("backup-tables", {
+    ...BACKUP_MIGRATIONS,
+    "docs/runbooks/restore.md": backupRunbook(["owners", "listings"]).replace(
+      /`postal_codes` is excluded.*\n/,
+      "",
+    ),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /excluded from the documented export but .* never mentions it/);
+});
+
+test("backup-tables: fails when the runbook names a table no migration creates", () => {
+  const result = runOne("backup-tables", {
+    ...BACKUP_MIGRATIONS,
+    "docs/runbooks/restore.md": backupRunbook(["owners", "listings", "wishlists"]),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /--table wishlists names a table no migration/);
+});
+
+test("backup-tables: fails when the runbook tries to export the FTS5 virtual table", () => {
+  const result = runOne("backup-tables", {
+    ...BACKUP_MIGRATIONS,
+    "docs/runbooks/restore.md": backupRunbook(["owners", "listings", "listings_fts"]),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /listings_fts is an FTS5 virtual table/);
+});
+
+test("backup-tables: fails rather than passing when the runbook has no --table list at all", () => {
+  const result = runOne("backup-tables", {
+    ...BACKUP_MIGRATIONS,
+    "docs/runbooks/restore.md": "# Restore\n\nJust use Time Travel.\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /contains no `--table` arguments/);
+});
+
+test("backup-tables: this repository's own runbook covers listing_aspects", () => {
+  const result = runChecks(["backup-tables"], REPO_ROOT)[0];
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  const runbook = createContext(REPO_ROOT).readText("docs/runbooks/restore.md");
+  assert.match(runbook, /--table listing_aspects/, "#164's actual fix");
+});
+
+test("tablesAfterMigrations replays rename/create/drop rather than counting CREATEs", () => {
+  // 0005_compliance.sql's shuffle: rename the old table aside, create the new
+  // one, copy, drop the old. Naively counting CREATE TABLE sees two.
+  const { real, virtual } = tablesAfterMigrations([
+    "CREATE TABLE requests (id TEXT);",
+    `ALTER TABLE requests RENAME TO requests_old;
+     CREATE TABLE requests (id TEXT, note TEXT);
+     INSERT INTO requests SELECT id, NULL FROM requests_old;
+     DROP TABLE requests_old;`,
+    "CREATE VIRTUAL TABLE listings_fts USING fts5(title);",
+  ]);
+  assert.deepEqual([...real].sort(), ["requests"]);
+  assert.deepEqual([...virtual], ["listings_fts"]);
+});
+
+test("documentedBackupTables reads the --table arguments out of the runbook", () => {
+  assert.deepEqual(documentedBackupTables("  --table owners --table listings \\\n  --table photos\n"), [
+    "owners",
+    "listings",
+    "photos",
+  ]);
+});
+
 // ── cron-triggers ──────────────────────────────────────────────────────
 //
 // `scheduled()` dispatches on the literal cron string, so the two halves —
@@ -820,6 +950,157 @@ test("cron-triggers: fails when scheduled() handles crons nothing declares", () 
 test("cron-triggers: skips when wrangler.toml is not present", () => {
   const result = runOne("cron-triggers", { "apps/api/src/index.ts": SCHEDULED_GOOD });
   assert.equal(result.status, "skip");
+});
+
+// ── cron-triggers, the third file (#176) ───────────────────────────────
+//
+// `cron/registry.ts` is where a job's name, schedule and staleness threshold
+// are described together, and it is what `/api/admin/health` and the daily
+// digest read. The check used to open two of the three files while two
+// documents said it tied all three together.
+
+const REGISTRY_GOOD = `
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+
+export const CRON_JOBS = [
+  {
+    name: "moderationRetry",
+    cron: "*/5 * * * *",
+    staleAfterMs: 30 * MINUTE,
+  },
+  {
+    name: "orphanSweep",
+    cron: "17 3 * * *",
+    staleAfterMs: 26 * HOUR,
+  },
+] as const satisfies readonly CronJobSpec[];
+`;
+
+test("cron-triggers: passes and says so when the registry agrees with both other files", () => {
+  const result = runOne("cron-triggers", cronTree({ "apps/api/src/cron/registry.ts": REGISTRY_GOOD }));
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  assert.match(result.details.join("\n"), /2 apps\/api\/src\/cron\/registry\.ts job\(s\) agree/);
+  assert.match(result.details.join("\n"), /moderationRetry \("\*\/5 \* \* \* \*", stale after 30m\)/);
+});
+
+test("cron-triggers: says out loud when there is no registry to check, rather than implying it agreed", () => {
+  const result = runOne("cron-triggers", cronTree());
+  assert.equal(result.status, "pass");
+  assert.match(result.details.join("\n"), /registry\.ts not present, so registry agreement was not checked/);
+});
+
+test("cron-triggers: fails when a registry job's schedule is declared nowhere (#176's own experiment)", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      "apps/api/src/cron/registry.ts": REGISTRY_GOOD.replace('cron: "17 3 * * *"', 'cron: "0 0 * * 0"'),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /"orphanSweep" is scheduled "0 0 \* \* 0", which env\.production does not declare/);
+});
+
+test("cron-triggers: fails when the registry name is not the string runCron is handed", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      "apps/api/src/cron/registry.ts": REGISTRY_GOOD.replace('name: "orphanSweep"', 'name: "nightlySweep"'),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(
+    result.details.join("\n"),
+    /scheduled\(\) runs "orphanSweep" for cron "17 3 \* \* \*", but .*registry\.ts calls that job "nightlySweep"/,
+  );
+  assert.match(result.details.join("\n"), /heartbeat key \(cron:last:<name>\)/);
+});
+
+test("cron-triggers: fails when a declared, dispatched cron has no registry entry watching it", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      "apps/api/src/cron/registry.ts": REGISTRY_GOOD.replace(
+        /\{\s*name: "orphanSweep"[\s\S]*?\},\n/,
+        "",
+      ),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /no CRON_JOBS entry .* describes it/);
+});
+
+test("cron-triggers: fails when staleAfterMs does not exceed the schedule's own interval", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      // Five-minute job, five-minute threshold: every healthy run is "stale".
+      "apps/api/src/cron/registry.ts": REGISTRY_GOOD.replace("staleAfterMs: 30 * MINUTE", "staleAfterMs: 5 * MINUTE"),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /"moderationRetry" fires every 5m .* but staleAfterMs is 5m/);
+});
+
+test("cron-triggers: fails when staleAfterMs cannot be resolved to a number", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      "apps/api/src/cron/registry.ts": REGISTRY_GOOD.replace("staleAfterMs: 26 * HOUR", "staleAfterMs: config.sweepStale"),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /cannot resolve to a number — an unreadable threshold is an unchecked one/);
+});
+
+test("cron-triggers: fails when registry.ts is present but CRON_JOBS cannot be parsed", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({ "apps/api/src/cron/registry.ts": "export const JOBS = [];\n" }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /no CRON_JOBS entries could be parsed/);
+});
+
+test("cron-triggers: reads this repository's real registry, and all three files agree today", () => {
+  const result = runChecks(["cron-triggers"], REPO_ROOT)[0];
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  const text = result.details.join("\n");
+  for (const name of ["moderationRetry", "orphanSweep", "dailyDigest"]) {
+    assert.match(text, new RegExp(name), `the real registry job ${name} was not reported as checked`);
+  }
+});
+
+test("parseCronRegistry resolves MINUTE/HOUR products and ignores commented-out entries", () => {
+  const jobs = parseCronRegistry(REGISTRY_GOOD);
+  assert.deepEqual(
+    jobs.map((j) => [j.name, j.cron, j.staleAfterMs]),
+    [
+      ["moderationRetry", "*/5 * * * *", 30 * 60 * 1000],
+      ["orphanSweep", "17 3 * * *", 26 * 60 * 60 * 1000],
+    ],
+  );
+  assert.equal(parseCronRegistry("export const NOTHING = 1;\n"), null);
+});
+
+test("cronIntervalMs returns the longest gap between firings", () => {
+  assert.equal(cronIntervalMs("*/5 * * * *"), 5 * 60 * 1000);
+  assert.equal(cronIntervalMs("17 3 * * *"), 24 * 60 * 60 * 1000);
+  assert.equal(cronIntervalMs("7 0 * * *"), 24 * 60 * 60 * 1000);
+  assert.equal(cronIntervalMs("0 0 * * 0"), 7 * 24 * 60 * 60 * 1000);
+  // Weekdays only: the Friday→Monday gap is the one a threshold has to beat.
+  assert.equal(cronIntervalMs("0 9 * * 1-5"), 3 * 24 * 60 * 60 * 1000);
+  // Longer than a week: not computed, and the caller says so rather than
+  // treating "not computed" as "fine".
+  assert.equal(cronIntervalMs("0 0 1 * *"), null);
+});
+
+test("scheduledCronDispatch pairs each case with the name it hands runCron", () => {
+  assert.deepEqual(scheduledCronDispatch(SCHEDULED_GOOD), [
+    { cron: "*/5 * * * *", jobName: "moderationRetry" },
+    { cron: "17 3 * * *", jobName: "orphanSweep" },
+  ]);
+  assert.equal(scheduledCronDispatch("export default { fetch };\n"), null);
 });
 
 test("parseCronTriggers reads top-level, per-env, multi-line and empty lists", () => {
@@ -1158,6 +1439,212 @@ test("public-env: skips when nothing is present to scan", () => {
   assert.equal(result.status, "skip");
 });
 
+// ── public-env-passthrough ─────────────────────────────────────────────
+//
+// #175: `.env.example` declared seven EXPO_PUBLIC_* names and deploy.yml
+// passed four, and nothing reconciled the two lists — `env-parity` excludes
+// EXPO_PUBLIC_* on purpose, and verify-public-env.mjs derived its
+// expectations from the very environment that was missing the variable.
+
+const DEPLOY_WORKFLOW = `name: Deploy
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Export web
+        env:
+          EXPO_PUBLIC_SITE_URL: \${{ vars.EXPO_PUBLIC_SITE_URL }}
+          EXPO_PUBLIC_ENV: \${{ env.DEPLOY_ENV }}
+        run: pnpm --filter @keepsake/web export
+`;
+
+test("public-env-passthrough: passes when the two lists agree", () => {
+  const result = runOne("public-env-passthrough", {
+    ".env.example": "ENVIRONMENT=development\nEXPO_PUBLIC_SITE_URL=http://localhost:8081\nEXPO_PUBLIC_ENV=development\n",
+    ".github/workflows/deploy.yml": DEPLOY_WORKFLOW,
+  });
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  assert.match(result.details[0], /2 EXPO_PUBLIC_\* name\(s\)/);
+});
+
+test("public-env-passthrough: fails on a declared name deploy.yml never passes (#175's shape)", () => {
+  const result = runOne("public-env-passthrough", {
+    ".env.example": "EXPO_PUBLIC_SITE_URL=http://localhost:8081\nEXPO_PUBLIC_NEW_THING=\nEXPO_PUBLIC_ENV=development\n",
+    ".github/workflows/deploy.yml": DEPLOY_WORKFLOW,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /declares EXPO_PUBLIC_NEW_THING but .* never passes it/);
+});
+
+test("public-env-passthrough: fails on a name deploy.yml passes that nothing declares", () => {
+  const result = runOne("public-env-passthrough", {
+    ".env.example": "EXPO_PUBLIC_ENV=development\n",
+    ".github/workflows/deploy.yml": DEPLOY_WORKFLOW,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /passes EXPO_PUBLIC_SITE_URL, which .* does not declare/);
+});
+
+test("public-env-passthrough: a commented-out declaration is not a declaration", () => {
+  const result = runOne("public-env-passthrough", {
+    ".env.example": "EXPO_PUBLIC_SITE_URL=x\nEXPO_PUBLIC_ENV=development\n# EXPO_PUBLIC_LATER=\n",
+    ".github/workflows/deploy.yml": DEPLOY_WORKFLOW,
+  });
+  assert.equal(result.status, "pass", result.details.join("\n"));
+});
+
+test("public-env-passthrough: this repository's deploy.yml passes every declared name", () => {
+  const result = runChecks(["public-env-passthrough"], REPO_ROOT)[0];
+  assert.equal(result.status, "pass", result.details.join("\n"));
+});
+
+test("no EXPO_PUBLIC_GOOGLE_ADS_* survives anywhere that would make it a declared variable again", () => {
+  // #175's resolution: Kiarash decided against Google Ads, so the three names
+  // were removed rather than wired up. This asserts the removal is complete
+  // in the two files that decide whether the variable exists at all — a name
+  // reappearing in `.env.example` alone is what created the bug the first
+  // time (declared, read, passed by nothing).
+  const ctx = createContext(REPO_ROOT);
+  for (const file of [".env.example", ".github/workflows/deploy.yml"]) {
+    const text = ctx.readText(file) ?? "";
+    const declarations = text
+      .split("\n")
+      .filter((line) => /^\s*EXPO_PUBLIC_GOOGLE_ADS_[A-Z_]+\s*[:=]/.test(line));
+    assert.deepEqual(declarations, [], `${file} still declares a Google Ads variable`);
+  }
+});
+
+// ── csp-script-hash ────────────────────────────────────────────────────
+//
+// #194: three `sha256-` values written by hand into two policy files with
+// nothing binding them to the scripts they authorise. Not a check that could
+// not fail — a check that did not exist; `docs/design/ops.md` and
+// `_headers`' own comment named the hazard in prose and that was the whole
+// enforcement.
+
+const CSP_SCRIPT = '\n(function () {\n  document.documentElement.dataset.theme = "light";\n})();\n';
+const CSP_SCRIPT_HASH = createHash("sha256").update(CSP_SCRIPT, "utf8").digest("base64");
+const EXPO_HYDRATE_HASH = createHash("sha256")
+  .update("globalThis.__EXPO_ROUTER_HYDRATE__=true;", "utf8")
+  .digest("base64");
+
+function cspTree({ script = CSP_SCRIPT, declared = null } = {}) {
+  const hashes = (declared ?? [CSP_SCRIPT_HASH, EXPO_HYDRATE_HASH])
+    .map((h) => `'sha256-${h}'`)
+    .join(" ");
+  return {
+    "apps/web/app/+html.tsx": `const PREHYDRATION_SCRIPT = \`${script}\`;\n`,
+    "apps/api/src/middleware/securityHeaders.ts": `const CSP = ["script-src 'self' ${hashes}"].join("; ");\n`,
+    "apps/web/public/_headers": `# documented above: 'sha256-deadbeefNotDeclaredJustMentionedInAComment='\n/*\n  Content-Security-Policy: default-src 'self'; script-src 'self' ${hashes}\n`,
+  };
+}
+
+test("csp-script-hash: passes when both policies declare the script's real hash", () => {
+  const result = runOne("csp-script-hash", cspTree());
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  assert.match(result.details.join("\n"), new RegExp(`PREHYDRATION_SCRIPT: sha256-${CSP_SCRIPT_HASH.replace(/[+/=]/g, (c) => `\\${c}`)}`));
+});
+
+test("csp-script-hash: one added space to the script turns it red (#194's own experiment)", () => {
+  const result = runOne("csp-script-hash", cspTree({ script: CSP_SCRIPT.replace("(function () {", "(function () { ") }));
+  assert.equal(result.status, "fail");
+  const text = result.details.join("\n");
+  assert.match(text, /does not declare 'sha256-[^']+', the hash of PREHYDRATION_SCRIPT/);
+  // The failure has to name the cause, because "a space" is not something
+  // anyone will suspect on their own.
+  assert.match(text, /exact bytes/);
+  assert.match(text, /prettier reflow/);
+  // And the old hash must be reported stale, not silently tolerated.
+  assert.match(text, /matches no script in this tree/);
+});
+
+test("csp-script-hash: a stale hash left behind after a script edit fails", () => {
+  const result = runOne("csp-script-hash", {
+    ...cspTree({ declared: [CSP_SCRIPT_HASH, EXPO_HYDRATE_HASH, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="] }),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /declares 'sha256-AAA[^']*', which matches no script in this tree/);
+});
+
+test("csp-script-hash: fails when the two hand-maintained policies disagree", () => {
+  const tree = cspTree();
+  tree["apps/web/public/_headers"] = `/*\n  Content-Security-Policy: script-src 'self' 'sha256-${CSP_SCRIPT_HASH}'\n`;
+  const result = runOne("csp-script-hash", tree);
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /the two policies are maintained by hand and must stay identical/);
+});
+
+test("csp-script-hash: fails when one apps/site page's inline script diverges from its siblings", () => {
+  const page = (theme) =>
+    `<html><head><script src="/consent.js" defer></script><script>\n  var t = "${theme}";\n</script></head></html>\n`;
+  const sitePages = {
+    "apps/site/public/about.html": page("light"),
+    "apps/site/public/privacy.html": page("light"),
+    "apps/site/public/terms.html": page("dark"),
+  };
+  const result = runOne("csp-script-hash", { ...cspTree(), ...sitePages });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /carry 2 different inline <script> bodies/);
+});
+
+test("csp-script-hash: fails rather than passing when the script literal cannot be found", () => {
+  const tree = cspTree();
+  tree["apps/web/app/+html.tsx"] = "const SOMETHING_ELSE = `x`;\n";
+  const result = runOne("csp-script-hash", tree);
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /could not find `const PREHYDRATION_SCRIPT/);
+});
+
+test("csp-script-hash: fails when the script interpolates, so source bytes are not browser bytes", () => {
+  const tree = cspTree();
+  tree["apps/web/app/+html.tsx"] = "const PREHYDRATION_SCRIPT = `var k = ${KEY};`;\n";
+  const result = runOne("csp-script-hash", tree);
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /interpolates/);
+});
+
+test("csp-script-hash: skips a tree with no CSP at all", () => {
+  const result = runOne("csp-script-hash", { "README.md": "# nothing\n" });
+  assert.equal(result.status, "skip");
+});
+
+test("cspHashesIn ignores hashes that only appear in comments", () => {
+  // `_headers` documents all three hashes in a comment directly above the
+  // policy, so a whole-file scan would "find" hashes the policy never
+  // declares — and the check would pass on a policy missing all of them.
+  const text = "# 'sha256-AAA=' is the theme script\n/*\n  Content-Security-Policy: script-src 'sha256-BBB='\n";
+  assert.deepEqual([...cspHashesIn(text, { commentPrefixes: ["#"] })], ["BBB="]);
+});
+
+test("templateLiteralBody takes the exact bytes between the backticks", () => {
+  assert.equal(templateLiteralBody("const X = `\n  a();\n`;\n", "X"), "\n  a();\n");
+  assert.equal(templateLiteralBody("const Y = `z`;", "X"), null);
+});
+
+test("inlineScriptBodies skips <script src=…> and keeps inline bodies in order", () => {
+  assert.deepEqual(
+    inlineScriptBodies('<script src="/consent.js" defer></script><script>a()</script><script>b()</script>'),
+    ["a()", "b()"],
+  );
+});
+
+test("csp-script-hash: this repository's real hashes match the scripts they authorise", () => {
+  // The whole point of #194, against the real tree. Kiarash verified
+  // sha256-Fv9zzPn… against a 1261-char script by hand; this asserts the
+  // check computes the same thing, so an extractor grabbing the wrong bytes
+  // cannot look like a policy that is genuinely in sync.
+  const result = runChecks(["csp-script-hash"], REPO_ROOT)[0];
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  const text = result.details.join("\n");
+  assert.match(text, /PREHYDRATION_SCRIPT: sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g= — apps\/web\/app\/\+html\.tsx \(1261 chars\)/);
+  assert.match(text, /apps\/site inline script: sha256-d6qbtEYff\/sB38YyzuzhASbVmmOidU\/UFC9mNit47j4=/);
+  // The one hash it cannot compute must say so rather than blending in.
+  assert.match(text, /NOT against Expo's actual output/);
+});
+
 // ── shell-syntax ───────────────────────────────────────────────────────
 
 test("shell-syntax: passes for a valid script", () => {
@@ -1174,9 +1661,141 @@ test("shell-syntax: fails for a syntax error", () => {
   assert.equal(result.status, "fail");
 });
 
-test("shell-syntax: skips when there are no shell scripts", () => {
+test("shell-syntax: skips only a tree with neither shell scripts nor workflows", () => {
   const result = runOne("shell-syntax", {});
   assert.equal(result.status, "skip");
+});
+
+// #166: the tests above are the shape the audit called out — they can only
+// fail against an invented `.sh` file, which this repository has never
+// contained. Everything below runs against **this repository's own bytes**.
+
+test("shell-syntax: this repo really does contain no .sh files, so the .sh glob alone guards nothing", () => {
+  const shellFiles = [
+    ...createContext(REPO_ROOT).walk("tools"),
+    ...createContext(REPO_ROOT).walk(".github"),
+  ].filter((f) => f.endsWith(".sh"));
+  assert.deepEqual(shellFiles, [], "if a .sh file ever lands, this assertion is the place to notice");
+});
+
+test("shell-syntax: parses this repository's actual workflow run: blocks, and there are some", () => {
+  const result = runChecks(["shell-syntax"], REPO_ROOT)[0];
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  const blocks = Number(/and (\d+) workflow/.exec(result.details[0])?.[1]);
+  assert.ok(blocks > 0, `expected real run: blocks to be parsed, got: ${result.details[0]}`);
+});
+
+test("shell-syntax: extracts every run: key the real workflows contain", () => {
+  const ctx = createContext(REPO_ROOT);
+  const files = ctx.walk(".github/workflows").filter((f) => /\.ya?ml$/.test(f));
+  let runKeys = 0;
+  let extracted = 0;
+  for (const file of files) {
+    const text = ctx.readText(file);
+    runKeys += (text.match(/^\s*(?:-\s+)?run:/gm) ?? []).length;
+    extracted += extractWorkflowRunBlocks(text).length;
+  }
+  assert.ok(runKeys > 0, "no run: keys in .github/workflows — has the layout changed?");
+  assert.equal(extracted, runKeys, "the extractor silently dropped a run: block");
+});
+
+test("shell-syntax: goes red when a `fi` is removed from the real uptime.yml", () => {
+  // The audit's own break-the-guard experiment, as a test. Uses the shipped
+  // file's bytes rather than an invented script, so it cannot drift into
+  // proving something about a fixture only.
+  const real = createContext(REPO_ROOT).readText(".github/workflows/uptime.yml");
+  assert.ok(real, ".github/workflows/uptime.yml is missing");
+  const lines = real.split("\n");
+  const fiAt = lines.findIndex((l) => l.trim() === "fi");
+  assert.ok(fiAt > 0, "uptime.yml no longer contains a bare `fi` to remove");
+  lines.splice(fiAt, 1);
+
+  const good = runOne("shell-syntax", { ".github/workflows/uptime.yml": real });
+  assert.equal(good.status, "pass", good.details.join("\n"));
+
+  const broken = runOne("shell-syntax", { ".github/workflows/uptime.yml": lines.join("\n") });
+  assert.equal(broken.status, "fail");
+  assert.match(broken.details.join("\n"), /uptime\.yml:\d+: line \d+:/);
+});
+
+test("shell-syntax: fails rather than skips when workflows have run: blocks it cannot parse", () => {
+  const result = runOne("shell-syntax", {
+    ".github/workflows/py.yml": `name: Py
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - shell: python
+        run: |
+          print("not bash")
+`,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /extracted none|no shell found at all/);
+});
+
+test("shell-syntax: fails rather than skips for a workflow tree containing no shell at all", () => {
+  const result = runOne("shell-syntax", {
+    ".github/workflows/uses-only.yml": `name: Uses
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /no shell found at all/);
+});
+
+test("shell-syntax: \${{ }} expressions are substituted, not parsed as shell", () => {
+  const result = runOne("shell-syntax", {
+    ".github/workflows/expr.yml": `name: Expr
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          url="\${{ vars.SITE_URL }}/health"
+          echo "$url"
+`,
+  });
+  assert.equal(result.status, "pass", result.details.join("\n"));
+});
+
+test("extractWorkflowRunBlocks: dedents block scalars, keeps inline runs, and reads shell:", () => {
+  const blocks = extractWorkflowRunBlocks(`name: X
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pnpm install --frozen-lockfile
+      - name: Multi
+        run: |
+          set -euo pipefail
+          if [ -n "$X" ]; then
+            echo yes
+          fi
+      - name: Node
+        shell: node
+        run: console.log(1)
+`);
+  assert.equal(blocks.length, 3);
+  assert.equal(blocks[0].script, "pnpm install --frozen-lockfile");
+  assert.equal(blocks[0].shell, null);
+  assert.equal(
+    blocks[1].script,
+    'set -euo pipefail\nif [ -n "$X" ]; then\n  echo yes\nfi',
+    "the block scalar must be dedented to column 0 and keep its relative indentation",
+  );
+  assert.equal(blocks[1].shell, null);
+  assert.equal(blocks[2].shell, "node");
+  // Line mapping: bash's "line 1" is the first line of the script body.
+  assert.equal(blocks[1].firstScriptLine, 10);
 });
 
 // ── CLI: --only and --json ────────────────────────────────────────────

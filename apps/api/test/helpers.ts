@@ -41,6 +41,25 @@ export function freshClientIp(): string {
   return `198.51.100.${ipCounter}`;
 }
 
+let requesterEmailCounter = 0;
+
+/**
+ * A requester address no other test has used, for the same reason
+ * `freshClientIp` exists — except that the limit this one keeps out of the
+ * way is keyed by the *recipient*.
+ *
+ * Issue #188 added a per-address daily ceiling on the "was this you?"
+ * confirmation (three, `REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET`). A suite where
+ * every test asks as `requester@keepsake.ing` shares one counter, so the
+ * fourth test in a file silently stops receiving mail and fails somewhere far
+ * from the cause. The ceiling itself is proved deliberately, with an address
+ * of its own, in `requestConfirm.test.ts`.
+ */
+export function freshRequesterEmail(): string {
+  requesterEmailCounter += 1;
+  return `requester-${requesterEmailCounter}@keepsake.ing`;
+}
+
 /** Headers for an authenticated request from a fresh synthetic client. Each
  * call gets its own `CF-Connecting-IP` so burst/daily rate limits never leak
  * between unrelated test cases — the primitives themselves (`checkAndBump`,
@@ -62,6 +81,46 @@ export function fakeJpegBytes(sizeBytes = 32): Uint8Array {
   return bytes;
 }
 
+/**
+ * A JPEG whose header actually declares `width`x`height`, so
+ * `sniffImageDimensions` can read it.
+ *
+ * An APP0 (JFIF) segment is written *before* the SOF0 on purpose: every real
+ * camera JPEG puts kilobytes of JFIF/EXIF ahead of the frame header, so a
+ * fixture without one would let a parser that reads a fixed offset pass while
+ * failing on every actual photo. This one only passes if the marker walk
+ * really walks.
+ */
+export function fakeJpegWithSof(width: number, height: number, sizeBytes = 64): Uint8Array {
+  const header = [
+    0xff, 0xd8, // SOI
+    0xff, 0xe0, 0x00, 0x10, // APP0, length 16
+    0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+    0xff, 0xc0, 0x00, 0x11, 0x08, // SOF0, length 17, 8-bit precision
+    (height >> 8) & 0xff, height & 0xff,
+    (width >> 8) & 0xff, width & 0xff,
+    0x03, // 3 components
+  ];
+  const bytes = new Uint8Array(Math.max(sizeBytes, header.length));
+  bytes.set(header, 0);
+  return bytes;
+}
+
+/**
+ * A PNG whose IHDR declares `width`x`height`. No IDAT and no valid CRC —
+ * `sniffImageDimensions` reads only the signature and the IHDR fields, and a
+ * fixture that carried real compressed pixel data would be testing zlib.
+ */
+export function fakePngBytes(width: number, height: number, sizeBytes = 64): Uint8Array {
+  const bytes = new Uint8Array(Math.max(sizeBytes, 26));
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  bytes.set([0x00, 0x00, 0x00, 0x0d], 8); // IHDR length
+  bytes.set([0x49, 0x48, 0x44, 0x52], 12); // "IHDR"
+  bytes.set([(width >>> 24) & 0xff, (width >>> 16) & 0xff, (width >>> 8) & 0xff, width & 0xff], 16);
+  bytes.set([(height >>> 24) & 0xff, (height >>> 16) & 0xff, (height >>> 8) & 0xff, height & 0xff], 20);
+  return bytes;
+}
+
 export function fakeFile(bytes: Uint8Array, name: string, type: string): File {
   // TS 5.9's DOM lib types `BlobPart` against `ArrayBufferView<ArrayBuffer>`
   // specifically, while `Uint8Array`'s own buffer is typed `ArrayBufferLike`
@@ -80,10 +139,30 @@ export interface UploadPhotoOptions {
   blurhash?: string;
 }
 
+/**
+ * Uploads a photo the way an honest client does: **the same bytes for both
+ * variants**, standing in for a `full` and a `thumb` produced from one
+ * source image.
+ *
+ * This helper used to default `full` to `fakeJpegBytes()` (32 bytes) and
+ * `thumb` to `fakeJpegBytes(16)` — two byte sequences no single source
+ * image could have produced — so every test in this suite had been
+ * demonstrating #161's attack shape by accident, with nothing objecting.
+ * The default now models a real client; a test that wants mismatched
+ * variants passes `fullBytes`/`thumbBytes` explicitly and is saying so on
+ * purpose (see `moderationVariants.test.ts`).
+ *
+ * Note what this helper still cannot do, and what the server therefore
+ * still cannot check: nothing here or in `PUT /api/photos` decodes an
+ * image, so "these two files came from one source" is not verifiable
+ * server-side. That is why #161 is fixed by moderating both variants
+ * rather than by rejecting mismatched ones.
+ */
 export async function uploadPhoto(options: UploadPhotoOptions): Promise<Response> {
   const form = new FormData();
-  form.set("full", fakeFile(options.fullBytes ?? fakeJpegBytes(), "full.jpg", "image/jpeg"));
-  form.set("thumb", fakeFile(options.thumbBytes ?? fakeJpegBytes(16), "thumb.jpg", "image/jpeg"));
+  const fullBytes = options.fullBytes ?? fakeJpegBytes();
+  form.set("full", fakeFile(fullBytes, "full.jpg", "image/jpeg"));
+  form.set("thumb", fakeFile(options.thumbBytes ?? fullBytes, "thumb.jpg", "image/jpeg"));
   form.set("width", String(options.width ?? 800));
   form.set("height", String(options.height ?? 600));
   form.set("blurhash", options.blurhash ?? "LEHV6nWB2yk8pyo0adR*.7kCMdnj");

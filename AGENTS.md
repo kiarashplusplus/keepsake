@@ -118,7 +118,7 @@ environment secrets, which no session can read back (the GitHub secrets API retu
 
 **A passing test is not evidence. Verify the artifact.**
 
-This project has shipped seven separate checks that could not fail:
+This project has shipped eleven separate checks that could not fail:
 
 | What looked fine | What was actually true |
 |---|---|
@@ -129,6 +129,10 @@ This project has shipped seven separate checks that could not fail:
 | A rate limiter declared in every environment | It was called from nowhere. 320 parallel requests, 320 successes. |
 | `tools/preflight/preflight.test.mjs` — 55 tests whose whole job is proving each preflight check can still fail | Nothing ever ran them. `tools/*` are workspace packages, but `pnpm test`'s runner only invoked the preflight *binary* and CI's `test-packages` filtered on `./packages/*`. The tests that guard the guards had never executed once. Found while adding the 56th (#99). |
 | Three commits merged to `main`, nothing red in the Actions tab | Not a check that could not fail — a check that silently *did not run*. CI's concurrency group was one bucket for `main`, so each merge cancelled the previous merge's run; `cancelled` is neither red nor green, nothing reads it, and `deploy.yml` shipped each of those commits to preview anyway. The merged *combination* — the one thing a PR run never tests — went out untested three times (#103). |
+| `SKIP shell-syntax  no *.sh files under tools/ or .github/` | There has never been a `.sh` file in this repository, in the tree or in history, so the check had skipped **every time it ever ran** — while all the shell that matters sits inline in workflow `run:` blocks, including the `uptime.yml` probe that is the only monitor of the live site. A new variant worth naming: its *test* was sound and passed, but only ever against a fixture tree containing an invented `.sh` file — **a test that can only fail against inputs the repo does not contain.** Fixed by parsing `run:` blocks and making "found no shell at all" a failure (#166). |
+| `PASS cron-triggers  3 cron(s) valid` | It read `wrangler.toml` and `index.ts`. `cron/registry.ts` — the file `/api/admin/health` and the daily digest actually read, and which two documents said this check tied to the other two — was never opened. Renaming a job and moving its schedule in the registry alone still reported three valid crons, naming the *old* schedules (#176). |
+| A documented, executed, verified D1 backup | The `--table` list was hard-coded and went stale when `0006_aspects.sql` landed, so no export contained any listing's aspects — and because `listings.aspects_backfilled_at` *is* in the export, every restored listing said "already done" and its aspects could never be re-derived. The restore closed its own recovery path. The runbook glob-loops the *migrations* to avoid exactly this, one paragraph away (#164). |
+| `[verify-public-env] 4 value(s) present in the bundle` | It built its expectation set by filtering `process.env`, so a variable `deploy.yml` forgot to pass was absent from the expectations too and could never be reported missing. It could only verify what had already been passed correctly — structurally blind to the shape of the bot-check incident two rows above. Three Google Ads ids shipped as `""` in every deployed bundle, and a legal document asserted the tag was live (#175). |
 
 So: when you add a guard, **break the code and watch the guard fail**, then restore. Say in the
 issue comment which one you broke. This applies to observability too, and is why
@@ -140,7 +144,7 @@ deployed URL, read the actual bytes, take a viewport screenshot. Do not screensh
 `captureBeyondViewport`; that is how a page nobody could scroll looked perfect for a week.
 
 **And one more, #66: "verified on preview" was never safe to say.** `deploy.yml`'s own
-"Verify /health reports this commit" step is not one of the seven above — it's correct at the
+"Verify /health reports this commit" step is not one of the eleven above — it's correct at the
 moment it runs. What was worthless was trusting it a minute later, because preview was one shared
 Worker that every open PR deployed to, so another session's deploy could land between CI's check
 and whatever you did next. This happened for real verifying #14 — a probe ran 90 seconds after an
@@ -170,8 +174,26 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
   of `@keepsake/*`** — it will fail with "Could not resolve".
 - **`expo export` needs `--clear`.** Public config is inlined at transform time and cached; the
   export script does this and then verifies the values actually reached the bundle.
-- **Turnstile now enforces on preview**, so you cannot exercise a write path with curl. Use the
-  admin endpoints, `MOCK_AI`, or a real browser.
+- **Turnstile enforces on preview, but not on every write path.** In `src/routes/listings.ts`
+  `turnstile()` is mounted on exactly three routes — `POST /api/listings`,
+  `POST /api/listings/:id/reports` and `POST /api/listings/:id/requests` — plus one in
+  `src/routes/me.ts` and one in `src/routes/recover.ts`. Those you cannot drive with curl, so use
+  the admin endpoints, `MOCK_AI`, or a real browser. **Everything else is curl-reachable with an
+  owner token**: `PATCH`/`DELETE /api/listings/:id` and `given`/`withdraw`/`relist` mount no
+  Turnstile (this bullet listed "create/edit/relist" until 2026-09-07 and was wrong about two of
+  the three), and the photo routes mount none of it either — `PUT /api/photos`,
+  `DELETE /api/photos/:id` and `POST /api/photos/:id/suggest` carry `ownerAuth()` and the rate
+  limiters only (#183, open). `PATCH` stays without it deliberately (#168): the web edit step
+  mints no token, so adding one would break the real edit flow rather than harden it — what it
+  got instead is the router-level burst brake and a daily budget. Do not rely on Turnstile as the
+  reason a write path is unreachable without checking that the route actually mounts it.
+- **Every non-GET route on `listingRoutes` is metered by a router-level registration**
+  (`listingRoutes.on(["POST","PATCH","PUT","DELETE"], "*", burst("RL_WRITE"))`, PR #197 / #168),
+  the same shape as `adminRoutes.use("*", …)`. Add a write route to that file and it is metered
+  by default; `test/listingWriteMetering.test.ts` enumerates `listingRoutes.routes` and fails if
+  one appears outside the list it exercises. The equivalent writes in `src/routes/photos.ts` and
+  `src/routes/me.ts` still carry per-route decisions and `POST /api/me/listings/:id/choose` and
+  `DELETE /api/photos/:id` remain unmetered — #168 names them.
 - **Email**: preview is `allowlist` (Kiarash and `leapkg@gmail.com` only), production is `live`.
   Reserved domains (`example.com`, `.test`, `.invalid`) are refused everywhere, which is why the
   repo's fixtures cannot bounce the sending domain. `EMAIL_MODE=test` bypasses the guard and a
@@ -181,7 +203,7 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
   number is a shared namespace: two sessions cut from the same `main` both claim `0009`, the one
   that merges second must renumber on rebase, and renaming a file the shared preview has already
   applied makes the next deploy re-run its SQL. That broke `deploy (preview)` for every
-  concurrent pull request once already (#99). The existing `0001`–`0008` stay exactly as they
+  concurrent pull request once already (#99). The existing `0001`–`0009` stay exactly as they
   are — renaming them would *be* the bug. `node tools/preflight/preflight.mjs --only
   migrations,migration-drift` enforces both halves; `docs/runbooks/migrations.md` has the detail.
 - **Never edit, rename or delete a migration that has landed on `main`, or that this branch has
@@ -189,7 +211,8 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
 - **The e2e suite runs entirely locally — use it, it is the best verification available.**
   `pnpm --filter @keepsake/web export` then `pnpm --filter @keepsake/web e2e` stands up real
   `workerd` with local D1/R2/KV via `wrangler dev` (see `apps/web/playwright.config.ts`), which is
-  closer to production than preview ever was and needs no credentials. Baseline is 84 passing.
+  closer to production than preview ever was and needs no credentials. Baseline was 84 passing;
+  #173 added six a11y specs, which is twelve more runs across the two projects.
   Now that pull requests no longer deploy anywhere, this is *the* way to verify a branch.
   - If Playwright reports `Executable doesn't exist at .../chromium_headless_shell-<n>/...`, the
     container's browser build predates the pinned `@playwright/test`. Do not run
@@ -234,8 +257,15 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
 - **A new cron is three edits, and one of them changes an unrelated test.** Name, schedule and
   staleness threshold live together in `apps/api/src/cron/registry.ts`; `wrangler.toml`'s
   `[triggers] crons` has to restate the schedule because Cloudflare reads that file, and
-  `index.ts`'s `scheduled()` switch has to match the literal string (preflight's `cron-triggers`
-  check enforces both). The part that surprises people: `GET /api/admin/health` derives `ok` from
+  `index.ts`'s `scheduled()` switch has to match the literal string. Preflight's `cron-triggers`
+  check now enforces all three: every registry `cron` must be a trigger that resolves for every
+  env block, every registry `name` must be the literal string `scheduled()` hands `runCron`
+  (that argument *is* the heartbeat key `cron:last:<name>`), and `staleAfterMs` must exceed the
+  schedule's own interval. It used to read only the `wrangler.toml` ↔ `scheduled()` pair while
+  two documents claimed otherwise, so a job renamed or rescheduled in `CRON_JOBS` alone passed it
+  clean (#176). It compares *declarations*: a job correctly declared everywhere that still never
+  writes its heartbeat at runtime is a different bug, and not one this check can see. The part
+  that surprises people: `GET /api/admin/health` derives `ok` from
   **every** job in the registry, so adding one turns `ok: true` into `ok: false` in any test that
   seeds only the heartbeats it knew about. That is the guard working — a job nothing watches is
   the bug — but budget for updating those tests.
@@ -255,7 +285,21 @@ pnpm --filter @keepsake/web e2e    # 84 specs, mobile and desktop
 node tools/preflight/preflight.mjs
 ```
 
-The accessibility specs carry **no exclusions**. If your change fails them, it is your change.
+The accessibility specs carry **no per-rule or per-selector exclusions**. One thing still narrows
+what they can catch, so "green" is not quite "everything was scanned": `a11y.spec.ts` fails only
+on `serious` and `critical` impacts, so `moderate`/`minor` violations are reported by the run and
+never fail it. Within that scope: if your change fails them, it is your change.
+
+Two gaps that were in this paragraph until #173 are now covered, and the way they were covered is
+worth copying. The shared fixture (`e2e/support/fixtures.ts`) seeds a consent decision into every
+context, so the consent banner was never in the DOM during a scan — the first interactive element
+a new visitor meets was the one component the suite structurally could not see, while two comments
+in the tree said otherwise. `a11y.spec.ts`'s "consent banner" block now builds its own **unseeded**
+contexts (it asks Playwright only for `browser`, so the seeding fixture never runs) and scans the
+banner closed and with its preferences panel open. And no scan had ever run in dark mode, though
+`[data-theme="dark"]` is an entire second colour system; the "dark mode" block now re-runs the page
+scans under `colorScheme: "dark"` and asserts `data-theme` really is `dark` before scanning, so it
+cannot pass by having scanned the light palette twice.
 
 ## Where the thinking is written down
 

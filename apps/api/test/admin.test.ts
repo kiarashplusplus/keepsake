@@ -325,8 +325,13 @@ describe("admin routes", () => {
       const heldId = await insertApprovedListing({ ownerId });
       await setListingStatus(heldId, "needs_review");
 
-      await env.DB.prepare("INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at) VALUES (?, ?, ?, ?, ?, 'open', ?)")
-        .bind(ulid(), heldId, "I would love this, thank you.", "someone@keepsake.ing", "digest", Date.now())
+      // `confirmed_at` alongside `status = 'open'` since #188: an `open` row
+      // with a null `confirmed_at` is not a state the Worker can produce, and
+      // every owner-facing read filters it out.
+      await env.DB.prepare(
+        "INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at, confirmed_at) VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
+      )
+        .bind(ulid(), heldId, "I would love this, thank you.", "someone@keepsake.ing", "digest", Date.now(), Date.now())
         .run();
       await env.DB.prepare("INSERT INTO email_events (id, kind, to_hash, provider, ok, error, created_at) VALUES (?, 'new_request', 'hash', 'cf', 0, 'send_failed', ?)")
         .bind(ulid(), Date.now())
@@ -669,16 +674,24 @@ describe("admin routes", () => {
       // Stable code — this is what the 7-day rollup groups on, so it must not
       // vary with the provider's wording or the recipient's address.
       expect(result.reason).toBe("send_failed");
-      // ...and the provider's actual words, whole, is the diagnosis.
-      expect(result.detail).toBe(providerError);
+      // ...and the provider's actual words are the diagnosis. Whole, but with
+      // the recipient replaced by `<recipient>` — #190. The admin typed that
+      // address into this request, so they lose nothing; the point is that
+      // the same scrubbed string is what lands in `email_events` below,
+      // beside a `to_hash` that exists so the row names nobody.
+      expect(result.detail).toBe(
+        "destination address not verified: <recipient> is not a verified destination address for this Email Routing zone",
+      );
       expect(result.detail).toContain("not a verified destination address");
+      expect(result.detail).not.toContain("leapkg@gmail.com");
 
       const emailEvent = await env.DB.prepare(
         "SELECT id, ok, error, error_detail, to_domain FROM email_events WHERE kind = 'admin_test' ORDER BY created_at DESC LIMIT 1",
       ).first<{ id: string; ok: number; error: string | null; error_detail: string | null; to_domain: string | null }>();
       expect(emailEvent?.ok).toBe(0);
       expect(emailEvent?.error).toBe("send_failed");
-      expect(emailEvent?.error_detail).toBe(providerError);
+      expect(emailEvent?.error_detail).toBe(result.detail);
+      expect(emailEvent?.error_detail ?? "").not.toContain("leapkg@gmail.com");
       expect(emailEvent?.to_domain).toBe("gmail.com");
       // The row id comes back so a human proving delivery has an exact row to
       // paste, not a guess about which of today's rows was theirs.

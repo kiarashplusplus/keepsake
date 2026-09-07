@@ -1,24 +1,23 @@
 /**
- * `POST /api/recover` / `POST /api/recover/:token` — dashboard recovery for
+ * `POST /api/recover` / `POST /api/recover/exchange` — dashboard recovery for
  * an owner who kept a verified email, per docs/design/identity.md. Losing
  * the device without a verified email is unrecoverable by design; this is
  * the only way back for the ones who did add one.
  */
 import { Hono } from "hono";
-import { RecoverInput, OWNER_TOKEN_PREFIX, type RecoverResult } from "@keepsake/contracts/owner";
+import { RecoverExchangeInput, RecoverInput, OWNER_TOKEN_PREFIX, type RecoverResult } from "@keepsake/contracts/owner";
 import type { Env } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
 import { sha256Hex } from "../lib/digest.js";
 import { randomTokenRaw } from "../lib/tokens.js";
-import { requireParam } from "../lib/params.js";
 import { turnstile } from "../middleware/turnstile.js";
 import { burst, dailyBudget, DEFAULT_EMAIL_IP_DAILY_BUDGET } from "../middleware/rateLimit.js";
 import { validateBody } from "../middleware/validate.js";
 import { sendMail } from "../email/sendMail.js";
 import { recover as recoverTemplate } from "../email/templates/recover.js";
 
-type Vars = { validatedBody: RecoverInput };
+type Vars = { validatedBody: RecoverInput | RecoverExchangeInput };
 export const recoverRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 /** Short-lived on purpose: this token is only useful for the stretch between
@@ -60,7 +59,7 @@ recoverRoutes.post(
   dailyBudget({ kind: "email", ipDailyLimitVar: "EMAIL_IP_DAILY_BUDGET", fallbackIpDailyLimit: DEFAULT_EMAIL_IP_DAILY_BUDGET }),
   validateBody(RecoverInput),
   async (c) => {
-    const input = c.get("validatedBody");
+    const input = c.get("validatedBody") as RecoverInput;
 
     const owner = await c.env.DB.prepare("SELECT id FROM owners WHERE email = ? AND email_verified_at IS NOT NULL")
       .bind(input.email)
@@ -88,8 +87,30 @@ recoverRoutes.post(
   },
 );
 
-recoverRoutes.post("/:token", async (c) => {
-  const token = requireParam(c, "token");
+/**
+ * Issue #182: this used to be `POST /api/recover/:token`, with a live
+ * account-takeover credential sitting in the URL. `apps/api/src/index.ts`'s
+ * `onError` logs the request path, and Workers Logs keeps every line
+ * (`head_sampling_rate = 1` in all three env blocks) — so any request that
+ * threw while a giver was clicking their emailed link wrote the token
+ * verbatim into a log store, still live, still single-use-but-unused. The
+ * redactor knew `?token=` and `Bearer …` and nothing about a secret sitting
+ * in a path segment.
+ *
+ * It takes `{ token }` in the JSON body now, exactly as
+ * `POST /api/requests/withdraw` already did for a strictly lower-value
+ * token (`src/routes/requestWithdraw.ts`) — one flow copying the other,
+ * rather than two shapes for the same kind of secret. The path-segment form
+ * is gone rather than kept as an alias: leaving it registered would leave
+ * the leak reachable by anyone still holding an old link, and the emailed
+ * link is a *web* route (`/recover/<token>`, read by `apps/web/app/recover/
+ * [token].tsx`), so old mail keeps working — that page reads the token out
+ * of its own path and posts it here in a body.
+ *
+ * No Turnstile, unchanged: possession of the mailed token is the proof.
+ */
+recoverRoutes.post("/exchange", validateBody(RecoverExchangeInput), async (c) => {
+  const { token } = c.get("validatedBody") as RecoverExchangeInput;
   const tokenHash = await sha256Hex(token);
   const now = Date.now();
 

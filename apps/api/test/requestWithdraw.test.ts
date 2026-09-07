@@ -2,6 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   freshClientIp,
+  freshRequesterEmail,
   insertApprovedListing,
   insertOwner,
   installFakeEmail,
@@ -11,19 +12,41 @@ import {
   type CapturedEmail,
 } from "./helpers.js";
 
-const VALID_REQUEST_BODY = {
-  note: "This would mean so much to my family, thank you for considering us.",
-  email: "requester@keepsake.ing",
-  date_of_birth: "1990-01-01",
-};
+function validRequestBody(): Record<string, unknown> {
+  return {
+    note: "This would mean so much to my family, thank you for considering us.",
+    // Fresh per call: since #188 the requester's address is a rate-limit key,
+    // so a shared constant would have these tests spending one another's
+    // confirmation allowance.
+    email: freshRequesterEmail(),
+    date_of_birth: "1990-01-01",
+  };
+}
 
+/**
+ * Submit *and* confirm, because since #188 those are two steps and a withdraw
+ * token only exists after the second one — a request nobody confirmed has
+ * nothing to withdraw, and is deleted by the nightly sweep instead.
+ */
 async function createRequest(listingId: string, overrides: Record<string, unknown> = {}): Promise<{ res: Response; withdrawLink: string | undefined }> {
   const sent: CapturedEmail[] = installFakeEmail();
   const res = await SELF.fetch(`http://x/api/listings/${listingId}/requests`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "CF-Connecting-IP": freshClientIp() },
-    body: JSON.stringify({ ...VALID_REQUEST_BODY, ...overrides }),
+    body: JSON.stringify({ ...validRequestBody(), ...overrides }),
   });
+
+  const confirmLink = sent
+    .find((m) => m.subject.includes("Did you ask for"))
+    ?.text.match(/https?:\/\/\S+\/confirm\/(\S+)/)?.[1];
+  if (confirmLink !== undefined) {
+    await SELF.fetch("http://x/api/requests/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "CF-Connecting-IP": freshClientIp() },
+      body: JSON.stringify({ token: confirmLink }),
+    });
+  }
+
   const confirmation = sent.find((m) => m.subject.includes("We passed your note along"));
   const withdrawLink = confirmation?.text.match(/https?:\/\/\S+\/withdraw\/\S+/)?.[0];
   return { res, withdrawLink };
@@ -63,13 +86,26 @@ describe("POST /api/requests/withdraw", () => {
     expect(body.listing_id).toBe(listingId);
     expect(body.withdrawn_at).toBeGreaterThan(0);
 
-    const row = await env.DB.prepare("SELECT status, note, email, phone, withdrawn_at FROM requests WHERE id = ?")
+    const row = await env.DB.prepare("SELECT status, note, email, phone, ip_digest, withdrawn_at FROM requests WHERE id = ?")
       .bind(requestId)
-      .first<{ status: string; note: string | null; email: string | null; phone: string | null; withdrawn_at: number | null }>();
+      .first<{
+        status: string;
+        note: string | null;
+        email: string | null;
+        phone: string | null;
+        ip_digest: string | null;
+        withdrawn_at: number | null;
+      }>();
     expect(row?.status).toBe("withdrawn");
     expect(row?.note).toBeNull();
     expect(row?.email).toBeNull();
     expect(row?.phone).toBeNull();
+    // Issue #169: `ip_digest` was absent from the UPDATE, so the one control a
+    // requester has over their own data left behind a hash of their IP address
+    // on the day they used the site — permanently, because nothing else ever
+    // removed a `requests` row except the giver deleting the whole listing.
+    // The privacy page said it expired within 48 hours.
+    expect(row?.ip_digest).toBeNull();
     expect(row?.withdrawn_at).not.toBeNull();
 
     const after = await env.DB.prepare("SELECT request_count FROM listings WHERE id = ?").bind(listingId).first<{ request_count: number }>();

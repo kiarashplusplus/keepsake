@@ -36,10 +36,16 @@
 #     same dist/ under this same _headers — breaking it would be exactly the
 #     "silently breaks theming" failure mode this comment is trying to avoid
 #     on the app side). If that script's text ever changes, this hash goes
-#     stale silently — nothing in this repo's test suite currently protects
-#     that pair; a real regression check needs a curl/CSP-report-only pass
-#     against a live deploy, not just a static comparison at the time this
-#     was written.
+#     stale silently. That is no longer unguarded (issue #194): preflight's
+#     `csp-script-hash` check hashes both of the above from source, asserts
+#     each appears in this file AND in securityHeaders.ts, and fails on any
+#     'sha256-' either policy declares that matches no script in the tree —
+#     so a stale leftover is caught as well as a missing value. What it still
+#     cannot do is confirm the browser agrees; that needs a
+#     curl/CSP-report-only pass against a live deploy. The middle hash below
+#     is Expo's own output and is not in this tree, so the check verifies it
+#     against the literal recorded here — agreement between two things we
+#     wrote, not evidence Expo still emits it.
 # connect-src (issue #132) is the directive this file went to production
 # without. Absent, it falls back to default-src 'self', and the browser drops
 # every cross-origin fetch before it reaches the network — which is what made

@@ -1,6 +1,16 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { authHeaders, fakeFile, fakeJpegBytes, freshOwnerToken, readErr, readOk, uploadPhoto } from "./helpers.js";
+import {
+  authHeaders,
+  fakeFile,
+  fakeJpegBytes,
+  fakeJpegWithSof,
+  fakePngBytes,
+  freshOwnerToken,
+  readErr,
+  readOk,
+  uploadPhoto,
+} from "./helpers.js";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
 
 describe("PUT /api/photos", () => {
@@ -58,7 +68,10 @@ describe("PUT /api/photos", () => {
     const token = freshOwnerToken();
     const maxBytes = Number(env.MAX_PHOTO_BYTES);
     const tooBig = fakeJpegBytes(maxBytes + 1);
-    const res = await uploadPhoto({ token, fullBytes: tooBig });
+    // Explicit small thumb: `uploadPhoto` otherwise mirrors `fullBytes` into
+    // both variants, which would also trip the (much tighter) thumb ceiling
+    // and leave it ambiguous which check produced the 413.
+    const res = await uploadPhoto({ token, fullBytes: tooBig, thumbBytes: fakeJpegBytes() });
     expect(res.status).toBe(413);
     const error = await readErr(res);
     expect(error.code).toBe("payload_too_large");
@@ -71,8 +84,83 @@ describe("PUT /api/photos", () => {
   it("accepts a photo exactly at MAX_PHOTO_BYTES", async () => {
     const token = freshOwnerToken();
     const maxBytes = Number(env.MAX_PHOTO_BYTES);
-    const res = await uploadPhoto({ token, fullBytes: fakeJpegBytes(maxBytes) });
+    // As above: the thumb is given its own realistic size, both so this test
+    // stays about the `full` ceiling and because it doubles as the proof that
+    // the new thumb ceiling was not accidentally applied to `full` too.
+    const res = await uploadPhoto({ token, fullBytes: fakeJpegBytes(maxBytes), thumbBytes: fakeJpegBytes() });
     expect(res.status).toBe(201);
+  });
+
+  // The thumb used to share `full`'s 5 MiB ceiling, so a caller could store a
+  // 5 MiB "thumbnail" that `/i/:id/thumb` served and `suggest/suggest.ts`
+  // base64'd into a vision prompt.
+  it("413s a thumb past MAX_THUMB_BYTES", async () => {
+    const token = freshOwnerToken();
+    const maxThumbBytes = Number(env.MAX_THUMB_BYTES);
+    const res = await uploadPhoto({ token, thumbBytes: fakeJpegBytes(maxThumbBytes + 1) });
+    expect(res.status).toBe(413);
+    expect((await readErr(res)).code).toBe("payload_too_large");
+  });
+
+  it("accepts a thumb exactly at MAX_THUMB_BYTES", async () => {
+    const token = freshOwnerToken();
+    const maxThumbBytes = Number(env.MAX_THUMB_BYTES);
+    const res = await uploadPhoto({ token, thumbBytes: fakeJpegBytes(maxThumbBytes) });
+    expect(res.status).toBe(201);
+  });
+
+  // The two ceilings have to be distinguishable, or a 413 sends the caller to
+  // check the wrong number.
+  it("says which variant blew its ceiling", async () => {
+    const token = freshOwnerToken();
+    const fullRes = await uploadPhoto({ token, fullBytes: fakeJpegBytes(Number(env.MAX_PHOTO_BYTES) + 1) });
+    const thumbRes = await uploadPhoto({ token, thumbBytes: fakeJpegBytes(Number(env.MAX_THUMB_BYTES) + 1) });
+    expect((await readErr(fullRes)).message).not.toBe((await readErr(thumbRes)).message);
+  });
+
+  // Guard validated by breaking it: reverting `storedWidth` to the declared
+  // `width` in routes/photos.ts makes this fail while the fail-open test below
+  // stays green — which is exactly the pair that has to hold.
+  it("prefers the dimensions sniffed from the bytes over the client's claim", async () => {
+    const token = freshOwnerToken();
+    const res = await uploadPhoto({ token, fullBytes: fakePngBytes(1200, 900), width: 1, height: 1 });
+    expect(res.status).toBe(201);
+
+    const data = await readOk<PublicPhoto>(res);
+    expect(data.width).toBe(1200);
+    expect(data.height).toBe(900);
+
+    const row = await env.DB.prepare("SELECT width, height FROM photos WHERE id = ?")
+      .bind(data.id)
+      .first<{ width: number; height: number }>();
+    expect(row).toEqual({ width: 1200, height: 900 });
+  });
+
+  // The other half of the pair. `fakeJpegBytes` has no frame header, so the
+  // sniff returns null — and this whole suite depends on that falling back to
+  // the declared values rather than refusing. Asserted explicitly rather than
+  // left as an accident of the other tests passing.
+  it("falls back to the declared dimensions when the header can't be read", async () => {
+    const token = freshOwnerToken();
+    const res = await uploadPhoto({ token, width: 800, height: 600 });
+    expect(res.status).toBe(201);
+    const data = await readOk<PublicPhoto>(res);
+    expect(data.width).toBe(800);
+    expect(data.height).toBe(600);
+  });
+
+  it("refuses a degenerate strip whose shape it could actually read", async () => {
+    const token = freshOwnerToken();
+    const res = await uploadPhoto({ token, fullBytes: fakeJpegWithSof(16000, 8), width: 16000, height: 8 });
+    expect(res.status).toBe(400);
+    expect((await readErr(res)).code).toBe("bad_request");
+  });
+
+  it("accepts an ordinary photo whose shape it can read", async () => {
+    const token = freshOwnerToken();
+    const res = await uploadPhoto({ token, fullBytes: fakeJpegWithSof(4032, 3024) });
+    expect(res.status).toBe(201);
+    expect((await readOk<PublicPhoto>(res)).width).toBe(4032);
   });
 });
 
@@ -132,5 +220,55 @@ describe("GET /i/:id/:variant", () => {
   it("404s for an unknown photo id", async () => {
     const res = await SELF.fetch("http://x/i/nonexistent/thumb");
     expect(res.status).toBe(404);
+  });
+});
+
+/**
+ * #181 — `apps/web/src/lib/images/uploadIdempotencyKey.ts` stated as
+ * present-tense fact that "retrying the exact same upload reuses the same
+ * key and the API's `X-Idempotency-Key` handling can no-op a duplicate
+ * rather than creating a second photo row". Both halves were false: the
+ * client never sent the header, and this route mounts no `idempotency()`,
+ * so nothing would have read it if it had. The module and its five green
+ * unit tests are deleted; this asserts what the product actually does
+ * instead of leaving it assumed.
+ *
+ * A live guard, not a monument: mount `idempotency()` on `PUT /api/photos`
+ * and this goes red, which is the moment to decide what an upload's key
+ * should be. Do not reuse the deleted module's `name:size:lastModified` —
+ * it cannot tell a retried upload apart from a giver deliberately adding
+ * the same photo twice, and replaying the first response for the second
+ * pick hands two draft tiles the same `photo.id`.
+ */
+describe("PUT /api/photos is not idempotent (#181)", () => {
+  it("creates two photo rows for two identical uploads carrying the same X-Idempotency-Key", async () => {
+    const token = freshOwnerToken();
+    const key = "same-key-both-times";
+
+    async function uploadWithKey(): Promise<PublicPhoto> {
+      const form = new FormData();
+      const bytes = fakeJpegBytes();
+      form.set("full", fakeFile(bytes, "full.jpg", "image/jpeg"));
+      form.set("thumb", fakeFile(bytes, "thumb.jpg", "image/jpeg"));
+      form.set("width", "800");
+      form.set("height", "600");
+      form.set("blurhash", "LEHV6nWB2yk8pyo0adR*.7kCMdnj");
+      const res = await SELF.fetch("http://x/api/photos", {
+        method: "PUT",
+        headers: { ...authHeaders(token), "X-Idempotency-Key": key },
+        body: form,
+      });
+      expect(res.status).toBe(201);
+      return readOk<PublicPhoto>(res);
+    }
+
+    const first = await uploadWithKey();
+    const second = await uploadWithKey();
+
+    expect(second.id).not.toBe(first.id);
+    const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM photos WHERE id IN (?, ?)")
+      .bind(first.id, second.id)
+      .first<{ n: number }>();
+    expect(row?.n).toBe(2);
   });
 });

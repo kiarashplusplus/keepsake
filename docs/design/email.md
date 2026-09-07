@@ -37,7 +37,7 @@ Routing's, and authenticates nothing we send. Don't "fix" a sending problem by e
 ### Inbound (2026-09-07)
 
 Until this date the apex had **no MX at all**, so every reply to `hello@keepsake.ing` bounced. That
-was a real gap rather than a cosmetic one: `hello@keepsake.ing` is the `From` on all six templates,
+was a real gap rather than a cosmetic one: `hello@keepsake.ing` is the `From` on all seven templates,
 and `chosen` is the only one that sets reply-to elsewhere (the giver). A requester hitting reply on
 any *other* message — including the request confirmation that asks them to wait to hear back — got
 a bounce from the domain that had just written to them.
@@ -90,12 +90,33 @@ works out.
 
 | Trigger | To | Notes |
 |---|---|---|
-| `POST /api/listings/:id/requests` | giver (if verified) | new request on their listing |
-| `POST /api/listings/:id/requests` | requester, always | "we passed your note along" confirmation + a signed, single-use link to `POST /api/requests/withdraw` — the requester's only no-account way back in; see `docs/design/identity.md`'s "Request withdrawal" section |
+| `POST /api/listings/:id/requests` | requester, always | **the only message that can be aimed at an address nobody has proved they own** (#188): one "did you ask for this?" link, carrying the listing title and nothing the submitter wrote. Capped per *recipient* address per day (`REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET`), not per caller — see identity.md's "Request confirmation" |
+| `POST /api/requests/confirm` | giver (if verified) | new request on their listing. Moved here from the create route by #188: until the requester redeems their link, the giver is told nothing |
+| `POST /api/requests/confirm` | requester | "we passed your note along" confirmation + a signed, single-use link to `POST /api/requests/withdraw` — the requester's only no-account way back in; see `docs/design/identity.md`'s "Request withdrawal" section. Sent here rather than at submit time so the sentence is true when it is sent |
 | `POST /api/me/listings/:id/choose` | requester | handoff note, reply-to set to the giver's email — this is the one place both parties' emails become mutually visible |
 | `POST/POST verify` on `/api/me/email` | giver | verification link |
 | `POST /api/recover` | the address given | recovery link, always sent as if the address matched (see identity.md) |
 | `POST /api/admin/test-email` | whatever address the admin gives | on-demand delivery proof — a real send through the real path, reported back honestly (sent/blocked and why); see `docs/runbooks/admin.md` |
+
+## Mail aimed at people who never asked for it
+
+One send point is different in kind from every other on that table: the `confirm_request` message
+goes to an address supplied by a stranger, which may belong to someone who has never heard of
+Keepsake. Three rules follow, and they are load-bearing rather than stylistic — see
+`src/email/templates/confirmRequest.ts`, which restates them where they can be broken:
+
+1. **It never echoes the submitter's text.** Only the listing title is interpolated, and that is
+   public, already-moderated content. Reflecting the note would make the safety mechanism a
+   delivery channel for anonymous messages into a stranger's inbox.
+2. **Doing nothing is a complete answer**, and the copy says so. Someone who didn't send it has
+   no account to secure and nothing to click; the held row is deleted on its own.
+3. **It is capped per recipient**, because confirm-then-forward alone does not stop a flood — it
+   only changes what the flood is made of. M3AAWG's web-form signup recommendation
+   (`draft-levine-mailbomb-header`, which proposes a `Form-Sub` header so providers can throttle
+   exactly this traffic) is the industry statement of the same problem. Keepsake does not emit
+   that header today — `sendMail()` exposes no per-message header hook, and neither the Cloudflare
+   `EMAIL.send` shape nor the Resend call it builds carries one — which is worth knowing as an
+   unclaimed improvement rather than a gap being papered over.
 
 ## Contact reveal rule
 
@@ -104,6 +125,14 @@ their own listing's requests (`GET /api/me/listings/:id`). Choosing a request is
 that flips both directions open: the response to `choose` reveals the requester's contact, and
 the requester's notification email carries the giver's (via reply-to). No other code path
 reveals either party's contact info.
+
+**And it can only fire once per listing** (#185, 2026-09-07). `POST /api/me/listings/:id/choose`
+used to be three separate unbatched D1 writes whose only concurrency check was a request status
+read several awaits earlier, so an interrupted or concurrent choose could leave two requests
+`chosen` and mail two strangers the giver's address for one object. The three writes are one
+`env.DB.batch()` now — the Worker's first — opening with a conditional claim on the listing
+(`... WHERE id = ? AND chosen_request_id IS NULL`) that the other two are gated on. `meta.changes`
+on that claim is checked **before** `sendMail`, so a lost race answers 409 and sends nothing.
 
 ## Templates
 
@@ -119,8 +148,10 @@ no markup in a header to escape. That left the listing title interpolated raw in
 
 Both layers earn their place: the schema is the front door, but a title reaches a subject from a
 D1 row rather than from freshly validated input, so a row written before that check still flows
-through the runtime path. If you add a template, run its subject through `sanitizeSubject` —
-`recover.ts` and `verifyEmail.ts` are exempt only because their subjects are static.
+through the runtime path. If you add a template, run its subject through `sanitizeSubject`. **There are no exemptions**:
+`recover.ts:33` and `verifyEmail.ts:15` wrap their static subjects too, `templates/shared.ts`
+states the rule as enforced rather than advisory, and `test/emailSubjects.test.ts` enumerates the
+directory and fails any `subject:` site that is unwrapped or missing the import.
 
 ## M3 status (API side)
 
@@ -134,8 +165,27 @@ or the send itself throwing all fall through to a `[email:stub]` log and `{ sent
 in `email_events` (migration `0004_email_events.sql`), keyed by `sha256(lowercased address)`
 (`to_hash`) — never the raw address.
 
-Six templates in `src/email/templates/*.ts` (`verifyEmail`, `newRequest`, `requestReceived`,
-`chosen`, `recover`, `adminTest`), sharing `templates/shared.ts`'s table-based HTML shell styled
+That last clause was true of the *key* and false of the row. `error_detail`
+(`20260907083648_email_event_diagnostics.sql`) held the provider's rejection sentence verbatim,
+and SMTP and Email-Routing rejections quote the destination address — so the column that exists so
+we never store who was mailed sat beside a column that stored who was mailed, for the 90 days of
+`orphanSweep`'s retention, surviving both the requester's withdraw link and `DELETE
+/api/me/email`. The one copy that outlived a deletion request was the one nobody knew was there
+(#190). A test enforced it, two lines above the assertion defending `to_hash`.
+
+`sendMail.ts`'s `scrubProviderDetail(text, to)` now runs at the point the provider string is
+captured — not on the way into D1 — so it covers all three diagnostic surfaces at once: the
+`email_events` row, `POST /api/admin/test-email`, and the `console.error` line. That placement is
+the point: the log line is a *direct* console call and never reaches
+`@keepsake/observability/redact`. The recipient becomes `<recipient>`, then `redactString` runs as
+a backstop for a *different* address the provider quotes. The sentence survives whole —
+`"destination address not verified: <recipient> is not a verified destination address for this
+Email Routing zone"` — because that is the half that would answer #6; only the identifier goes.
+It is called *before* `truncateDetail`, so the 1000-char cut can never leave half an address
+behind. Keep that order.
+
+Seven templates in `src/email/templates/*.ts` (`verifyEmail`, `newRequest`, `requestReceived`,
+`chosen`, `recover`, `adminTest`, `dailyDigest`), sharing `templates/shared.ts`'s table-based HTML shell styled
 with `@keepsake/tokens/colors`'
 *light* palette only (email clients don't reliably honor `prefers-color-scheme`). Each ends with
 the one-line footer "Keepsake · keepsake.ing · you're getting this because …", the reason varying
@@ -150,8 +200,9 @@ conditional, the requester-side confirmation is not), `POST /api/me/listings/:id
 `chosen`, reply-to the giver when verified), `POST /api/me/email` + `POST /api/listings` with an
 `email` field (→ `verifyEmail`, the same path — M1's stub link now actually resolves via
 `GET /api/me/email/verify`), `POST /api/recover` (→ `recover`, only for a verified match, but
-always 200 either way), `POST /api/requests/withdraw` (consumes the `requestReceived` link's token;
-sends nothing itself — it's the destination, not another trigger), `POST /api/admin/test-email`
+always 200 either way; the link it mails is exchanged at `POST /api/recover/exchange` with the
+token in the body, sending nothing itself), `POST /api/requests/withdraw` (consumes the
+`requestReceived` link's token; sends nothing itself — it's the destination, not another trigger), `POST /api/admin/test-email`
 (→ `adminTest`, to whatever address the admin gives).
 
 Tests: `apps/api/test/requests.test.ts` (notified + `email_events` row when verified, requester

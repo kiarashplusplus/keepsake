@@ -20,6 +20,18 @@
 //     the backup bucket, so a photo copied here survives a bad `BUCKET.delete()`
 //     on the primary bucket, even after the corresponding D1 row is also
 //     gone — restore is "copy it back", not "hope D1 still points at it".
+//   - As of #178 that protection no longer depends on this job winning a race
+//     against orphanSweep. It used to: this workflow is scheduled before the
+//     sweep's cron, GitHub's `schedule:` queue is best-effort, and the one
+//     scheduled run this workflow has ever had started *after* the sweep's
+//     trigger — in which case the sweep deletes the row first, the `SELECT`
+//     below no longer sees it, nothing is copied, and the run passes. The
+//     sweep now reads the backup bucket (`PHOTO_BACKUP_BUCKET`) and refuses
+//     to delete a photo it has not copied, so a late run of this script
+//     delays a deletion instead of losing the bytes. **What that makes this
+//     script responsible for: actually running.** A backup that stops
+//     entirely no longer loses photos, but it does stop orphan cleanup — the
+//     sweep logs `photosDeferred` every night that happens.
 //   - It does NOT fix the weakness restore.md already names for the D1
 //     export path: "a backup living in the same account it insures against
 //     is weak protection." Both buckets sit in the one Cloudflare account.

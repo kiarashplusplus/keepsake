@@ -14,6 +14,13 @@ optional verified email), AI moderation + human queue + report button, serves US
 operated by one individual in Texas (not a company), zero revenue, a handful of users, Google Ads
 and a consent banner being added now.
 
+> **One of those assumed product facts did not survive.** The consent banner shipped; **Google Ads
+> did not, and as of 2026-09-07 will not** — Kiarash decided against it and the plumbing has been
+> removed (issue #175). The research below is left exactly as written, because it is a record of
+> what was found and when, but every "adding Google Ads" / "ads pilot starting" phrase in it is a
+> 2026-09-06 assumption that is now false. The Rhode Island bullet in the status update below
+> carries the current position; where the two disagree, that bullet wins.
+
 ---
 
 **Status update (2026-09-06), left in place rather than edited into the research above so this
@@ -71,8 +78,11 @@ stays an honest record of what was found and when:**
 - **Privacy page retention/rights/Rhode Island (issue #60): done.** The page now names access and
   portability alongside deletion, states retention in concrete numbers pulled from the actual crons
   (30-day terminal-photo grace period and 24-hour orphan-upload cleanup from
-  `apps/api/src/cron/orphanSweep.ts`; 90-day moderation/email-event retention; 48-hour rate-limit
-  hash TTL from `apps/api/src/moderation/budget.ts`), and says plainly that an owner's email is kept
+  `apps/api/src/cron/orphanSweep.ts`; 90-day moderation/email-event retention; 48-hour IP-hash
+  expiry, enforced in `apps/api/src/moderation/budget.ts` for the KV counters and, since #169, in
+  `orphanSweep`'s `IP_DIGEST_RETENTION_MS` pass for the `requests.ip_digest` / `reports.ip_digest`
+  copies that previously had no expiry at all — `apps/web/test/guards/privacyPolicy.test.ts` locks
+  the number against all three mechanisms), and says plainly that an owner's email is kept
   indefinitely once set (inactivity alone doesn't delete it — `sweepEmptyOwners` requires
   `email IS NULL`) rather than leaving that undocumented. It also carries a designated
   "Categories of information we collect" section satisfying Rhode Island's RIDTPPA §6-48.1-3(a)
@@ -109,15 +119,46 @@ stays an honest record of what was found and when:**
     specifically — but it's the strongest fact pattern available regardless of how that
     targeting-language question resolves, and it overlaps with #61's takedown-rule work (referenced
     here, not duplicated — #61 owns `docs/runbooks/**`/admin-UI territory).
-  - **Rhode Island** (§6-48.1-3(a)): the live site now runs a consent-gated Google Ads tag
-    (`privacy.html`'s "Advertising" consent group, `www.googletagmanager.com`, off until the
-    visitor opts in) — ad infrastructure that didn't exist when the original research called this
-    "genuinely unsettled." Revenue is still zero, and whether ad-tag presence without confirmed ad
-    spend crosses RIDTPPA's undefined "commercial website" line is exactly the open question, not
-    something this pass can settle. What *is* settled: if RI is ever found to apply, the
-    §6-48.1-3(a) content disclosure itself is very likely already compliant — the "Categories of
-    information we collect" section (#60) covers it — so the only live lawyer question is the
-    applicability gate, not what to disclose once it applies.
+  - **Rhode Island** (§6-48.1-3(a)): **corrected 2026-09-07 (issue #175). This paragraph used to
+    assert that "the live site now runs a consent-gated Google Ads tag" and built the
+    applicability argument on it. That was not true, and had never been true.** The consent
+    plumbing was real — `privacy.html`'s "Advertising" consent group, `www.googletagmanager.com`
+    held off until the visitor opts in, `adsEvents.ts`'s conversion tracking — but the tag id it
+    needed (`EXPO_PUBLIC_GOOGLE_ADS_ID`, plus two conversion labels) was passed by no deploy.
+    `deploy.yml`'s "Export web" step set four `EXPO_PUBLIC_*` variables while `.env.example`
+    declared seven, so all three ads ids inlined as `""` in every preview and production bundle,
+    the static pages shipped a literal `%EXPO_PUBLIC_GOOGLE_ADS_ID%` placeholder, and
+    `adsEvents.ts` returned early on every call. **No Google Ads tag has ever loaded on either
+    tier.** Verified against a real export, not by reading the code: a bundle built with exactly
+    `deploy.yml`'s four variables contained `googleAdsId:""`.
+
+    **Resolved the same day, and this is now settled rather than latent: Kiarash decided against
+    running Google Ads for now, so the plumbing was removed rather than wired up.** The three
+    `EXPO_PUBLIC_GOOGLE_ADS_*` variables are gone from `.env.example` and `deploy.yml`, their
+    readers are gone from `apps/web/src/lib/config.ts`, and `adsEvents.ts` — which could never
+    have fired — is deleted. `/consent.js` keeps its "Advertising" category and its loader,
+    unfed: the `ks-google-ads-id` meta is now emitted deliberately empty on every page, which is
+    that loader's own kill switch, so it returns before touching the network. Nothing is
+    scheduled, planned or in flight to turn it on.
+
+    So the Rhode Island question rests on the same fact pattern the original research had, only
+    more plainly: a free, no-money, **no-ads** site. Revenue is zero and there is no ad
+    infrastructure in the shipped product — only a consent framework with an advertising slot
+    nothing fills. Whether that crosses RIDTPPA's undefined "commercial website" line is still
+    the open question and still not something this pass can settle, but it is a weaker case for
+    "commercial" than the version this paragraph previously described, not a stronger one. What
+    *is* settled: if RI is ever found to apply, the §6-48.1-3(a) content disclosure itself is
+    very likely already compliant — the "Categories of information we collect" section (#60)
+    covers it — so the only live lawyer question is the applicability gate, not what to disclose
+    once it applies.
+
+    **If ads are ever revisited**, this paragraph has to be rewritten *before* the tag ships, not
+    after: at that point one really would load, and every "no ads" statement above and in
+    `privacy.html` becomes false. Turning it on means restoring the variables, the `config.ts`
+    readers, the `deploy.yml` env keys and the GitHub Environment values together — the guard in
+    `verify-public-env.mjs` now fails a deployed export if those halves disagree, which is what
+    stops this recurring, but it cannot tell anyone to re-read this file. That is what this
+    sentence is for.
   - Both are captured concretely (not just named) in #34 Q3, referencing the facts above rather
     than the original research's more abstract framing. #31 was left open, advisory, labeled
     `blocked-on-kiarash` when this was written — **it has since been closed (2026-09-07), and, like
@@ -266,6 +307,8 @@ small:
   Island," no threshold. Whether a zero-revenue hobby site with an ads pilot starting is
   "commercial" is **genuinely unsettled** — I found no case or guidance resolving it, and adding
   Google Ads this week tips the fact pattern toward "commercial" in a way it wasn't before.
+  <br>*(2026-09-07: the ads pilot never happened and has been cancelled — see the Rhode Island
+  bullet in the status update above. The "tips the fact pattern" reasoning here never applied.)*
 
 **Independent of thresholds:** falling below a state's volume threshold does not immunize a false
 statement about honoring an opt-out signal. California's Healthline enforcement ran under the

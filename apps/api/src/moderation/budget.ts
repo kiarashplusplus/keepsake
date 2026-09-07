@@ -55,7 +55,7 @@
  * anything.
  */
 
-import { dailyIpDigest } from "../lib/digest.js";
+import { dailyIpDigest, dailyEmailDigest } from "../lib/digest.js";
 import { todayISO } from "../lib/day.js";
 
 const TTL_SECONDS = 172_800; // 48 hours
@@ -94,7 +94,8 @@ export type BudgetKind =
   | "upload"
   | "report"
   | "email"
-  | "embed";
+  | "embed"
+  | "request_confirm";
 
 export interface CheckAndBumpOptions {
   kind: BudgetKind;
@@ -285,5 +286,55 @@ export async function checkAndBump(
     await bumpCountBy(kv, ipKey, cost);
   }
 
+  return { allowed: true };
+}
+
+/**
+ * The KV key holding today's count of messages aimed at one *recipient
+ * address* for one kind. Same layout and same 48-hour TTL as the per-IP keys
+ * above, under its own `addr:` segment so the two can never collide.
+ *
+ * Exported for the same reason `todayIPKey` is: a test that rebuilds the key
+ * layout by hand is a test that can agree with itself while disagreeing with
+ * the Worker.
+ */
+export async function todayRecipientKey(kind: BudgetKind, address: string): Promise<string> {
+  const digest = (await dailyEmailDigest(address)).slice(0, 32);
+  return `budget:addr:${kind}:${digest}:${todayISO()}`;
+}
+
+/**
+ * Issue #188: how many messages this Worker will aim at one address today,
+ * counted per address rather than per sender.
+ *
+ * Every other ceiling here answers "how much may this caller do?" and is keyed
+ * by the caller's IP. That question cannot bound a mail flood aimed at someone
+ * else: the attacker is not the person being harmed, and `clientIPFrom`'s own
+ * doc comment concedes that an attacker can always find more addresses. This
+ * one answers the question that matters to the victim instead — "how much mail
+ * can arrive here today, from anyone?" — which is the only shape of limit that
+ * an attacker cannot widen by moving.
+ *
+ * Deliberately *not* folded into `checkAndBump`: that function's contract is
+ * "check the global pool, then the caller's slice of it", and a recipient is
+ * neither. Fitting it in would have meant a third optional key with different
+ * semantics from the two already there, which is how a limiter ends up
+ * counting something other than what its call sites think.
+ *
+ * Read-then-write, non-atomic, for the same reason and with the same
+ * consequence as the counters above: concurrent sends can undercount by a
+ * handful. That is acceptable here — a burst of five where the ceiling says
+ * three is not the attack this stops, which is hundreds.
+ */
+export async function checkAndBumpRecipient(
+  kv: KVNamespace,
+  options: { kind: BudgetKind; address: string; dailyLimit: number },
+): Promise<CheckAndBumpResult> {
+  const key = await todayRecipientKey(options.kind, options.address);
+  const count = await readCount(kv, key);
+  if (count + 1 > options.dailyLimit) {
+    return { allowed: false, retryAfter: secondsUntilMidnightUTC() };
+  }
+  await bumpCountBy(kv, key, 1);
   return { allowed: true };
 }

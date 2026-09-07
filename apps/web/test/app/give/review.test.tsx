@@ -66,6 +66,8 @@ function seedDraft(): void {
           blurhash: "LKO2?U%2Tw=w]~RBVZRi};RPxuwH",
           status: "done",
           error: null,
+          errorCode: null,
+          canRetry: false,
         },
       ],
     }),

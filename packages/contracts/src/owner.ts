@@ -30,6 +30,28 @@ export const RecoverInput = z.object({
 });
 export type RecoverInput = z.infer<typeof RecoverInput>;
 
+/**
+ * Body of `POST /api/recover/exchange`.
+ *
+ * Issue #182: the recovery token used to ride in the URL as
+ * `POST /api/recover/<token>`, where `apps/api/src/index.ts`'s `onError`
+ * wrote it verbatim into a log field on any thrown request — while the token
+ * was still live and still worth full takeover of a giver's dashboard. It
+ * travels in the body now, the same shape `RequestWithdrawInput` already
+ * uses for a strictly lower-value token: one flow copying the other, rather
+ * than two shapes for the same kind of secret.
+ *
+ * Deliberately `z.string().min(1)` rather than a shape check on the token —
+ * identical to `RequestWithdrawInput`. A validator that could reject a
+ * malformed token would answer 400 where an unknown one answers 401, and
+ * that difference is itself an oracle; the route refuses every bad token
+ * the same way instead.
+ */
+export const RecoverExchangeInput = z.object({
+  token: z.string().trim().min(1),
+});
+export type RecoverExchangeInput = z.infer<typeof RecoverExchangeInput>;
+
 export const RecoverResult = z.object({
   ownerToken: OwnerTokenSchema,
 });

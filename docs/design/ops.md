@@ -79,7 +79,44 @@ opts?)` — plain functions that write one structured object to `console.error`/
 (objects, not `JSON.stringify`'d strings, so Workers Logs can index and filter on individual
 fields like `tags.cron`). Every message/tag/extra/error still runs through
 `@keepsake/observability/redact`'s `redactDeep`/`redactString` first — that redaction is the part
-of the original Sentry work worth keeping, and it survived the SDK's removal unchanged.
+of the original Sentry work worth keeping, and it outlived the SDK — minus the two Sentry-shaped wrappers,
+`redactEvent` and `redactBreadcrumb`, which went with it.
+
+**Redaction was credential-shaped only until 2026-09-07**, and that is worth keeping written down
+because of how convincingly it read as working. `SENSITIVE_KEY_RE` and `KEY_VALUE_NAMES` were
+lists of key and token names, and `redactDeep` matched on key name alone — so `Bearer` tokens and
+`?token=` were caught, and an email address or phone number, the only PII Keepsake holds, was
+matched nowhere. One sitting in a message string, a stack, or under an ordinary key like `to`
+reached Workers Logs verbatim, with `head_sampling_rate = 1` keeping every line. The tell was that
+the redactor's test file contained no email address at all, so no test could ever have failed on
+it (#170).
+
+It now redacts three more shapes, built from `packages/observability/src/patterns.ts` — the single
+definition of what an address looks like, which `apps/api/src/moderation/contactInfo.ts` reads
+too, so the moderation check and the redactor cannot drift apart:
+
+- **Email**, keeping the domain: `alice@gmail.com` → `[REDACTED]@gmail.com`. Same trade
+  `email_events.to_domain` makes — a domain names a mail provider, not a person — and it is what
+  separates "one address bounced" from "this provider refuses everything" (#6).
+- **Phone**, but *not* with moderation's pattern. `contactInfo`'s rule matches any 8+ digit run,
+  which is every `Date.now()` in every log line; the redaction rule requires a `+` country code or
+  real separators. The two definitions live side by side in `patterns.ts` with the reason for the
+  split. **Do not unify them** — the must-survive tests in `test/redact.test.ts` exist to catch
+  exactly that, and half of them assert what redaction must *leave alone* (a bare domain, a ULID,
+  epoch millis, `552 5.2.2`), because a redactor is trivially "correct" by erasing everything and
+  an unreadable log is its own outage.
+- **A secret in a URL path segment** — `/recover/<token>`, `/withdraw/<token>`. The `?key=` rule
+  only ever matched query parameters. Defence in depth alongside #182, which moves the recovery
+  token out of the path.
+
+`redactDeep` now also catches an address by value shape and as an object key, not only by key
+name. There is deliberately no second address pattern inside `redactDeep`: every string leaf
+already routes through `redactString`.
+
+One path this does **not** cover, by construction: a bare `console.error`/`console.log` never
+reaches `redactString`. `sendMail.ts` scrubs its own provider text for that reason (#190) — if you
+add a direct console call that can carry provider or user text, it is on you, not on this layer.
+
 `SENSITIVE_KEY_RE` covers `cf-turnstile-response` and `idempotency[-_]?key` alongside the
 originals. `POST /api/admin/test-error` (`src/routes/admin.ts`, `adminAuth()`-guarded) exists
 purely to prove an event actually lands against a real deployment — a unit test asserting
@@ -90,8 +127,11 @@ outright), and one fewer subprocessor that ever sees error data — it stays ins
 platform already hosting the app.
 
 **What's lost, honestly:** the Free plan's Workers Logs retains events for **3 days**, versus
-Sentry's much longer history. There is **no alerting or push notification** — nobody's phone buzzes
-when an error lands, the same "no notification that would wake him" gap launch-audit finding 4
+Sentry's much longer history. There is **no push notification** — nobody's phone buzzes
+when an error lands. (Not quite "no alerting": the daily digest emailed to `ADMIN_DIGEST_TO` at
+00:07 UTC carries a `needs_attention` list covering stale crons and budget exhaustion, and
+`cron/dailyDigest.ts` calls itself an alerting channel. It is a once-a-day pull, not a page.)
+This is the same "no notification that would wake him" gap launch-audit finding 4
 originally described, just without a DSN to blame anymore. There is **no issue grouping or release
 tracking** — every event is a flat log line, not a deduplicated, trending issue. A **Tail Worker or
 Logpush** could push events somewhere alerting *is* possible; that is a real follow-up, not
@@ -104,16 +144,37 @@ implied.
 ## Health checks
 
 `/health` performs a real operation per binding, not a presence check: `SELECT 1` on D1, a
-`head()` on R2, a `get()` on KV. A `null` result from either of the last two still grades `ok` —
-an absent key proves the service answered, and only a thrown error is a failure. `AI` stays
-presence-only on purpose: a real inference on every health poll would draw down the same daily
-moderation budget #18 flags as exhaustible. `EMAIL` stays presence-only and grades `degraded`
-rather than failing the whole check.
+`head()` on R2, a `get()` on KV, and — since #191 — a real `fetch()` of the SPA shell through
+`ASSETS`. A `null` result from the R2/KV probes still grades `ok` — an absent key proves the
+service answered, and only a thrown error is a failure; the assets probe grades on the response
+status, because `deploy.yml`'s only post-deploy verification is that `/health` reports the right
+commit, and `/health` is answered by Worker code rather than by the assets binding. A deploy over
+a broken or partial `dist/` used to verify green while the site served nothing usable.
+
+`vectorize` is a fourth field with **three** states rather than two, for the same reason the
+Observatory's Cloudflare panels have three: `ok` (binding present), `error` (`SEMANTIC_SEARCH` is
+on and the binding is absent — search has silently reverted to FTS while the var and the privacy
+page both still say it is running; this fails `ok`), and `off` (the kill switch is off and there
+is no binding, a supported configuration and not a fault). It is presence rather than a query
+because a real Vectorize read costs an embedding call.
+
+`AI` stays presence-only on purpose: a real inference on every health poll would draw down the
+same daily moderation budget #18 flags as exhaustible. `EMAIL` stays presence-only and grades
+`degraded` rather than failing the whole check — a real read there is a delivered message, and
+`POST /api/admin/test-email` is the on-demand version. Both reasons are written down beside
+`assertBindings` in `src/env.ts` so the next audit does not re-file them.
 
 `GET /api/admin/health` is the separate, authenticated signal: it grades each cron's
-`cron:last:<name>` heartbeat against `CRON_STALE_AFTER_MS` (30 min for `moderationRetry`, 26 h
-for `orphanSweep`), counts a never-run cron as stale, and folds that into `ok`. The admin stats
-strip renders it, so a stopped cron is visible on the page rather than only in logs.
+`cron:last:<name>` heartbeat against the `staleAfterMs` recorded per job in
+`src/cron/registry.ts` (30 min for `moderationRetry`, 26 h for `orphanSweep` **and
+`dailyDigest`** — three registered crons, not two), counts a never-run cron as stale, and folds
+that into `ok` along with `report_pressure.autohidden_awaiting_review`. `CRON_STALE_AFTER_MS` no
+longer exists on the API side; the only identifier by that name left is the web mirror in
+`StatsStrip.tsx`. Every heartbeat is written in one place — `runCron` in `index.ts`, after the
+job's promise resolves and never when it throws — so a cron cannot be registered without one
+(#165, where `dailyDigest` wrote none and pinned this signal to `ok: false` on every deployed
+tier). The admin stats strip renders it, so a stopped cron is visible on the page rather than only
+in logs.
 
 ## Security headers
 
@@ -123,9 +184,28 @@ by the Cloudflare assets binding, so it covers the SPA shell and static files;
 rewritten HTML and every `/api/*` JSON response. The CSP string is duplicated verbatim between
 them rather than shared: they are consumed by unrelated runtimes with no common module, and
 `/item/:id` serves the real exported shell, so a stricter policy on the Worker side would break
-theming on that one route. `script-src` is hash-based rather than `'unsafe-inline'`. If the
-pre-hydration theme script's text ever changes, its hash goes stale silently — nothing in the
-suite currently protects that pair.
+theming on that one route. `script-src` is hash-based rather than `'unsafe-inline'`.
+
+**That pair is now enforced** (issue #194). This paragraph used to end "if the pre-hydration theme
+script's text ever changes, its hash goes stale silently — nothing in the suite currently protects
+that pair", and that prose was the entire enforcement: three `sha256-` values written by hand into
+two files, with nothing computing any of them. Preflight's `csp-script-hash` check now hashes
+`apps/web/app/+html.tsx`'s `PREHYDRATION_SCRIPT` and the no-flash script inline in
+`apps/site/public/*.html`, asserts both values appear in **both** policies, and fails on a hash
+either policy declares that matches no script in the tree — so a stale value left behind after an
+edit is caught as well as a missing one. It also fails if the two policies stop being identical,
+and if the three static pages' inline scripts stop being identical to each other.
+
+The hash covers the **exact bytes** of the script, so a whitespace change or a prettier reflow is
+enough to break it, and nothing else would notice: no test loads the page under the real policy,
+so the symptom is the theme flash the script exists to prevent plus a console error, in production
+only. That is why the check exists rather than a test.
+
+One hash it cannot compute: Expo Router's injected `globalThis.__EXPO_ROUTER_HYDRATE__=true;` is
+not in this tree. The check verifies the declared value against the literal `_headers` records for
+it, which is agreement between two things we wrote — **not** evidence that Expo still emits that
+exact text. Only a real `dist/` shows that. The check says so in its passing output rather than
+letting it blend in with the two it does verify.
 
 ## Version skew
 
@@ -200,7 +280,8 @@ Four things in this document's territory changed after the launch audit
   minutes forever.
 - **`GET /api/admin/health` reads its own heartbeats.** `cron:last:<name>` was written correctly
   and returned correctly, and then ignored: `ok` came from `postal_codes_count > 0` alone. It is
-  now false when either heartbeat is stale (30 min for `moderationRetry`, 26 h for `orphanSweep`).
+  now false when any of the three heartbeats is stale (30 min for `moderationRetry`, 26 h for
+  `orphanSweep` and `dailyDigest`).
 - **There is an uptime check.** `.github/workflows/uptime.yml` — every 15 minutes, `/health` on
   preview and (once `PRODUCTION_LIVE` is set) production, with a JSON assertion on `ok`, an error
   annotation, and a deduplicated issue on failure. Before this, `.github/workflows/` held two

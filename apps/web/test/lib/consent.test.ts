@@ -265,6 +265,25 @@ describe("the gate", () => {
     expect(thirdPartyScripts()).toEqual([]);
   });
 
+  it("loads no ads tag for the empty ks-google-ads-id every page now ships (#175)", () => {
+    // The shipped state after Kiarash's "no Google Ads for now" decision: the
+    // meta exists on every page (consent.js registers an advertising provider
+    // and `test/guards/privacyPolicy.test.ts` requires every provider to be
+    // wired on every page) with a hardcoded empty content. This asserts that
+    // exact shape is inert even for a visitor who grants advertising —
+    // "removed the variable" and "the tag cannot load" are different claims,
+    // and this is the one that matters.
+    document.head.innerHTML = "";
+    setMeta("ks-google-ads-id", "");
+    setMeta("ks-cf-beacon-token", "beacon-token-abc");
+    loadPage().write({ analytics: true, advertising: true });
+    const sources = thirdPartyScripts();
+    expect(sources.some((s) => s.includes("www.googletagmanager.com"))).toBe(false);
+    // …and the analytics half, which IS in use, still loads. Removing ads
+    // must not quietly take the consented tool down with it.
+    expect(sources.some((s) => s.includes("static.cloudflareinsights.com"))).toBe(true);
+  });
+
   it("denies Google Consent Mode on withdrawal", () => {
     const store = loadPage();
     store.write({ analytics: true, advertising: true });

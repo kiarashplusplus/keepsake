@@ -103,10 +103,14 @@ reach the apex.** Run them in this order:
   ages badly next to a flag; that is row six of `AGENTS.md`'s table wearing a different hat, and
   it is now the third time it has been written down on this feature.
 
-**Open issues — re-read against GitHub on 2026-09-07, because the two lists that used to sit here
-had gone stale in the direction that flatters the project.** Four of the six "blocked on a human"
-issues (#6, #31, #94) and one of the two "workable by anyone" (#103) had been closed; four open
-issues nothing in `docs/` mentioned at all were missing.
+**Open issues — re-read against GitHub on 2026-09-07 evening. There are 46 open.** These lists
+have now gone stale in the direction that flatters the project twice in one day. The morning
+re-read found four "blocked on a human" issues (#6, #31, #94) and one "workable by anyone" (#103)
+already closed, and four open issues nothing in `docs/` mentioned. This re-read found worse:
+**30 open issues nothing in `docs/` mentioned at all** — the adversarial audit wave #161–#191,
+filed after the last docs commit — and **#158 sitting in the list below as an open blocker when
+it had been deleted outright** (`GET /issues/158` → `410 This issue was deleted`). Treat GitHub,
+not this file, as the count; what this file is for is which of them matter and why.
 
 *Blocked on a human:*
 - **#6** — **reopened 2026-09-07 evening** (it is back in this list, having been closed out of it
@@ -126,10 +130,85 @@ issues nothing in `docs/` mentioned at all were missing.
   they actually happen.
 - **#156** — revoke `keepsake-pr-preview` or build the job it was minted for. #73 was reversed and
   the create-and-delete token it produced is still live and used by nothing.
-- **#158** — check whether anything was indexed while preview was crawlable (replaces the deleted
-  #85).
 
-*Workable by anyone:*
+*The 2026-09-07 adversarial audit — #161–#191.* Filed against the data, moderation, auth, ops
+and CI layers hours after this file's previous sweep. Roughly half have since been fixed and the
+rest are being worked in parallel, so the counts this paragraph used to carry went stale within
+hours and are gone: **read the labels on GitHub before starting any of these**, and per "Picking
+up work" in `AGENTS.md` that label is the lock. The lists below mark what is fixed and by what;
+five — **#162, #168, #171, #184, #189** — are fixed on the branch behind PR #197 and close on
+merge, so until then they are open issues whose work is written and whose behaviour these docs
+already describe in the fixed tense.
+
+- **Launch blockers:** all three closed. **#161** (#205): the pipeline moderated only the
+  client-uploaded thumbnail while `/i/:id/full` published the never-inspected full-resolution
+  file, so a caller could pass on one image and publish another — every stored variant is now
+  moderated, see moderation.md step 4. **#162** (PR #197): `withdraw`+`relist` undid an admin
+  rejection, a hide, a ban sweep or a three-report auto-hide; `relist` now reads the newest
+  status-setting event of *any* kind and sends a takedown to `needs_review` rather than back to
+  `approved`. **#165** (#209): `dailyDigest` never wrote its heartbeat, so `/api/admin/health`
+  was permanently `ok: false` and the crons alarm was stuck on — `runCron` now writes the
+  heartbeat for every registered job on success and for none that throws, so a new cron cannot be
+  added without one.
+- **Personal data and email:** #188 is the one left — a request's email address is never
+  verified, so anyone can enrol a third party as a requester. **#167, #170, #182 and #190 are
+  fixed** (2026-09-07): a `verify_email` token is bound to the address it was mailed to rather
+  than to the owner row, the recovery token travels in a POST body instead of a URL path segment
+  (both in `docs/design/identity.md`), and the redactor has rules for path segments and for the
+  PII Keepsake actually holds, with the recipient scrubbed out of `email_events.error_detail`.
+  **#169 is fixed** (#209): `orphanSweep` nulls both `ip_digest` columns at 48 hours, withdrawal
+  nulls its own immediately, and the number is locked against the page and all three mechanisms
+  in `privacyPolicy.test.ts`. **#189's server half is fixed in PR #197**: the request endpoint was
+  an oracle for the giver's address and for who else had asked — both the self-request `400` and
+  the duplicate `409` now return the same `201` the success path returns, having written and sent
+  nothing. Its client half — the helpful "that's your own keepsake" message, checked in `apps/web`
+  against the owner address the device already knows — is still to do.
+- **More checks that could not fail:** all closed. **#166, #175 and #176 are fixed** (PR #198):
+  preflight's `shell-syntax` now parses the workflow `run:` blocks that hold all this repo's shell
+  and fails rather than skips when it finds none; `cron-triggers` reads `cron/registry.ts` and
+  asserts the three-way agreement two documents already claimed; and `verify-public-env` derives
+  its expectations from `.env.example` instead of from the environment that forgot the variable.
+  **#194 is fixed** in the same PR — the CSP script hashes are now computed from the script they
+  authorise. Six instances of `AGENTS.md`'s table found in a single pass; the table is now at
+  eleven rows and should be read as a pattern, not a closed list. **#191 is fixed**
+  (#209): `/health` gives `ASSETS` a real read and reports `VECTORIZE` as `ok`/`error`/`off`
+  rather than not looking at it at all. **#173 and #181 are fixed**
+  (2026-09-07): the consent banner was never scanned by axe, because every a11y context seeded a
+  consent decision and two comments in the tree claimed a scan that did not exist —
+  `e2e/a11y.spec.ts` now builds its own unseeded contexts for the banner and runs a dark-mode
+  pass, and both comments say what is true.
+- **Moderation and abuse surface:** #183. **#179 is fixed** (#206): a budget denial no longer
+  counts against the 3 retry attempts, so an exhausted daily ceiling stops turning every listing
+  posted afterwards into permanent manual review — moderation.md step 2. **#168 and #171 are
+  fixed in PR #197**: every non-GET route on `listingRoutes` is behind a router-level
+  `burst("RL_WRITE")` and `PATCH` charges the same daily budget create does, and listing aspects
+  now run through `containsContactInfo` and reach Llama Guard. #168's siblings in
+  `routes/photos.ts` and `routes/me.ts` are untouched and still unmetered.
+- **Correctness:** all fixed. **#163, #180 and #186** (#206) — the search sanitizer, and the two
+  that ran with it. **#172, #174 and #187** (2026-09-07): a failed Delete on `/mine/[id]` no
+  longer navigates as though it succeeded; a Turnstile challenge failure reports `unconfigured`
+  and lets the server's `siteverify` decide, instead of disabling every submit button in the app
+  with no message and no retry; and `useFeed`'s `loadMore` drops a page belonging to a query the
+  visitor has already left. **#185**: choosing a recipient is one `env.DB.batch()` with a
+  conditional claim on the listing, checked before any mail goes out — see
+  `docs/design/email.md`'s "Contact reveal rule". It is also the Worker's first use of `batch()`;
+  the other multi-write sequences that issue named (create-listing + photos + aspects,
+  `replaceListingAspects`) are still unbatched. **#184 is fixed in PR #197** — the report
+  auto-hide decides on the count returned by its own `UPDATE … RETURNING`, so concurrent reports
+  trip the threshold instead of each reading zero.
+- **Ops and backup:** both closed. **#164** (PR #198): the documented D1 backup omitted
+  `listing_aspects`, and because `aspects_backfilled_at` *is* in the export the loss was
+  unrecoverable — `restore.md`'s `--table` list now includes it, and preflight's new
+  `backup-tables` check compares that list against the tables the migrations create, so the next
+  migration that adds a table fails the build instead of the backup. #178 (**fixed** — `orphanSweep` refuses
+  to delete a photo the backup bucket does not have, so the ordering no longer rests on two
+  independent schedulers). **#157** (this PR): `keepsake-photos-production-backup` now exists
+  with the same 400-day expiry preview has, production's 4 referenced keys are in it (one
+  verified byte-identical by SHA-256 out of both buckets), and `PHOTO_BACKUP_BUCKET` is bound
+  on production — so the sweep's guard is live there rather than degrading to an unguarded
+  delete with a warn.
+
+*Workable by anyone (pre-audit):*
 - **#104** — `wrangler dev` dies mid-e2e with no diagnostic and `serve.mjs`'s restart hides it.
 - **#116** — the `adminAuth` brute-force test is flaky again on unmodified `main`. **Note the
   supersession**: `AGENTS.md` and several docs still explain this flake by pointing at #65, which
@@ -193,7 +272,7 @@ condensed to what actually earns its keep on a solo-agent-driven repo:
 | M1 Give + moderation | `[DONE]` | Migrations 0001–0003, geodata seed loaded on preview, owner token middleware, photo upload, create listing, moderation pipeline + cron retry + budgets, web give flow (5 steps), breathing seal, reviewing states, read-only dashboard. |
 | M2 Browse + share | `[DONE]` | Feed (keyset/category/FTS/geo), item page, `/i/:id/:variant` edge cache, `/item/:id` OG injection, masonry feed, location bar, share, `+not-found`. |
 | M3 Requests, email, recovery | `[DONE]` | Turnstile, requests, giver email add/verify, `sendMail()` (cf + resend fallback), choose flow + contact reveal, given/withdraw/relist/edit/delete, recovery. |
-| M4 Trust and operations | `[DONE]`, version skew guard excepted (`[TODO]` on the client — issue #23) | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Workers Logs observability (issue #14, replaced a never-configured Sentry), Web Analytics, Playwright in CI, runbooks. Version skew: server half (`/version.json`, `no-store`) is done and tested; nothing in `apps/web` polls it yet — see `docs/design/ops.md#version-skew`. |
+| M4 Trust and operations | `[DONE]` | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Workers Logs observability (issue #14, replaced a never-configured Sentry), Web Analytics, Playwright in CI, runbooks. Version skew: **both halves shipped** — the server's `/version.json` (`no-store`) and the client's `useVersionSkewGuard`/`VersionSkewBanner`, closed by #23 via PR #78 and covered by `e2e/versionSkew.spec.ts`. This row read "`[TODO]` on the client — nothing in `apps/web` polls it yet" until 2026-09-07, three commits after that stopped being true; `docs/design/ops.md#version-skew` had the correct account the whole time. |
 | M5 Polish and launch | `[QA]` — cutover done, apex unverified | About/Privacy/Terms, empty states, motion + reduce-motion pass, keyboard/focus audit, robots/sitemap, cache-header audit, production secrets, `keepsake.ing` cutover. |
 
 Definition of done per milestone lives with the plan (`M0`–`M5` DoD bullets); the short version:

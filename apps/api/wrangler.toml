@@ -227,6 +227,15 @@ UPLOAD_IP_DAILY_BUDGET = "60"
 # environment, since neither scales with traffic the way an AI budget does.
 REPORT_IP_DAILY_BUDGET = "10"
 EMAIL_IP_DAILY_BUDGET = "10"
+# Issue #188, and the odd one out on this page: every other ceiling here is
+# keyed by the *caller's* address and answers "how much may this client do?".
+# This one is keyed by the **recipient's** address and answers "how much mail
+# can arrive at one inbox today, from anyone?" — the only question a per-IP
+# number cannot answer, because the attacker and the person harmed are not the
+# same party and an attacker can always find more IPs. Three "did you ask for
+# this?" confirmations a day, per address, from everyone combined. See
+# `DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET` in src/routes/listings.ts.
+REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET = "3"
 # Loose for the same reason as the ceilings above — one giver calls this a
 # handful of times per give flow; this only stops a single retry loop from
 # working through SUGGEST_DAILY_BUDGET alone.
@@ -244,6 +253,11 @@ SHELF_MIN_ITEMS = "3"
 # `src/routes/photos.ts` via `parseIntVar` — unlike the two vars removed
 # below, this one does something.
 MAX_PHOTO_BYTES = "5242880"
+# The `thumb` variant's own, tighter ceiling. Both variants used to share
+# MAX_PHOTO_BYTES, so a caller could store a 5 MiB "thumbnail" and have it
+# served from /i/:id/thumb and base64'd into a vision prompt. Read by
+# `src/routes/photos.ts` via `parseIntVar`.
+MAX_THUMB_BYTES = "786432"
 # Removed 2026-09-06 (launch audit): `MAX_PHOTOS` and `IMAGE_TRANSFORMS_ENABLED`
 # were declared in all three environment blocks and referenced nowhere in
 # `apps/api/src`. The real photo limit is a hardcoded `.max(5)` in
@@ -330,13 +344,33 @@ migrations_dir = "migrations"
 # lives outside this binding on purpose, so it survives a bug in the code
 # that reads this binding: `tools/backup-photos.mjs` copies every referenced
 # photo into a same-account `<bucket_name>-backup` bucket that nothing here
-# ever deletes from. That bucket is not declared as a binding because no
-# Worker code reads it — an unread binding is exactly the
-# configuration-that-can't-change-behavior anti-pattern the MAX_PHOTOS /
-# IMAGE_TRANSFORMS_ENABLED removal note above (in [vars]) warns about.
+# ever deletes from.
+#
+# That bucket **is** now declared as a binding, which it deliberately was not
+# before: the note here used to say an unread binding is the
+# configuration-that-can't-change-behavior anti-pattern, and it was right —
+# nothing in the Worker read it. Issue #178 gave it something to read.
+#
+# The backup's whole safety argument used to be that GitHub Actions runs it
+# at 03:00 and `orphanSweep` fires at 03:17, so the copy always happens
+# first. GitHub's `schedule:` queue is best-effort, drift on this repo is
+# routinely larger than 17 minutes, and the single scheduled run this
+# workflow has ever had started at 03:18 — after the sweep. Any fixed offset
+# is the same bet at longer odds, so the ordering is now enforced by the
+# deleter instead: `orphanSweep` refuses to delete a photo whose keys are not
+# already in the backup bucket, and a late backup delays a deletion by a
+# night instead of losing the bytes.
+#
+# `PHOTO_BACKUP_BUCKET` is read-only from the Worker's side (`head()` only —
+# see `cron/orphanSweep.ts`), so a binding leak cannot write to or delete
+# from the bucket that exists to survive a bad delete.
 [[r2_buckets]]
 binding = "BUCKET"
 bucket_name = "keepsake-photos-dev"
+
+[[r2_buckets]]
+binding = "PHOTO_BACKUP_BUCKET"
+bucket_name = "keepsake-photos-dev-backup"
 
 # --- KV ---
 # `id = "local"` is a placeholder the same way the D1 id above is: local
@@ -470,10 +504,24 @@ REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
 REPORT_IP_DAILY_BUDGET = "10"
 EMAIL_IP_DAILY_BUDGET = "10"
+# Issue #188, and the odd one out on this page: every other ceiling here is
+# keyed by the *caller's* address and answers "how much may this client do?".
+# This one is keyed by the **recipient's** address and answers "how much mail
+# can arrive at one inbox today, from anyone?" — the only question a per-IP
+# number cannot answer, because the attacker and the person harmed are not the
+# same party and an attacker can always find more IPs. Three "did you ask for
+# this?" confirmations a day, per address, from everyone combined. See
+# `DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET` in src/routes/listings.ts.
+REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET = "3"
 SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
 SHELF_MIN_ITEMS = "3"
 MAX_PHOTO_BYTES = "5242880"
+# The `thumb` variant's own, tighter ceiling. Both variants used to share
+# MAX_PHOTO_BYTES, so a caller could store a 5 MiB "thumbnail" and have it
+# served from /i/:id/thumb and base64'd into a vision prompt. Read by
+# `src/routes/photos.ts` via `parseIntVar`.
+MAX_THUMB_BYTES = "786432"
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 # Preview shares the verified keepsake.ing sender with production, so it is
@@ -501,6 +549,14 @@ migrations_dir = "migrations"
 [[env.preview.r2_buckets]]
 binding = "BUCKET"
 bucket_name = "keepsake-photos-preview"
+
+# Issue #178, and see the top-level block for the reasoning.
+# `keepsake-photos-preview-backup` exists — created 2026-09-07, with a real
+# copy run and a byte-identical restore drill recorded in
+# docs/runbooks/restore.md#r2-photo-backup.
+[[env.preview.r2_buckets]]
+binding = "PHOTO_BACKUP_BUCKET"
+bucket_name = "keepsake-photos-preview-backup"
 
 [[env.preview.kv_namespaces]]
 binding = "KV"
@@ -637,10 +693,24 @@ REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
 REPORT_IP_DAILY_BUDGET = "10"
 EMAIL_IP_DAILY_BUDGET = "10"
+# Issue #188, and the odd one out on this page: every other ceiling here is
+# keyed by the *caller's* address and answers "how much may this client do?".
+# This one is keyed by the **recipient's** address and answers "how much mail
+# can arrive at one inbox today, from anyone?" — the only question a per-IP
+# number cannot answer, because the attacker and the person harmed are not the
+# same party and an attacker can always find more IPs. Three "did you ask for
+# this?" confirmations a day, per address, from everyone combined. See
+# `DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET` in src/routes/listings.ts.
+REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET = "3"
 SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
 SHELF_MIN_ITEMS = "3"
 MAX_PHOTO_BYTES = "5242880"
+# The `thumb` variant's own, tighter ceiling. Both variants used to share
+# MAX_PHOTO_BYTES, so a caller could store a 5 MiB "thumbnail" and have it
+# served from /i/:id/thumb and base64'd into a vision prompt. Read by
+# `src/routes/photos.ts` via `parseIntVar`.
+MAX_THUMB_BYTES = "786432"
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 # Real users. Reserved domains (example.com, .test, .invalid) are still
@@ -667,6 +737,28 @@ migrations_dir = "migrations"
 [[env.production.r2_buckets]]
 binding = "BUCKET"
 bucket_name = "keepsake-photos-production"
+
+# `keepsake-photos-production-backup` exists as of 2026-09-07 21:59 UTC (#157)
+# — `eeur` location hint to match the primary above, and the same
+# `expire-after-400d` lifecycle rule preview carries. It is not empty: the 4
+# keys production's `photos` rows referenced at creation were copied into it,
+# and one was checked byte-identical out of both buckets by SHA-256.
+#
+# So this binding is now live, which is the second half of #157 and the thing
+# that turns `orphanSweep`'s guard on for the production site. Until this
+# deploys, the sweep still takes its documented degraded path there: it
+# deletes as it did before and logs a warn saying deletion ran unguarded,
+# rather than refusing to delete anything forever. That fallback stays in the
+# code on purpose — blocking every deletion for want of a bucket would turn
+# one missing resource into unbounded R2 growth and an unswept `photos` table
+# — but it should no longer be reached on production once this is deployed.
+#
+# `head()`-only from the Worker's side, same as the other tiers: nothing here
+# can write to or delete from the bucket whose whole value is that nothing
+# deletes from it.
+[[env.production.r2_buckets]]
+binding = "PHOTO_BACKUP_BUCKET"
+bucket_name = "keepsake-photos-production-backup"
 
 [[env.production.kv_namespaces]]
 binding = "KV"

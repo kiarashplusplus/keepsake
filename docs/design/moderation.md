@@ -12,19 +12,68 @@ else is enforced by `tools/preflight`'s `models` check.
 
 ## Pipeline (`apps/api/src/moderation/pipeline.ts: moderateListing(env, listingId, version)`)
 
-1. **Local checks** (no AI): title 4–80 chars, story 20–2000, category enum, 1–5 owned photos.
-   Email/phone/URL regex in title+story → `rejected` (`contact_in_story`) — privacy and a bypass
-   block in one move.
+1. **Local checks** (no AI): the contact-info regex on `title\nstory` → `rejected`
+   (`contact_in_story`). The length, category-enum and 1–5-owned-photo rules are enforced
+   *earlier*, at the API boundary (`CreateListingInput`/`UpdateListingInput` plus the ownership
+   query in `routes/listings.ts`), and the pipeline does not re-check them.
+   Client-supplied `aspects` are covered too, as of PR #197. They are still up to six free-text
+   name/value pairs taken from the request body with no check that they came from
+   `POST /api/photos/:id/suggest` — so they are attacker-controlled input, and
+   `serializePublicListing` still publishes them — but they no longer skip the gate. Both halves
+   of each pair (`name` as well as `value`; 24 characters is enough for a short URL) run through
+   `containsContactInfo` at the API boundary, where `POST /api/listings` and
+   `PATCH /api/listings/:id` answer `400` above every write, and this step re-checks the
+   *persisted* rows so a pair that reached `listing_aspects` some other way — a backfill, an
+   older client — is caught as well. Until then the same email address auto-rejected in the
+   story and was published verbatim as an aspect value, which is the control the regression test
+   still runs both halves of.
 2. **Budget gate**: KV daily counters `mod_text`/`mod_image` (ported from Bayan's
-   `worker/src/budget.ts`). Exhausted → stays `pending`, event `reason=budget`, cron retries
-   after midnight UTC.
-3. **Text**: Llama Guard 3 (`@cf/meta/llama-guard-3-8b`) on `title\n\nstory`, 20s timeout.
-4. **Images**: each photo's 640px thumbnail (not the full image — cheaper, still enough signal)
-   to Llama 3.2 Vision, strict JSON prompt, `temperature 0`, 30s timeout, one retry on a parse
-   failure before giving up to `error`.
+   `worker/src/budget.ts`). Exhausted → stays `pending` with `reason=budget`. The denial is
+   logged as a `decision`/`error` event, but **`nextAttemptNumber` does not count it**
+   (`reason <> 'budget'`), so it does not consume one of the 3 attempts: `moderationRetry` keeps
+   picking the listing up every 5 minutes and it stays `pending` until the midnight-UTC counter
+   reset lets a real attempt run. Until #179 the denial *was* counted, and since the cron re-runs
+   anything `pending` for 2 minutes, three denials inside ~15 minutes escalated the listing to
+   `needs_review` — a status the cron never selects again — so an exhausted budget turned every
+   listing posted for the rest of the day into permanent manual review.
+
+   That trap got *faster* the same week it was removed: step 4 now spends two vision calls per
+   photo instead of one (#161), so `mod_image` is consumed twice as quickly and the day's ceiling
+   is reached twice as early. The two changes are complementary — charging the true cost is what
+   makes the ceiling mean what it says, and not counting the denial is what keeps hitting the
+   ceiling survivable.
+3. **Text**: Llama Guard 3 (`@cf/meta/llama-guard-3-8b`) on `title\n\nstory`, 20s timeout. The
+   listing's aspects are appended to the story half as `name: value` lines (PR #197), so they
+   reach the model inside the one text call this pipeline is budgeted for rather than costing a
+   second one.
+4. **Images**: **every stored variant of every photo** — `r2_key_thumb` *and* `r2_key_full`,
+   listed in `moderation/image.ts`'s `MODERATED_PHOTO_VARIANTS`. Each is sent to Llama 3.2
+   Vision, strict JSON prompt, `temperature 0`, 30s timeout, one retry on a parse failure
+   before giving up to `error`, and each gets its own `moderation_events` row tagged with the
+   variant in `flags_json`. Photos run in parallel; the variants of one photo run in sequence.
+
+   Both, not just the thumb, because neither is derived from the other: `PUT /api/photos` takes
+   `full` and `thumb` as two separate multipart files and validates only byte size and magic
+   bytes on each. Until 2026-09-07 the pipeline read `r2_key_thumb` alone while `/i/:id/full`
+   published `r2_key_full` to anyone once the listing was approved, so a caller could pass
+   moderation on a photo of a mug and publish anything at all — and `moderation_events` recorded
+   `pass` for that photo, so the audit trail said we had looked (#161, fixed; regression test
+   `apps/api/test/moderationVariants.test.ts`).
+
+   **This costs two vision calls per photo**, and the `mod_image` budget is charged
+   `photos.length * MODERATED_PHOTO_VARIANTS.length` accordingly, so a 5-photo listing now
+   spends 10 of `MOD_IMAGE_DAILY_BUDGET` (3000). Deriving the thumbnail server-side from the
+   full image would be the cheaper *and* stronger answer — one set of bytes both moderated and
+   served — but this Worker has no image-transform binding (`docs/design/images.md`: the
+   `IMAGE_TRANSFORMS_ENABLED` var was deleted on 2026-09-06 because nothing read it), and
+   without a decoder the server also cannot check that two uploaded variants came from one
+   source. Still true, and still unchecked for the same reason: `width`/`height` are taken from
+   the form and compared to neither file. They are metadata for layout, not a security
+   boundary — nothing gates publication on them.
 5. **Decide** (`decide.ts`, pure, exhaustively tested):
    - Text `S1 S3 S4 S9` (violent crime, sex crimes, child exploitation, indiscriminate weapons) →
-     `flag`; `S2 S7 S10 S12` (non-violent crime, privacy, hate, sexual content) → `review`.
+     `flag`; `S2 S7 S10 S11 S12` (non-violent crime, privacy, hate, self-harm, sexual content) →
+     `review` — S11 is held for a human rather than auto-rejected (`decide.ts`).
    - Image `drugs ≥ 0.7` or `is_physical_object === false` → `flag`; any of
      `nsfw, violence, weapons, hate_symbols, personal_info ≥ 0.5` → `review`; else `pass`.
    - Any `error` → stays `pending` (cron retries, 3 attempts → `needs_review`). Any `flag` →
@@ -42,7 +91,8 @@ model id, seed a miniflare D1, run the pipeline, assert the resulting rows — n
 text still says the right thing. Matrix: all-pass, S12→needs_review, S4→rejected, drugs 0.9→
 rejected, nsfw 0.55→needs_review, malformed JSON once then valid, malformed twice→pending,
 AI throws→pending, budget 0→pending/budget, stale version→no approval, cron escalation after
-3 attempts.
+3 attempts, and (#179) three cron passes under an exhausted budget leaving the listing `pending`
+rather than escalating it, with the restored budget then letting the next pass decide it.
 
 ## Open risk
 

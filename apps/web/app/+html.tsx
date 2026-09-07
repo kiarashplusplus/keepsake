@@ -221,12 +221,24 @@ export default function Root({ children }: { children: React.ReactNode }): React
             the ONLY thing that injects a third-party script, so it does not
             have to be blocking: nothing is racing it to run first.
 
-            The two ids below reach it as meta tags because it is a static file
+            The id below reaches it as a meta tag because it is a static file
             and cannot read `process.env`. An absent or empty value is the kill
             switch — nothing loads, in any environment, whatever the visitor
             consented to. `apps/web/scripts/copy-site.mjs` performs the same
-            substitution for the static pages. */}
-        {config.googleAdsId ? <meta name="ks-google-ads-id" content={config.googleAdsId} /> : null}
+            substitution for the static pages.
+
+            `ks-google-ads-id` below is deliberately empty, and that is the
+            kill switch (#175, Kiarash's call: no Google Ads for now). It used
+            to be `config.googleAdsId ? <meta …> : null`, and that condition
+            was false in every build ever shipped, because no deploy passed
+            the variable. The variable and its readers are gone; the tag stays
+            declared-and-empty for the same reason the static pages keep it —
+            `/consent.js` still registers an "advertising" provider and
+            `test/guards/privacyPolicy.test.ts` requires every provider to be
+            wired on every page, so an absent tag is drift rather than a
+            decision. consent.js reads "", fails its /^(AW|G|GT)-/ test, and
+            returns before touching the network. */}
+        <meta name="ks-google-ads-id" content="" />
         {config.cfWebAnalyticsToken ? (
           <meta name="ks-cf-beacon-token" content={config.cfWebAnalyticsToken} />
         ) : null}
