@@ -318,9 +318,10 @@ curl -s -X POST "$SITE_URL/api/admin/backfill-aspects" \
 `/admin` → **Observatory**, or `GET /api/admin/observatory` above. Three sections, and the
 important thing about them is that they fail *separately*:
 
-- **`app`** — listings, requests, the give→get funnel, and how long the moderation queue has been
-  waiting. Comes from D1, needs no credential, and is always present. If this is missing the
-  request 500s, because a Worker that cannot read its own database has nothing to say.
+- **`app`** — listings, requests, the give→get funnel, how long the moderation queue has been
+  waiting, and the search index. Comes from D1, needs no credential, and is always present. If
+  this is missing the request 500s, because a Worker that cannot read its own database has nothing
+  to say.
 - **`edge`** — request/error counts and CPU quantiles from Cloudflare's GraphQL Analytics API.
 - **`logs`** — the Worker's own `console.error`/`console.warn` lines, read back out of Workers Logs.
 
@@ -329,6 +330,32 @@ feature: `unconfigured` (no credential — a setup hint, not an alarm), `error` 
 call failed — an alarm, and the state most easily mistaken for "no traffic"), or `ok`. **A panel
 showing nothing is never ambiguous.** If you find yourself guessing whether a chart is empty
 because nothing happened or because something is broken, that is a bug — file it.
+
+### The search-index panel (#208)
+
+`app.search_index` counts approved listings whose text has no vector in Vectorize —
+`listings.vector_indexed_at IS NULL` — and ages the oldest of them. **Zero is the healthy
+answer.** A non-zero count is not an outage: #180 made an un-indexed listing still findable by
+title and story through full-text search, so what is degraded is ranking, not visibility.
+
+What to do with a number that is not zero:
+
+- **Small, and the age is under an hour or so** — that is the `searchIndexRetry` cron's ordinary
+  work. It runs hourly, takes five listings newest-first, and the count should fall on its own.
+- **The age keeps growing** — something is refusing the same listings every hour. Check the
+  `embed` budget first (`AI budget (embed)` in the digest, or the `budget_exhausted` alert): when
+  `EMBED_DAILY_BUDGET` is spent, every re-embed of the day is denied and this backlog is that
+  outage's symptom rather than a second incident. It clears itself after midnight UTC. The daily
+  digest says so in the alert text when both are true, so the two are never chased as two
+  problems (#207).
+- **`Semantic search is switched off`** — `SEMANTIC_SEARCH` is `"0"` in that environment, so
+  nothing is indexed and there is deliberately no number to read. It is `"1"` in all three today.
+
+The retry is bounded on purpose: five an hour is at most 120 embeds a day against a budget of
+2000, so a backlog can never crowd out the create/edit paths a person is actually waiting on. The
+honest cost of "newest first" is that a listing which fails *permanently* sits at the back of the
+queue while newer failures keep arriving — which is exactly what the age is for. An age that
+climbs past a day with a small count is a bug report about one listing, not a retry candidate.
 
 Note `logs` clamps its own window to 3 days whatever you ask for, because that is Workers Logs
 retention on the Free plan, and it reports the window it actually used rather than labelling three

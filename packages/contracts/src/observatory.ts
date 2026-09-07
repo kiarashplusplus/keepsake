@@ -192,11 +192,47 @@ export type ObservatoryModerationLatency = {
   median_time_to_decision_ms: number | null;
 };
 
+/**
+ * How much of the public catalogue currently has no semantic-search vector
+ * for its own text — issue #208.
+ *
+ * `listings.vector_indexed_at` (#180) made "this listing has no vector" a
+ * queryable fact instead of silence, and then nothing read it: no panel, no
+ * health field, no cron. A signal nobody looks at is one step from an empty
+ * chart, which `AGENTS.md` calls the most convincing wrong answer there is.
+ *
+ * A union rather than a struct with a flag, for the same reason
+ * `ObservatorySource` is one: with `SEMANTIC_SEARCH` off, `reembedListing`
+ * returns before it records anything, so *every* listing reads as
+ * un-indexed. That number is arithmetically true and says nothing about
+ * health, and a dashboard that renders it next to a moderation backlog
+ * invites exactly the wrong conclusion. So when the feature is off there is
+ * no number to render at all.
+ *
+ * `oldest_unindexed_age_ms` for the reason `ObservatoryModerationLatency`
+ * gives about its own ages: a count is a level, an age is a verdict. Five
+ * listings that failed to embed in the last minute are the retry cron's
+ * ordinary work; one that has been un-indexed since Tuesday is a stuck
+ * backlog.
+ */
+export type ObservatorySearchIndex =
+  | { enabled: false }
+  | {
+      enabled: true;
+      /** Approved listings — the ones whose ranking a missing vector degrades. */
+      approved: number;
+      /** …of those, how many have no vector for their current text. */
+      unindexed: number;
+      /** Age of the longest-waiting un-indexed listing, by `updated_at`. */
+      oldest_unindexed_age_ms: number | null;
+    };
+
 export type ObservatoryApp = {
   window_days: number;
   by_day: ObservatoryAppDay[];
   funnel: ObservatoryFunnel;
   moderation: ObservatoryModerationLatency;
+  search_index: ObservatorySearchIndex;
 };
 
 // ---------------------------------------------------------------------------
@@ -318,6 +354,12 @@ export type DailyReport = {
     mod_text: DailyReportBudget;
     mod_image: DailyReportBudget;
     suggest: DailyReportBudget;
+    /** Issue #208. `EMBED_DAILY_BUDGET` was the one AI budget the digest did
+     * not report, so the day it ran out looked, from here, like nothing at
+     * all — while every listing created or edited after it went un-indexed.
+     * Reported for its own sake, and because the search-index alert reads it
+     * to say whether a backlog is that outage rather than a second one. */
+    embed: DailyReportBudget;
   };
   crons: DailyReportCron[];
 };

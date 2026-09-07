@@ -70,6 +70,7 @@ describe("/admin: Observatory section is not fetched until selected", () => {
         by_day: [],
         funnel: { window_days: 7, photos_uploaded: 0, listings_created: 0, listings_approved: 0, listings_requested: 0, listings_chosen: 0 },
         moderation: { pending: 0, needs_review: 0, oldest_pending_age_ms: null, oldest_needs_review_age_ms: null, median_time_to_decision_ms: null },
+        search_index: { enabled: true, approved: 0, unindexed: 0, oldest_unindexed_age_ms: null },
       },
       edge: { state: "unconfigured", reason: "not set" },
       logs: { state: "unconfigured", reason: "not set" },
@@ -83,7 +84,7 @@ describe("/admin: Observatory section is not fetched until selected", () => {
         requests: { created: 0, chosen: 0 },
         email: { attempted: 0, failed: 0, top_error: null },
         reports: { autohidden_awaiting_review: 0, near_threshold: 0 },
-        budgets: { mod_text: { used: 0, limit: 1 }, mod_image: { used: 0, limit: 1 }, suggest: { used: 0, limit: 1 } },
+        budgets: { mod_text: { used: 0, limit: 1 }, mod_image: { used: 0, limit: 1 }, suggest: { used: 0, limit: 1 }, embed: { used: 0, limit: 1 } },
         crons: [],
       },
     });

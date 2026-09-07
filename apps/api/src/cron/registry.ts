@@ -57,6 +57,15 @@ export const CRON_JOBS = [
     staleAfterMs: 26 * HOUR,
   },
   {
+    name: "searchIndexRetry",
+    cron: "23 * * * *",
+    // Three missed ticks. An un-indexed listing is still findable through FTS
+    // (#180), so this job dying is a ranking problem rather than an outage —
+    // but it is the only thing that ever retries a failed embed, so nobody
+    // finding out for a day is not acceptable either.
+    staleAfterMs: 3 * HOUR,
+  },
+  {
     name: "dailyDigest",
     cron: "7 0 * * *",
     // Same 26-hour reasoning as the nightly sweep. Worth stating what a stale
