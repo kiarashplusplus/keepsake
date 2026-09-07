@@ -22,3 +22,14 @@ ADMIN_TOKEN=
 # interface, used only if Cloudflare Email Service enablement or the
 # keepsake.ing sender domain onboarding (plan Risks #1) isn't ready.
 RESEND_API_KEY=
+
+# Cloudflare API token scoped to `Zone.Cache Purge` on the keepsake.ing zone
+# (issue #94). Paired with the `CF_ZONE_ID` var in wrangler.toml: with both
+# set, `src/lib/photoCache.ts` purges a deleted photo's two variant URLs from
+# every colo via POST /zones/:zone_id/purge_cache, not just from the colo
+# that happened to execute the delete. Left blank here on purpose — with
+# either half missing the zone purge is a silent no-op, the per-colo
+# `caches.default.delete()` still runs, and `images.ts`'s `max-age=3600`
+# bounds how long any unreached copy can survive. Local dev has no zone to
+# purge against anyway.
+CF_CACHE_PURGE_TOKEN=
