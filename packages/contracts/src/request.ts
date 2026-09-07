@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AgeAttestationSchema, EmailSchema, MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
+import { DateOfBirthSchema, EmailSchema, MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
 
 export const NOTE_MIN = 10;
 export const NOTE_MAX = 500;
@@ -16,11 +16,11 @@ export const CreateRequestInput = z.object({
   note: z.string().trim().min(NOTE_MIN).max(NOTE_MAX),
   email: MailableEmailSchema,
   phone: PhoneSchema.optional(),
-  // Minimum age (docs/legal-considerations.md) — see `AgeAttestationSchema`'s
-  // own doc comment. A requester never has an account, so unlike a listing's
-  // owner there is no "attested once, don't ask again" — every request
-  // re-attests.
-  age_attested: AgeAttestationSchema,
+  // Minimum age (docs/legal-considerations.md, issue #64) — see
+  // `DateOfBirthSchema`'s own doc comment in `./common`. A requester never
+  // has an account, so unlike a listing's owner there is no "attested once,
+  // don't ask again" — every request re-attests.
+  date_of_birth: DateOfBirthSchema,
 });
 export type CreateRequestInput = z.infer<typeof CreateRequestInput>;
 

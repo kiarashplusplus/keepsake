@@ -14,7 +14,7 @@ import {
 const VALID_REQUEST_BODY = {
   note: "This would mean so much to my family, thank you for considering us.",
   email: "requester@keepsake.ing",
-  age_attested: true,
+  date_of_birth: "1990-01-01",
 };
 
 async function createRequest(listingId: string, overrides: Record<string, unknown> = {}): Promise<{ res: Response; withdrawLink: string | undefined }> {

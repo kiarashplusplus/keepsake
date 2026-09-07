@@ -55,7 +55,8 @@ test("a giver walks the five steps and the keepsake goes live", async ({ page, r
   await expect(page.getByLabel("Title")).toHaveValue("Blue ceramic mug");
   await expect(page.getByText("Filled in from your photo. Change anything.")).toBeVisible();
   await page.getByLabel("Title").fill(title);
-  await page.getByLabel("Home & kitchen", { exact: true }).click();
+  // Issue #35: no category picker here anymore — `draft.category` follows
+  // the mocked suggestion's category ("home_kitchen") automatically.
   await page.getByLabel("Postcode").fill("02144");
   // The live `GET /api/geo/lookup` behind the postcode field.
   await expect(page.getByText("Somerville, MA")).toBeVisible();
@@ -70,7 +71,9 @@ test("a giver walks the five steps and the keepsake goes live", async ({ page, r
   // The gap that let the cover photo go missing from this step entirely:
   // the print card must actually render an image, not just a photo count.
   await expect(page.getByAltText("Cover photo")).toBeVisible();
-  await onScreen(page, "I'm 18 or older").click();
+  // Issue #64: a neutral date-of-birth prompt, not an "I'm 18 or older"
+  // checkbox.
+  await page.getByLabel("Date of birth").fill("1990-01-01");
   await onScreen(page, "Give it").click();
 
   // The breathing-stamp reviewing state, then the settled one. The screen

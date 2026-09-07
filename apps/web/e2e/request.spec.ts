@@ -25,7 +25,9 @@ test("a stranger asks, and the giver chooses them and gets their contact", async
   await stranger.getByLabel("I'd love this").click();
   await stranger.getByLabel("Note").fill(note);
   await stranger.getByLabel("Email", { exact: true }).fill(requesterEmail);
-  await stranger.getByLabel("I'm 18 or older").click();
+  // Issue #64: a neutral date-of-birth prompt, not an "I'm 18 or older"
+  // checkbox.
+  await stranger.getByLabel("Date of birth").fill("1990-01-01");
   await stranger.getByLabel("Send").click();
 
   await expect(stranger.getByText("Sent. The giver will choose in their own time.")).toBeVisible();

@@ -105,7 +105,7 @@ describe("give/review", () => {
       moderation: { status: "approved", held: false },
     });
 
-    const { toJSON, UNSAFE_getByProps } = renderReview();
+    const { toJSON, getByLabelText, UNSAFE_getByProps } = renderReview();
 
     // Let Turnstile's no-site-key effect report `unconfigured` so Submit's
     // Turnstile gate is satisfied.
@@ -113,7 +113,7 @@ describe("give/review", () => {
       await Promise.resolve();
     });
 
-    fireEvent.press(UNSAFE_getByProps({ accessibilityRole: "checkbox" }));
+    fireEvent.changeText(getByLabelText("Date of birth"), "1990-01-01");
 
     const submitButton = UNSAFE_getByProps({ accessibilityRole: "button" });
     await act(async () => {
@@ -147,13 +147,13 @@ describe("give/review", () => {
       moderation: { status: "rejected", reason: "contact_in_story", held: false },
     });
 
-    const { toJSON, UNSAFE_getByProps } = renderReview();
+    const { toJSON, getByLabelText, UNSAFE_getByProps } = renderReview();
 
     await act(async () => {
       await Promise.resolve();
     });
 
-    fireEvent.press(UNSAFE_getByProps({ accessibilityRole: "checkbox" }));
+    fireEvent.changeText(getByLabelText("Date of birth"), "1990-01-01");
 
     const submitButton = UNSAFE_getByProps({ accessibilityRole: "button" });
     await act(async () => {

@@ -20,7 +20,7 @@ const VALID_LISTING_BODY = {
   category: "home_kitchen",
   country: "US",
   postal_code: "02144",
-  age_attested: true,
+  date_of_birth: "1990-01-01",
 };
 
 async function createListing(token: string, photoIds: string[], overrides: Record<string, unknown> = {}): Promise<Response> {

@@ -28,8 +28,13 @@ async function fillAndSubmit(
   note: string,
   email: string,
 ): Promise<void> {
-  const [noteField, emailField] = instance.UNSAFE_getAllByType(TextInput);
-  if (noteField === undefined || emailField === undefined) throw new Error("Expected note and email fields");
+  // Note, email, phone (optional), date of birth — in that render order
+  // (see RequestSheet.tsx). Phone is skipped here (every test leaves it
+  // blank); the date of birth field is the fourth `TextInput` on the page.
+  const [noteField, emailField, , dobField] = instance.UNSAFE_getAllByType(TextInput);
+  if (noteField === undefined || emailField === undefined || dobField === undefined) {
+    throw new Error("Expected note, email, and date-of-birth fields");
+  }
 
   await act(async () => {
     fireEvent.changeText(noteField, note);
@@ -39,8 +44,10 @@ async function fillAndSubmit(
     fireEvent.changeText(emailField, email);
     await Promise.resolve();
   });
-
-  fireEvent.press(instance.UNSAFE_getByProps({ accessibilityRole: "checkbox" }));
+  await act(async () => {
+    fireEvent.changeText(dobField, "1990-01-01");
+    await Promise.resolve();
+  });
 
   const sendButton = instance.UNSAFE_getByProps({ accessibilityLabel: "Send" });
   await act(async () => {

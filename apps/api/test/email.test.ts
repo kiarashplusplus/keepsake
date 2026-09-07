@@ -99,7 +99,7 @@ describe("POST /api/me/email + GET /api/me/email/verify", () => {
         postal_code: "02144",
         photo_ids: [photo.id],
         email: "on-create@keepsake.ing",
-        age_attested: true,
+        date_of_birth: "1990-01-01",
       }),
     });
     expect(res.status).toBe(201);
@@ -294,7 +294,7 @@ describe("email subjects strip CR/LF from the listing title (issue #20)", () => 
       body: JSON.stringify({
         note: "This would mean so much, thank you for considering us.",
         email: "requester@keepsake.ing",
-        age_attested: true,
+        date_of_birth: "1990-01-01",
       }),
     });
     expect(res.status).toBe(201);
