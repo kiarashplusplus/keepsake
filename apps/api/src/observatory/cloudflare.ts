@@ -76,6 +76,25 @@ const LOG_EVENT_LIMIT = 50;
  */
 const LOG_RETENTION_DAYS = 3;
 
+/**
+ * Widest window the GraphQL Analytics API will accept for this account,
+ * measured rather than read off a docs page: a 31-day query returns 32
+ * contiguous daily rows, and 40 days is refused outright with
+ * `cannot request a time range wider than 4w4d`.
+ *
+ * Nothing clamps to it, deliberately. A window that exceeded it would be
+ * *refused* — surfacing as `{ state: "error" }` carrying Cloudflare's own
+ * message — rather than silently returning a short series under a long
+ * label, and loud is the right failure here.
+ *
+ * What this must not become is a comment nobody checks: the zero-fill above
+ * reads a missing day as zero, which is only honest while every window fits
+ * inside this ceiling. Exported so `test/observatory.test.ts` asserts exactly
+ * that against `OBSERVATORY_WINDOWS`, so widening the set past 32 days fails
+ * a test rather than quietly turning gaps into zeroes.
+ */
+export const MAX_EDGE_WINDOW_DAYS = 32;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface TelemetryConfig {
@@ -203,7 +222,8 @@ export async function fetchEdgeTelemetry(
   // a duration: the series is bucketed by calendar date, so a rolling
   // 168-hour window would render a half-height first bar that looks like a
   // traffic drop rather than like a partial day.
-  const from = new Date(Date.parse(`${utcDate(now - (windowDays - 1) * DAY_MS)}T00:00:00Z`)).toISOString();
+  const windowStart = Date.parse(`${utcDate(now - (windowDays - 1) * DAY_MS)}T00:00:00Z`);
+  const from = new Date(windowStart).toISOString();
   const to = new Date(now).toISOString();
 
   try {
@@ -241,12 +261,32 @@ export async function fetchEdgeTelemetry(
     }
 
     const overall = account.overall?.[0];
-    const byDay: ObservatoryEdgeDay[] = (account.byDay ?? []).map((row) => ({
-      date: row.dimensions.date,
-      requests: row.sum.requests,
-      errors: row.sum.errors,
-      subrequests: row.sum.subrequests,
-    }));
+
+    // Zero-filled across the window's calendar days rather than passed
+    // through as Cloudflare returned it. Cloudflare emits no row at all for a
+    // day with no invocations, so the raw result is sparse — and a chart fed
+    // only the days that exist closes the gap and draws a continuous line
+    // across the one day the Worker served nothing, which is exactly the day
+    // worth seeing. `appMetrics.ts` seeds its D1 series the same way for the
+    // same reason; before this they disagreed, and a 7-day window over a
+    // quiet Worker rendered 7 bars against 2.
+    //
+    // "No row" is only safely read as "zero" because the API covers the whole
+    // window: every value in `OBSERVATORY_WINDOWS` is inside the 32-day
+    // ceiling below, so there is no region where a missing day means "we did
+    // not look that far back". If that stops being true, this becomes the
+    // confident-empty lie `ObservatorySource` exists to prevent.
+    const byDate = new Map((account.byDay ?? []).map((row) => [row.dimensions.date, row.sum]));
+    const byDay: ObservatoryEdgeDay[] = Array.from({ length: windowDays }, (_, i) => {
+      const date = utcDate(windowStart + i * DAY_MS);
+      const sum = byDate.get(date);
+      return {
+        date,
+        requests: sum?.requests ?? 0,
+        errors: sum?.errors ?? 0,
+        subrequests: sum?.subrequests ?? 0,
+      };
+    });
 
     return {
       state: "ok",
