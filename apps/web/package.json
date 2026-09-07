@@ -7,7 +7,7 @@
     "start": "expo start --web",
     "export": "expo export --platform web --clear && node scripts/verify-public-env.mjs && node scripts/fix-html-head.mjs && node scripts/write-version-json.mjs && node scripts/copy-site.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "jest",
+    "test": "node --test e2e/support/*.test.mjs && jest",
     "lint": "eslint .",
     "e2e": "playwright test",
     "e2e:ux": "pnpm run export && UX_SHOTS=1 playwright test --project=ux-mobile --project=ux-desktop --workers=1",

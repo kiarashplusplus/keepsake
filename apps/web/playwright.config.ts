@@ -121,6 +121,11 @@ const UX_PROJECTS = CAPTURING_UX
 
 export default defineConfig({
   testDir: "./e2e",
+  // Every browser spec here is `*.spec.ts`. Playwright's default `testMatch`
+  // also collects `*.test.*`, which would sweep up `e2e/support/serve.test.mjs`
+  // — a `node --test` suite for the server wrapper, run by
+  // `pnpm --filter @keepsake/web test` — and fail on its `node:test` imports.
+  testMatch: "**/*.spec.ts",
   // Generous: a cold `wrangler dev` compiles the Worker on the first request,
   // and the give spec walks five steps including a real upload.
   timeout: 90_000,
