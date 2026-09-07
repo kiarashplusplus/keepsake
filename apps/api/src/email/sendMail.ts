@@ -25,8 +25,18 @@
  * "one address bounced" from "this binding refuses every unverified
  * destination" — issue #6's worst case, and until now indistinguishable from
  * working.
+ *
+ * `error_detail` used to hold the provider's sentence *verbatim*, and SMTP
+ * and Email-Routing rejections quote the destination address — so the column
+ * that exists so we never store who was mailed sat beside a column that
+ * stored who was mailed, and that row outlived both the requester's withdraw
+ * link and `DELETE /api/me/email`. `scrubProviderDetail` (below) is the fix
+ * for #190: every provider string is scrubbed at the point it is captured,
+ * which is also the only way to cover the `console.error` lines, since those
+ * are direct console calls that never reach `redactString`.
  */
 import { isReservedEmailDomain } from "@keepsake/contracts/common";
+import { redactString } from "@keepsake/observability/redact";
 import type { Env } from "../env.js";
 import { emailProviderName } from "../env.js";
 import { sha256Hex } from "../lib/digest.js";
@@ -134,6 +144,12 @@ export interface SendMailResult {
    * otherwise identical, which is exactly issue #6. Diagnostic surfaces
    * only: the `email_events` row, `POST /api/admin/test-email`, and the
    * `console.error` line. Never returned to an ordinary end user.
+   *
+   * Whole, but not verbatim: the recipient's address is replaced with
+   * `<recipient>` first (#190). The sentence survives — that is the part with
+   * the diagnostic value — and the identifier does not, because `to_hash` is
+   * meant to be the only column in that row naming who was mailed. See
+   * `scrubProviderDetail`.
    */
   detail?: string;
   /**
@@ -155,6 +171,51 @@ const MAX_ERROR_DETAIL_CHARS = 1000;
 
 function truncateDetail(text: string): string {
   return text.length > MAX_ERROR_DETAIL_CHARS ? `${text.slice(0, MAX_ERROR_DETAIL_CHARS)}…` : text;
+}
+
+/** What the recipient's own address is replaced with in provider text. */
+export const RECIPIENT_PLACEHOLDER = "<recipient>";
+
+function escapeForRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Issue #190. SMTP and Email-Routing rejections quote the destination
+ * address, so the provider's sentence carried the recipient's plaintext email
+ * into `email_events.error_detail` — the column sitting beside the `to_hash`
+ * that exists precisely so we never store who was mailed, and the one copy
+ * that outlived both the requester's withdraw link and `DELETE /api/me/email`
+ * for the 90 days of `orphanSweep`'s retention.
+ *
+ * Every provider string is scrubbed **here, where it is captured**, not on
+ * the way into D1, so all three surfaces the `detail` doc comment names — the
+ * `email_events` row, `POST /api/admin/test-email`, and the `console.error`
+ * line — are covered by one call. That matters for the log line in
+ * particular: it is a direct `console.error`, so it never passes through
+ * `redactString` the way `captureException` does.
+ *
+ * Two passes, in this order:
+ *
+ *  1. The recipient's own address becomes `<recipient>`. Naming it as the
+ *     recipient keeps the entire diagnosis intact — *"… is not a verified
+ *     destination address for this Email Routing zone"* still reads as a
+ *     sentence, and that sentence is the half that would answer #6 — while
+ *     removing the identifier `to_hash` already carries. Case-insensitive,
+ *     because the provider may echo a normalised form of what we sent.
+ *  2. `redactString` as the backstop, for a *different* address the provider
+ *     quotes (a forwarding target, an envelope sender) or a normalisation
+ *     step 1 could not match. It keeps the domain, so the provider is still
+ *     named. This is the #170 rule; the two fixes are deliberately layered
+ *     rather than duplicated.
+ */
+export function scrubProviderDetail(text: string, to: string): string {
+  const address = to.trim();
+  const withoutRecipient =
+    address.length > 0
+      ? text.replace(new RegExp(escapeForRegExp(address), "gi"), RECIPIENT_PLACEHOLDER)
+      : text;
+  return redactString(withoutRecipient);
 }
 
 /**
@@ -220,8 +281,9 @@ async function sendViaCloudflare(env: Env, message: MailMessage): Promise<SendMa
     // code stays stable so the rollup can group on it. Folding the two
     // together (as this did before issue #6's second pass) is what made a
     // binding-level refusal indistinguishable from a bad address.
-    console.error("sendMail: EMAIL.send failed", { domain: recipientDomain(message.to), error: errorMessage });
-    return { sent: false, reason: "send_failed", detail: truncateDetail(errorMessage) };
+    const detail = truncateDetail(scrubProviderDetail(errorMessage, message.to));
+    console.error("sendMail: EMAIL.send failed", { domain: recipientDomain(message.to), error: detail });
+    return { sent: false, reason: "send_failed", detail };
   }
 }
 
@@ -243,7 +305,7 @@ async function sendViaResend(env: Env, message: MailMessage): Promise<SendMailRe
       }),
     });
     if (!response.ok) {
-      const body = await response.text().catch(() => "");
+      const body = scrubProviderDetail(await response.text().catch(() => ""), message.to);
       console.error("sendMail: resend request failed", { status: response.status, body: body.slice(0, 200) });
       // The HTTP status is stable enough to group on and is itself a
       // diagnosis (401 = key, 403 = domain, 422 = recipient); the body is
@@ -256,9 +318,9 @@ async function sendViaResend(env: Env, message: MailMessage): Promise<SendMailRe
     }
     return { sent: true };
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error("sendMail: resend request threw", { error: errorMessage });
-    return { sent: false, reason: "send_failed", detail: truncateDetail(errorMessage) };
+    const detail = truncateDetail(scrubProviderDetail(err instanceof Error ? err.message : String(err), message.to));
+    console.error("sendMail: resend request threw", { error: detail });
+    return { sent: false, reason: "send_failed", detail };
   }
 }
 
@@ -296,7 +358,10 @@ export async function sendMail(env: Env, message: MailMessage): Promise<SendMail
   } else {
     providerLabel = "none";
     const reason = provider === "cf" ? "email_binding_missing" : provider === "resend" ? "resend_key_missing" : "provider_unset";
-    console.log("[email:stub]", { to: message.to, subject: message.subject, reason });
+    // `domain`, not `to`: this line used to print the recipient's plaintext
+    // address on the no-binding path, which is the same #190 leak one line
+    // away from the one the issue names. Matches `[email:blocked]` above.
+    console.log("[email:stub]", { domain: toDomain, subject: message.subject, reason });
     result = { sent: false, reason };
   }
 

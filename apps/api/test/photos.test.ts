@@ -134,3 +134,53 @@ describe("GET /i/:id/:variant", () => {
     expect(res.status).toBe(404);
   });
 });
+
+/**
+ * #181 — `apps/web/src/lib/images/uploadIdempotencyKey.ts` stated as
+ * present-tense fact that "retrying the exact same upload reuses the same
+ * key and the API's `X-Idempotency-Key` handling can no-op a duplicate
+ * rather than creating a second photo row". Both halves were false: the
+ * client never sent the header, and this route mounts no `idempotency()`,
+ * so nothing would have read it if it had. The module and its five green
+ * unit tests are deleted; this asserts what the product actually does
+ * instead of leaving it assumed.
+ *
+ * A live guard, not a monument: mount `idempotency()` on `PUT /api/photos`
+ * and this goes red, which is the moment to decide what an upload's key
+ * should be. Do not reuse the deleted module's `name:size:lastModified` —
+ * it cannot tell a retried upload apart from a giver deliberately adding
+ * the same photo twice, and replaying the first response for the second
+ * pick hands two draft tiles the same `photo.id`.
+ */
+describe("PUT /api/photos is not idempotent (#181)", () => {
+  it("creates two photo rows for two identical uploads carrying the same X-Idempotency-Key", async () => {
+    const token = freshOwnerToken();
+    const key = "same-key-both-times";
+
+    async function uploadWithKey(): Promise<PublicPhoto> {
+      const form = new FormData();
+      const bytes = fakeJpegBytes();
+      form.set("full", fakeFile(bytes, "full.jpg", "image/jpeg"));
+      form.set("thumb", fakeFile(bytes, "thumb.jpg", "image/jpeg"));
+      form.set("width", "800");
+      form.set("height", "600");
+      form.set("blurhash", "LEHV6nWB2yk8pyo0adR*.7kCMdnj");
+      const res = await SELF.fetch("http://x/api/photos", {
+        method: "PUT",
+        headers: { ...authHeaders(token), "X-Idempotency-Key": key },
+        body: form,
+      });
+      expect(res.status).toBe(201);
+      return readOk<PublicPhoto>(res);
+    }
+
+    const first = await uploadWithKey();
+    const second = await uploadWithKey();
+
+    expect(second.id).not.toBe(first.id);
+    const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM photos WHERE id IN (?, ?)")
+      .bind(first.id, second.id)
+      .first<{ n: number }>();
+    expect(row?.n).toBe(2);
+  });
+});

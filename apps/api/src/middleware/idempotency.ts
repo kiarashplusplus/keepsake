@@ -6,14 +6,31 @@
  * same string never collide, and the KV key never holds a raw IP (only its
  * digest), matching the no-raw-IPs rule everywhere else in this Worker.
  *
+ * **Two routes mount this**, and the docblock said one until #181 caught it:
+ * `POST /api/listings` (`routes/listings.ts`) and
+ * `POST /api/listings/:id/requests` (same file). It is *not* mounted on
+ * `PUT /api/photos` — nothing sends the header there; see that route's
+ * comment and #181.
+ *
  * That digest rotates daily since issue #87 (`dailyIpDigest`), like every
  * other address digest here. The only behavioural cost is a replay whose
  * retry crosses midnight UTC: an anonymous caller's cached response becomes
- * unreachable and the write happens again. Today that is unreachable in
- * practice — the sole route mounting this middleware
- * (`POST /api/listings`) runs `ownerAuth({ createIfMissing: true })` first,
- * so `owner` is always set and the IP branch below is the fallback for a
- * mount that doesn't exist yet. Worth knowing before adding one.
+ * unreachable and the write happens again. This used to be described as
+ * unreachable in practice, on the reasoning that every mount runs
+ * `ownerAuth({ createIfMissing: true })` first so `owner` is always set and
+ * the IP branch is a fallback for a mount that does not exist yet. That is
+ * false and has been since the requests mount landed: `POST
+ * /api/listings/:id/requests` is anonymous — a stranger asks for a keepsake
+ * without an owner token — so the IP-digest branch below is the *live* path
+ * for it, and a request retried across midnight UTC does write twice. The
+ * unique `(listing_id, email)` constraint is what actually stops a duplicate
+ * request row; this middleware only saves the round trip.
+ *
+ * If a third route ever mounts this, namespace the KV key by method+route
+ * first: `idem:${scope}:${key}` has no route component, which is fine while
+ * both mounts are `POST` under `/api/listings` and a caller's key collides
+ * only with its own, and stops being fine the moment two different writes
+ * can carry the same client-chosen key string.
  */
 import type { Context, Next } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";

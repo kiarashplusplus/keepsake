@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { RecoverInput as RecoverInputSchema, RecoverResult, type RecoverInput, type RecoverResult as RecoverResultT } from "@keepsake/contracts/owner";
+import {
+  RecoverExchangeInput,
+  RecoverInput as RecoverInputSchema,
+  RecoverResult,
+  type RecoverInput,
+  type RecoverResult as RecoverResultT,
+} from "@keepsake/contracts/owner";
 import { apiFetch } from "@/api/client";
 
 const RecoverSent = z.object({ sent: z.literal(true) });
@@ -22,12 +28,22 @@ export async function recover(input: RecoverInput, options: RecoverOptions): Pro
   RecoverSent.parse(data);
 }
 
-/** `POST /api/recover/:token` — one-time use; rotates the owner's token and
+/** `POST /api/recover/exchange` — one-time use; rotates the owner's token and
  * returns the new one exactly once. No Turnstile (the token itself, sent
- * only via email, is the proof of possession). */
+ * only via email, is the proof of possession).
+ *
+ * Issue #182: the token used to be a path segment (`POST /api/recover/<token>`),
+ * where the Worker's `onError` logged it verbatim while it was still live and
+ * still worth full takeover of the dashboard. It goes in the body now, the
+ * same shape `withdrawWithToken` already used (`src/api/withdraw.ts`). The
+ * *link* people click is unchanged — `/recover/<token>` is this app's own
+ * route (`app/recover/[token].tsx`), not the API's — so recovery mail sent
+ * before this change still works. */
 export async function recoverWithToken(token: string, signal?: AbortSignal): Promise<RecoverResultT> {
-  const data = await apiFetch<unknown>(`/api/recover/${encodeURIComponent(token)}`, {
+  const body = RecoverExchangeInput.parse({ token });
+  const data = await apiFetch<unknown>("/api/recover/exchange", {
     method: "POST",
+    body,
     ...(signal !== undefined ? { signal } : {}),
   });
   return RecoverResult.parse(data);

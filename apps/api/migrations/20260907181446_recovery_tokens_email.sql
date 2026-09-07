@@ -1,0 +1,23 @@
+-- Issue #167: bind a verify_email token to the address it was mailed to.
+--
+-- `recovery_tokens` had `owner_id` as its only subject, so redeeming a link
+-- stamped "verified" on whatever address sat on the owner row at click time —
+-- not on the address the link was actually sent to. Typo an address, correct
+-- it, click the first link out of your inbox, and the corrected address is
+-- marked verified without anyone having confirmed it. Adversarially the same
+-- move attaches a stranger's address, which then receives recovery links,
+-- requesters' private notes, and the giver's own address at choose time.
+--
+-- Nullable on purpose. Rows minted before this migration genuinely do not
+-- record which address they were mailed to, and there is no way to recover
+-- it — the address is not derivable from the owner row, which is precisely
+-- the bug. `GET /api/me/email/verify` therefore FAILS CLOSED on NULL: a
+-- legacy verify_email token verifies nothing and is burned on use. The blast
+-- radius is one dead link for anyone mid-verification across the deploy, on
+-- a 24 h TTL, fixed by asking for another. Backfilling from `owners.email`
+-- would reinstate exactly the assumption this migration exists to remove.
+--
+-- `purpose = 'recover'` rows leave this NULL and never read it: a recovery
+-- token's subject is the owner, and the address it was mailed to is already
+-- pinned by the `email_verified_at IS NOT NULL` lookup that minted it.
+ALTER TABLE recovery_tokens ADD COLUMN email TEXT;

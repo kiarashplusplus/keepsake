@@ -144,17 +144,30 @@ is the lock.
   `withdraw`+`relist` undoes an admin rejection, a hide, a ban sweep or a three-report auto-hide.
   **#165** — `dailyDigest` never writes its heartbeat, so `/api/admin/health` is permanently
   `ok: false` and the crons alarm is stuck on.
-- **Personal data and email:** #167, #169, #170, #182, #188, #189, #190. Between them: a redactor
-  with no rule for the only PII Keepsake holds, IP hashes kept forever against a privacy page that
-  promises 48-hour expiry twice, a recovery token logged verbatim because it travels as a path
-  segment, and a request endpoint that is an oracle for the giver's address.
+- **Personal data and email:** #169, #170, #188, #189, #190. Between them: a redactor with no rule
+  for the only PII Keepsake holds, IP hashes kept forever against a privacy page that promises
+  48-hour expiry twice, and a request endpoint that is an oracle for the giver's address.
+  **#167 and #182 are fixed** (2026-09-07): a `verify_email` token is now bound to the address it
+  was mailed to rather than to the owner row, and the recovery token travels in a POST body
+  instead of a URL path segment — see `docs/design/identity.md`. #170 still owns the redactor's
+  own missing path-segment and PII rules.
 - **More checks that could not fail:** #166 (preflight's shell-syntax check has never examined a
-  byte of shell), #173 (the consent banner was never scanned by axe — fixed; it and a dark-mode pass are
-  scanned now), #175, #176, #181, #191. Six
-  more instances of `AGENTS.md`'s table, found in a single pass — the table is at seven rows and
-  should be read as a pattern, not a closed list.
+  byte of shell), #175, #176, #181, #191. Six more instances of `AGENTS.md`'s table, found in a
+  single pass — the table is at seven rows and should be read as a pattern, not a closed list.
+  **#173 is fixed** (2026-09-07): the consent banner was never scanned by axe, because every a11y
+  context seeded a consent decision, and two comments in the tree claimed a scan that did not
+  exist. `e2e/a11y.spec.ts` now builds its own unseeded contexts for the banner and runs a
+  dark-mode pass over the pages; both comments say what is true.
 - **Moderation and abuse surface:** #168, #171, #179, #183.
-- **Correctness:** #163, #172, #174, #180, #184, #185, #186, #187.
+- **Correctness:** #163, #180, #184, #186. **#172, #174 and #187 are fixed** (2026-09-07): a
+  failed Delete on `/mine/[id]` no longer navigates as though it succeeded; a Turnstile challenge
+  failure reports `unconfigured` and lets the server's `siteverify` decide, instead of disabling
+  every submit button in the app with no message and no retry; and `useFeed`'s `loadMore` drops a
+  page belonging to a query the visitor has already left. **#185 is fixed** (2026-09-07):
+  choosing a recipient is one `env.DB.batch()` with a conditional claim on the listing, checked
+  before any mail goes out — see `docs/design/email.md`'s "Contact reveal rule". It is also the
+  Worker's first use of `batch()`; the other multi-write sequences that issue named
+  (create-listing + photos + aspects, `replaceListingAspects`) are still unbatched.
 - **Ops and backup:** #164 (the documented D1 backup omits `listing_aspects`, and
   `aspects_backfilled_at` makes the loss unrecoverable), #178.
 

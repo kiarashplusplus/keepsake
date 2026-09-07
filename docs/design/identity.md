@@ -21,12 +21,20 @@ listings, and the email step in `give` says so explicitly.
 
 - `POST /api/recover {email}` — always returns 200 regardless of whether the email matches (no
   account-enumeration signal), Turnstile-gated, emails a link to `/recover/<token>` if it does.
-- `POST /api/recover/:token` — rotates `token_hash`, returns the new owner token once. The old
-  token is dead the instant this succeeds: a device that loses the recovery race gets 401 on its
-  next request, by design (compromise containment, not a bug to smooth over).
+- `POST /api/recover/exchange {token}` — rotates `token_hash`, returns the new owner token once.
+  The old token is dead the instant this succeeds: a device that loses the recovery race gets 401
+  on its next request, by design (compromise containment, not a bug to smooth over). **The token
+  goes in the body, never in the URL** (#182, 2026-09-07): it used to be
+  `POST /api/recover/:token`, and the Worker's `onError` logged the request path verbatim, so any
+  request that threw while a giver clicked their link wrote a live takeover credential into
+  Workers Logs. `POST /api/requests/withdraw` already had the right shape and this now copies it.
+  The emailed link is unchanged — `/recover/<token>` is the *web* app's route, and that page reads
+  the token out of its own path and posts it in a body — so mail sent before the change still
+  works.
 - `recovery_tokens` table: `purpose` `recover` (60 min TTL — `RECOVER_TTL_MS`, raised from 30 on
   2026-09-07) or `verify_email` (24 h), single-use
-  (`used_at`).
+  (`used_at`), plus `email` — the address a `verify_email` link was actually mailed to
+  (migration `20260907181446_recovery_tokens_email.sql`).
 
 ## Request withdrawal
 
@@ -63,7 +71,7 @@ Kiarash alone. Not an owner token with elevated scope — there is no user table
 
 ## M3 status (API side)
 
-`POST /api/recover` and `POST /api/recover/:token` (`apps/api/src/routes/recover.ts`) implement
+`POST /api/recover` and `POST /api/recover/exchange` (`apps/api/src/routes/recover.ts`) implement
 recovery exactly as described above: always `{ sent: true }` regardless of a match (no
 enumeration signal — the D1 lookup and the conditional send happen entirely inside the "always
 200" branch); a matching, *verified* owner gets a 60-minute `recovery_tokens` row (`purpose =
@@ -71,6 +79,20 @@ enumeration signal — the D1 lookup and the conditional send happen entirely in
 marks the row used in the same request, so the old token 401s on its very next call and the
 recovery token itself can't be replayed. `POST /api/me/email` mints the `verify_email` counterpart
 (24 h TTL) and `GET /api/me/email/verify` redirects to `/mine?verified=1|0&reason=expired|invalid`.
+
+**A verify link is bound to the address it was mailed to, not to the owner row** (#167,
+2026-09-07). It used to be bound only to `owner_id`, so redeeming any unexpired link stamped
+"verified" on whatever address sat on the row at click time — reachable by typing an address,
+correcting it, and then clicking the first link out of your inbox, with no attacker involved.
+Since verification is what gates recovery mail, request notifications, and revealing the giver's
+address to a chosen requester, that attached all three to an address nobody had confirmed. Two
+conditions now both have to hold at redeem time: the address recorded on the token still matches
+`owners.email`, and no newer `verify_email` token exists for that owner. The second is what fails
+a token minted before the column existed — or by `POST /api/listings`, which does not record one —
+closed rather than open. `POST /api/me/email` and `DELETE /api/me/email` also mark outstanding
+`verify_email` tokens used the moment they change or clear the address, so nothing redeemable is
+left in the table; `recover` tokens are deliberately untouched by that, since editing an address
+must not kill a live recovery link for someone who has already lost their device.
 
 Both token kinds share `src/lib/tokens.ts`'s `randomTokenRaw()` — one `crypto.getRandomValues(32)`
 + base64url-without-padding implementation for every raw secret this Worker mints (owner tokens,
