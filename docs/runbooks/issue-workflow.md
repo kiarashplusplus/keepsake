@@ -40,9 +40,30 @@ success is worth less than the evidence for it:
 - What you did not do, and why.
 - Anything a later session would otherwise have to rediscover.
 
-## Branches
+## Branches — short-lived, merged the same session
 
-One branch can carry many issues. `give-flow-fixes` spans a dozen, and splitting it per issue
-would slow the work more than it would help. That is why the state lives in labels rather than in
-draft pull requests: the label tells you what is claimed, the commit message tells you what
-closed it.
+**Branch from `main`, open a pull request, merge it before you stop.** A branch may carry a few
+closely related issues, but not a whole session's work.
+
+An earlier version of this document said the opposite: that one branch could carry a dozen issues,
+and that labels rather than pull requests were the shared state. That was true while one session
+worked the repo alone. It is wrong now, and the cost was measured:
+
+- `give-flow-fixes` ran to sixteen commits while another session worked `main`. That session could
+  not see a fix that existed only on the branch, so it wrote the same fix again, byte for byte.
+- Reconciling the two took **eight conflicted files**, and one hand-resolution truncated a test
+  block badly enough to stop the file parsing.
+- The merge surfaced a content-security-policy bug that had been **live on `main`** and invisible
+  to both sides: the policy never allowlisted the analytics and tag-manager hosts, so a visitor
+  granting consent had the script refused by the browser. Nothing on either branch alone could
+  have caught it.
+
+That last point is the argument for merging often rather than merely the argument against
+divergence. Branches meeting is where this class of bug becomes visible, so make it happen early
+and cheaply instead of once and expensively.
+
+Labels still say who is working what — that has not changed, and it remains the lock. What changed
+is that the label is no longer a substitute for landing the code.
+
+One more reason, mechanical rather than social: **the full suite only runs on a pull request.** A
+branch that never opens one has never been tested the way `main` tests it.

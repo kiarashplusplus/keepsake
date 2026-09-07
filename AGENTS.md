@@ -14,8 +14,8 @@ The product is the story. Anything that makes a listing feel like a classified a
 
 ## Where things stand
 
-- **Preview**: <https://preview.keepsake.ing> — the whole product, live, on branch
-  `give-flow-fixes`. Deploys itself on every push to `main`.
+- **Preview**: <https://preview.keepsake.ing> — the whole product, live from `main`, which
+  redeploys itself on every push.
 - **Production**: `keepsake-production` exists, migrated, seeded, secrets set — but **no domain
   points at it** and that is deliberate. Attaching `keepsake.ing` is Kiarash's call, and
   production deploys are manual (`workflow_dispatch`) because GitHub's required-reviewer gate is a
@@ -41,6 +41,12 @@ about who has what.
 3. Add `status: in progress`, comment saying what you intend to change, then work.
 4. Reference the issue in commits (`Closes #12`, or `Refs #12` for partial work).
 5. On finish, comment with **what changed and how you proved it**, then remove the label.
+
+**Branch from `main` and merge before you stop.** Short-lived branches, one pull request per
+coherent chunk. A sixteen-commit branch already cost another session a duplicated fix and eight
+conflicted files, and hid a live bug on `main` until the two finally met. The full test suite only
+runs on a pull request, so an unmerged branch is also an untested one.
+`docs/runbooks/issue-workflow.md` has the detail.
 
 ## The one rule that matters
 
