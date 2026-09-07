@@ -22,9 +22,28 @@ import { isImageError, moderateImage } from "./image.js";
 import { decide, decideImage, decideText } from "./decide.js";
 import { containsContactInfo } from "./contactInfo.js";
 
-/** After this many failed attempts (AI errors, exhausted budget, timeouts —
- * anything that would otherwise retry forever) a listing is escalated to
- * `needs_review` instead of retried again. */
+/** After this many failed attempts (AI errors, timeouts — anything that
+ * would otherwise retry forever) a listing is escalated to `needs_review`
+ * instead of retried again.
+ *
+ * **A budget denial is not one of them** (issue #179). It used to be: a
+ * denial writes a `kind='decision'` / `verdict='error'` / `reason='budget'`
+ * event, `nextAttemptNumber` counted exactly those, and the 5-minute retry
+ * cron therefore burned all three attempts in about fifteen minutes — so
+ * once `MOD_TEXT_DAILY_BUDGET`/`MOD_IMAGE_DAILY_BUDGET` was exhausted at,
+ * say, 10:00 UTC, every listing posted for the next fourteen hours was told
+ * "still in the queue, no action needed" and then flipped to
+ * `held_for_review` a quarter of an hour later. At midnight the budget reset
+ * and nothing re-ran them, because the cron only selects `status='pending'`.
+ * A cheap denial-of-service on the AI budget became permanent manual work
+ * for Kiarash, one listing at a time.
+ *
+ * `docs/design/moderation.md` already promised the other behaviour —
+ * exhausted budget means "stays `pending`, event `reason=budget`, cron
+ * retries after midnight UTC" — and `nextAttemptNumber` below is what makes
+ * that true: budget denials are logged, but not counted. The attempt counter
+ * is for "we tried to judge this listing and could not", and a denial is not
+ * an attempt at judging anything. */
 const MAX_ATTEMPTS = 3;
 
 const DEFAULT_TEXT_DAILY_BUDGET = 1000;
@@ -122,13 +141,40 @@ async function logEvent(env: Env, fields: LogEventFields): Promise<void> {
     .run();
 }
 
+/** The moderation-budget denial reason, written by the two budget gates
+ * below and excluded from the attempt count by `nextAttemptNumber` (#179).
+ * One constant so the writer and the reader cannot drift apart — a typo in
+ * either string would silently restore the bug this fixed. */
+const BUDGET_DENIAL_REASON = "budget";
+
+/**
+ * The attempt number this run is, derived from the event log rather than
+ * passed in, so every caller (the create/edit `waitUntil`, the retry cron)
+ * has the same contract.
+ *
+ * `reason <> 'budget'` is issue #179: a budget denial is logged as a
+ * `decision`/`error` row, exactly like a Workers AI outage, and counting it
+ * meant three cron ticks — fifteen minutes — turned every listing posted
+ * after the daily ceiling was hit into a permanent `needs_review`. Denials
+ * still write their event (the owner-facing `moderation_reason='budget'` and
+ * the audit trail both depend on it); they just don't advance the counter,
+ * so the listing stays `pending` and the cron keeps picking it up until the
+ * midnight-UTC reset lets a real attempt happen.
+ *
+ * `reason IS NULL OR reason <> 'budget'` rather than a bare `<>`: in SQL,
+ * `NULL <> 'budget'` is NULL, not true, so the bare form would skip every
+ * decision row written without a reason — which is most of them, including
+ * the `decide()` "pending/error" rows that are exactly what the attempt
+ * counter exists to count.
+ */
 async function nextAttemptNumber(env: Env, listingId: string, version: number): Promise<number> {
   const last = await env.DB.prepare(
     `SELECT attempt FROM moderation_events
      WHERE listing_id = ? AND listing_version = ? AND kind = 'decision'
+       AND (reason IS NULL OR reason <> ?)
      ORDER BY created_at DESC LIMIT 1`,
   )
-    .bind(listingId, version)
+    .bind(listingId, version, BUDGET_DENIAL_REASON)
     .first<{ attempt: number }>();
   return (last?.attempt ?? 0) + 1;
 }
@@ -233,7 +279,18 @@ export async function moderateListing(env: Env, listingId: string, version: numb
     freshCallerCeiling: FRESH_CALLER_CEILING,
   });
   if (!textBudget.allowed) {
-    await logEvent(env, { listingId, listingVersion: version, kind: "decision", verdict: "error", reason: "budget", attempt });
+    // Logged, but not counted against MAX_ATTEMPTS — see `nextAttemptNumber`
+    // and issue #179. The listing stays `pending` with
+    // `moderation_reason='budget'` until the ceiling resets at midnight UTC
+    // and `cron/moderationRetry.ts`'s next pass can make a real attempt.
+    await logEvent(env, {
+      listingId,
+      listingVersion: version,
+      kind: "decision",
+      verdict: "error",
+      reason: BUDGET_DENIAL_REASON,
+      attempt,
+    });
     await setStatus(env, listingId, version, { status: "pending", moderationReason: "budget", publishIfUnset: false });
     await alertBudgetExhaustedOnce(env, "mod_text");
     return;
@@ -250,7 +307,15 @@ export async function moderateListing(env: Env, listingId: string, version: numb
       freshCallerCeiling: FRESH_CALLER_CEILING,
     });
     if (!imageBudget.allowed) {
-      await logEvent(env, { listingId, listingVersion: version, kind: "decision", verdict: "error", reason: "budget", attempt });
+      // Same as the text gate above: logged, not counted (#179).
+      await logEvent(env, {
+        listingId,
+        listingVersion: version,
+        kind: "decision",
+        verdict: "error",
+        reason: BUDGET_DENIAL_REASON,
+        attempt,
+      });
       await setStatus(env, listingId, version, { status: "pending", moderationReason: "budget", publishIfUnset: false });
       await alertBudgetExhaustedOnce(env, "mod_image");
       return;
