@@ -10,13 +10,22 @@
  * `env.AI.run` is stubbed per-test rather than actually calling Workers AI —
  * same convention `test/moderation.test.ts` already uses — with a fixture
  * table keyed by the *exact* embedding input text, not a real text encoder.
- * This is deliberate: it proves the code path calls `env.AI`/`env.VECTORIZE`
- * with the right inputs and reacts correctly to their outputs, but it
- * cannot prove bge-base-en-v1.5 actually places related listings near each
- * other in real vector space — only a run against the real service can, and
- * that's done separately (see the issue's closing comment) rather than
- * faked here, per this project's rule that a mocked AI call can never catch
- * a prompt/model problem (docs/design/moderation.md).
+ * That proves the code path calls `env.AI`/`env.VECTORIZE` with the right
+ * inputs and reacts correctly to their outputs. It proves nothing about the
+ * model. A fixture that says "these two texts are similar" is the test
+ * author asserting the answer, not the model producing it — so none of these
+ * blocks may be cited as evidence that `MODELS.embedding` actually places
+ * related listings near each other in real vector space.
+ *
+ * The one block that *would* be such evidence is "real Workers AI
+ * embeddings" at the bottom, gated behind `REAL_AI=1`. It is skipped by
+ * default and has never been observed to run: no session working on this
+ * issue has had a Cloudflare credential. See its own comment.
+ *
+ * An earlier revision of this header claimed the real-service run was "done
+ * separately (see the issue's closing comment)". There is no such comment on
+ * issue #38, and no artifact of that run exists anywhere. The claim is
+ * removed rather than left pointing at nothing.
  */
 import { env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -24,7 +33,7 @@ import type { FeedPage } from "@keepsake/contracts/feed";
 import type { OwnerListing, PublicListing } from "@keepsake/contracts/listing";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
 import { MODELS } from "../src/models.js";
-import { embeddingText } from "../src/search/embedding.js";
+import { embed, embeddingText } from "../src/search/embedding.js";
 import { reembedListing } from "../src/search/reembed.js";
 import { vectorSearchCandidates } from "../src/search/search.js";
 import {
@@ -96,6 +105,13 @@ function fixtureEmbedding(text: string, vector: number[]): void {
 
 beforeEach(async () => {
   setTestEnvVar("MOCK_AI", "0");
+  // Every deployed environment has SEMANTIC_SEARCH off (see
+  // `semanticSearchEnabled` in src/env.ts), and vitest.config.ts pins the
+  // test default to "0" to match. The blocks below that exercise the vector
+  // path have to opt in explicitly, exactly like a human flipping the flag
+  // would — which is the point: nothing reaches Vectorize by default, in
+  // tests or anywhere else. The "flag off" block resets it to "0" itself.
+  setTestEnvVar("SEMANTIC_SEARCH", "1");
   mockAi();
   installFakeVectorize();
   await seedStandardPostalCodes();
@@ -246,7 +262,10 @@ const VALID_LISTING_BODY = {
   category: "home_kitchen",
   country: "US",
   postal_code: "02144",
-  age_attested: true,
+  // `date_of_birth`, not the old `age_attested: true` — #93 dropped the age
+  // checkbox for a DOB prompt, and this file was written before that landed.
+  // Kept identical to `test/listings.test.ts`'s body so the two don't drift.
+  date_of_birth: "1990-01-01",
 };
 
 async function createListingWithPhoto(token: string, overrides: Record<string, unknown> = {}): Promise<OwnerListing> {
@@ -338,5 +357,248 @@ describe("write paths re-embed (issue #38)", () => {
 
     await waitFor(async () => (fake.has(listing.id) ? undefined : true));
     expect(fake.has(listing.id)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SEMANTIC_SEARCH off — the shipping posture this branch actually merges in.
+//
+// The flag is "0" in all three wrangler.toml env blocks and .env.example
+// because the Vectorize indexes are not confirmed to exist. That makes these
+// the only tests in this file describing what a deployed environment really
+// does today; everything above describes a path no request currently reaches.
+//
+// What has to hold: search behaves exactly as it does on main (FTS5 via
+// db/fts.ts), and the vector machinery is not merely unused but unreachable
+// — no embedding call, no Vectorize call, on the read path or the write one.
+// ---------------------------------------------------------------------------
+describe("SEMANTIC_SEARCH off: search is exactly main's FTS behaviour", () => {
+  beforeEach(() => {
+    setTestEnvVar("SEMANTIC_SEARCH", "0");
+  });
+
+  it("vectorSearchCandidates returns null without calling env.AI or env.VECTORIZE at all", async () => {
+    // A fully-populated, perfectly-matching index — so that if the flag were
+    // not checked, this query would certainly return a match. The assertion
+    // is that it returns null anyway, and that nothing was consulted to
+    // decide that: a flag checked *after* the embed call would still return
+    // null here and would still be wrong, because it would spend a Workers
+    // AI call and, on a real deploy, reach for an index that may not exist.
+    const fake = installFakeVectorize();
+    await fake.upsert([{ id: "would-have-matched", values: [1, 0] }]);
+    fixtureEmbedding("matching query", [1, 0]);
+    const callsBefore = embeddingCallCount;
+
+    expect(await vectorSearchCandidates(env, "matching query")).toBeNull();
+    expect(embeddingCallCount).toBe(callsBefore);
+  });
+
+  it("reembedListing writes no vector and spends no AI call on the write path", async () => {
+    const ownerId = await insertOwner();
+    const title = "A brass compass";
+    const story = "My grandfather carried this at sea for thirty years.";
+    const listingId = await insertApprovedListing({ ownerId, title, story });
+
+    const fake = installFakeVectorize();
+    // A fixture *is* registered, so a re-embed would succeed rather than
+    // throw — this must fail if the code runs, not merely if it errors.
+    fixtureEmbedding(embeddingText(title, story, []), [1, 0]);
+    const callsBefore = embeddingCallCount;
+
+    await reembedListing(env, listingId);
+
+    expect(embeddingCallCount).toBe(callsBefore);
+    expect(fake.has(listingId)).toBe(false);
+  });
+
+  it("GET /api/feed?q= returns the same page it returns with Vectorize removed entirely", async () => {
+    const ownerId = await insertOwner();
+    const lighthouse = await insertApprovedListing({
+      ownerId,
+      title: "A lighthouse lens",
+      story: "An old lighthouse lens my grandfather kept on his desk for years.",
+    });
+    // Shares no word with the query — so a feed that ignored `q` and
+    // returned everything would be caught here rather than passing.
+    const decoy = await insertApprovedListing({
+      ownerId,
+      title: "A teacup",
+      story: "Nothing to do with the sea at all.",
+    });
+
+    // Flag off, but the binding present and the index holding a vector that
+    // would rank differently if the vector path were live.
+    const fake = installFakeVectorize();
+    await fake.upsert([{ id: lighthouse, values: [1, 0] }]);
+    fixtureEmbedding("lighthouse", [1, 0]);
+
+    const flagOff = await readOk<FeedPage<PublicListing>>(await fetchFeed("?q=lighthouse"));
+
+    // The reference: no Vectorize binding whatsoever, unambiguously the FTS
+    // path. Comparing against this rather than a hardcoded expected list is
+    // what makes it an equivalence assertion — it stays meaningful if FTS
+    // ranking itself changes later.
+    removeFakeVectorize();
+    const ftsOnly = await readOk<FeedPage<PublicListing>>(await fetchFeed("?q=lighthouse"));
+
+    expect(flagOff.items.map((item) => item.id)).toEqual(ftsOnly.items.map((item) => item.id));
+    expect(flagOff.items.map((item) => item.id)).toContain(lighthouse);
+    expect(flagOff.items.map((item) => item.id)).not.toContain(decoy);
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue #40's failure mode, on the path that is actually live: a listing
+  // the vision model found nothing to tag must still be findable. This is the
+  // eBay problem the milestone exists to avoid — a lovely story nobody can
+  // reach because the machine had no labels for it.
+  //
+  // The block far above tests the same guarantee through the *vector* path,
+  // with a fixture standing in for the model. This one needs no model at all:
+  // with SEMANTIC_SEARCH off, a zero-aspect listing has to surface on words
+  // from its own title and story, through FTS, exactly as on main.
+  // -------------------------------------------------------------------------
+  it("a listing with ZERO aspects still surfaces via the FTS fallback", async () => {
+    const ownerId = await insertOwner();
+    const title = "A lighthouse lens";
+    const story = "An old lighthouse lens my grandfather kept on his desk for years.";
+    const listingId = await insertApprovedListing({ ownerId, title, story });
+
+    // A decoy sharing none of the query words. Without it this test would
+    // pass against a feed that ignored `q` altogether and returned
+    // everything — "the listing is in the results" is only meaningful
+    // alongside "and something else isn't". Found by breaking the FTS
+    // fallback and watching the first version of this test stay green.
+    const decoy = await insertApprovedListing({
+      ownerId,
+      title: "A teacup",
+      story: "Nothing to do with the sea at all.",
+    });
+
+    // The #40 condition, asserted rather than assumed: not one aspect row.
+    const aspectCount = await env.DB.prepare("SELECT COUNT(*) AS n FROM listing_aspects WHERE listing_id = ?")
+      .bind(listingId)
+      .first<{ n: number }>();
+    expect(aspectCount?.n).toBe(0);
+
+    // Findable on a title word, a story-only word, and one spanning both.
+    for (const query of ["lighthouse", "grandfather", "lens"]) {
+      const page = await readOk<FeedPage<PublicListing>>(await fetchFeed("?q=" + encodeURIComponent(query)));
+      const ids = page.items.map((item) => item.id);
+      expect(ids, `query ${JSON.stringify(query)} should find the zero-aspect listing`).toContain(listingId);
+      expect(ids, `query ${JSON.stringify(query)} must actually search, not return everything`).not.toContain(decoy);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Real Workers AI embeddings — the only block here that can say anything
+// about the model itself.
+//
+// Skipped unless REAL_AI=1 (wired through vitest.config.ts from the host
+// env). It is NOT skipped for convenience: `env.AI` has no local emulator and
+// always proxies to the real Workers AI API, which needs a Cloudflare
+// credential this repo's CI deliberately does not give the test job.
+//
+// **This block has never been observed to run.** Every session that has
+// worked on issue #38 has been in a sandbox with no CLOUDFLARE_API_TOKEN, so
+// "it passes" is not something anyone can currently claim. It is written so
+// a human with credentials can answer the question in one command:
+//
+//     REAL_AI=1 pnpm --filter @keepsake/api test
+//
+// Why it can't be a mock, and why these specific assertions: the failure this
+// project has already shipped once (docs/design/moderation.md) was a model
+// returning confident, well-shaped, meaningless output while every mocked
+// test stayed green. The equivalent failure here is an embedding call that
+// returns a vector of the right length encoding nothing — constant, uniform,
+// or unrelated to its input. A fixture table cannot detect that, because the
+// fixture *is* the answer. Only real output can, and only via a relative
+// assertion: that the model puts related text closer together than unrelated
+// text. An absolute cosine threshold here would be exactly the uncalibrated
+// number `search.ts` warns about.
+// ---------------------------------------------------------------------------
+
+/** Captured at import time, before `mockAi()` in `beforeEach` overwrites it. */
+const realAiRun = env.AI.run.bind(env.AI);
+
+function cosine(a: number[], b: number[]): number {
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i]! * b[i]!;
+    normA += a[i]! * a[i]!;
+    normB += b[i]! * b[i]!;
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+const realAiEnabled = env.REAL_AI === "1";
+
+describe.skipIf(!realAiEnabled)("real Workers AI embeddings (REAL_AI=1)", () => {
+  beforeEach(() => {
+    // Undo the stub the outer beforeEach installed — this block wants the
+    // genuine binding, and MOCK_AI is already "0" there.
+    env.AI.run = realAiRun as unknown as Ai["run"];
+    setTestEnvVar("SEMANTIC_SEARCH", "1");
+  });
+
+  it("returns a 768-dim vector, the width the index-create command specifies", async () => {
+    const vector = await embed(env, "A brass sextant my grandfather used at sea.");
+    expect(vector).not.toBeNull();
+    // 768 is not incidental: it is the `--dimensions` in wrangler.toml's
+    // create commands. A model returning some other width means the index
+    // those commands build cannot store it, and every upsert would fail in
+    // production rather than here.
+    expect(vector!.length).toBe(768);
+  });
+
+  it("is not degenerate: different inputs produce different vectors", async () => {
+    // The decorative-output failure mode. A model — or a broken response
+    // parse — returning the same vector regardless of input would pass the
+    // similarity test below by accident, since everything would be
+    // equidistant from everything.
+    const a = await embed(env, "A brass sextant my grandfather used at sea.");
+    const b = await embed(env, "A cast iron skillet from my mother's kitchen.");
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a).not.toEqual(b);
+    expect(new Set(a!).size).toBeGreaterThan(1); // not a constant-valued vector
+  });
+
+  it("places a related query nearer a zero-aspect story than an unrelated one (#40, for real)", async () => {
+    // Exactly the #40 shape: title + story, no aspects at all, and a query
+    // sharing no literal words with either — so FTS could never find it and
+    // only real semantic similarity can.
+    const title = "A well-loved keepsake";
+    const story = "This belonged to a dear friend of the family, kept safe in a drawer for decades.";
+    const listingText = embeddingText(title, story, []);
+
+    const related = "a treasured old family heirloom kept for many years";
+    const unrelated = "diesel engine torque specifications and gearbox ratios";
+
+    for (const word of ["treasured", "heirloom", "many", "years"]) {
+      expect(`${title} ${story}`.toLowerCase()).not.toContain(word);
+    }
+
+    const [listingVec, relatedVec, unrelatedVec] = await Promise.all([
+      embed(env, listingText),
+      embed(env, related),
+      embed(env, unrelated),
+    ]);
+    expect(listingVec).not.toBeNull();
+    expect(relatedVec).not.toBeNull();
+    expect(unrelatedVec).not.toBeNull();
+
+    const relatedScore = cosine(listingVec!, relatedVec!);
+    const unrelatedScore = cosine(listingVec!, unrelatedVec!);
+
+    // Relative, not absolute: this asserts the model has an opinion in the
+    // right direction, which is the premise semantic search rests on. It
+    // deliberately does NOT assert either score clears MIN_SCORE — that
+    // number is uncalibrated (see search.ts), and calibrating it is a
+    // separate errand for whoever can actually run this.
+    console.log(`real-embeddings #40 check: related=${relatedScore.toFixed(4)} unrelated=${unrelatedScore.toFixed(4)}`);
+    expect(relatedScore).toBeGreaterThan(unrelatedScore);
   });
 });

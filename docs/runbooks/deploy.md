@@ -100,6 +100,78 @@ rather than failing if it isn't working yet).
 DNS: point `keepsake.ing` at the Worker via a route/custom domain in the Cloudflare dashboard,
 once `wrangler deploy --env production` has run at least once.
 
+## Vectorize (issue #38) — NOT DONE, needs a human
+
+Semantic search is built and merged but **switched off in every environment**, because nobody
+has been able to confirm its Vectorize indexes exist. This section is the errand that would
+change that. Nothing here is optional-but-nice: until it is done, `SEMANTIC_SEARCH` must stay
+`"0"` and the `[[vectorize]]` blocks in `wrangler.toml` must stay commented out.
+
+**Why it is blocked.** The branch that built the feature (PR #101) stated in its commit message
+that it had created all three indexes against real credentials. That claim was never
+corroborated — the agent left no transcript, log, or issue comment, and every session since has
+run in a sandbox with no `CLOUDFLARE_API_TOKEN` at all (`wrangler vectorize list` returns
+`In a non-interactive environment, it's necessary to set a CLOUDFLARE_API_TOKEN environment
+variable`). A separate probe of the account token reported it had no Vectorize permission. So
+the indexes may exist, or may never have been created; the honest state is "unknown".
+
+**1. Token permission.** The API token used must have, in addition to the scopes the deploy
+already needs:
+
+| Permission | Scope | Level |
+| --- | --- | --- |
+| `Vectorize` | Account | `Edit` |
+
+`Edit` (not `Read`) — creating the indexes needs write, and the Worker's own upserts/deletes at
+runtime go through the binding rather than this token. Add it at
+<https://dash.cloudflare.com/profile/api-tokens> to the token stored as the `CLOUDFLARE_API_TOKEN`
+GitHub Actions secret, or use a separate token locally just for step 2.
+
+**2. Create the three indexes.** From `apps/api/`:
+
+```sh
+wrangler vectorize create keepsake-listings-dev        --dimensions=768 --metric=cosine
+wrangler vectorize create keepsake-listings-preview    --dimensions=768 --metric=cosine
+wrangler vectorize create keepsake-listings-production --dimensions=768 --metric=cosine
+
+# Confirm — this is the check nobody has yet been able to run:
+wrangler vectorize list
+```
+
+`--dimensions=768` must match `MODELS.embedding` in `apps/api/src/models.ts`; `--metric=cosine`
+must match how `search/search.ts` interprets scores. An index created with the wrong values
+cannot be altered — it has to be deleted and recreated.
+
+**3. Verify the model before trusting it.** With a credential in the environment:
+
+```sh
+CLOUDFLARE_API_TOKEN=… REAL_AI=1 pnpm --filter @keepsake/api test
+```
+
+This un-skips the `real Workers AI embeddings (REAL_AI=1)` block in `test/search.test.ts`, which
+is skipped and has never once been observed to run. It asserts the model returns 768-dim
+vectors, that different inputs give different vectors, and that a related query lands nearer a
+zero-aspect story than an unrelated one. Those assertions exist because a mocked embedding
+cannot catch a model returning well-shaped meaningless output — the failure this project has
+already shipped once (see `docs/design/moderation.md`).
+
+**4. Re-derive `MIN_SCORE`.** `search/search.ts`'s threshold is currently an uncalibrated
+number; the measurements its comment reports were never reproduced. Re-derive it against the
+real model and record the run somewhere durable before relying on it.
+
+**5. Only then turn it on.** Uncomment the three `[[vectorize]]` blocks in `wrangler.toml` and
+flip `SEMANTIC_SEARCH` to `"1"` — one environment at a time, `preview` first.
+
+In the same change, update the "Search by meaning" section of `apps/site/public/privacy.html`:
+it currently states the feature is *switched off and not running*, which stops being true the
+moment you flip the flag. `apps/web/test/guards/privacyPolicy.test.ts` asserts that exact
+sentence is present, so remove it from both the policy and the guard's `discloses` list
+together — the build fails until they agree, which is the point (#88).
+
+> Order matters. Uncommenting a `[[vectorize]]` binding that names a non-existent index makes
+> the Worker upload fail, which blocks **every** deploy of this Worker, including deploys of
+> unrelated changes. Create the indexes first and see `wrangler vectorize list` return them.
+
 ## Secrets
 
 Set per environment, never committed (see root `.env.example`'s `# secrets:` block):

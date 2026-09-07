@@ -1,10 +1,14 @@
 /**
  * Query-side half of semantic search (issue #38): turns a raw `q=` string
  * into a ranked list of listing ids, or `null` when `routes/feed.ts` should
- * fall back to `db/fts.ts`'s FTS5 search instead. Three things can trigger
+ * fall back to `db/fts.ts`'s FTS5 search instead. Four things can trigger
  * that fallback, all deliberately distinguishable in the return value so a
  * test can drive each one on purpose (see `test/search.test.ts`):
  *
+ *  0. `SEMANTIC_SEARCH` is not `"1"` — the kill switch, checked first and
+ *     currently the live answer in every environment. Nothing below it runs
+ *     at all: no embedding call, no Vectorize call. See
+ *     `semanticSearchEnabled` in `env.ts`.
  *  1. Vectorize is unavailable — no `env.VECTORIZE` binding, or the query
  *     call throws (`vectorize.ts` already turns both into `null`).
  *  2. Embedding the query failed — no `env.AI` result, a timeout, `MOCK_AI`
@@ -17,38 +21,37 @@
  *     never fire — exactly the kind of guard-that-can't-fail this project
  *     has shipped before.
  *
- * MIN_SCORE is deliberately **not** a relevance classifier, because a real
- * one isn't available cheaply: measured directly against real Workers AI
- * (`@cf/baai/bge-base-en-v1.5`, cosine, six pairs, same "brass sextant"
- * anchor text each time) —
+ * MIN_SCORE is deliberately **not** a relevance classifier, and the number
+ * below is **not calibrated against anything reproducible.**
  *
- *   identical text                        1.00
- *   close paraphrase, zero shared words    0.86
- *   same category, different item          0.56
- *   unrelated but concrete                 0.52
- *   random word-salad gibberish            0.55
- *   totally unrelated / abstract           0.42
+ * The original author of this branch reported measuring `MODELS.embedding`
+ * directly against real Workers AI — six cosine pairs against one "brass
+ * sextant" anchor, reported as: identical 1.00, close paraphrase 0.86, same
+ * category/different item 0.56, unrelated but concrete 0.52, gibberish 0.55,
+ * unrelated/abstract 0.42 — and set MIN_SCORE under that spread. **None of
+ * that has been reproduced.** That agent never reported back and left no
+ * transcript, log or issue comment behind (the header of
+ * `test/search.test.ts` cites "the issue's closing comment" for it; no such
+ * comment exists), and no session since has had a Cloudflare credential to
+ * re-run it. The numbers are recorded here as a lead for whoever does have
+ * one — not as a measurement this repo stands behind.
  *
- * — this model's raw cosine scores do not separate "relevant" from
- * "irrelevant" cleanly; unrelated concrete text and outright gibberish both
- * score *higher* than one genuinely unrelated abstract pair. A threshold
- * that actually filtered "same category, different item" (0.56) would also
- * filter plenty of real matches, since a true synonym pair can plausibly
- * land in that same band. Building a real relevance classifier (a
- * cross-encoder re-ranker, or a margin relative to the top result rather
- * than an absolute cutoff) is out of scope here.
+ * What survives independently of those numbers is the shape of the argument:
+ * an absolute cosine cutoff on a bi-encoder is a weak relevance signal at
+ * best, so this threshold is set low and treated as a *degenerate-result
+ * floor* — it catches an empty index, or a query so far outside the
+ * embedding space that even Vectorize's nearest neighbors are near
+ * orthogonal. It is not asked to decide topical relevance, and must not be
+ * trusted to. False negatives fall back to FTS (the listing is still
+ * findable); false positives serve an imperfectly-ranked result.
  *
- * So MIN_SCORE is set low, well under the "unrelated but concrete" floor
- * measured above, and exists only to catch the genuinely degenerate case —
- * an empty index, or a query so far outside the embedding space that even
- * Vectorize's own nearest neighbors are closer to orthogonal than to
- * anything real — not to enforce topical relevance. False negatives here
- * fall back to FTS (a listing is still findable); false positives serve an
- * imperfectly-ranked result, which is the honest ceiling of this approach
- * without a re-ranker. Revisit with real query traffic and, ideally, a
- * second-stage re-ranker before trusting this number to mean "relevant."
+ * Before `SEMANTIC_SEARCH` is ever turned on (see `semanticSearchEnabled` —
+ * it is off in every environment today), this number has to be re-derived
+ * against the real model, with the run recorded somewhere durable. Until
+ * then no request reaches this code in a deployed environment at all.
  */
 import type { Env } from "../env.js";
+import { semanticSearchEnabled } from "../env.js";
 import { embed } from "./embedding.js";
 import { queryListingVectors, type VectorMatch } from "./vectorize.js";
 
@@ -56,6 +59,14 @@ const SEARCH_TOP_K = 100;
 const MIN_SCORE = 0.3;
 
 export async function vectorSearchCandidates(env: Env, rawQuery: string): Promise<VectorMatch[] | null> {
+  // The kill switch, checked before anything else so that with the flag off
+  // this function cannot embed, cannot call Vectorize, and cannot return
+  // anything but `null` — which `routes/feed.ts` reads as "fall back to
+  // FTS". This is the fourth fallback trigger, and the only one that holds
+  // no matter what the bindings or the index are doing. See
+  // `semanticSearchEnabled` in `env.ts` for why it is off everywhere.
+  if (!semanticSearchEnabled(env)) return null;
+
   const trimmed = rawQuery.trim();
   if (trimmed.length === 0) return null;
 

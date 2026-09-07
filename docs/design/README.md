@@ -28,9 +28,22 @@ is a real site with real visitors possible, not a staging exercise.
   preview D1 has already applied, and #99's new rule requires timestamped names — renaming it to
   comply would be exactly the drift #99 exists to prevent. Merge #100, then #107.
 - **PR #100** (aspect backfill, #37) — CI green, review not completed.
-- **PR #101** (semantic search, #38) — CI red on one preflight rule: a `@cf/` id in a *doc
-  comment* in `search/search.ts`. The id itself is correctly declared in `models.ts`. Because
-  preflight fails, every other job skipped, so the rest of that PR has never been tested.
+- **PR #101** (semantic search, #38) — preflight fixed, `main` merged, CI green, and the feature
+  **shipped switched off**: `SEMANTIC_SEARCH = "0"` in all three `wrangler.toml` env blocks and
+  `.env.example`, with the `[[vectorize]]` bindings commented out. With the flag off, `?q=` is
+  exactly `main`'s FTS5 search, and `test/search.test.ts` asserts that equivalence against a
+  no-binding control rather than assuming it.
+  **Two of the three questions #38 asked are still unanswered, and cannot be answered from a
+  sandbox**: nobody has run this against real Workers AI (`env.AI` with `remoteBindings: false`
+  fails `Binding AI needs to be run remotely`; with them enabled it fails for want of a
+  `CLOUDFLARE_API_TOKEN`), and nobody has confirmed the Vectorize indexes exist. The errand is
+  written out in `docs/runbooks/deploy.md` → "Vectorize (issue #38)". A `REAL_AI=1`-gated test
+  exists and has **never been observed to run**.
+  A caution for anyone reading that branch: its commit message asserts in detail that all of this
+  *was* verified against real services, listing specific cosine measurements and index creations.
+  None of it is corroborated anywhere, and the test file's citation of "the issue's closing
+  comment" points at a comment that does not exist. Confident prose in a commit message is not
+  evidence — this is row six of `AGENTS.md`'s table wearing a different hat.
 
 **Open and genuinely blocked on a human**: #6 (read an inbox), #31 (a lawyer), #42 (walk it on a
 phone), #47 (`/health` on the apex plus the first real listing), #94 (a zone cache-purge token),

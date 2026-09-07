@@ -23,17 +23,27 @@ export default defineConfig({
       const migrations = await readD1Migrations(path.join(__dirname, "migrations"));
 
       return {
-        // The `[ai]` binding has no local emulator in workerd — it always
-        // proxies to the real Workers AI API, which is what causes the
-        // "AI bindings always access remote resources" warning and a
-        // lingering connection that delays (but does not fail) `vitest run`
-        // teardown. `remoteBindings: false` keeps D1/R2/KV/assets/ratelimits
-        // fully local; AI still goes remote regardless because there is no
-        // local alternative, per Cloudflare's own docs. None of the M0 tests
-        // call `env.AI.run()`, so this only affects teardown latency, not
-        // correctness — left in place (not mocked away) because M1's
-        // moderation pipeline tests will want the real binding shape.
-        remoteBindings: false,
+        // The `[ai]` binding has no local emulator in workerd. This comment
+        // used to claim that AI "still goes remote regardless" of
+        // `remoteBindings: false`, because there is no local alternative.
+        // That is not what workerd does. With `remoteBindings: false`, an
+        // `env.AI.run()` call fails outright:
+        //
+        //     embed: AI call failed { error: 'Binding AI needs to be run remotely' }
+        //
+        // (observed directly while wiring up `test/search.test.ts`'s real-AI
+        // block — issue #38). It never reaches Cloudflare at all. That was
+        // harmless while every test mocked `env.AI.run`, which is why it went
+        // unnoticed; it matters now that one test deliberately does not.
+        //
+        // So this is opt-in rather than a constant: default `false` keeps
+        // ordinary runs and CI fully local, deterministic and offline, and
+        // `REAL_AI=1` flips it so the real-embeddings test can actually reach
+        // Workers AI. Remote bindings also need a Cloudflare credential
+        // (`CLOUDFLARE_API_TOKEN`) in the environment — without one, `REAL_AI=1`
+        // fails at authentication instead, which is a clearer error than a
+        // silently-mocked pass.
+        remoteBindings: process.env.REAL_AI === "1",
         wrangler: { configPath: "./wrangler.toml" },
         miniflare: {
           // `@cloudflare/vitest-pool-workers@0.22.0` pins its own miniflare
@@ -64,6 +74,20 @@ export default defineConfig({
             MOD_IMAGE_DAILY_BUDGET: "3000",
             SUGGEST_DAILY_BUDGET: "1000",
             EMBED_DAILY_BUDGET: "2000",
+            // Issue #38's kill switch, pinned "0" here so the default test
+            // env matches every deployed environment — `test/search.test.ts`
+            // turns it on explicitly for the tests that exercise the vector
+            // path, and asserts the off behaviour without touching it.
+            SEMANTIC_SEARCH: "0",
+            // Opt-in escape hatch for the one test that calls *real* Workers
+            // AI (`test/search.test.ts`'s "real embeddings" block). Read from
+            // the host env out here in Node because the Workers runtime has
+            // no `process.env`. Unset means "0", so CI and every ordinary
+            // `pnpm test` run stay fully offline and deterministic; a human
+            // with Cloudflare credentials runs `REAL_AI=1 pnpm test` to
+            // actually look at the model. See that block's comment for why
+            // this cannot be a mock.
+            REAL_AI: process.env.REAL_AI === "1" ? "1" : "0",
             LISTING_IP_DAILY_BUDGET: "20",
             REQUEST_IP_DAILY_BUDGET: "20",
             UPLOAD_IP_DAILY_BUDGET: "60",

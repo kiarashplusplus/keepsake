@@ -8,7 +8,28 @@
  * ambient global for every reference in the file, hoisting included.
  * `Cloudflare.Env` names the same generated shape without that trap.
  */
-export type Env = Cloudflare.Env;
+/**
+ * `VECTORIZE` (issue #38) is declared here by hand rather than coming from
+ * `wrangler types`, and is **optional**, because the `[[vectorize]]` blocks
+ * in `wrangler.toml` are commented out — the indexes are not confirmed to
+ * exist, and an unresolvable binding fails the whole Worker upload. With
+ * them commented, `wrangler types` emits no `VECTORIZE` at all and every
+ * `env.VECTORIZE` reference in `search/vectorize.ts` stops compiling.
+ *
+ * Optional is also simply the truthful shape, and a better one than the
+ * generated type would give. `search/vectorize.ts` has always branched on
+ * `if (!env.VECTORIZE)` to fall back to FTS; against a generated
+ * non-optional binding that branch is unreachable-by-type — the compiler
+ * would let it rot, or flag it. Declaring it optional is what makes the
+ * fallback a live, type-checked path in exactly the configuration the repo
+ * actually ships.
+ *
+ * When the indexes are created and the binding uncommented (see
+ * `docs/runbooks/deploy.md` → "Vectorize (issue #38)"), `wrangler types`
+ * will start emitting `VECTORIZE` itself; this intersection stays correct
+ * either way, since the generated non-optional property narrows this one.
+ */
+export type Env = Cloudflare.Env & { VECTORIZE?: VectorizeIndex };
 
 /** One of the five bindings `/health` and `assertBindings` care about. */
 type CheckedBinding = "DB" | "BUCKET" | "KV" | "AI" | "ASSETS" | "EMAIL";
@@ -86,6 +107,36 @@ export function emailProviderName(env: Env): EmailProviderName | undefined {
  */
 export function isProduction(env: Env): boolean {
   return (env.ENVIRONMENT as string) === "production";
+}
+
+/**
+ * Issue #38's kill switch: is semantic search (Vectorize + Workers AI
+ * embeddings) allowed to run at all?
+ *
+ * **Off in every environment**, deliberately, and it must stay that way
+ * until someone with a Cloudflare credential does two things:
+ *
+ *   1. Confirms the Vectorize indexes actually exist. They may not. The
+ *      branch that built this feature claimed to have created all three, but
+ *      that claim was never corroborated, and the one account token probed
+ *      since had no Vectorize permission. See `docs/runbooks/deploy.md`'s
+ *      "Vectorize (issue #38)" section for the exact `wrangler vectorize
+ *      create` commands and the token scope needed.
+ *   2. Re-derives `MIN_SCORE` (`search/search.ts`) against the real
+ *      embedding model, since the calibration behind today's value was
+ *      likewise never reproduced.
+ *
+ * Until both are done this stays `"0"` and `GET /api/feed?q=` behaves
+ * exactly as it does on `main`: FTS5 via `db/fts.ts`, which is the fallback
+ * path the issue asked to keep rather than replace. `test/search.test.ts`
+ * asserts that equivalence directly rather than assuming it.
+ *
+ * Opt-in on `"1"` only — an unset, empty, malformed or absent var reads as
+ * off, so no environment can enable this by accident or by omission. Same
+ * string-literal widening as `isMockAi` above.
+ */
+export function semanticSearchEnabled(env: Env): boolean {
+  return (env.SEMANTIC_SEARCH as string | undefined) === "1";
 }
 
 /**

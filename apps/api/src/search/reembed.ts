@@ -18,7 +18,7 @@
  * findable by title/story through FTS in the meantime.
  */
 import type { Env } from "../env.js";
-import { parseIntVar } from "../env.js";
+import { parseIntVar, semanticSearchEnabled } from "../env.js";
 import { checkAndBump } from "../moderation/budget.js";
 import { fetchAspectRows, fetchListingRow } from "../lib/listingsDb.js";
 import { embed, embeddingText } from "./embedding.js";
@@ -27,6 +27,14 @@ import { upsertListingVector } from "./vectorize.js";
 const DEFAULT_EMBED_DAILY_BUDGET = 2000;
 
 export async function reembedListing(env: Env, listingId: string): Promise<void> {
+  // Same kill switch the read path checks (`search/search.ts`), checked
+  // first here too. With `SEMANTIC_SEARCH` off this must not spend a
+  // Workers AI call, a KV budget increment, or a Vectorize write — a
+  // listing create/edit should cost exactly what it costs on `main`.
+  // Nothing downstream depends on the vector existing: the read path is
+  // off as well, and FTS indexes the same listing through its own trigger.
+  if (!semanticSearchEnabled(env)) return;
+
   const listing = await fetchListingRow(env, listingId);
   if (!listing) return; // deleted, or never existed, by the time this runs
 

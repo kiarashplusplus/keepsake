@@ -78,6 +78,21 @@ const AI_CALL_SITES: AiCallSite[] = [
       "a separate call from the safety screening",
     ],
   },
+  {
+    file: "search/embedding.ts",
+    purpose: "semantic search: embedding a listing's words, and a search query",
+    discloses: [
+      "into a list of numbers that",
+      // The policy must say what is sent, not just that a model is called —
+      // "only the words already public on the listing" is the whole claim.
+      "Only your listing's own public words are",
+      // And it must not imply this is running while SEMANTIC_SEARCH is off
+      // in every environment. When the flag is flipped, this phrase is
+      // removed from the policy and from here, together — see step 5 of
+      // "Vectorize (issue #38)" in docs/runbooks/deploy.md.
+      "switched off today and is not running",
+    ],
+  },
 ];
 
 /** Which sentence in the policy accounts for each field the suggestion model

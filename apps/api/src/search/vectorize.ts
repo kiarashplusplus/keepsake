@@ -41,12 +41,19 @@ export async function deleteListingVector(env: Env, listingId: string): Promise<
  * `routes/feed.ts`, but the two are kept distinct here so a test can name
  * which one it's driving (see `test/search.test.ts`).
  *
- * `returnMetadata: "none"`, not `false` — the generated type
+ * `returnMetadata: "none"`, not `false`. The generated type
  * (`VectorizeQueryOptions.returnMetadata?: boolean | VectorizeMetadataRetrievalLevel`)
- * allows a boolean, but the real Vectorize API rejects the literal `false`
- * with `VECTOR_QUERY_ERROR (40026)`. Found running this against the real
- * dev index while verifying this issue — a mocked `env.VECTORIZE` would
- * have accepted either value and never caught it.
+ * accepts either, and `"none"` is a valid `VectorizeMetadataRetrievalLevel`,
+ * so this is the conservative choice of the two under any behaviour.
+ *
+ * The branch that wrote this reported that the live API *rejects* the
+ * literal `false` with `VECTOR_QUERY_ERROR (40026)` and that a mocked
+ * `env.VECTORIZE` would never have caught it. That would be a good catch if
+ * true, but it has not been reproduced — no session since has had a
+ * Vectorize-scoped credential, and the fake in `test/helpers.ts` accepts
+ * both values exactly as the report says a mock would. Treat it as an
+ * unconfirmed lead: keep `"none"` (it costs nothing and is safe either
+ * way), and do not cite it as evidence this code has met the real API.
  */
 export async function queryListingVectors(env: Env, vector: number[], topK: number): Promise<VectorMatch[] | null> {
   if (!env.VECTORIZE) return null;

@@ -32,22 +32,42 @@ run_worker_first = true
 [ai]
 binding = "AI"
 
-# Issue #38: semantic search over story + aspects. One Vectorize index per
-# environment (created directly with `wrangler vectorize create <name>
-# --dimensions=768 --metric=cosine` — 768 to match `MODELS.embedding`,
-# `@cf/baai/bge-base-en-v1.5`), the same separation the D1/R2/KV bindings
-# below already follow so dev/preview/production traffic never shares an
-# index. `src/db/fts.ts`'s FTS5 search remains the fallback path
-# (`src/routes/feed.ts` decides when it fires) rather than being replaced —
-# per the issue, Vectorize is tried first and FTS is the documented swap
-# point if it's unavailable, an embedding call fails, or a query comes back
-# with nothing useful. Like `[ai]` above, Vectorize has no local emulator
-# (`V4RemoteBinding` in miniflare's own types) — every test that touches
-# this binding stubs `env.VECTORIZE` directly rather than hitting the real
-# index, same convention `test/moderation.test.ts` already uses for `env.AI`.
-[[vectorize]]
-binding = "VECTORIZE"
-index_name = "keepsake-listings-dev"
+# Issue #38: semantic search over story + aspects. DELIBERATELY COMMENTED
+# OUT, in all three environments, and paired with `SEMANTIC_SEARCH = "0"` in
+# every [vars] block below.
+#
+# Nobody has been able to confirm these indexes exist. The branch that added
+# this feature said it created all three; that claim was never corroborated,
+# and the one account token probed since had no Vectorize permission. An
+# uncommented `[[vectorize]]` binding naming an index that does not exist is
+# not a graceful degradation — the Worker upload rejects unresolvable
+# bindings, so it would take *every* deploy of this Worker down, including
+# deploys of changes that have nothing to do with search. That is a strictly
+# worse failure than semantic search being off.
+#
+# So the binding stays commented until someone runs the create commands and
+# sees them succeed. `src/search/vectorize.ts` already treats an absent
+# `env.VECTORIZE` as "fall back to FTS", so with these commented and the
+# flag off, `GET /api/feed?q=` is byte-for-byte `main`'s FTS5 behaviour.
+#
+# To turn this on — the full errand is in `docs/runbooks/deploy.md` under
+# "Vectorize (issue #38)":
+#
+#   wrangler vectorize create keepsake-listings-dev        --dimensions=768 --metric=cosine
+#   wrangler vectorize create keepsake-listings-preview    --dimensions=768 --metric=cosine
+#   wrangler vectorize create keepsake-listings-production --dimensions=768 --metric=cosine
+#
+# 768 to match `MODELS.embedding`; cosine to match `search/search.ts`'s
+# MIN_SCORE. One index per environment, the same separation the D1/R2/KV
+# bindings below already follow, so dev/preview/production never share one.
+#
+# Like `[ai]` above, Vectorize has no local emulator (`V4RemoteBinding` in
+# miniflare's own types) — every test stubs `env.VECTORIZE` directly, the
+# same convention `test/moderation.test.ts` uses for `env.AI`.
+#
+# [[vectorize]]
+# binding = "VECTORIZE"
+# index_name = "keepsake-listings-dev"
 
 # Issue #14: `SENTRY_DSN` was never set (it needs a Sentry account only
 # Kiarash can create), so every `Sentry.captureException`/`captureMessage`
@@ -116,8 +136,18 @@ SUGGEST_DAILY_BUDGET = "1000"
 # its own client-callable endpoint, and a failure here degrades to the FTS
 # fallback rather than parking anything, so a single runaway-protection
 # ceiling is enough. Pure runaway protection like every other budget in this
-# block, not sized against real traffic yet.
+# block, not sized against real traffic yet. Only ever consulted when
+# SEMANTIC_SEARCH is on, which today it is not anywhere.
 EMBED_DAILY_BUDGET = "2000"
+# Issue #38's kill switch. "0" everywhere — semantic search is fully built
+# but nothing about it has been verified against the real services, and the
+# Vectorize indexes are not confirmed to exist (see the commented-out
+# [[vectorize]] block above). With this off, `GET /api/feed?q=` is exactly
+# `main`'s FTS5 search; `src/env.ts`'s `semanticSearchEnabled` treats
+# anything other than the literal "1" as off, so it cannot be enabled by
+# accident. Turning it on is a deliberate two-step errand documented in
+# `docs/runbooks/deploy.md` under "Vectorize (issue #38)".
+SEMANTIC_SEARCH = "0"
 # Per-IP daily ceilings for the write endpoints. An address is not a person —
 # a household or a mobile carrier's CGNAT range sits behind one IP — so these
 # are set loose on purpose; they catch a runaway script, not a family posting
@@ -303,9 +333,12 @@ run_worker_first = true
 [env.preview.ai]
 binding = "AI"
 
-[[env.preview.vectorize]]
-binding = "VECTORIZE"
-index_name = "keepsake-listings-preview"
+# Commented out for the reason given at the top-level [[vectorize]] block:
+# the index is not confirmed to exist, and an unresolvable binding fails the
+# whole deploy rather than degrading.
+# [[env.preview.vectorize]]
+# binding = "VECTORIZE"
+# index_name = "keepsake-listings-preview"
 
 [env.preview.observability]
 enabled = true
@@ -324,6 +357,7 @@ MOD_TEXT_DAILY_BUDGET = "2000"
 MOD_IMAGE_DAILY_BUDGET = "6000"
 SUGGEST_DAILY_BUDGET = "1000"
 EMBED_DAILY_BUDGET = "2000"
+SEMANTIC_SEARCH = "0"  # issue #38 kill switch, off — see top-level [vars]
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
@@ -422,9 +456,12 @@ run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/s
 [env.production.ai]
 binding = "AI"
 
-[[env.production.vectorize]]
-binding = "VECTORIZE"
-index_name = "keepsake-listings-production"
+# Commented out for the reason given at the top-level [[vectorize]] block.
+# Production especially: an unresolvable binding here would block deploys of
+# every unrelated change too.
+# [[env.production.vectorize]]
+# binding = "VECTORIZE"
+# index_name = "keepsake-listings-production"
 
 [env.production.observability]
 enabled = true
@@ -462,6 +499,7 @@ MOD_TEXT_DAILY_BUDGET = "5000"
 MOD_IMAGE_DAILY_BUDGET = "15000"
 SUGGEST_DAILY_BUDGET = "1000"
 EMBED_DAILY_BUDGET = "2000"
+SEMANTIC_SEARCH = "0"  # issue #38 kill switch, off — see top-level [vars]
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
