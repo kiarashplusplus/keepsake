@@ -30,6 +30,7 @@ describe("constants", () => {
 function validSuggestion(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     subject: "a chipped stoneware mug",
+    markings: "",
     title: "Chipped stoneware mug",
     category: "home_kitchen",
     condition: "glaze worn at the rim",

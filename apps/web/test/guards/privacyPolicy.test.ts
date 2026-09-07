@@ -211,6 +211,11 @@ const SUGGESTION_FIELD_DISCLOSURES: Record<string, string> = {
   category: "picks a category",
   condition: "one line about visible wear",
   aspects: "suggests a handful of short tags",
+  // #135. `markings` is the model's verbatim read of any lettering on the
+  // object, and like `subject` it is never persisted — but it is read off a
+  // photo of someone's possession, so a policy that lists every other field
+  // and silently omits this one is the same drift #88 was written for.
+  markings: "copies out any words printed on the object itself",
 };
 
 /** Every file under `apps/api/src` that calls Workers AI, relative to that
