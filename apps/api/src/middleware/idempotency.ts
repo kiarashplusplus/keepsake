@@ -5,12 +5,21 @@
  * listing. Scoped per-caller: an owner's key and a stranger's key with the
  * same string never collide, and the KV key never holds a raw IP (only its
  * digest), matching the no-raw-IPs rule everywhere else in this Worker.
+ *
+ * That digest rotates daily since issue #87 (`dailyIpDigest`), like every
+ * other address digest here. The only behavioural cost is a replay whose
+ * retry crosses midnight UTC: an anonymous caller's cached response becomes
+ * unreachable and the write happens again. Today that is unreachable in
+ * practice — the sole route mounting this middleware
+ * (`POST /api/listings`) runs `ownerAuth({ createIfMissing: true })` first,
+ * so `owner` is always set and the IP branch below is the fallback for a
+ * mount that doesn't exist yet. Worth knowing before adding one.
  */
 import type { Context, Next } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { Env } from "../env.js";
 import type { OwnerRow } from "./ownerAuth.js";
-import { sha256Hex } from "../lib/digest.js";
+import { dailyIpDigest } from "../lib/digest.js";
 import { clientIPFrom } from "../moderation/budget.js";
 
 type IdempotencyCtx = Context<{ Bindings: Env; Variables: { owner?: OwnerRow } }>;
@@ -32,7 +41,7 @@ export function idempotency() {
     }
 
     const owner = c.get("owner");
-    const scope = owner ? owner.id : await sha256Hex(clientIPFrom(c.req.raw));
+    const scope = owner ? owner.id : await dailyIpDigest(clientIPFrom(c.req.raw));
     const kvKey = `idem:${scope}:${key}`;
 
     const cached = await c.env.KV.get<StoredResponse>(kvKey, "json");

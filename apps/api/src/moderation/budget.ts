@@ -55,6 +55,9 @@
  * anything.
  */
 
+import { dailyIpDigest } from "../lib/digest.js";
+import { todayISO } from "../lib/day.js";
+
 const TTL_SECONDS = 172_800; // 48 hours
 
 /** The six things this Worker rations per calendar day. */
@@ -117,13 +120,13 @@ export interface CheckAndBumpResult {
  * refusing them.
  */
 
-/** Exported for `moderation/pipeline.ts`'s once-a-day capture alert on budget
- * exhaustion (issue #18), which needs the same UTC-day key this module
- * uses so the "have we already alerted today" flag rolls over at the same
- * boundary the counters do. */
-export function todayISO(): string {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
-}
+/** Re-exported for `moderation/pipeline.ts`'s once-a-day capture alert on
+ * budget exhaustion (issue #18), which needs the same UTC-day key this
+ * module uses so the "have we already alerted today" flag rolls over at the
+ * same boundary the counters do. Defined in `lib/day.ts` since issue #87 —
+ * this module used to keep its own private copy, and two definitions of "the
+ * day" is one more than a promise about daily rotation can survive. */
+export { todayISO };
 
 function todayKey(kind: BudgetKind): string {
   return `budget:${kind}:${todayISO()}`;
@@ -136,13 +139,15 @@ function todayKey(kind: BudgetKind): string {
  * an unrelated digest tomorrow: two days of counters cannot be joined into a
  * history of one address, which is the only thing this data could otherwise
  * be turned into.
+ *
+ * The hashing itself moved to `lib/digest.ts`'s `dailyIpDigest` (issue #87)
+ * so every site that turns an address into an identifier shares one
+ * construction. Truncating its first 32 hex characters is byte-for-byte the
+ * old 16-byte slice of the same digest of the same input, so existing KV
+ * counters keep counting rather than resetting on deploy.
  */
 async function clientDigest(clientIP: string): Promise<string> {
-  const input = new TextEncoder().encode(`${todayISO()}:${clientIP}`);
-  const digest = await crypto.subtle.digest("SHA-256", input);
-  return Array.from(new Uint8Array(digest).slice(0, 16))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+  return (await dailyIpDigest(clientIP)).slice(0, 32);
 }
 
 /**

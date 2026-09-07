@@ -31,7 +31,7 @@
 import type { Context, Next } from "hono";
 import type { Env } from "../env.js";
 import { fail } from "../lib/respond.js";
-import { sha256Hex } from "../lib/digest.js";
+import { dailyIpDigest } from "../lib/digest.js";
 import { checkAndBump, clientIPFrom, type BudgetKind } from "../moderation/budget.js";
 import { parseIntVar } from "../env.js";
 
@@ -56,7 +56,24 @@ export function burst(bindingName: RateLimitBindingName) {
       return;
     }
 
-    const key = await sha256Hex(clientIPFrom(c.req.raw));
+    // `dailyIpDigest`, not a bare `sha256Hex` of the address (issue #87).
+    // This used to hash the address alone, which made the limiter key a
+    // stable pseudonymous identifier for one caller with no expiry of its
+    // own — the exact thing `apps/site/public/privacy.html`'s "Rate
+    // limiting" section promises we don't keep, and the opposite of what
+    // `budget.ts` had always done.
+    //
+    // The cost is one bucket boundary a day: at midnight UTC a caller's key
+    // changes, so a 60s window straddling midnight is really two windows and
+    // a determined caller gets up to twice the configured per-minute
+    // allowance for that one minute. That is inside the noise this layer
+    // already lives with — the binding is documented (above, and in
+    // `wrangler.toml`) as best-effort and eventually consistent, and was
+    // *measured* at ~2.6x overshoot on an ordinary minute — and the hard cap
+    // behind it, `dailyBudget()`, resets at the same midnight anyway. A
+    // once-a-day 2x on a brake that already leaks 2.6x is not worth a
+    // never-rotating identifier for every caller.
+    const key = await dailyIpDigest(clientIPFrom(c.req.raw));
     const { success } = await binding.limit({ key });
     if (!success) {
       return fail(c, "rate_limited", "Too many requests — please slow down.", 429, { retryAfter: 60 });

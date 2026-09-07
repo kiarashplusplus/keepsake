@@ -18,8 +18,7 @@ import { sendMail } from "../email/sendMail.js";
 import { verifyEmail } from "../email/templates/verifyEmail.js";
 import { newRequest as newRequestTemplate } from "../email/templates/newRequest.js";
 import { requestReceived as requestReceivedTemplate } from "../email/templates/requestReceived.js";
-import { sha256Hex } from "../lib/digest.js";
-import { todayISO } from "../lib/day.js";
+import { dailyIpDigest, sha256Hex } from "../lib/digest.js";
 import { randomTokenRaw } from "../lib/tokens.js";
 import { clientIPFrom } from "../moderation/budget.js";
 import { parseIntVar } from "../env.js";
@@ -388,12 +387,12 @@ listingRoutes.post(
       return fail(c, "not_found", "Listing not found.", 404);
     }
 
-    // Rotates daily (sha256(day:ip), the same shape src/moderation/budget.ts
-    // uses for its KV keys) — the same address can report the same listing
-    // again tomorrow; this only blocks a repeat within one day, on purpose,
-    // so `reports.ip_digest` never becomes a long-term per-address
+    // Rotates daily (sha256(day:ip), the one shape `lib/digest.ts` allows
+    // an address to be hashed into) — the same address can report the same
+    // listing again tomorrow; this only blocks a repeat within one day, on
+    // purpose, so `reports.ip_digest` never becomes a long-term per-address
     // identifier.
-    const ipDigest = await sha256Hex(`${todayISO()}:${clientIPFrom(c.req.raw)}`);
+    const ipDigest = await dailyIpDigest(clientIPFrom(c.req.raw));
 
     const existing = await c.env.DB.prepare("SELECT id FROM reports WHERE listing_id = ? AND ip_digest = ?")
       .bind(id, ipDigest)
@@ -514,7 +513,7 @@ listingRoutes.post(
     }
 
     const clientIp = clientIPFrom(c.req.raw);
-    const ipDigest = await sha256Hex(`${todayISO()}:${clientIp}`);
+    const ipDigest = await dailyIpDigest(clientIp);
     const now = Date.now();
     const requestId = ulid();
 
