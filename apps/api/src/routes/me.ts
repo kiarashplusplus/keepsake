@@ -422,13 +422,20 @@ meRoutes.get("/email/verify", async (c) => {
     .first<{ email: string | null }>();
   const addressMatches = row.email !== null ? owner?.email === row.email : true;
 
-  // Condition 2 — no newer `verify_email` token exists for this owner. Both
-  // writers of `owners.email` mint one immediately after changing it, so a
-  // newer token is proof the address moved after this link was sent. This is
-  // what fails a `NULL`-address token closed: legacy rows and rows minted by
-  // `POST /api/listings` (which does not record the address, and which this
-  // branch deliberately does not edit — another session owns that file) are
-  // still refused the moment the address is changed again by any route.
+  // Condition 2 — no newer `verify_email` token exists for this owner. All
+  // three writers of `owners.email` mint one immediately after changing it,
+  // so a newer token is proof the address moved after this link was sent.
+  // This is what fails a `NULL`-address token closed: rows minted before
+  // migration 20260907181446 added the column are still refused the moment
+  // the address is changed again by any route.
+  //
+  // It is no longer the only thing holding at the listing-create mint site:
+  // `POST /api/listings` records the address too as of #202, so condition 1
+  // covers every token this Worker mints today, and preflight's
+  // `verify-email-token` check refuses a new mint site that omits it. Both
+  // conditions stay — condition 2 is what covers the pre-migration rows, and
+  // a redeem path that fails closed two ways is the right shape for the one
+  // check standing between a swapped address and a verified badge.
   const newer = await c.env.DB.prepare(
     `SELECT id FROM recovery_tokens WHERE owner_id = ? AND purpose = 'verify_email' AND created_at > ? LIMIT 1`,
   )

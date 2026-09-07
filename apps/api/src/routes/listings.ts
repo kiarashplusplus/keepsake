@@ -236,11 +236,25 @@ listingRoutes.post(
 
       const rawVerifyToken = randomTokenRaw();
       const verifyTokenHash = await sha256Hex(rawVerifyToken);
+      // `email` is issue #202, the second half of #167. That fix binds a
+      // `verify_email` token to the address it was mailed to, and
+      // `GET /api/me/email/verify` refuses to redeem one whose recorded
+      // address is no longer the address on the owner row. This mint site was
+      // outside that PR's file scope, so it wrote `NULL` here and leaned on
+      // the redeem check's *second* condition — "no newer token exists for
+      // this owner" — to fail closed. That fallback held, and was load-bearing
+      // and undocumented: it works only because all three writers of
+      // `owners.email` mint a token immediately after writing, so one edit to
+      // any of them would have quietly reopened #167 with nothing failing.
+      // Recording the address makes condition 1 carry the guarantee here on
+      // its own, the same way it already does for `POST /api/me/email`, and
+      // preflight's `verify-email-token` check now refuses a mint site that
+      // omits it.
       await c.env.DB.prepare(
-        `INSERT INTO recovery_tokens (id, owner_id, purpose, token_hash, expires_at, created_at)
-         VALUES (?, ?, 'verify_email', ?, ?, ?)`,
+        `INSERT INTO recovery_tokens (id, owner_id, purpose, email, token_hash, expires_at, created_at)
+         VALUES (?, ?, 'verify_email', ?, ?, ?, ?)`,
       )
-        .bind(ulid(), owner.id, verifyTokenHash, now + 24 * 60 * 60 * 1000, now)
+        .bind(ulid(), owner.id, input.email, verifyTokenHash, now + 24 * 60 * 60 * 1000, now)
         .run();
 
       const verifyUrl = `${c.env.SITE_URL}/api/me/email/verify?token=${rawVerifyToken}`;

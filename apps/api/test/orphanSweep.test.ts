@@ -337,6 +337,112 @@ describe("orphanSweep: hashed IPs expire at 48 hours (#169)", () => {
   });
 });
 
+describe("orphanSweep: legacy plaintext addresses in email_events (#200)", () => {
+  /**
+   * A row exactly as it was written before #190 scrubbed provider text at the
+   * point of capture: Cloudflare Email Routing's own sentence, quoting the
+   * destination address in full.
+   */
+  async function insertEmailEvent(errorDetail: string | null, createdAt = Date.now()): Promise<string> {
+    const id = ulid();
+    await env.DB.prepare(
+      `INSERT INTO email_events (id, kind, to_hash, provider, ok, error, error_detail, created_at)
+       VALUES (?, 'new_request', ?, 'cf', 0, 'send_failed', ?, ?)`,
+    )
+      .bind(id, `hash-${id}`, errorDetail, createdAt)
+      .run();
+    return id;
+  }
+
+  async function detailOf(id: string): Promise<string | null> {
+    const row = await env.DB.prepare("SELECT error_detail FROM email_events WHERE id = ?")
+      .bind(id)
+      .first<{ error_detail: string | null }>();
+    return row?.error_detail ?? null;
+  }
+
+  it("rewrites the address out of a pre-#190 row and keeps the provider's diagnosis", async () => {
+    const id = await insertEmailEvent(
+      'destination address "alice.smith+keepsake@gmail.com" is not a verified destination address for this Email Routing zone',
+    );
+
+    await orphanSweep(env);
+
+    const detail = await detailOf(id);
+    expect(detail).not.toContain("alice.smith+keepsake");
+    // The domain stays — the same trade `email_events.to_domain` already
+    // makes, and the difference between "one address bounced" and "this
+    // provider refuses everything".
+    expect(detail).toContain("[REDACTED]@gmail.com");
+    // And the sentence still reads, which is the half that would answer #6.
+    expect(detail).toContain("is not a verified destination address for this Email Routing zone");
+  });
+
+  it("leaves a row that never held an address untouched", async () => {
+    const id = await insertEmailEvent("temporary failure, code 451");
+    await orphanSweep(env);
+    expect(await detailOf(id)).toBe("temporary failure, code 451");
+  });
+
+  it("does not rewrite an already-scrubbed row a second time", async () => {
+    // A scrubbed row still contains an `@`, so a `LIKE '%@%'` filter would
+    // re-select it every night forever; the GLOB looks at the character
+    // *before* the `@` and skips it. What a test at this level can see is the
+    // text staying byte-identical across runs — the wasted re-read the GLOB
+    // avoids is visible in the sweep's `emailDetailsExamined` count, not here.
+    const scrubbed = "destination address \"[REDACTED]@gmail.com\" is not verified";
+    const id = await insertEmailEvent(scrubbed);
+
+    await orphanSweep(env);
+    expect(await detailOf(id)).toBe(scrubbed);
+
+    // A second pass the same night is a no-op, like every other sweep here.
+    await orphanSweep(env);
+    expect(await detailOf(id)).toBe(scrubbed);
+  });
+
+  it("scrubs every affected row, not just the first page", async () => {
+    // The keyset cursor, in the only way that can fail visibly: more rows
+    // than one batch. `EMAIL_DETAIL_SCRUB_BATCH` is 200, so 220 rows means
+    // the second page has to be fetched for the last 20 to be cleaned.
+    const ids: string[] = [];
+    for (let i = 0; i < 220; i++) {
+      ids.push(await insertEmailEvent(`rejected: user-${i}@example.org is not verified`));
+    }
+
+    await orphanSweep(env);
+
+    for (const id of ids) {
+      const detail = await detailOf(id);
+      expect(detail).toContain("[REDACTED]@example.org");
+    }
+  });
+
+  it("a row the pattern cannot improve does not starve the rows behind it", async () => {
+    // The keyset cursor's actual job, and the only shape that can show it.
+    // `user@localhost` matches the GLOB (a local-part character sits before
+    // the `@`) but `redactString` declines it — the domain has no dot and no
+    // TLD — so these rows stay in the matching set forever. Re-querying from
+    // the start would hand back the same 200 of them every pass and burn the
+    // per-run ceiling without ever reaching the row that needs cleaning.
+    for (let i = 0; i < 210; i++) {
+      await insertEmailEvent(`rejected: user${i}@localhost is unreachable`);
+    }
+    // ULIDs are time-ordered, so this one sorts after all 210 above.
+    const dirty = await insertEmailEvent("rejected: victim@gmail.com is not verified");
+
+    await orphanSweep(env);
+
+    expect(await detailOf(dirty)).toContain("[REDACTED]@gmail.com");
+  });
+
+  it("leaves a NULL error_detail alone", async () => {
+    const id = await insertEmailEvent(null);
+    await orphanSweep(env);
+    expect(await detailOf(id)).toBeNull();
+  });
+});
+
 describe("orphanSweep: retention", () => {
   it("deletes recovery_tokens more than 7 days past their own expiry, keeps the rest", async () => {
     const ownerId = await insertOwner();

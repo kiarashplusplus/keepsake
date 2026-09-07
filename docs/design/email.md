@@ -184,6 +184,27 @@ Email Routing zone"` — because that is the half that would answer #6; only the
 It is called *before* `truncateDetail`, so the 1000-char cut can never leave half an address
 behind. Keep that order.
 
+That fix is forward-only: it cleans every row written from then on and does nothing about the rows
+already written, which are the same 90-day rows the paragraph above is about (#200). `orphanSweep`
+now carries a nightly pass over them. It can only run `scrubProviderDetail`'s **second** half —
+`redactString` — because the first replaces the *known* recipient and a stored row has only
+`to_hash`, by design. That is enough: the local part becomes `[REDACTED]`, the domain stays (the
+trade `to_domain` already makes), and the provider's sentence still reads.
+
+Two details worth keeping if that pass is ever rewritten. It selects with
+`GLOB '*[A-Za-z0-9._%+-]@*'`, not `LIKE '%@%'`: a scrubbed row still contains an `@`, so the
+`LIKE` form would re-select every row it had already cleaned, every night, forever — the character
+*before* the `@` is what separates `alice@gmail.com` from `[REDACTED]@gmail.com`. And it pages by
+a keyset cursor over `id`, so a row the regex declines to change (an address whose domain has no
+TLD, say) cannot sit at the head of the batch and starve the rows behind it. Both have tests in
+`apps/api/test/orphanSweep.test.ts`, each watched to fail with the mechanism removed.
+
+The pass is a backstop, not a substitute for scrubbing at capture: a row written unscrubbed is
+still exposed until the next 03:17 UTC run. It also answers the question #200 opens with — how
+many rows are affected on production, which no session can query directly — by logging
+`emailDetailsScrubbed` every night and raising a `warning` through `captureMessage` on any run
+that scrubs more than zero.
+
 Seven templates in `src/email/templates/*.ts` (`verifyEmail`, `newRequest`, `requestReceived`,
 `chosen`, `recover`, `adminTest`, `dailyDigest`), sharing `templates/shared.ts`'s table-based HTML shell styled
 with `@keepsake/tokens/colors`'

@@ -2424,6 +2424,79 @@ function checkGhRepoContext(ctx) {
   };
 }
 
+// ── verify-email-token ────────────────────────────────────────────────────
+//
+// Issue #202, the second half of #167. A `verify_email` token is the one
+// credential that turns an unverified address into a verified one, and #167's
+// fix binds each token to the address it was mailed to (`recovery_tokens.email`,
+// migration 20260907181446) so a link already in an inbox cannot verify an
+// address someone swapped in afterwards.
+//
+// That fix landed at one of the two mint sites. `POST /api/listings` kept
+// inserting `email` as NULL, and stayed correct only through the redeem
+// path's *second* condition — "no newer `verify_email` token exists for this
+// owner" — which holds because every writer of `owners.email` mints a token
+// immediately after writing. Correct by fallback, not by construction: one
+// edit to any of those writers would have reopened #167 with nothing failing
+// anywhere. The issue asked for exactly this check alongside the two-line fix.
+//
+// The rule is deliberately stricter than "verify_email inserts must name
+// email", because a mint site that binds `purpose` as a `?` parameter would
+// otherwise be unreadable to a regex and would slip past: **every** INSERT
+// into `recovery_tokens` must either name the `email` column, or bind
+// `purpose` to a SQL literal that is not `'verify_email'`. `recover` tokens
+// legitimately carry no address — losing a device is not an address change —
+// and say so by naming their purpose inline.
+//
+// What it cannot see, said plainly rather than left to be discovered: it
+// checks that the column is *named*, not that the value bound to it is the
+// address the mail actually went to. `apps/api/test/email.test.ts` covers
+// that half by redeeming a real token minted through the real route.
+const RECOVERY_TOKENS_INSERT_RE = /INSERT\s+INTO\s+recovery_tokens\s*\(([^)]*)\)([\s\S]{0,400}?)`/g;
+
+function checkVerifyEmailToken(ctx) {
+  if (!ctx.exists(API_SRC_DIR)) return { status: "skip", details: [`${API_SRC_DIR} not present`] };
+  const files = ctx.walk(API_SRC_DIR).filter((f) => /\.(ts|tsx|js|mjs)$/.test(f) && !isTestFile(f));
+  if (files.length === 0) return { status: "skip", details: [`${API_SRC_DIR} has no source files yet`] };
+
+  const details = [];
+  const seen = [];
+  for (const file of files) {
+    const text = ctx.readText(file) ?? "";
+    for (const match of text.matchAll(RECOVERY_TOKENS_INSERT_RE)) {
+      const line = text.slice(0, match.index).split("\n").length;
+      const columns = match[1].split(",").map((c) => c.trim());
+      const values = match[2];
+      const namesEmail = columns.includes("email");
+      // The purpose as written in the VALUES clause, when it is a literal.
+      const purpose = /'([a-z_]+)'/.exec(values)?.[1] ?? null;
+
+      if (namesEmail) {
+        seen.push(`${file}:${line}: ${purpose ?? "purpose bound at runtime"} — records the address`);
+        continue;
+      }
+      if (purpose !== null && purpose !== "verify_email") {
+        seen.push(`${file}:${line}: ${purpose} — no address needed`);
+        continue;
+      }
+      details.push(
+        `${file}:${line}: INSERT INTO recovery_tokens ${purpose === null ? "binds purpose at runtime and" : "mints a verify_email token that"} ` +
+          `does not record \`email\` — bind the address the link is mailed to, so GET /api/me/email/verify can refuse a token whose ` +
+          `address has since been swapped (#167, #202) instead of relying on a newer token existing`,
+      );
+    }
+  }
+
+  if (seen.length === 0) {
+    details.push(
+      `no INSERT INTO recovery_tokens found under ${API_SRC_DIR} — this check is meaningless against a tree with no mint site, ` +
+        `which is the shape of the #166 bug (a guard that had never once run against real input)`,
+    );
+  }
+  if (details.length > 0) return { status: "fail", details };
+  return { status: "pass", details: [`${seen.length} recovery_tokens mint site(s):`, ...seen] };
+}
+
 export const CHECKS = {
   fonts: { description: "@font-face url(/fonts/*) vs apps/web/public/fonts/*.ttf", run: checkFonts },
   migrations: { description: "apps/api/migrations/*.sql naming, apply order and terminators", run: checkMigrations },
@@ -2434,6 +2507,7 @@ export const CHECKS = {
   "cron-triggers": { description: "wrangler.toml [triggers] ↔ scheduled() ↔ cron/registry.ts agree (name, schedule, staleAfterMs)", run: checkCronTriggers },
   models: { description: '"@cf/" model ids confined to apps/api/src/models.ts', run: checkModels },
   "ip-digest": { description: "client-IP hashes rotate daily via lib/digest.ts's dailyIpDigest", run: checkIpDigest },
+  "verify-email-token": { description: "every verify_email token records the address it was mailed to", run: checkVerifyEmailToken },
   exports: { description: "packages/*/package.json subpath exports (no \".\")", run: checkExports },
   routes: { description: "apps/web/app/**/*.tsx export a default component", run: checkRoutes },
   "conflict-markers": { description: "no unresolved <<<<<<< / >>>>>>> in tracked text", run: checkConflictMarkers },

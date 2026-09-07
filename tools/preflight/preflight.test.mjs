@@ -1172,6 +1172,91 @@ test("models: ignores test files", () => {
   assert.equal(result.status, "pass");
 });
 
+// ── verify-email-token ─────────────────────────────────────────────────
+
+// The two mint shapes the real tree has, reduced to what the check reads.
+const VERIFY_MINT_GOOD = [
+  "await c.env.DB.prepare(",
+  "  `INSERT INTO recovery_tokens (id, owner_id, purpose, email, token_hash, expires_at, created_at)",
+  "   VALUES (?, ?, 'verify_email', ?, ?, ?, ?)`,",
+  ")",
+  "  .bind(ulid(), owner.id, input.email, tokenHash, now + TTL, now)",
+  "  .run();",
+  "",
+].join("\n");
+
+const RECOVER_MINT = [
+  "await c.env.DB.prepare(",
+  "  `INSERT INTO recovery_tokens (id, owner_id, purpose, token_hash, expires_at, created_at)",
+  "   VALUES (?, ?, 'recover', ?, ?, ?)`,",
+  ")",
+  "  .bind(ulid(), owner.id, tokenHash, now + TTL, now)",
+  "  .run();",
+  "",
+].join("\n");
+
+test("verify-email-token: passes when every verify_email mint site records the address", () => {
+  const result = runOne("verify-email-token", {
+    "apps/api/src/routes/me.ts": VERIFY_MINT_GOOD,
+    "apps/api/src/routes/listings.ts": VERIFY_MINT_GOOD,
+    "apps/api/src/routes/recover.ts": RECOVER_MINT,
+  });
+  assert.equal(result.status, "pass");
+});
+
+test("verify-email-token: fails on a verify_email mint site with no email column (the #202 bug)", () => {
+  const result = runOne("verify-email-token", {
+    "apps/api/src/routes/me.ts": VERIFY_MINT_GOOD,
+    // Exactly what apps/api/src/routes/listings.ts wrote before #202.
+    "apps/api/src/routes/listings.ts": VERIFY_MINT_GOOD.replace("purpose, email,", "purpose,").replace("'verify_email', ?, ?, ?, ?", "'verify_email', ?, ?, ?"),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /listings\.ts:2: INSERT INTO recovery_tokens mints a verify_email token that does not record/);
+});
+
+test("verify-email-token: fails on a mint site that binds purpose at runtime and skips the address", () => {
+  // The dodge a "verify_email inserts must name email" rule would miss: no
+  // literal to match on, so the check demands the column from every insert
+  // that does not name a non-verify purpose inline.
+  const result = runOne("verify-email-token", {
+    "apps/api/src/routes/me.ts": [
+      "await c.env.DB.prepare(",
+      "  `INSERT INTO recovery_tokens (id, owner_id, purpose, token_hash, expires_at, created_at)",
+      "   VALUES (?, ?, ?, ?, ?, ?)`,",
+      ")",
+      "  .bind(ulid(), owner.id, purpose, tokenHash, now + TTL, now)",
+      "  .run();",
+      "",
+    ].join("\n"),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /binds purpose at runtime and does not record/);
+});
+
+test("verify-email-token: a recover token needs no address", () => {
+  const result = runOne("verify-email-token", { "apps/api/src/routes/recover.ts": RECOVER_MINT });
+  assert.equal(result.status, "pass");
+  assert.match(result.details.join("\n"), /recover — no address needed/);
+});
+
+test("verify-email-token: fails against a tree with no mint site at all", () => {
+  // #166's lesson: a check whose only evidence is a fixture it invented can
+  // skip every real run and still look green. Finding nothing to examine is
+  // a failure here, not a pass.
+  const result = runOne("verify-email-token", { "apps/api/src/routes/feed.ts": "export const feedRoutes = new Hono();\n" });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /no INSERT INTO recovery_tokens found/);
+});
+
+test("verify-email-token: the repository's own mint sites all record the address", () => {
+  // The fixtures above prove the logic; this runs it against the bytes that
+  // actually ship, which is the half #166 found missing.
+  const result = runChecks(["verify-email-token"], REPO_ROOT)[0];
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  assert.match(result.details.join("\n"), /routes\/listings\.ts:\d+: verify_email — records the address/);
+  assert.match(result.details.join("\n"), /routes\/me\.ts:\d+: verify_email — records the address/);
+});
+
 // ── ip-digest ──────────────────────────────────────────────────────────
 
 // The helper the real `apps/api/src/lib/digest.ts` exports, reduced to what

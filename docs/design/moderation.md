@@ -83,6 +83,17 @@ else is enforced by `tools/preflight`'s `models` check.
    - **Fail-closed**: nothing auto-approves on an AI error. Update is guarded by
      `WHERE version = ?` so an edit racing the pipeline never gets approved against stale
      content.
+   - **A human's takedown outranks a later `approved`** (#199). Before the write, the pipeline
+     reads the listing's most recent human status event across *every* version — `kind='admin'`
+     with `hidden`/`rejected`, or `kind='report_autohide'` — and if one stands, an `approved`
+     decision is written as `needs_review`/`held_for_review` instead. `PATCH` bumps `version`,
+     and admin events are recorded against the version that was live when they happened, so
+     without this the new version looked to the models like a listing nobody had ever judged:
+     one edited character re-ran the pipeline and republished a rejected listing. A later admin
+     `approved` or `restored` clears it, which is what keeps "fix it and resubmit" working — the
+     fixed version reaches the person who rejected it rather than the feed. The listing's own
+     earlier `kind='decision'` rejection is deliberately *not* carried forward; that one the
+     giver is supposed to be able to clear by fixing the listing.
 
 ## Testing
 
