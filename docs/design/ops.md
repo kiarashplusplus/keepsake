@@ -124,9 +124,11 @@ rather than failing the whole check.
 `dailyDigest`** — three registered crons, not two), counts a never-run cron as stale, and folds
 that into `ok` along with `report_pressure.autohidden_awaiting_review`. `CRON_STALE_AFTER_MS` no
 longer exists on the API side; the only identifier by that name left is the web mirror in
-`StatsStrip.tsx`. Note that `dailyDigest` never writes its heartbeat, so this signal is currently
-pinned to `ok: false` (#165). The admin stats
-strip renders it, so a stopped cron is visible on the page rather than only in logs.
+`StatsStrip.tsx`. Every heartbeat is written in one place — `runCron` in `index.ts`, after the
+job's promise resolves and never when it throws — so a cron cannot be registered without one
+(#165, where `dailyDigest` wrote none and pinned this signal to `ok: false` on every deployed
+tier). The admin stats strip renders it, so a stopped cron is visible on the page rather than only
+in logs.
 
 ## Security headers
 

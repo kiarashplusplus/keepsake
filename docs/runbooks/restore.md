@@ -256,8 +256,9 @@ Full details, including regenerating from GeoNames, in [geodata.md](geodata.md).
 - `GET /api/admin/health` — `postal_codes_count > 0`, and `cron_last_run` fresh for all **three**
   jobs (`moderationRetry`, `orphanSweep`, `dailyDigest`). `ok` is false if any heartbeat is stale,
   if postcodes are missing, or if auto-hidden reports are awaiting review; see
-  `docs/runbooks/admin.md`. Note `dailyDigest` never writes its heartbeat today, so `ok` is
-  currently `false` regardless (#165) — do not read that as a failed restore.
+  `docs/runbooks/admin.md`. On a freshly restored KV namespace every heartbeat is missing, which
+  counts as stale — `moderationRetry` clears within five minutes, the two nightly jobs on their
+  next run, so `ok: false` immediately after a restore is expected and is not itself a finding.
 - Search still works: `GET /api/feed?q=<a word you know is in a listing>` returns it. This is the
   one thing a restore can break silently, because an empty FTS index looks exactly like "no
   results".

@@ -385,14 +385,24 @@ With `ADMIN_DIGEST_TO` unset the report is still built every night — which pro
 run — and logged instead of sent. That is a supported state, not a failure, and the cron does not
 fail because of it.
 
-**But the job reports itself stale anyway, and always has** (#165). This paragraph used to end by
-saying a non-failing digest keeps itself out of the stale alarm; the counterfactual is inverted.
-`cron/dailyDigest.ts` never writes `cron:last:dailyDigest` — only `moderationRetry.ts:70` and
-`orphanSweep.ts:236` write a heartbeat, and `runCron` does not write one either, despite comments
-in `index.ts` and `cron/registry.ts` claiming it does as its final statement. A never-written key
-is stale by definition, so `GET /api/admin/health` returns `ok: false` permanently and every
-digest lists its own cron under `needs_attention`. The crons alarm is stuck on, whether or not
-`ADMIN_DIGEST_TO` is set.
+**A non-failing digest keeps itself out of the stale alarm**, and that is now mechanically true
+rather than a claim in a comment. `runCron` (`index.ts`) writes `cron:last:<name>` for **every**
+registered job the moment the job's promise resolves, and writes nothing when it throws — so the
+key means "this job finished", the heartbeat is written whether or not `ADMIN_DIGEST_TO` is set,
+and a job that dies stops refreshing it.
+
+That was not true until 2026-09-07. Each job used to write its own key as its last statement, and
+`cron/dailyDigest.ts` — the last one added — wrote none, while the comments in `index.ts` and
+`cron/registry.ts` already described `runCron` as the writer. A never-written key is stale by
+definition, so `GET /api/admin/health` answered `ok: false` on every deployed tier permanently,
+every digest listed its own cron under `needs_attention`, and the only "the crons died" channel
+this system has was jammed in the alarm position — which carries exactly as much information as
+one jammed in the all-clear position. Fixed by moving the write into the dispatcher, so a new cron
+cannot be added without a heartbeat: the job author no longer writes one at all. History in #165.
+
+One consequence to know rather than rediscover: the digest builds its report *before* its own
+heartbeat is written, so the very first run on an environment that has never written the key still
+lists `dailyDigest` as stale in that one email. It clears itself the next night.
 
 To see today's digest without waiting for the cron, read `.report` out of the Observatory payload —
 the page and the email render the same object, so they cannot disagree:

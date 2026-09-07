@@ -142,8 +142,9 @@ is the lock.
 - **Launch blockers:** **#161** — moderation only ever sees the client-uploaded thumbnail, and
   `/i/:id/full` serves the never-inspected full-resolution file to the public. **#162** —
   `withdraw`+`relist` undoes an admin rejection, a hide, a ban sweep or a three-report auto-hide.
-  **#165** — `dailyDigest` never writes its heartbeat, so `/api/admin/health` is permanently
-  `ok: false` and the crons alarm is stuck on.
+  **#165** — `dailyDigest` never wrote its heartbeat, so `/api/admin/health` was permanently
+  `ok: false` and the crons alarm was stuck on. **Fixed**: `runCron` writes the heartbeat for
+  every registered job on success, so a new cron cannot be added without one.
 - **Personal data and email:** #167, #169, #170, #182, #188, #189, #190. Between them: a redactor
   with no rule for the only PII Keepsake holds, IP hashes kept forever against a privacy page that
   promises 48-hour expiry twice, a recovery token logged verbatim because it travels as a path

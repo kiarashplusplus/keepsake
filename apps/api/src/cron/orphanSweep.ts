@@ -230,8 +230,9 @@ export async function orphanSweep(env: Env): Promise<void> {
     ownersDeleted,
   });
 
-  // Read by `GET /api/admin/health` (`cron:last:<name>`) so a stalled cron
-  // trigger is visible from the admin page, not just inferred from a growing
-  // orphan-photo count in R2 storage bills.
-  await env.KV.put("cron:last:orphanSweep", String(now));
+  // No heartbeat write here any more (#165): `runCron` in `index.ts` writes
+  // `cron:last:orphanSweep` for every registered job the moment this
+  // resolves, so a stalled cron trigger is still visible from the admin page
+  // rather than inferred from a growing orphan-photo count in R2 storage
+  // bills — it is just no longer this file's job to remember.
 }

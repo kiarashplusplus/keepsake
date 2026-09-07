@@ -7,6 +7,7 @@ import { assertBindings, isProduction, type Env } from "./env.js";
 import { dailyDigest } from "./cron/dailyDigest.js";
 import { moderationRetry } from "./cron/moderationRetry.js";
 import { orphanSweep } from "./cron/orphanSweep.js";
+import { type CronJobName, writeCronHeartbeat } from "./cron/registry.js";
 import { ukBlock } from "./middleware/ukBlock.js";
 import { securityHeaders } from "./middleware/securityHeaders.js";
 import { geoRoutes } from "./routes/geo.js";
@@ -280,14 +281,28 @@ app.all("*", async (c) => {
  * `[observability]` in wrangler.toml — automatically, no SDK needed), this
  * function additionally captures it with the job's name attached (so the log
  * line says which cron, not just "scheduled"), and rethrowing marks the
- * invocation failed in the Cloudflare dashboard. The heartbeat each job
- * writes as its last statement (`cron:last:<name>` in KV) stays the positive
- * signal — `GET /api/admin/health` turns a stale one into `ok: false`.
+ * invocation failed in the Cloudflare dashboard.
+ *
+ * **The heartbeat is written here** (`cron:last:<name>` in KV), after the
+ * job's promise resolves and before this returns — that is the positive
+ * signal `GET /api/admin/health` turns into `ok: false` once it goes stale.
+ * Issue #165: this docblock and `cron/registry.ts` both already said so while
+ * each job wrote its own key instead, and `dailyDigest` — added last — wrote
+ * none. A never-written key is stale by definition, so the endpoint answered
+ * `ok: false` on every deployed tier permanently and the digest's subject was
+ * permanently "N needs attention". Centralizing the write is what makes a
+ * fourth cron impossible to add without one: the job author no longer writes
+ * a heartbeat at all, the dispatcher does, and `name` is typed against the
+ * registry so a job dispatched under a name no `staleAfterMs` covers does not
+ * compile.
+ *
+ * On failure nothing is written, deliberately — a job that threw did not do
+ * its job, and the whole value of the key is that it means "finished".
  *
  * `ctx` is still passed and used for `waitUntil`, so the job keeps running if
  * the request context is torn down early — belt and braces, not either/or.
  */
-async function runCron(name: string, job: (env: Env) => Promise<void>, env: Env, ctx: ExecutionContext): Promise<void> {
+async function runCron(name: CronJobName, job: (env: Env) => Promise<void>, env: Env, ctx: ExecutionContext): Promise<void> {
   // `scheduled` (below) never touches the `app.use("*", ...)` middleware
   // above — it isn't an HTTP request — so this is the only place a cron
   // invocation gets `service`/`environment`/`release` configured before any
@@ -298,6 +313,7 @@ async function runCron(name: string, job: (env: Env) => Promise<void>, env: Env,
   ctx.waitUntil(running);
   try {
     await running;
+    await writeCronHeartbeat(env.KV, name, Date.now());
     console.log("scheduled: done", { cron: name, durationMs: Date.now() - started });
   } catch (err) {
     console.error("scheduled: failed", {

@@ -60,12 +60,12 @@ export async function moderationRetry(env: Env): Promise<void> {
     console.warn("moderationRetry: batch finished with failures", { failed, total: candidates.length });
   }
 
-  // Read by `GET /api/admin/health` (`cron:last:<name>`) so a stalled cron
-  // trigger is visible from the admin page rather than inferred from a
-  // growing pile of stuck `pending` listings. Written after a completed pass,
-  // including one where individual listings failed: the heartbeat answers
-  // "did the sweep run", and per-listing failures are answered by the capture
-  // events above. Conflating the two would mean one bad row could make the
-  // whole cron look dead.
-  await env.KV.put("cron:last:moderationRetry", String(Date.now()));
+  // No heartbeat write here any more (#165). `runCron` in `index.ts` writes
+  // `cron:last:moderationRetry` for this job the moment this function
+  // resolves, which is what `GET /api/admin/health` reads. The property that
+  // used to be stated here still holds and is why the per-item `try`/`catch`
+  // above exists: returning normally from a pass in which individual
+  // listings failed is deliberate, so the heartbeat answers "did the sweep
+  // run" while per-listing failures are answered by the captures above. One
+  // bad row must not make the whole cron look dead.
 }

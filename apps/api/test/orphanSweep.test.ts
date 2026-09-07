@@ -1,6 +1,7 @@
-import { env, SELF } from "cloudflare:test";
+import { createExecutionContext, env, SELF, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { orphanSweep } from "../src/cron/orphanSweep.js";
+import { runCron } from "../src/index.js";
 import { ulid } from "../src/lib/ids.js";
 import {
   authHeaders,
@@ -99,8 +100,17 @@ describe("orphanSweep: orphan photos", () => {
   });
 
   it("records its own last-run time in KV for GET /api/admin/health", async () => {
+    // Through `runCron`, because since #165 the heartbeat is written by the
+    // dispatcher rather than by each job's last statement — one writer, so a
+    // new cron cannot be added without one. `cron.test.ts` covers the same
+    // property for all three jobs by driving the real `scheduled()` handler;
+    // this stays because a sweep that stops writing its heartbeat is a
+    // sweep-shaped failure and belongs in the sweep's own file.
+    await env.KV.delete("cron:last:orphanSweep");
     const before = Date.now();
-    await orphanSweep(env);
+    const ctx = createExecutionContext();
+    await runCron("orphanSweep", orphanSweep, env, ctx);
+    await waitOnExecutionContext(ctx);
     const stored = await env.KV.get("cron:last:orphanSweep");
     expect(stored).not.toBeNull();
     expect(Number.parseInt(stored ?? "0", 10)).toBeGreaterThanOrEqual(before);
