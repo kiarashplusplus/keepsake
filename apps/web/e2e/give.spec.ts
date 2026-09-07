@@ -81,6 +81,20 @@ test("a giver walks the five steps and the keepsake goes live", async ({ page, r
   // default assertion timeout even though the pipeline itself is instant.
   await expect(page.getByText("It's live.")).toBeVisible({ timeout: 45_000 });
 
+  // The giver sees the card their friends will get. `getByAltText`, not
+  // `getByLabel`: `expo-image` renders an <img alt="…"> on web, so
+  // `accessibilityLabel` lands on `alt` and a label locator finds nothing.
+  const cardPreview = page.getByAltText("Preview of the link card your friends will see");
+  await expect(cardPreview).toBeVisible();
+  await expect(page.getByText("This is what your friends will see.")).toBeVisible();
+
+  // And it is the real card, not a broken image: `naturalWidth` is only
+  // non-zero once the browser has actually decoded the response, and 1200 is
+  // the card's own width. A 404 or an HTML error page would be 0.
+  await expect
+    .poll(async () => cardPreview.evaluate((el) => (el as HTMLImageElement).naturalWidth))
+    .toBe(1200);
+
   // "See it" is a full navigation to the canonical item URL, which is also
   // how this test learns the id the API minted.
   await onScreen(page, "See it").click();

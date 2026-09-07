@@ -83,7 +83,6 @@ describe("the root shell's structured data", () => {
     // The literal is JS, not JSON (unquoted keys), so it is evaluated rather
     // than parsed. Reading the source instead of the built output is the
     // point: a guard on `dist/` only holds after an export has run.
-    // eslint-disable-next-line no-new-func
     return new Function(`return ${(match as RegExpExecArray)[1] as string}`)() as Record<string, unknown>[];
   }
 

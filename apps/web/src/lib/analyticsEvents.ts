@@ -21,6 +21,12 @@ export const AnalyticsEvents = {
   RecoverRequested: "recover_requested",
   Recovered: "recovered",
   RequestWithdrawn: "request_withdrawn",
+  // One event for both share surfaces, fired inside `shareListing` rather
+  // than at each call site — a third caller cannot forget it, and the
+  // `surface`/`result` props keep "the giver shared their own keepsake right
+  // after it went live" distinguishable from "a stranger shared someone
+  // else's" without two names.
+  Shared: "shared",
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvents)[keyof typeof AnalyticsEvents];
