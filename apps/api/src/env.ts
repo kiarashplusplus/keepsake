@@ -89,6 +89,25 @@ export function isProduction(env: Env): boolean {
 }
 
 /**
+ * True in the two environments that run as a deployed Worker on Cloudflare —
+ * `preview` and `production` — and false for local `wrangler dev`, `vitest`
+ * and Playwright.
+ *
+ * The distinction `isProduction` draws is "is this the public site"; this one
+ * is "is this configured infrastructure, where a missing binding or secret is
+ * a defect rather than the normal state". Issue #123 needed the second: the
+ * zone cache purge is *expected* to be unconfigured locally and in tests, so
+ * skipping it there is silent, but a skip on a deployed Worker means the
+ * credential is damaged and has to be loud. Kept beside `isProduction` so the
+ * two string comparisons that decide environment live in one place and cannot
+ * drift apart.
+ */
+export function isDeployed(env: Env): boolean {
+  const environment = env.ENVIRONMENT as string;
+  return environment === "production" || environment === "preview";
+}
+
+/**
  * Parse an integer-shaped [vars] entry (all Worker vars are strings), falling
  * back when the value is missing or not a valid integer rather than throwing
  * — a malformed budget var should degrade to a safe default, not 500 the

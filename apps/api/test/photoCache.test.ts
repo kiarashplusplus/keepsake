@@ -23,7 +23,8 @@
  * HTTP call at all" is the behaviour that keeps them working.
  */
 import { env, SELF } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import type { CaptureLogLine } from "@keepsake/observability/capture";
 import type { OwnerListing } from "@keepsake/contracts/listing";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
 import { purgePhotoCache } from "../src/lib/photoCache.js";
@@ -317,5 +318,112 @@ describe("issue #94: a failing purge never breaks the caller", () => {
     expect(purge.url).toBe(PURGE_ENDPOINT);
     expect(purgedFiles(purge)).toEqual([`${SITE_URL}/i/${photo.id}/full`, `${SITE_URL}/i/${photo.id}/thumb`]);
     warn.mockRestore();
+  });
+});
+
+describe("issue #123: a skipped purge is silent locally and loud on a deployed Worker", () => {
+  // `ENVIRONMENT` is `"development"` in the top-level `[vars]` block that
+  // wrangler.toml hands the test runtime, and `env` is shared across this
+  // file, so every test here restores it rather than trusting order.
+  const DEV_ENVIRONMENT = "development";
+
+  /**
+   * The `capture()` lines out of a `console.warn` spy, ignoring everything
+   * else on that channel. `purgePhotoCache` calls `caches.default.delete()`
+   * once per variant and the test runtime warns on each, so a bare
+   * `toHaveBeenCalledTimes` here would be asserting on workerd's noise
+   * rather than on this module's diagnostics — and would start failing the
+   * day that noise changes. Matching `event: "capture"` also means these
+   * assertions read the structured line the log pipeline actually emits,
+   * not a stringified approximation of it.
+   */
+  function captureLines(warn: MockInstance<typeof console.warn>): CaptureLogLine[] {
+    return warn.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (arg): arg is CaptureLogLine =>
+          typeof arg === "object" && arg !== null && (arg as CaptureLogLine).event === "capture",
+      );
+  }
+
+  afterEach(() => {
+    setTestEnvVar("ENVIRONMENT", DEV_ENVIRONMENT);
+    // `vi.spyOn` on an already-spied method hands back the *existing* mock,
+    // calls and all — so a test that throws before its own `mockRestore()`
+    // leaves the spy installed and the next test inherits its recorded
+    // calls. That turns one real failure into three misleading ones. Restore
+    // unconditionally here rather than trusting the happy path.
+    vi.restoreAllMocks();
+  });
+
+  it.each(["preview", "production"])(
+    "warns when the credentials are missing on a deployed Worker (%s)",
+    async (environment) => {
+      // The failure #123 exists for: `CF_CACHE_PURGE_TOKEN` missing, empty
+      // or otherwise damaged on a Worker that is supposed to have it. The
+      // per-colo `cache.delete()` still succeeds and the caller's delete
+      // returns 200, so without this warning nothing anywhere distinguishes
+      // it from a purge that worked.
+      setTestEnvVar("ENVIRONMENT", environment);
+      setTestEnvVar("CF_ZONE_ID", TEST_ZONE_ID);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const fake = installFakeCloudflare(purgeAccepted);
+
+      await purgePhotoCache(env, "photo-damaged-secret");
+
+      // Still no HTTP call — the behavior is unchanged, only its visibility.
+      expect(fake.all).toHaveLength(0);
+
+      const lines = captureLines(warn);
+      expect(lines).toHaveLength(1);
+      const [line] = lines;
+      expect(line?.message).toContain("photo-damaged-secret");
+      expect(line?.message).toContain("skipped");
+      expect(line?.tags).toMatchObject({ component: "photoCache", environment });
+      // Which half is missing is the entire diagnostic value.
+      // `credentialPresent`, not `tokenPresent`: `SENSITIVE_KEY_RE` matches
+      // any key containing `token`, so that name would arrive here as
+      // `"[REDACTED]"` instead of `false`. This assertion is what stops the
+      // field being renamed back into uselessness.
+      expect(line?.extra).toMatchObject({ zoneIdPresent: true, credentialPresent: false });
+      // The credential itself must never reach a log line.
+      expect(JSON.stringify(line)).not.toContain(TEST_PURGE_TOKEN);
+      warn.mockRestore();
+    },
+  );
+
+  it("stays silent in local dev, vitest and Playwright", async () => {
+    // The reason the no-op was silent in the first place, and it must stay
+    // that way: these environments land here on every single delete, and a
+    // log line each would be the noise that trains people to ignore exactly
+    // the warning above.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fake = installFakeCloudflare(purgeAccepted);
+
+    await purgePhotoCache(env, "photo-local-dev");
+
+    expect(fake.all).toHaveLength(0);
+    expect(captureLines(warn)).toHaveLength(0);
+    warn.mockRestore();
+  });
+
+  it("logs nothing on a deployed Worker when the purge actually succeeds", async () => {
+    // The other half of the invariant, and the one that makes silence
+    // informative: with this in place, a quiet preview/production delete
+    // means the every-colo purge really ran. Without it, quiet would still
+    // be ambiguous and #123 would not be closed.
+    setTestEnvVar("ENVIRONMENT", "production");
+    configureZonePurge();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fake = installFakeCloudflare(purgeAccepted);
+
+    await purgePhotoCache(env, "photo-happy-path");
+
+    expect(fake.purges).toHaveLength(1);
+    expect(captureLines(warn)).toHaveLength(0);
+    expect(error).not.toHaveBeenCalled();
+    warn.mockRestore();
+    error.mockRestore();
   });
 });
