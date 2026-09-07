@@ -88,6 +88,43 @@ name = "EMAIL"
 # doesn't strand a listing in `pending` forever. `orphanSweep` runs once a day,
 # off-peak, to delete photos uploaded but never attached to a listing —
 # abandoned `give` flows and abuse probes both leave these behind.
+#
+# **Not restated under `[env.preview]`/`[env.production]`, and that is
+# deliberate — verified, not assumed.** Every other block in this file is
+# repeated per environment because Wrangler genuinely does not inherit
+# `[vars]` or any `[[binding]]`; `[triggers]` sitting only at the top level
+# therefore looks exactly like the bug that would leave both crons unattached
+# in production. It is not. Checked two ways against the pinned wrangler
+# 4.129.0, 2026-09-07:
+#
+#   1. Wrangler's config normalizer registers `triggers` through its
+#      `inheritable(...)` helper — the same one `main`, `compatibility_date`
+#      and `routes` use — and it sits *above* that function's literal
+#      `// Not inherited fields` comment, under which `vars`, `secrets` and
+#      every binding are registered via `notInheritable(...)`
+#      (`node_modules/wrangler/wrangler-dist/cli.js`).
+#   2. Resolved this actual file through wrangler's own public API rather
+#      than by reading its source:
+#        node -e 'const {unstable_readConfig}=require("wrangler");
+#          for (const env of [undefined,"preview","production"])
+#            console.log(env, unstable_readConfig({config:"wrangler.toml",env}).triggers)'
+#      prints `{"crons":["*/5 * * * *","17 3 * * *"]}` for all three.
+#
+# Note `wrangler deploy --env production --dry-run` is *not* evidence here:
+# it prints bindings and vars but says nothing about triggers, in either the
+# top-level or the named-environment form. It was the first thing tried.
+#
+# Restating the list under each env block would work too, but it would mean
+# three places to keep in step for no gain. What keeps this honest instead is
+# preflight's `cron-triggers` check (`tools/preflight/preflight.mjs`): it
+# asserts every deployed tier still resolves a non-empty, syntactically valid
+# cron list — including the one override that would silently switch a tier's
+# crons off, `[env.<name>.triggers] crons = []` — and that every schedule
+# below matches a `case` in `scheduled()` (`src/index.ts`), which dispatches
+# on the literal string. Editing a schedule here without editing that switch
+# leaves the job registered with Cloudflare, firing on time, and falling
+# through to `default:`: a `console.warn` and no work, on an invocation the
+# platform records as successful.
 [triggers]
 crons = ["*/5 * * * *", "17 3 * * *"]
 
@@ -208,6 +245,20 @@ EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 EMAIL_MODE = "off"
 EMAIL_ALLOWLIST = ""
 SITE_URL = "http://localhost:8787"
+# Issue #94: the keepsake.ing zone that `src/lib/photoCache.ts` purges a
+# deleted photo's two variant URLs from, so the purge reaches every colo
+# instead of only the one that executed the delete request
+# (`caches.default` is per-colo). A zone id is a public identifier, not a
+# credential — it's written down in `docs/runbooks/kiarash-checklist.md` —
+# so it lives here as a var; the API token it pairs with
+# (`CF_CACHE_PURGE_TOKEN`, `Zone.Cache Purge`) is a Worker secret, set with
+# `wrangler secret put`. Empty here because local dev serves photos from
+# `http://localhost:8787`, which is not in any zone and has nothing to
+# purge; with either half missing the zone call is skipped silently and the
+# per-colo delete is still done. That's a bounded state, not a hole:
+# `images.ts` serves `max-age=3600`, so an unreached copy expires within the
+# hour regardless.
+CF_ZONE_ID = ""
 # M1: flips the moderation pipeline to canned responses for local dev and
 # Playwright, so `give` works without live Workers AI calls.
 MOCK_AI = "0"
@@ -383,6 +434,12 @@ EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 EMAIL_MODE = "allowlist"
 EMAIL_ALLOWLIST = "kiarasha@alum.mit.edu,leapkg@gmail.com"
 SITE_URL = "https://preview.keepsake.ing"
+# Same keepsake.ing zone as production (issue #94): `preview.keepsake.ing`
+# is a record inside it, so a purge-by-URL for
+# `https://preview.keepsake.ing/i/...` is in-zone and valid. Still inert
+# until `CF_CACHE_PURGE_TOKEN` is set on this Worker — see the top-level
+# `[vars]` comment.
+CF_ZONE_ID = "dcc1fb09eeeba27a343fc1d98aff9094"
 MOCK_AI = "0"
 
 [[env.preview.d1_databases]]
@@ -524,6 +581,12 @@ EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 EMAIL_MODE = "live"
 EMAIL_ALLOWLIST = ""
 SITE_URL = "https://keepsake.ing"
+# The keepsake.ing zone (issue #94), attached to this account 2026-09-07 and
+# recorded in `docs/runbooks/kiarash-checklist.md`. Inert until
+# `CF_CACHE_PURGE_TOKEN` is set on the production Worker — see the top-level
+# `[vars]` comment for the full rationale and for why an unset token is a
+# silent no-op rather than an error.
+CF_ZONE_ID = "dcc1fb09eeeba27a343fc1d98aff9094"
 MOCK_AI = "0"
 
 [[env.production.d1_databases]]

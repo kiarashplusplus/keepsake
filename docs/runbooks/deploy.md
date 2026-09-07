@@ -4,6 +4,11 @@ Status: current for M0; secrets/DNS steps below are one-time setup, not per-depl
 manual-deploy sections below were corrected 2026-09-07 (issues #13, #24) after launch audit
 finding 18 found them describing a workflow that no longer matched `deploy.yml`.
 
+**After a production deploy, run [verify-production.md](verify-production.md)** — copy-pasteable
+`curl`s for `/health` on the apex (`ok: true`, a real commit SHA, never `"dev"`), `robots.txt` on
+both tiers, preview's `/sitemap.xml` 404, and a commit check against what was actually dispatched.
+It needs a human on an ordinary network: agent containers cannot reach `keepsake.ing` at all.
+
 ## Environments
 
 | Environment | Trigger | Worker | Data |

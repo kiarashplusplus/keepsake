@@ -146,13 +146,44 @@ export const AdminRejectInput = z.object({
 export type AdminRejectInput = z.infer<typeof AdminRejectInput>;
 
 /**
+ * One recipient domain's delivery record over the rolling window — issue #6's
+ * central question, which a per-reason count alone cannot answer.
+ *
+ * "3 sends failed with `send_failed`" is the same line whether three
+ * different people mistyped their address or whether the Cloudflare binding
+ * is refusing every unverified destination it is handed. The difference is
+ * the *ratio within one provider*: one failure out of forty gmail.com sends
+ * is a bounce, forty out of forty is a policy. So `attempted` ships next to
+ * `failed` — the denominator is the signal, and a `failed` count on its own
+ * is exactly the shape that made this failure mode invisible.
+ *
+ * `domain` is the provider (`gmail.com`), never the address; `to_hash`
+ * remains the only recipient identifier `email_events` stores. Rows written
+ * before `20260907083648_email_event_diagnostics.sql` have no domain at all and group
+ * under `(unknown)` rather than being silently dropped.
+ */
+export type AdminEmailDomainStats = {
+  domain: string;
+  attempted: number;
+  failed: number;
+  /** The most common `error` code among this domain's failures — enough to
+   * tell a refusal from a bounce without expanding the row. */
+  top_reason: string;
+};
+
+/**
  * `email_events` grouped by outcome over a rolling window — the only bounce
  * signal that exists otherwise, since there is no bounce webhook or
  * complaint feedback loop (issue #6). `by_error` covers only the `ok = 0`
- * rows, one entry per distinct `sendMail()` reason (`blocked_reserved_domain`,
- * `send_failed: ...`, …), sorted most-frequent first, so a single
- * misconfigured allowlist entry or a real bounce pattern reads as a spike
- * rather than getting buried in one opaque "failures" count.
+ * rows, one entry per distinct `sendMail()` reason code
+ * (`blocked_reserved_domain`, `send_failed`, …), sorted most-frequent first,
+ * so a single misconfigured allowlist entry or a real bounce pattern reads
+ * as a spike rather than getting buried in one opaque "failures" count.
+ *
+ * `failures_by_domain` is the second axis, and the one that answers "is this
+ * systematic": only domains with at least one failure, most-failed first.
+ * Both are needed — a reason says *what* the provider said, a domain says
+ * *how much of one provider* it said it about.
  */
 export type AdminEmailEventStats = {
   window_days: number;
@@ -160,6 +191,7 @@ export type AdminEmailEventStats = {
   ok: number;
   failed: number;
   by_error: { error: string; count: number }[];
+  failures_by_domain: AdminEmailDomainStats[];
 };
 
 /** `GET /api/admin/stats` — plain data, not a client-submitted shape, so
@@ -189,13 +221,29 @@ export const AdminTestEmailInput = z.object({
 });
 export type AdminTestEmailInput = z.infer<typeof AdminTestEmailInput>;
 
-/** `sent`/`reason` mirror `apps/api/src/email/sendMail.ts`'s `SendMailResult`
- * exactly — this endpoint is a thin, honest window onto that function, not a
- * reinterpretation of it. */
+/** `sent`/`reason`/`detail` mirror `apps/api/src/email/sendMail.ts`'s
+ * `SendMailResult` exactly — this endpoint is a thin, honest window onto that
+ * function, not a reinterpretation of it. The rest is the context a human
+ * needs to act on a failure without shell access to the Worker: which
+ * provider actually ran, what `EMAIL_MODE` was in force (a `blocked_*` reason
+ * means nothing without it), which domain was addressed, and the id of the
+ * `email_events` row this attempt wrote, so the evidence trail is a lookup
+ * rather than a guess about which of today's rows was theirs.
+ *
+ * Admin-authenticated surface only: `detail` is the provider's raw text and
+ * must not reach an ordinary end user. */
 export type AdminTestEmailResult = {
   sent: boolean;
+  /** Stable short code (`blocked_email_mode_off`, `send_failed`, …). */
   reason: string | null;
+  /** The provider's own words — the only thing that separates "this binding
+   * refuses unverified destinations" from "that address was a typo". */
+  detail: string | null;
   provider: string;
+  email_mode: string;
+  to_domain: string | null;
+  event_id: string | null;
+  at: number;
 };
 
 /**
