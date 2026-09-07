@@ -16,3 +16,6 @@ apps/web/web-build/
 apps/web/ios/
 apps/web/android/
 *.tsbuildinfo
+
+# Claude Code agent worktrees (harness scaffolding, never project content)
+.claude/worktrees/
