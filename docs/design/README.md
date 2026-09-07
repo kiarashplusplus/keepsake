@@ -28,7 +28,8 @@ is a real site with real visitors possible, not a staging exercise.
   preview D1 has already applied, and #99's new rule requires timestamped names — renaming it to
   comply would be exactly the drift #99 exists to prevent. Merge #100, then #107.
 - **PR #100** (aspect backfill, #37) — CI green, review not completed.
-- **PR #101** (semantic search, #38) — preflight fixed, `main` merged, CI green, and the feature
+- **PR #114** (semantic search, #38 — supersedes #101, which stays draft) — preflight fixed,
+  `main` merged, and the feature
   **shipped switched off**: `SEMANTIC_SEARCH = "0"` in all three `wrangler.toml` env blocks and
   `.env.example`, with the `[[vectorize]]` bindings commented out. With the flag off, `?q=` is
   exactly `main`'s FTS5 search, and `test/search.test.ts` asserts that equivalence against a
