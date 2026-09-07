@@ -38,40 +38,43 @@ is a real site with real visitors possible, not a staging exercise.
   the panels were verified returning real data on preview at `3534a94`. Production has the secret
   but not yet the code — see the tier drift below.
 
-**Tier drift — observed, not inferred, at 2026-09-07 15:46 UTC**
-([uptime run 34139983362](https://github.com/kiarashplusplus/keepsake/actions/runs/34139983362)):
+**Tier state — observed, not inferred, at 2026-09-07 17:03 UTC**
+([uptime run 34145949309](https://github.com/kiarashplusplus/keepsake/actions/runs/34145949309)).
+`uptime.yml` prints the commit each tier serves every 15 minutes, and reading that log is the only
+observation of the live site an agent container can make (egress `403`s `CONNECT keepsake.ing:443`
+— re-confirmed this session):
 
 | Tier | Serving | Means |
 |---|---|---|
-| preview | `454ab9a` | the newest commit on `main` at that moment |
-| production | `7afeb92` | five commits back |
+| preview | `3980c9d` | the newest commit on `main` |
+| production | `b0f5eba` | **functionally current** — see below |
 
-Production **has** semantic search (#114/`97eed3e`), the constants sweep (#143), the raised AI
-budgets (#146) and the labeling-milestone note (#148) — this section previously said it was behind
-by that whole batch, and it has since caught up on all of it. What production does **not** have:
-the Observatory (#151), `POST /api/admin/listings/:id/resuggest` (#149), the zero-filled edge
-series (#153) and the two docs commits. That is the manual gate working as designed, not drift to
-panic about — but two of those absences have operational consequences right now, below.
+**Production is no longer meaningfully behind.** A manual dispatch on 2026-09-07 took it from
+`7afeb92` to `b0f5eba`, which carries semantic search (#114), the constants sweep (#143), the
+raised AI budgets (#146), the labeling-milestone note (#148), **the Observatory (#151)**, **the
+`resuggest` endpoint (#149)** and the zero-filled edge series (#153). The only commits it lacks are
+`22e8f86` and the four from the 2026-09-07 docs sweep — all documentation, one `tools/` script and
+one workflow comment, none of which the Worker runs. Do not read this gap as drift.
 
-**Two errands that are now due, because production already carries `97eed3e`.** Semantic search is
-on (`SEMANTIC_SEARCH = "1"` in all three env blocks) and the `[[vectorize]]` bindings are live;
-production deployed that code and did not fall over, which retires the "an uncommented binding
-naming a missing index fails the Worker upload" worry as a *deploy* risk (the three indexes are
-therefore real, at least as far as upload cares) without retiring it as a rule — deleting an index
+Production also deployed the `[[vectorize]]` bindings and did not fall over, which retires "an
+uncommented binding naming a missing index fails the Worker upload" as a *deploy* risk — the three
+indexes are real, at least as far as upload cares. It does not retire the rule: deleting an index
 still breaks every deploy of this Worker, search-related or not.
 
-1. **Run the aspects backfill against production.** `reembedListing` fires on create, on edit, and
-   on each row the #37 backfill touches; there is no vector-only backfill. Every production listing
-   predates the feature, so until this runs, production's vector index is empty and `?q=` silently
-   falls through to FTS5 — working, but not the feature that was shipped.
-   `POST /api/admin/backfill-aspects`, repeat until `.data.remaining` is 0.
-   `docs/runbooks/deploy.md` → "Vectorize / semantic search" has the detail.
-2. **The fishing-line spool is still stuck, and the tool that fixes it is not deployed.** The
-   backfill skips any listing that already has `listing_aspects` rows, and the spool has one
-   (`material: braided`), so it is not a backfill candidate and never will be.
-   `POST /api/admin/listings/:id/resuggest` (#149) is the path built for exactly this — and it is
-   in `94c7946`, which production does not have. So: dispatch a production deploy first, then
-   `resuggest` the spool, then run the backfill for everything else.
+**Two errands are now unblocked and still owed. Both need a human — an agent container cannot
+reach the apex.** Run them in this order:
+
+1. **`resuggest` the fishing-line spool** (`01M1XP7SYFDR05M1CPAH0020EE`). It shows a visitor
+   `OTHER` with the single aspect `material: braided`, and the backfill will never reach it — that
+   job skips any listing that already has `listing_aspects` rows. `POST
+   /api/admin/listings/:id/resuggest` (#149) is the path built for exactly this, and **it is on
+   production now**. Check `.data.before` / `.data.after` rather than trusting the 200.
+2. **Run the aspects backfill.** `reembedListing` fires on create, on edit, and on each row the #37
+   backfill touches; there is no vector-only backfill. Every production listing predates semantic
+   search, so until this runs production's vector index is empty and `?q=` silently falls through
+   to FTS5 — working, but not the feature that shipped. `POST /api/admin/backfill-aspects`, repeat
+   until `.data.remaining` is 0. `docs/runbooks/deploy.md` → "Vectorize / semantic search" has the
+   detail.
 
 **Landed since this list was last written** (kept per rule 7 rather than deleted):
 - **PR #100** (aspect backfill, #37) merged as `de75c67`; **PR #107** merged as `6412c7f`. The

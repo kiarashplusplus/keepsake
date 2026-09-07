@@ -89,12 +89,13 @@ that every session re-raises.
 a paid feature on private repos and "merge to `main` ships the public site" would have had nothing
 standing in front of it.
 
-**Cost:** the two tiers routinely diverge, and nothing enforces catching up. Observed at
-2026-09-07 15:46 UTC — preview `454ab9a`, production `7afeb92`, five commits apart. That is the
-gate working, but it also means a merged fix is not a shipped fix, and #129 was filed once already
-for exactly this ("production is 7 commits behind main, including the #117 cache purge it is
-documented as having"). Docs that say "we do X" while production runs code that does not is the
-same failure this repo keeps catching in tests.
+**Cost:** the two tiers routinely diverge, and nothing enforces catching up. Observed at 15:46 UTC
+on 2026-09-07 — preview `454ab9a`, production `7afeb92`, five commits apart — then closed by a
+manual dispatch by 17:03, which is the gate working exactly as intended. But it also means a merged
+fix is not a shipped fix until someone remembers, and #129 was filed once already for precisely the
+forgetting ("production is 7 commits behind main, including the #117 cache purge it is documented
+as having"). Docs asserting "we do X" while production runs code that does not is the same failure
+this repo keeps catching in tests, one layer out.
 
 **Re-evaluate if** the drift causes a second incident, or if a paid GitHub plan becomes worth it —
 required reviewers on `main` would let deploys follow merges without giving up the human gate. The
