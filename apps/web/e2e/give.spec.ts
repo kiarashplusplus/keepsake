@@ -108,4 +108,27 @@ test("a giver walks the five steps and the keepsake goes live", async ({ page, r
   const html = await shell.text();
   expect(html).toContain(`<title>${title} — Keepsake</title>`);
   expect(html).toContain(`<meta property="og:title" content="${title}">`);
+
+  // And the card that shell advertises really renders — against the real
+  // Worker, the real R2 object, and the photo this test actually uploaded.
+  // Everything below is asserted in unit tests too, on synthetic bytes; what
+  // this adds is the one thing a fixture cannot stand in for, the SIZE of a
+  // card built from a real image.
+  const cardUrl = /<meta property="og:image" content="([^"]+)">/.exec(html)?.[1];
+  expect(cardUrl).toBeTruthy();
+
+  const card = await request.get(new URL(cardUrl as string).pathname + new URL(cardUrl as string).search, {
+    headers: { "CF-Connecting-IP": freshClientIp() },
+  });
+  expect(card.status()).toBe(200);
+  expect(card.headers()["content-type"]).toBe("image/jpeg");
+
+  // The WhatsApp budget. A link preview image much past ~300 KB stops being
+  // rendered by some clients, and this is the assertion that holds the line
+  // as the card's design changes — the fibre texture and the photo window
+  // are both things a later change could make far more expensive. Measured
+  // headroom at the time of writing was roughly 3x.
+  const bytes = (await card.body()).length;
+  expect(bytes).toBeGreaterThan(1000); // not an empty or error body
+  expect(bytes).toBeLessThan(300_000);
 });

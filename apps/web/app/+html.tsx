@@ -167,14 +167,45 @@ export default function Root({ children }: { children: React.ReactNode }): React
         <title>Keepsake</title>
         <meta name="description" content="Give a keepsake a second life." />
 
-        {/* Default Open Graph / Twitter tags. The Worker rewrites these on
-            /item/:id via HTMLRewriter, targeting the marker comment below —
-            see apps/api's route for /item/:id (owned by another agent). */}
+        {/* Default Open Graph / Twitter tags — what `keepsake.ing` itself
+            unfurls as. The Worker replaces all of these on `/item/:id` via
+            HTMLRewriter (see `apps/api/src/routes/item.ts`); everywhere else
+            this is the preview.
+
+            The origin is hardcoded rather than read from `config.siteUrl`,
+            which is `""` in production by design (same-origin —
+            `src/lib/config.ts`) and `http://localhost:8081` in
+            `.env.example`. `apps/site/public/{about,privacy,terms}.html`
+            already hardcode it, so this matches rather than inventing a
+            second convention. The consequence is that unfurling a *preview*
+            root shows production's card and canonical — which is the
+            intended posture, not a leak: preview serves `Disallow: /` and an
+            unconditional `X-Robots-Tag: noindex, nofollow`
+            (`apps/api/src/routes/robots.ts`). Don't "fix" it.
+
+            `og:image` was relative (`/og-default.png`) until 2026-09-07.
+            Facebook and WhatsApp both want an absolute URL and mishandle a
+            relative one, which meant the bare domain — the single most
+            shared link this product has — unfurled with no image at all in
+            the two places it matters most. No CSP change is involved here;
+            these are `<meta>` tags, not scripts. */}
+        <meta property="og:type" content="website" />
         <meta property="og:site_name" content="Keepsake" />
+        <meta property="og:locale" content="en_US" />
         <meta property="og:title" content="Keepsake" />
         <meta property="og:description" content="Give a keepsake a second life." />
-        <meta property="og:image" content="/og-default.png" />
+        <meta property="og:url" content="https://keepsake.ing/" />
+        <meta property="og:image" content="https://keepsake.ing/og-default.png" />
+        <meta property="og:image:type" content="image/png" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta
+          property="og:image:alt"
+          content="A taped photographic print on a kraft table, reading “Give a keepsake a second life.”"
+        />
         <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:image" content="https://keepsake.ing/og-default.png" />
+        <link rel="canonical" href="https://keepsake.ing/" />
         {/*
           The marker below must be a literal HTML comment `<!--KEEPSAKE_OG-->`
           in the exported markup so the Worker's HTMLRewriter can find it on
