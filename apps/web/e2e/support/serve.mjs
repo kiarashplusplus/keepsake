@@ -4,10 +4,9 @@
  *
  * Three problems, one wrapper.
  *
- * 1. **`wrangler dev` dies when a client hangs up mid-request.** Any error
- *    surfacing from its internal ProxyWorker is fatal — including
- *    `Error inside ProxyWorker: Network connection lost` (seen as a bare
- *    `✘ [ERROR]` with an empty message; `castErrorCause` ->
+ * 1. **`wrangler dev` dies when a client hangs up mid-request.** One error
+ *    surfacing from its internal ProxyWorker is fatal:
+ *    `Error inside ProxyWorker: Network connection lost` (`castErrorCause` ->
  *    `ProxyController.emitErrorEvent` in the wrangler debug log). The app
  *    aborts in-flight fetches on purpose in several places
  *    (`app/give/details.tsx`'s postcode lookup on every keystroke,
@@ -20,10 +19,27 @@
  *    upstream request is left to finish and its body drained, so wrangler
  *    never observes a dropped connection at all.
  *
- * 2. **If wrangler exits anyway, restart it without failing the run.** The
+ * 2. **If wrangler exits anyway, restart it — but never silently.** The
  *    public port stays bound the whole time, and a request that arrives mid
  *    restart waits for the new process instead of getting
  *    `ECONNREFUSED`. `--persist-to` state is on disk, so D1/R2/KV survive.
+ *
+ *    What is *not* known is why wrangler exits. #104 recorded three fatal
+ *    exits in one 2.5-minute suite run, each printing a bare `✘ [ERROR]`
+ *    with an empty message — and grepping all three wrangler debug logs for
+ *    the problem-1 signature above found **zero** matches for
+ *    `Network connection lost`, `emitErrorEvent` or `castErrorCause`. The
+ *    logs simply end mid-normal-traffic with no error record. So at least one
+ *    *other*, still-unidentified fault kills `wrangler dev` here, and it
+ *    writes no diagnostic anywhere. Do not read the paragraph above as an
+ *    explanation for every restart line you see.
+ *
+ *    Because of that, restarting is not enough on its own: an invisible crash
+ *    plus Playwright's `retries` is a run that reports green whether wrangler
+ *    died three times or none. So this keeps the last `RETAINED_LINES` lines
+ *    of wrangler's own output, prints them (with the debug-log path wrangler
+ *    just wrote) on every unexpected exit, and gives up rather than restarting
+ *    forever once the restart count passes `E2E_MAX_WRANGLER_RESTARTS`.
  *
  * 3. **A request in flight the instant wrangler dies must not just fail.**
  *    `waitForUpstream()` confirms the port is accepting connections right
@@ -63,25 +79,180 @@ let stopping = false;
 let child = null;
 let restarts = 0;
 
-function startWrangler() {
-  child = spawn(
-    "pnpm",
-    ["exec", "wrangler", "dev", "--port", String(UPSTREAM_PORT), ...wranglerArgs],
-    {
-      stdio: "inherit",
-      env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
-    },
+/** How many of wrangler's own output lines to keep for the post-mortem. Big
+ * enough to cover a request or two of context before a crash, small enough
+ * that a suite-long run costs nothing to hold. */
+const RETAINED_LINES = 200;
+/** A single pathological line (a base64 body, a stack with no newlines) must
+ * not be able to grow this buffer without bound either. */
+const MAX_RETAINED_LINE_CHARS = 2_000;
+
+/**
+ * How many unexpected exits to absorb before failing the run outright.
+ *
+ * One is deliberate rather than arbitrary: #104 saw runs with one restart and
+ * runs with three, so tolerating a single blip keeps the suite usable while
+ * still refusing to let a three-crash run look like a clean one. Set
+ * `E2E_MAX_WRANGLER_RESTARTS` to raise it, or to a negative value / the word
+ * `unlimited` for the old restart-forever behaviour when you are deliberately
+ * working through a flaky local environment.
+ */
+const RESTART_LIMIT_ENV = "E2E_MAX_WRANGLER_RESTARTS";
+const DEFAULT_RESTART_LIMIT = 1;
+
+function readRestartLimit() {
+  // Statically named rather than `process.env[RESTART_LIMIT_ENV]`: eslint's
+  // expo/no-dynamic-env-var bans the computed form (bundlers inline env reads).
+  const raw = process.env.E2E_MAX_WRANGLER_RESTARTS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_RESTART_LIMIT;
+  if (raw.trim().toLowerCase() === "unlimited") return Infinity;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    console.error(
+      `[e2e:server] ignoring ${RESTART_LIMIT_ENV}=${raw} — not a number; using the default of ${DEFAULT_RESTART_LIMIT}.`,
+    );
+    return DEFAULT_RESTART_LIMIT;
+  }
+  return parsed < 0 ? Infinity : parsed;
+}
+
+const RESTART_LIMIT = readRestartLimit();
+
+/**
+ * The child command. `wrangler dev` in every real run; overridable only so the
+ * supervisor's crash handling can be tested against a process that exits on
+ * demand (`serve.test.mjs`) — there is no way to exercise "wrangler died"
+ * with real wrangler that is either fast or deterministic. A JSON array of
+ * argv, e.g. `["node", "crash.mjs"]`.
+ */
+const CHILD_COMMAND_ENV = "E2E_SERVER_CHILD_COMMAND";
+
+function childCommand() {
+  const override = process.env.E2E_SERVER_CHILD_COMMAND;
+  if (!override) {
+    return ["pnpm", ["exec", "wrangler", "dev", "--port", String(UPSTREAM_PORT), ...wranglerArgs]];
+  }
+  const argv = JSON.parse(override);
+  if (!Array.isArray(argv) || argv.length === 0 || argv.some((a) => typeof a !== "string")) {
+    throw new TypeError(`${CHILD_COMMAND_ENV} must be a JSON array of strings`);
+  }
+  return [argv[0], argv.slice(1)];
+}
+
+/** Last `RETAINED_LINES` lines of the child's output, as `"out"`/`"err"` tags. */
+const retained = [];
+/** The debug log wrangler announces with `🪵  Logs were written to "…"`. */
+let wranglerLogPath = null;
+const WRANGLER_LOG_RE = /Logs were written to\s+"([^"]+)"/;
+
+function retainLine(streamName, line) {
+  const trimmed = line.replace(/\r$/, "").slice(0, MAX_RETAINED_LINE_CHARS);
+  retained.push(`${streamName}| ${trimmed}`);
+  if (retained.length > RETAINED_LINES) retained.shift();
+  const match = WRANGLER_LOG_RE.exec(trimmed);
+  if (match) wranglerLogPath = match[1];
+}
+
+/**
+ * Tee one of the child's streams: every byte still goes straight through to
+ * our own stdio (live output is byte-for-byte what `stdio: "inherit"` gave),
+ * and a copy is split into lines for the ring buffer.
+ */
+function tee(source, sink, streamName) {
+  let pending = "";
+  const flush = () => {
+    if (pending === "") return;
+    retainLine(streamName, pending);
+    pending = "";
+  };
+  source.on("data", (chunk) => {
+    sink.write(chunk);
+    pending += chunk.toString("utf8");
+    let index;
+    while ((index = pending.indexOf("\n")) !== -1) {
+      retainLine(streamName, pending.slice(0, index));
+      pending = pending.slice(index + 1);
+    }
+    if (pending.length > MAX_RETAINED_LINE_CHARS) flush();
+  });
+  source.on("end", flush);
+  return flush;
+}
+
+function reportCrash(code, signal) {
+  const lines = [
+    `[e2e:server] ---- wrangler dev exited unexpectedly (code=${code} signal=${signal}) ----`,
+    `[e2e:server] last ${retained.length} line(s) of its output; "out|"/"err|" marks the stream:`,
+  ];
+  lines.push(
+    ...(retained.length > 0
+      ? retained.map((line) => `[e2e:server]   ${line}`)
+      : ["[e2e:server]   (nothing captured)"]),
   );
+  lines.push(
+    wranglerLogPath
+      ? `[e2e:server] wrangler debug log: ${wranglerLogPath}`
+      : "[e2e:server] wrangler printed no debug-log path before dying.",
+  );
+  console.error(lines.join("\n"));
+}
+
+/** GitHub renders `::error::` as an annotation on the run itself, so a suite
+ * that survived on retries still carries a visible mark. */
+function annotate(level, message) {
+  if (process.env.GITHUB_ACTIONS) console.error(`::${level}::${message}`);
+}
+
+function giveUp() {
+  stopping = true;
+  const message =
+    `wrangler dev died ${restarts} time(s) during the e2e run (limit ${RESTART_LIMIT}, ` +
+    `override with ${RESTART_LIMIT_ENV}). Cause is unknown — see issue #104 and the ` +
+    `captured output above.`;
+  console.error(`[e2e:server] FATAL: ${message}`);
+  annotate("error", `e2e: ${message}`);
+  child?.kill("SIGTERM");
+  proxy.close();
+  process.exit(1);
+}
+
+function startWrangler() {
+  const [command, args] = childCommand();
+  child = spawn(command, args, {
+    // Not `"inherit"`: the whole point is to retain what wrangler said on its
+    // way out. Both streams are teed back to ours, so live output is unchanged.
+    stdio: ["inherit", "pipe", "pipe"],
+    env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+  });
+
+  const flushOut = tee(child.stdout, process.stdout, "out");
+  const flushErr = tee(child.stderr, process.stderr, "err");
 
   child.on("exit", (code, signal) => {
     child = null;
     if (stopping) return;
     restarts += 1;
-    console.error(
-      `[e2e:server] wrangler dev exited unexpectedly (code=${code} signal=${signal}) — restart #${restarts}. ` +
-        "Requests arriving meanwhile will wait for the new process rather than fail.",
-    );
-    startWrangler();
+    // `exit` can fire while the last bytes of a crash message are still in the
+    // pipe, and those are precisely the lines this exists to keep. Give the
+    // reader a beat to drain before reporting; a restart takes seconds anyway.
+    setTimeout(() => {
+      flushOut();
+      flushErr();
+      reportCrash(code, signal);
+      if (restarts > RESTART_LIMIT) {
+        giveUp();
+        return;
+      }
+      console.error(
+        `[e2e:server] wrangler dev exited unexpectedly (code=${code} signal=${signal}) — restart #${restarts}. ` +
+          "Requests arriving meanwhile will wait for the new process rather than fail.",
+      );
+      annotate(
+        "warning",
+        `e2e: wrangler dev died and was restarted (restart #${restarts} of at most ${RESTART_LIMIT}). See issue #104.`,
+      );
+      startWrangler();
+    }, 100);
   });
 }
 
