@@ -170,14 +170,26 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
   of `@keepsake/*`** — it will fail with "Could not resolve".
 - **`expo export` needs `--clear`.** Public config is inlined at transform time and cached; the
   export script does this and then verifies the values actually reached the bundle.
-- **Turnstile enforces on preview, but not on every write path.** `turnstile()` is mounted on
-  listing create/edit/relist (`src/routes/listings.ts`), `src/routes/me.ts` and
-  `src/routes/recover.ts` — those you cannot drive with curl, so use the admin endpoints,
-  `MOCK_AI`, or a real browser. **The photo routes mount none of it**: `PUT /api/photos`,
+- **Turnstile enforces on preview, but not on every write path.** In `src/routes/listings.ts`
+  `turnstile()` is mounted on exactly three routes — `POST /api/listings`,
+  `POST /api/listings/:id/reports` and `POST /api/listings/:id/requests` — plus one in
+  `src/routes/me.ts` and one in `src/routes/recover.ts`. Those you cannot drive with curl, so use
+  the admin endpoints, `MOCK_AI`, or a real browser. **Everything else is curl-reachable with an
+  owner token**: `PATCH`/`DELETE /api/listings/:id` and `given`/`withdraw`/`relist` mount no
+  Turnstile (this bullet listed "create/edit/relist" until 2026-09-07 and was wrong about two of
+  the three), and the photo routes mount none of it either — `PUT /api/photos`,
   `DELETE /api/photos/:id` and `POST /api/photos/:id/suggest` carry `ownerAuth()` and the rate
-  limiters only, so an upload is still curl-reachable with an owner token (#183, open). This
-  bullet claimed the blanket version until 2026-09-07; do not rely on Turnstile as the reason a
-  write path is unreachable without checking that the route actually mounts it.
+  limiters only (#183, open). `PATCH` stays without it deliberately (#168): the web edit step
+  mints no token, so adding one would break the real edit flow rather than harden it — what it
+  got instead is the router-level burst brake and a daily budget. Do not rely on Turnstile as the
+  reason a write path is unreachable without checking that the route actually mounts it.
+- **Every non-GET route on `listingRoutes` is metered by a router-level registration**
+  (`listingRoutes.on(["POST","PATCH","PUT","DELETE"], "*", burst("RL_WRITE"))`, PR #197 / #168),
+  the same shape as `adminRoutes.use("*", …)`. Add a write route to that file and it is metered
+  by default; `test/listingWriteMetering.test.ts` enumerates `listingRoutes.routes` and fails if
+  one appears outside the list it exercises. The equivalent writes in `src/routes/photos.ts` and
+  `src/routes/me.ts` still carry per-route decisions and `POST /api/me/listings/:id/choose` and
+  `DELETE /api/photos/:id` remain unmetered — #168 names them.
 - **Email**: preview is `allowlist` (Kiarash and `leapkg@gmail.com` only), production is `live`.
   Reserved domains (`example.com`, `.test`, `.invalid`) are refused everywhere, which is why the
   repo's fixtures cannot bounce the sending domain. `EMAIL_MODE=test` bypasses the guard and a

@@ -137,23 +137,38 @@ not this file, as the count; what this file is for is which of them matter and w
 `status: in progress`.* Filed against the data, moderation, auth, ops and CI layers hours after
 this file's previous sweep. **Read the labels on GitHub before starting any of these**; roughly
 half are claimed by another session already, and per "Picking up work" in `AGENTS.md` that label
-is the lock.
+is the lock. Five of them — **#162, #168, #171, #184, #189** — are fixed on the branch behind
+PR #197 and marked so below; they close on merge, so until then they are open issues with the
+work already written and the code paragraphs in this repo's docs describing the *fixed*
+behaviour.
 
 - **Launch blockers:** **#161** — moderation only ever sees the client-uploaded thumbnail, and
   `/i/:id/full` serves the never-inspected full-resolution file to the public. **#162** —
-  `withdraw`+`relist` undoes an admin rejection, a hide, a ban sweep or a three-report auto-hide.
-  **#165** — `dailyDigest` never writes its heartbeat, so `/api/admin/health` is permanently
-  `ok: false` and the crons alarm is stuck on.
+  `withdraw`+`relist` undid an admin rejection, a hide, a ban sweep or a three-report auto-hide;
+  **fixed in PR #197**, `relist` now reads the newest status-setting event of *any* kind and
+  sends a takedown to `needs_review` rather than back to `approved`. **#165** — `dailyDigest`
+  never writes its heartbeat, so `/api/admin/health` is permanently `ok: false` and the crons
+  alarm is stuck on.
 - **Personal data and email:** #167, #169, #170, #182, #188, #189, #190. Between them: a redactor
   with no rule for the only PII Keepsake holds, IP hashes kept forever against a privacy page that
   promises 48-hour expiry twice, a recovery token logged verbatim because it travels as a path
-  segment, and a request endpoint that is an oracle for the giver's address.
+  segment, and a request endpoint that was an oracle for the giver's address (#189 — the server
+  half is **fixed in PR #197**: both the self-request `400` and the duplicate `409` now return
+  the same `201` the success path returns, having written and sent nothing. The client half — the
+  helpful "that's your own keepsake" message, checked in `apps/web` against the owner address the
+  device already knows — is still to do).
 - **More checks that could not fail:** #166 (preflight's shell-syntax check has never examined a
   byte of shell), #173 (the consent banner is never scanned by axe), #175, #176, #181, #191. Six
   more instances of `AGENTS.md`'s table, found in a single pass — the table is at seven rows and
   should be read as a pattern, not a closed list.
-- **Moderation and abuse surface:** #168, #171, #179, #183.
-- **Correctness:** #163, #172, #174, #180, #184, #185, #186, #187.
+- **Moderation and abuse surface:** #168, #171, #179, #183. **#168 and #171 are fixed in PR
+  #197** — every non-GET route on `listingRoutes` is now behind a router-level `burst("RL_WRITE")`
+  and `PATCH` charges the same daily budget create does, and listing aspects run through
+  `containsContactInfo` and reach Llama Guard. #168's siblings in `routes/photos.ts` and
+  `routes/me.ts` are untouched and still unmetered.
+- **Correctness:** #163, #172, #174, #180, #184, #185, #186, #187. **#184 is fixed in PR #197** —
+  the report auto-hide now decides on the count returned by its own `UPDATE … RETURNING`, so
+  concurrent reports trip the threshold instead of each reading zero.
 - **Ops and backup:** #164 (the documented D1 backup omits `listing_aspects`, and
   `aspects_backfilled_at` makes the loss unrecoverable), #178.
 
