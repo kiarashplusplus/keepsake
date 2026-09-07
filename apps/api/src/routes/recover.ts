@@ -22,8 +22,11 @@ type Vars = { validatedBody: RecoverInput };
 export const recoverRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 /** Short-lived on purpose: this token is only useful for the few minutes
- * between requesting it and clicking the emailed link. */
-const RECOVER_TTL_MS = 30 * 60 * 1000;
+ * between requesting it and clicking the emailed link. Exported because the
+ * recovery email states this lifetime to the reader in words — it is handed
+ * to the template rather than restated there, and `test/email.test.ts` holds
+ * the two together. */
+export const RECOVER_TTL_MS = 30 * 60 * 1000;
 
 // Issue #92: this route puts a real message in a real inbox, and until now
 // the only thing in front of it was the best-effort burst brake (~2.6x
@@ -64,7 +67,7 @@ recoverRoutes.post(
         .run();
 
       const link = `${c.env.SITE_URL}/recover/${rawToken}`;
-      await sendMail(c.env, { kind: "recover", to: input.email, ...recoverTemplate({ link }) });
+      await sendMail(c.env, { kind: "recover", to: input.email, ...recoverTemplate({ link, ttlMs: RECOVER_TTL_MS }) });
     }
 
     return ok(c, { sent: true });

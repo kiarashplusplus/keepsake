@@ -14,7 +14,7 @@
  * public is visible at all.
  */
 import { Hono } from "hono";
-import { FeedQuery, type FeedPage } from "@keepsake/contracts/feed";
+import { FeedQuery, type FeedPage, type RadiusMi } from "@keepsake/contracts/feed";
 import type { PublicListing } from "@keepsake/contracts/listing";
 import type { AspectShelf, ShelvesResponse } from "@keepsake/contracts/shelves";
 import { boundingBox, haversineMiles, type LatLng } from "@keepsake/contracts/geo";
@@ -45,7 +45,12 @@ const MAX_OFFSET = 200;
  * never runs out of candidates before hitting `MAX_OFFSET` itself. */
 const GEO_CANDIDATE_LIMIT = 500;
 
-const DEFAULT_RADIUS_MI = 25;
+/** Typed `RadiusMi` rather than left as a bare number so the comment at the
+ * call site — "25 mi, itself one of RADIUS_OPTIONS" — is checked instead of
+ * asserted. `radius_mi` is schema-validated against `RADIUS_OPTIONS`, so a
+ * default outside that set would be a radius the API uses and refuses. Drop
+ * 25 from the options and this line stops compiling. */
+const DEFAULT_RADIUS_MI: RadiusMi = 25;
 
 const FEED_COLUMNS = "id, title, story, category, country, place_name, admin1, status, lat, lng, published_at, given_at";
 /** Same columns, `l.`-qualified for the two query shapes that join
