@@ -1,14 +1,15 @@
 import { z } from "zod";
 import { AgeAttestationSchema, MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
 import { CountrySchema } from "./geo";
-import { PublicPhoto } from "./photo";
+import { AspectSchema, MAX_ASPECTS, PublicPhoto } from "./photo";
 // Re-exported below so nothing outside the package needs to know these live
 // in their own leaf module — see category.ts for why they aren't declared
 // here directly (a circular import with photo.ts).
 import { CATEGORIES, CATEGORY_LABELS, CategorySchema, TITLE_MAX, TITLE_MIN, type Category } from "./category";
 
-export { CATEGORIES, CATEGORY_LABELS, CategorySchema, TITLE_MAX, TITLE_MIN };
+export { CATEGORIES, CATEGORY_LABELS, CategorySchema, TITLE_MAX, TITLE_MIN, AspectSchema, MAX_ASPECTS };
 export type { Category };
+export type { Aspect } from "./photo";
 
 export const LISTING_STATUSES = [
   "pending",
@@ -58,10 +59,39 @@ export const CreateListingInput = z.object({
   // attesting once at posting time is the point, not re-attesting on every
   // edit.
   age_attested: AgeAttestationSchema,
+  // eBay-style name/value attributes read off the cover photo by
+  // `POST /api/photos/:id/suggest` (issue #36) — the give flow forwards
+  // whatever suggestion it applied verbatim; there's no separate
+  // aspect-editing UI. Optional + defaulted rather than required so an
+  // older client, a failed/skipped suggestion, or a listing with no
+  // confidently-identified attributes all mean the same harmless thing:
+  // zero rows in `listing_aspects`. A listing is never gated on having any
+  // — see apps/api/test/aspects.test.ts's zero-aspect feed/search guarantee
+  // (issue #40's failure mode is exactly what this schema must not allow).
+  aspects: z.array(AspectSchema).max(MAX_ASPECTS).default([]),
 });
 export type CreateListingInput = z.infer<typeof CreateListingInput>;
 
-export const UpdateListingInput = CreateListingInput.partial();
+/**
+ * `aspects` is overridden rather than left to `.partial()`'s usual
+ * "wrap in `.optional()`" treatment: zod v4's `.optional()` on a field that
+ * already carries `.default([])` still applies that default when the key is
+ * missing from the request body (confirmed directly — `z.object({ a:
+ * z.array(...).default([]) }).partial().parse({})` yields `{ a: [] }`, not
+ * `{}`), which would make an absent `aspects` key on a `PATCH` body
+ * indistinguishable from an explicit `aspects: []`. `routes/listings.ts`'s
+ * PATCH handler needs exactly that distinction — "the client didn't mention
+ * aspects" must leave a listing's existing ones alone, while "the client
+ * sent an empty array" is a real (if unusual) request to clear them. A
+ * plain `.optional()` with no default parses a missing key as `undefined`
+ * and a present-but-empty array as `[]`, which is the distinction the route
+ * needs. (Caught by `apps/api/test/aspects.test.ts`'s "PATCH omitting
+ * aspects entirely leaves the existing ones untouched" — it failed against
+ * the naive `.partial()` before this override was added.)
+ */
+export const UpdateListingInput = CreateListingInput.partial().extend({
+  aspects: z.array(AspectSchema).max(MAX_ASPECTS).optional(),
+});
 export type UpdateListingInput = z.infer<typeof UpdateListingInput>;
 
 /**
@@ -122,6 +152,12 @@ export const PublicListing = z.object({
   published_at: TimestampMs,
   given_at: TimestampMs.optional(),
   distance_mi: z.number().nonnegative().optional(),
+  // Read-only here — set at create/edit time from the applied suggestion,
+  // never edited directly by the client. Defaulted to `[]`, not optional:
+  // every real response includes the key (possibly empty), so a consumer
+  // can tell "no aspects" from "this field doesn't exist yet" without a
+  // schema version check.
+  aspects: z.array(AspectSchema).default([]),
 });
 export type PublicListing = z.infer<typeof PublicListing>;
 

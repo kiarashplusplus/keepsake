@@ -39,6 +39,28 @@ export const UploadPhotoFields = z.object({
 export type UploadPhotoFields = z.infer<typeof UploadPhotoFields>;
 
 /**
+ * One eBay-style name/value attribute read off a photo — `{name: "material",
+ * value: "copper"}` — shared between `PhotoSuggestionSchema.aspects` below
+ * (what the vision model returns) and `@keepsake/contracts/listing`'s
+ * `aspects` field (what actually gets persisted to a listing, see issue
+ * #36). Declared here rather than in `listing.ts` for the same reason
+ * `CATEGORIES`/`TITLE_MIN`/`TITLE_MAX` live in `category.ts`: `listing.ts`
+ * already imports from this file for `PublicPhoto`, so importing this
+ * schema the same way costs nothing, while the reverse (this file importing
+ * from `listing.ts`) would be circular.
+ */
+export const AspectSchema = z.object({
+  name: z.string().trim().min(1).max(24),
+  value: z.string().trim().min(1).max(48),
+});
+export type Aspect = z.infer<typeof AspectSchema>;
+
+/** Cap shared by the suggestion response and `CreateListingInput.aspects` —
+ * "the right number of visible aspects for a given photo is often zero", so
+ * this bounds the upside, not the common case. */
+export const MAX_ASPECTS = 6;
+
+/**
  * `POST /api/photos/:id/suggest`'s successful shape — the vision model's
  * read of a photo's cover, turned into give-flow form fields. Constrained to
  * the *real* `CategorySchema`/title bounds (imported from `./category`, not
@@ -75,14 +97,6 @@ export const PhotoSuggestionSchema = z.object({
    * (it can silently hide the listing from someone filtering by it, which
    * is eBay's own documented failure mode for this exact feature).
    */
-  aspects: z
-    .array(
-      z.object({
-        name: z.string().trim().min(1).max(24),
-        value: z.string().trim().min(1).max(48),
-      }),
-    )
-    .max(6)
-    .default([]),
+  aspects: z.array(AspectSchema).max(MAX_ASPECTS).default([]),
 });
 export type PhotoSuggestion = z.infer<typeof PhotoSuggestionSchema>;

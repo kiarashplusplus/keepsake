@@ -23,7 +23,7 @@ import { validateQuery } from "../middleware/validate.js";
 import { burst } from "../middleware/rateLimit.js";
 import { lookupPostalCode } from "../geo/lookup.js";
 import { serializePublicListing, type FeedListingRow } from "../lib/serialize.js";
-import { fetchPhotoRowsForListings } from "../lib/listingsDb.js";
+import { fetchAspectRowsForListings, fetchPhotoRowsForListings } from "../lib/listingsDb.js";
 import { sanitizeFtsQuery } from "../db/fts.js";
 import { decodeKeysetCursor, decodeOffsetCursor, encodeKeysetCursor, encodeOffsetCursor } from "../lib/cursor.js";
 
@@ -53,11 +53,14 @@ const FEED_COLUMNS_L = FEED_COLUMNS.split(", ")
   .join(", ");
 
 async function serializePage(env: Env, rows: FeedListingRow[], distances?: Map<string, number>): Promise<PublicListing[]> {
-  const photosByListing = await fetchPhotoRowsForListings(
-    env,
-    rows.map((row) => row.id),
+  const ids = rows.map((row) => row.id);
+  const [photosByListing, aspectsByListing] = await Promise.all([
+    fetchPhotoRowsForListings(env, ids),
+    fetchAspectRowsForListings(env, ids),
+  ]);
+  return rows.map((row) =>
+    serializePublicListing(row, photosByListing.get(row.id) ?? [], aspectsByListing.get(row.id) ?? [], distances?.get(row.id)),
   );
-  return rows.map((row) => serializePublicListing(row, photosByListing.get(row.id) ?? [], distances?.get(row.id)));
 }
 
 async function buildDefaultFeed(env: Env, query: FeedQuery): Promise<FeedPage<PublicListing>> {

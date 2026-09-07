@@ -39,6 +39,7 @@ function makeListing(id: string, title: string): PublicListing {
         url_thumb: "https://example.com/thumb.jpg",
       },
     ],
+    aspects: [],
     published_at: Date.now(),
   };
 }

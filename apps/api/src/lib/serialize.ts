@@ -4,7 +4,7 @@
  * regardless of which route is assembling them.
  */
 import type { PublicPhoto } from "@keepsake/contracts/photo";
-import type { Category, ListingStatus, ModerationReasonCode, OwnerListing, PublicListing } from "@keepsake/contracts/listing";
+import type { Aspect, Category, ListingStatus, ModerationReasonCode, OwnerListing, PublicListing } from "@keepsake/contracts/listing";
 import type { Country } from "@keepsake/contracts/geo";
 
 export interface ListingRow {
@@ -81,7 +81,19 @@ export interface FeedListingRow {
   given_at: number | null;
 }
 
-export function serializePublicListing(row: PublicListingSource, photos: PhotoRow[], distanceMi?: number): PublicListing {
+/**
+ * `aspects` defaults to `[]` (not required) so the many call sites that
+ * don't touch aspects on a given request (given/withdraw/relist) can still
+ * compile without threading a fetch through — but every route that *reads*
+ * a listing for display should still fetch and pass the real rows via
+ * `fetchAspectRows`/`fetchAspectRowsForListings` (lib/listingsDb.ts); an
+ * omitted argument here silently shows "no aspects" instead of a fetch bug,
+ * which is a real (if quiet) way to reintroduce the exact failure mode #40
+ * is about — a listing whose aspects vanished from the one place they were
+ * supposed to be visible. Nothing about this default makes a listing
+ * *invisible*; it only makes its aspects list rendered as empty.
+ */
+export function serializePublicListing(row: PublicListingSource, photos: PhotoRow[], aspects: Aspect[] = [], distanceMi?: number): PublicListing {
   return {
     id: row.id,
     title: row.title,
@@ -94,6 +106,7 @@ export function serializePublicListing(row: PublicListingSource, photos: PhotoRo
     photos: photos.map(serializePhoto),
     published_at: row.published_at ?? 0,
     ...(row.given_at !== null ? { given_at: row.given_at } : {}),
+    aspects,
     // Rounded to 1 decimal place per the plan — the haversine result has
     // more precision than is meaningful to show ("2.3 mi", not
     // "2.31871... mi").
@@ -101,7 +114,7 @@ export function serializePublicListing(row: PublicListingSource, photos: PhotoRo
   };
 }
 
-export function serializeOwnerListing(row: ListingRow, photos: PhotoRow[]): OwnerListing {
+export function serializeOwnerListing(row: ListingRow, photos: PhotoRow[], aspects: Aspect[] = []): OwnerListing {
   return {
     id: row.id,
     title: row.title,
@@ -114,6 +127,7 @@ export function serializeOwnerListing(row: ListingRow, photos: PhotoRow[]): Owne
     photos: photos.map(serializePhoto),
     published_at: row.published_at ?? 0,
     ...(row.given_at !== null ? { given_at: row.given_at } : {}),
+    aspects,
     postal_code: row.postal_code,
     moderation_reason: (row.moderation_reason as ModerationReasonCode | null) ?? null,
     request_count: row.request_count,

@@ -144,6 +144,20 @@ export default function GiveReview(): React.ReactElement {
     setSubmitError(null);
     setPhase("submitting");
 
+    // Issue #36: forward whatever the cover photo's suggestion actually
+    // read off the photo, straight through — unlike `title`/`category`
+    // (which the reducer only ever applies if the giver hasn't already set
+    // them, see `giveDraft.ts`'s `set_suggestion` case), aspects aren't a
+    // form field the giver can edit, so there's no "already set" to defer
+    // to. Cache-keyed by photo id, not gated on `appliedSuggestionPhotoId`
+    // (which only tracks whether title/category were ever overwritten) —
+    // if the cover has a cached suggestion at all, its aspects apply.
+    // `?? []` covers every other case identically: no suggestion fetched
+    // yet, the fetch failed, or MOCK_AI/the model returned none — a
+    // listing with zero aspects is always a valid, fully-visible listing
+    // (see apps/api/test/aspects.test.ts).
+    const coverAspects = cover !== null && cover.id !== null ? (draft.suggestions[cover.id]?.aspects ?? []) : [];
+
     const input: CreateListingInput = {
       title: draft.title,
       story: draft.story,
@@ -156,6 +170,7 @@ export default function GiveReview(): React.ReactElement {
       // is `z.literal(true)` specifically so a value can't be threaded
       // through as a plain (possibly-false) boolean.
       age_attested: true,
+      aspects: coverAspects,
       ...(draft.email.trim() !== "" ? { email: draft.email.trim() } : {}),
     };
 

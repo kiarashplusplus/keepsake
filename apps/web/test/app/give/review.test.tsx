@@ -35,6 +35,7 @@ const baseListing: OwnerListing = {
   postal_code: "02144",
   status: "pending",
   photos: [],
+  aspects: [],
   published_at: 0,
   moderation_reason: null,
   request_count: 0,
