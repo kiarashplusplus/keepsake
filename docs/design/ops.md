@@ -79,7 +79,12 @@ opts?)` — plain functions that write one structured object to `console.error`/
 (objects, not `JSON.stringify`'d strings, so Workers Logs can index and filter on individual
 fields like `tags.cron`). Every message/tag/extra/error still runs through
 `@keepsake/observability/redact`'s `redactDeep`/`redactString` first — that redaction is the part
-of the original Sentry work worth keeping, and it survived the SDK's removal unchanged.
+of the original Sentry work worth keeping, and it outlived the SDK — minus the two Sentry-shaped wrappers,
+`redactEvent` and `redactBreadcrumb`, which went with it. **Redaction is credential-shaped
+only:** `SENSITIVE_KEY_RE` and `KEY_VALUE_NAMES` are lists of key and token names, and
+`redactDeep` matches on key name, so an email address or phone number — the only PII Keepsake
+holds — is not matched anywhere, and one sitting in a message string, a stack or an unrecognised
+`extra` key reaches Workers Logs verbatim (#170).
 `SENSITIVE_KEY_RE` covers `cf-turnstile-response` and `idempotency[-_]?key` alongside the
 originals. `POST /api/admin/test-error` (`src/routes/admin.ts`, `adminAuth()`-guarded) exists
 purely to prove an event actually lands against a real deployment — a unit test asserting
@@ -90,8 +95,11 @@ outright), and one fewer subprocessor that ever sees error data — it stays ins
 platform already hosting the app.
 
 **What's lost, honestly:** the Free plan's Workers Logs retains events for **3 days**, versus
-Sentry's much longer history. There is **no alerting or push notification** — nobody's phone buzzes
-when an error lands, the same "no notification that would wake him" gap launch-audit finding 4
+Sentry's much longer history. There is **no push notification** — nobody's phone buzzes
+when an error lands. (Not quite "no alerting": the daily digest emailed to `ADMIN_DIGEST_TO` at
+00:07 UTC carries a `needs_attention` list covering stale crons and budget exhaustion, and
+`cron/dailyDigest.ts` calls itself an alerting channel. It is a once-a-day pull, not a page.)
+This is the same "no notification that would wake him" gap launch-audit finding 4
 originally described, just without a DSN to blame anymore. There is **no issue grouping or release
 tracking** — every event is a flat log line, not a deduplicated, trending issue. A **Tail Worker or
 Logpush** could push events somewhere alerting *is* possible; that is a real follow-up, not
@@ -111,8 +119,13 @@ moderation budget #18 flags as exhaustible. `EMAIL` stays presence-only and grad
 rather than failing the whole check.
 
 `GET /api/admin/health` is the separate, authenticated signal: it grades each cron's
-`cron:last:<name>` heartbeat against `CRON_STALE_AFTER_MS` (30 min for `moderationRetry`, 26 h
-for `orphanSweep`), counts a never-run cron as stale, and folds that into `ok`. The admin stats
+`cron:last:<name>` heartbeat against the `staleAfterMs` recorded per job in
+`src/cron/registry.ts` (30 min for `moderationRetry`, 26 h for `orphanSweep` **and
+`dailyDigest`** — three registered crons, not two), counts a never-run cron as stale, and folds
+that into `ok` along with `report_pressure.autohidden_awaiting_review`. `CRON_STALE_AFTER_MS` no
+longer exists on the API side; the only identifier by that name left is the web mirror in
+`StatsStrip.tsx`. Note that `dailyDigest` never writes its heartbeat, so this signal is currently
+pinned to `ok: false` (#165). The admin stats
 strip renders it, so a stopped cron is visible on the page rather than only in logs.
 
 ## Security headers
@@ -200,7 +213,8 @@ Four things in this document's territory changed after the launch audit
   minutes forever.
 - **`GET /api/admin/health` reads its own heartbeats.** `cron:last:<name>` was written correctly
   and returned correctly, and then ignored: `ok` came from `postal_codes_count > 0` alone. It is
-  now false when either heartbeat is stale (30 min for `moderationRetry`, 26 h for `orphanSweep`).
+  now false when any of the three heartbeats is stale (30 min for `moderationRetry`, 26 h for
+  `orphanSweep` and `dailyDigest`).
 - **There is an uptime check.** `.github/workflows/uptime.yml` — every 15 minutes, `/health` on
   preview and (once `PRODUCTION_LIVE` is set) production, with a JSON assertion on `ok`, an error
   annotation, and a deduplicated issue on failure. Before this, `.github/workflows/` held two

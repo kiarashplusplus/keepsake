@@ -12,19 +12,35 @@ else is enforced by `tools/preflight`'s `models` check.
 
 ## Pipeline (`apps/api/src/moderation/pipeline.ts: moderateListing(env, listingId, version)`)
 
-1. **Local checks** (no AI): title 4–80 chars, story 20–2000, category enum, 1–5 owned photos.
-   Email/phone/URL regex in title+story → `rejected` (`contact_in_story`) — privacy and a bypass
-   block in one move.
+1. **Local checks** (no AI): the contact-info regex on `title\nstory` → `rejected`
+   (`contact_in_story`). The length, category-enum and 1–5-owned-photo rules are enforced
+   *earlier*, at the API boundary (`CreateListingInput`/`UpdateListingInput` plus the ownership
+   query in `routes/listings.ts`), and the pipeline does not re-check them.
+   The bypass block is **not** complete: client-supplied `aspects` — up to six free-text
+   name/value pairs, written verbatim from the request body on create and PATCH with no check
+   that they came from `POST /api/photos/:id/suggest` — skip this gate and both AI models, and
+   `serializePublicListing` publishes them. A URL or phone number fits in the 48-character value
+   (#171).
 2. **Budget gate**: KV daily counters `mod_text`/`mod_image` (ported from Bayan's
-   `worker/src/budget.ts`). Exhausted → stays `pending`, event `reason=budget`, cron retries
-   after midnight UTC.
+   `worker/src/budget.ts`). Exhausted → stays `pending` with `reason=budget`, **but the denial
+   is logged as a `decision`/`error` event, so it consumes one of the 3 attempts** — and
+   `moderationRetry` runs every 5 minutes against anything `pending` for 2 minutes, so three
+   denials inside ~15 minutes escalate the listing to `needs_review` long before the
+   midnight-UTC counter reset it is waiting on (#179).
 3. **Text**: Llama Guard 3 (`@cf/meta/llama-guard-3-8b`) on `title\n\nstory`, 20s timeout.
-4. **Images**: each photo's 640px thumbnail (not the full image — cheaper, still enough signal)
-   to Llama 3.2 Vision, strict JSON prompt, `temperature 0`, 30s timeout, one retry on a parse
-   failure before giving up to `error`.
+4. **Images**: the bytes stored under each photo's `r2_key_thumb` — nominally a 640px
+   thumbnail, but a *client-uploaded* file in its own right: `PUT /api/photos` takes `full` and
+   `thumb` as two separate multipart files, validates only byte size and magic bytes, takes
+   `width`/`height` from the form without comparing them to either file, and nothing server-side
+   derives one from the other. The full-resolution image is never inspected by any model, while
+   `/i/:id/full` serves it publicly once the listing is approved — so a caller can pass
+   moderation on one image and publish another (#161). Sent to Llama 3.2 Vision, strict JSON
+   prompt, `temperature 0`, 30s timeout, one retry on a parse failure before giving up to
+   `error`.
 5. **Decide** (`decide.ts`, pure, exhaustively tested):
    - Text `S1 S3 S4 S9` (violent crime, sex crimes, child exploitation, indiscriminate weapons) →
-     `flag`; `S2 S7 S10 S12` (non-violent crime, privacy, hate, sexual content) → `review`.
+     `flag`; `S2 S7 S10 S11 S12` (non-violent crime, privacy, hate, self-harm, sexual content) →
+     `review` — S11 is held for a human rather than auto-rejected (`decide.ts`).
    - Image `drugs ≥ 0.7` or `is_physical_object === false` → `flag`; any of
      `nsfw, violence, weapons, hate_symbols, personal_info ≥ 0.5` → `review`; else `pass`.
    - Any `error` → stays `pending` (cron retries, 3 attempts → `needs_review`). Any `flag` →
