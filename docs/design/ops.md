@@ -136,9 +136,28 @@ by the Cloudflare assets binding, so it covers the SPA shell and static files;
 rewritten HTML and every `/api/*` JSON response. The CSP string is duplicated verbatim between
 them rather than shared: they are consumed by unrelated runtimes with no common module, and
 `/item/:id` serves the real exported shell, so a stricter policy on the Worker side would break
-theming on that one route. `script-src` is hash-based rather than `'unsafe-inline'`. If the
-pre-hydration theme script's text ever changes, its hash goes stale silently — nothing in the
-suite currently protects that pair.
+theming on that one route. `script-src` is hash-based rather than `'unsafe-inline'`.
+
+**That pair is now enforced** (issue #194). This paragraph used to end "if the pre-hydration theme
+script's text ever changes, its hash goes stale silently — nothing in the suite currently protects
+that pair", and that prose was the entire enforcement: three `sha256-` values written by hand into
+two files, with nothing computing any of them. Preflight's `csp-script-hash` check now hashes
+`apps/web/app/+html.tsx`'s `PREHYDRATION_SCRIPT` and the no-flash script inline in
+`apps/site/public/*.html`, asserts both values appear in **both** policies, and fails on a hash
+either policy declares that matches no script in the tree — so a stale value left behind after an
+edit is caught as well as a missing one. It also fails if the two policies stop being identical,
+and if the three static pages' inline scripts stop being identical to each other.
+
+The hash covers the **exact bytes** of the script, so a whitespace change or a prettier reflow is
+enough to break it, and nothing else would notice: no test loads the page under the real policy,
+so the symptom is the theme flash the script exists to prevent plus a console error, in production
+only. That is why the check exists rather than a test.
+
+One hash it cannot compute: Expo Router's injected `globalThis.__EXPO_ROUTER_HYDRATE__=true;` is
+not in this tree. The check verifies the declared value against the literal `_headers` records for
+it, which is agreement between two things we wrote — **not** evidence that Expo still emits that
+exact text. Only a real `dist/` shows that. The check says so in its passing output rather than
+letting it blend in with the two it does verify.
 
 ## Version skew
 

@@ -13,6 +13,7 @@
 // Exit status is 0 when every check passes (skips and warnings do not fail
 // the build), 1 if any check fails.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1974,6 +1975,209 @@ function checkPublicEnvPassthrough(ctx) {
   };
 }
 
+// ── csp-script-hash ────────────────────────────────────────────────────────
+//
+// Issue #194. A different animal from the other checks in this file: not a
+// check that could not fail, but one that **did not exist**.
+// `docs/design/ops.md` names the hazard in prose — "if the pre-hydration
+// theme script's text ever changes, its hash goes stale silently" — and
+// `apps/web/public/_headers:23-33` says the same about the `apps/site` copy.
+// Prose was the whole enforcement.
+//
+// `script-src` is hash-based rather than `'unsafe-inline'`, which is the
+// right call, and it means three `sha256-` values are written by hand into
+// two files that must agree with each other *and* with the scripts they
+// authorise. Nothing computed any of them. Change one character of
+// `PREHYDRATION_SCRIPT` — a space, a prettier reflow, since the hash covers
+// the exact bytes between the backticks — and the browser refuses to run it.
+// Every test still passes, because no test loads the page under the real
+// policy. The symptom is the theme flash the script exists to prevent, plus
+// a console error, in production only.
+//
+// This check computes what it can and is explicit about what it cannot:
+//
+//   - `PREHYDRATION_SCRIPT` (apps/web/app/+html.tsx) — computed from source.
+//   - the no-flash script inline in `apps/site/public/*.html` — computed from
+//     source, and the copies are compared against each other, because
+//     editing `about.html` and forgetting `terms.html` is the same bug one
+//     file over.
+//   - Expo Router's injected `globalThis.__EXPO_ROUTER_HYDRATE__=true;` —
+//     **not** from source; it is not in this tree. The declared hash is
+//     checked against the literal `_headers` records for it, which verifies
+//     the two agree and does *not* verify that Expo still emits that exact
+//     text. Only `dist/` shows that. Said out loud in the passing output
+//     rather than left to look like the other two.
+//
+// A declared hash matching none of the above is a failure too: "add the new
+// hash, forget to remove the old" leaves a policy authorising a script that
+// no longer exists, and only the reverse direction would catch it.
+
+const HTML_TSX_PATH = "apps/web/app/+html.tsx";
+const SITE_PUBLIC_DIR = "apps/site/public";
+const SECURITY_HEADERS_PATH = "apps/api/src/middleware/securityHeaders.ts";
+const HEADERS_FILE_PATH = "apps/web/public/_headers";
+
+// Expo Router's static-rendering output injects this verbatim. Recorded in
+// `_headers`' own comment; see the caveat above.
+const EXPO_ROUTER_HYDRATE_SCRIPT = "globalThis.__EXPO_ROUTER_HYDRATE__=true;";
+
+const CSP_HASH_RE = /'sha256-([A-Za-z0-9+/=]+)'/g;
+
+function sha256Base64(text) {
+  return createHash("sha256").update(text, "utf8").digest("base64");
+}
+
+/** The exact bytes between the backticks of `const <name> = \`…\`;`. */
+export function templateLiteralBody(text, name) {
+  const match = new RegExp(`const\\s+${name}\\s*=\\s*\`([\\s\\S]*?)\`;`).exec(text);
+  return match ? match[1] : null;
+}
+
+/** Inline `<script>` bodies (no `src=`) in an HTML document, in order. */
+export function inlineScriptBodies(html) {
+  return [...html.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+}
+
+/** The `'sha256-…'` sources in a CSP, ignoring any that appear in comments.
+ * `_headers` documents all three hashes in a comment block directly above the
+ * policy, so a whole-file scan would "find" a hash the policy does not
+ * actually declare. */
+export function cspHashesIn(text, { commentPrefixes = [] } = {}) {
+  const hashes = new Set();
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (commentPrefixes.some((p) => trimmed.startsWith(p))) continue;
+    for (const match of line.matchAll(CSP_HASH_RE)) hashes.add(match[1]);
+  }
+  return hashes;
+}
+
+function checkCspScriptHash(ctx) {
+  const headersText = ctx.readText(SECURITY_HEADERS_PATH);
+  const headersFile = ctx.readText(HEADERS_FILE_PATH);
+  if (headersText === null && headersFile === null) {
+    return { status: "skip", details: [`neither ${SECURITY_HEADERS_PATH} nor ${HEADERS_FILE_PATH} is present`] };
+  }
+
+  const details = [];
+  // name -> { hash, source } for every script this check can hash itself.
+  const computed = new Map();
+
+  const htmlTsx = ctx.readText(HTML_TSX_PATH);
+  if (htmlTsx === null) {
+    details.push(`${HTML_TSX_PATH} not present, but a CSP declaring script hashes is — nothing can be verified against its source`);
+  } else {
+    const script = templateLiteralBody(htmlTsx, "PREHYDRATION_SCRIPT");
+    if (script === null) {
+      details.push(
+        `${HTML_TSX_PATH}: could not find \`const PREHYDRATION_SCRIPT = \`…\`;\` — the script whose hash the CSP authorises. Renaming or reshaping it silently stops this check computing anything, which is how the hash went unguarded in the first place (#194).`,
+      );
+    } else if (script.includes("${")) {
+      details.push(
+        `${HTML_TSX_PATH}: PREHYDRATION_SCRIPT interpolates \${…}, so the source text is not the text the browser hashes and no hash can be computed from this file. Either inline the value or hash the rendered output instead.`,
+      );
+    } else {
+      computed.set("PREHYDRATION_SCRIPT", { hash: sha256Base64(script), where: `${HTML_TSX_PATH} (${script.length} chars)` });
+    }
+  }
+
+  if (ctx.exists(SITE_PUBLIC_DIR)) {
+    const pages = ctx.walk(SITE_PUBLIC_DIR).filter((f) => f.endsWith(".html"));
+    const byBody = new Map(); // script body -> [files]
+    for (const page of pages) {
+      for (const body of inlineScriptBodies(ctx.readText(page) ?? "")) {
+        if (!body.trim()) continue;
+        if (!byBody.has(body)) byBody.set(body, []);
+        byBody.get(body).push(page);
+      }
+    }
+    if (byBody.size > 1) {
+      details.push(
+        `${SITE_PUBLIC_DIR}: the static pages carry ${byBody.size} different inline <script> bodies — ` +
+          [...byBody.values()].map((files) => files.join(", ")).join(" vs ") +
+          ". They share one CSP, so each distinct body needs its own hash; editing one page's no-flash script and not its siblings is the same bug one file over.",
+      );
+    }
+    let i = 0;
+    for (const [body, files] of byBody) {
+      i += 1;
+      computed.set(`apps/site inline script${byBody.size > 1 ? ` #${i}` : ""}`, {
+        hash: sha256Base64(body),
+        where: `${files.join(", ")} (${body.length} chars)`,
+      });
+    }
+  }
+
+  // Declared, but not computable from this tree — see the header comment.
+  const documented = new Map([
+    [
+      sha256Base64(EXPO_ROUTER_HYDRATE_SCRIPT),
+      "Expo Router's injected `globalThis.__EXPO_ROUTER_HYDRATE__=true;` — checked against the literal _headers records, NOT against Expo's actual output",
+    ],
+  ]);
+
+  const policies = [];
+  if (headersText !== null) {
+    policies.push({ path: SECURITY_HEADERS_PATH, hashes: cspHashesIn(headersText, { commentPrefixes: ["//", "*", "/*"] }) });
+  }
+  if (headersFile !== null) {
+    policies.push({ path: HEADERS_FILE_PATH, hashes: cspHashesIn(headersFile, { commentPrefixes: ["#"] }) });
+  }
+
+  if (computed.size === 0 && details.length === 0) {
+    return {
+      status: "fail",
+      details: [
+        `a CSP declaring script hashes is present but this check computed none — with nothing to compare, it would report agreement it never checked (#194)`,
+      ],
+    };
+  }
+
+  for (const [name, { hash, where }] of computed) {
+    for (const policy of policies) {
+      if (policy.hashes.has(hash)) continue;
+      details.push(
+        `${policy.path} does not declare 'sha256-${hash}', the hash of ${name} (${where}). ` +
+          "The hash covers the *exact bytes* of the script, so a whitespace change or a prettier reflow is enough to do this — " +
+          "and nothing else notices, because no test loads the page under the real policy. The browser refuses to execute the script; " +
+          "the symptom is a theme flash and a console error in production only. Paste 'sha256-" +
+          `${hash}' into both ${SECURITY_HEADERS_PATH} and ${HEADERS_FILE_PATH}.`,
+      );
+    }
+  }
+
+  const known = new Set([...[...computed.values()].map((c) => c.hash), ...documented.keys()]);
+  for (const policy of policies) {
+    for (const hash of policy.hashes) {
+      if (known.has(hash)) continue;
+      details.push(
+        `${policy.path} declares 'sha256-${hash}', which matches no script in this tree and is not one of the documented external scripts — a stale hash left behind after a script edit authorises something that no longer exists`,
+      );
+    }
+  }
+
+  if (policies.length === 2) {
+    const [a, b] = policies;
+    for (const hash of a.hashes) {
+      if (!b.hashes.has(hash)) details.push(`${a.path} declares 'sha256-${hash}' and ${b.path} does not — the two policies are maintained by hand and must stay identical`);
+    }
+    for (const hash of b.hashes) {
+      if (!a.hashes.has(hash)) details.push(`${b.path} declares 'sha256-${hash}' and ${a.path} does not — the two policies are maintained by hand and must stay identical`);
+    }
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+
+  const lines = [
+    `${computed.size} inline script(s) hashed from source and declared by ${policies.length} polic(y/ies): ${policies.map((p) => p.path).join(", ")}`,
+  ];
+  for (const [name, { hash, where }] of computed) lines.push(`${name}: sha256-${hash} — ${where}`);
+  for (const [hash, note] of documented) {
+    if (policies.some((p) => p.hashes.has(hash))) lines.push(`sha256-${hash}: ${note}`);
+  }
+  return { status: "pass", details: lines };
+}
+
 // ── backup-tables ──────────────────────────────────────────────────────────
 //
 // Issue #164. `wrangler d1 export` refuses this database outright — migration
@@ -2236,6 +2440,7 @@ export const CHECKS = {
   "lfs-pointers": { description: "apps/api/seeds/*.sql are not unfetched LFS pointers", run: checkLfsPointers },
   "public-env": { description: "EXPO_PUBLIC_* names are never secrets", run: checkPublicEnv },
   "public-env-passthrough": { description: ".env.example's EXPO_PUBLIC_* block vs what deploy.yml passes to the export", run: checkPublicEnvPassthrough },
+  "csp-script-hash": { description: "CSP 'sha256-…' sources vs the inline scripts they authorise", run: checkCspScriptHash },
   "gh-repo-context": { description: "workflow steps running `gh` can resolve the repo", run: checkGhRepoContext },
   "shell-syntax": { description: "bash -n on every workflow `run:` block and every *.sh under tools/ and .github/", run: checkShellSyntax },
 };

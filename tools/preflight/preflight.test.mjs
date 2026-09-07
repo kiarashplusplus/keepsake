@@ -13,6 +13,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -29,6 +30,9 @@ import {
   cronIntervalMs,
   tablesAfterMigrations,
   documentedBackupTables,
+  cspHashesIn,
+  templateLiteralBody,
+  inlineScriptBodies,
   checkLfsPointers,
   lfsPointerDetail,
   resolveNumericExpr,
@@ -1497,6 +1501,134 @@ test("public-env-passthrough: this repository's deploy.yml passes every declared
   assert.equal(result.status, "pass", result.details.join("\n"));
   const deploy = createContext(REPO_ROOT).readText(".github/workflows/deploy.yml");
   assert.match(deploy, /EXPO_PUBLIC_GOOGLE_ADS_ID:/, "#175's fix: the ads ids are wired through");
+});
+
+// ── csp-script-hash ────────────────────────────────────────────────────
+//
+// #194: three `sha256-` values written by hand into two policy files with
+// nothing binding them to the scripts they authorise. Not a check that could
+// not fail — a check that did not exist; `docs/design/ops.md` and
+// `_headers`' own comment named the hazard in prose and that was the whole
+// enforcement.
+
+const CSP_SCRIPT = '\n(function () {\n  document.documentElement.dataset.theme = "light";\n})();\n';
+const CSP_SCRIPT_HASH = createHash("sha256").update(CSP_SCRIPT, "utf8").digest("base64");
+const EXPO_HYDRATE_HASH = createHash("sha256")
+  .update("globalThis.__EXPO_ROUTER_HYDRATE__=true;", "utf8")
+  .digest("base64");
+
+function cspTree({ script = CSP_SCRIPT, declared = null } = {}) {
+  const hashes = (declared ?? [CSP_SCRIPT_HASH, EXPO_HYDRATE_HASH])
+    .map((h) => `'sha256-${h}'`)
+    .join(" ");
+  return {
+    "apps/web/app/+html.tsx": `const PREHYDRATION_SCRIPT = \`${script}\`;\n`,
+    "apps/api/src/middleware/securityHeaders.ts": `const CSP = ["script-src 'self' ${hashes}"].join("; ");\n`,
+    "apps/web/public/_headers": `# documented above: 'sha256-deadbeefNotDeclaredJustMentionedInAComment='\n/*\n  Content-Security-Policy: default-src 'self'; script-src 'self' ${hashes}\n`,
+  };
+}
+
+test("csp-script-hash: passes when both policies declare the script's real hash", () => {
+  const result = runOne("csp-script-hash", cspTree());
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  assert.match(result.details.join("\n"), new RegExp(`PREHYDRATION_SCRIPT: sha256-${CSP_SCRIPT_HASH.replace(/[+/=]/g, (c) => `\\${c}`)}`));
+});
+
+test("csp-script-hash: one added space to the script turns it red (#194's own experiment)", () => {
+  const result = runOne("csp-script-hash", cspTree({ script: CSP_SCRIPT.replace("(function () {", "(function () { ") }));
+  assert.equal(result.status, "fail");
+  const text = result.details.join("\n");
+  assert.match(text, /does not declare 'sha256-[^']+', the hash of PREHYDRATION_SCRIPT/);
+  // The failure has to name the cause, because "a space" is not something
+  // anyone will suspect on their own.
+  assert.match(text, /exact bytes/);
+  assert.match(text, /prettier reflow/);
+  // And the old hash must be reported stale, not silently tolerated.
+  assert.match(text, /matches no script in this tree/);
+});
+
+test("csp-script-hash: a stale hash left behind after a script edit fails", () => {
+  const result = runOne("csp-script-hash", {
+    ...cspTree({ declared: [CSP_SCRIPT_HASH, EXPO_HYDRATE_HASH, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="] }),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /declares 'sha256-AAA[^']*', which matches no script in this tree/);
+});
+
+test("csp-script-hash: fails when the two hand-maintained policies disagree", () => {
+  const tree = cspTree();
+  tree["apps/web/public/_headers"] = `/*\n  Content-Security-Policy: script-src 'self' 'sha256-${CSP_SCRIPT_HASH}'\n`;
+  const result = runOne("csp-script-hash", tree);
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /the two policies are maintained by hand and must stay identical/);
+});
+
+test("csp-script-hash: fails when one apps/site page's inline script diverges from its siblings", () => {
+  const page = (theme) =>
+    `<html><head><script src="/consent.js" defer></script><script>\n  var t = "${theme}";\n</script></head></html>\n`;
+  const sitePages = {
+    "apps/site/public/about.html": page("light"),
+    "apps/site/public/privacy.html": page("light"),
+    "apps/site/public/terms.html": page("dark"),
+  };
+  const result = runOne("csp-script-hash", { ...cspTree(), ...sitePages });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /carry 2 different inline <script> bodies/);
+});
+
+test("csp-script-hash: fails rather than passing when the script literal cannot be found", () => {
+  const tree = cspTree();
+  tree["apps/web/app/+html.tsx"] = "const SOMETHING_ELSE = `x`;\n";
+  const result = runOne("csp-script-hash", tree);
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /could not find `const PREHYDRATION_SCRIPT/);
+});
+
+test("csp-script-hash: fails when the script interpolates, so source bytes are not browser bytes", () => {
+  const tree = cspTree();
+  tree["apps/web/app/+html.tsx"] = "const PREHYDRATION_SCRIPT = `var k = ${KEY};`;\n";
+  const result = runOne("csp-script-hash", tree);
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /interpolates/);
+});
+
+test("csp-script-hash: skips a tree with no CSP at all", () => {
+  const result = runOne("csp-script-hash", { "README.md": "# nothing\n" });
+  assert.equal(result.status, "skip");
+});
+
+test("cspHashesIn ignores hashes that only appear in comments", () => {
+  // `_headers` documents all three hashes in a comment directly above the
+  // policy, so a whole-file scan would "find" hashes the policy never
+  // declares — and the check would pass on a policy missing all of them.
+  const text = "# 'sha256-AAA=' is the theme script\n/*\n  Content-Security-Policy: script-src 'sha256-BBB='\n";
+  assert.deepEqual([...cspHashesIn(text, { commentPrefixes: ["#"] })], ["BBB="]);
+});
+
+test("templateLiteralBody takes the exact bytes between the backticks", () => {
+  assert.equal(templateLiteralBody("const X = `\n  a();\n`;\n", "X"), "\n  a();\n");
+  assert.equal(templateLiteralBody("const Y = `z`;", "X"), null);
+});
+
+test("inlineScriptBodies skips <script src=…> and keeps inline bodies in order", () => {
+  assert.deepEqual(
+    inlineScriptBodies('<script src="/consent.js" defer></script><script>a()</script><script>b()</script>'),
+    ["a()", "b()"],
+  );
+});
+
+test("csp-script-hash: this repository's real hashes match the scripts they authorise", () => {
+  // The whole point of #194, against the real tree. Kiarash verified
+  // sha256-Fv9zzPn… against a 1261-char script by hand; this asserts the
+  // check computes the same thing, so an extractor grabbing the wrong bytes
+  // cannot look like a policy that is genuinely in sync.
+  const result = runChecks(["csp-script-hash"], REPO_ROOT)[0];
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  const text = result.details.join("\n");
+  assert.match(text, /PREHYDRATION_SCRIPT: sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g= — apps\/web\/app\/\+html\.tsx \(1261 chars\)/);
+  assert.match(text, /apps\/site inline script: sha256-d6qbtEYff\/sB38YyzuzhASbVmmOidU\/UFC9mNit47j4=/);
+  // The one hash it cannot compute must say so rather than blending in.
+  assert.match(text, /NOT against Expo's actual output/);
 });
 
 // ── shell-syntax ───────────────────────────────────────────────────────
