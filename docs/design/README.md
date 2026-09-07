@@ -28,10 +28,14 @@ is a real site with real visitors possible, not a staging exercise.
   reports the three Vectorize indexes exist, the `REAL_AI=1` block ran against real Workers AI,
   and the flag is on — so it is no longer the inert PR the entry below described. Its base is
   `cc868c8`, three merges behind `main`.
-- **PR #139** (#135, #136) — the vision prompt never asks the model to *read* the object, and no
-  view renders an aspect. This is the whole distance between "aspects are persisted and indexed"
-  (true on `main`) and "a visitor sees anything other than `OTHER`" (not true on `main`). The
-  milestone's plumbing shipped; its visible half is in this PR.
+- **PR #139** (#135, #136) — **merged as `2108d37`** while this refresh was being written. It
+  closed the distance between "aspects are persisted and indexed" and "a visitor sees anything
+  other than `OTHER`": the prompt now reads the object's own markings first, `features/item/
+  AspectList` renders the result under the story, and the category list went from five to twelve.
+  Its two deliberate leftovers both touch **live production rows** and neither is filed: the
+  fishing-line spool keeps its single `material: braided` row, so `POST /api/admin/backfill-aspects`
+  skips it (the job skips any listing that already has rows), and nothing re-runs a suggestion to
+  re-categorise an existing listing off the new prompt.
 
 **Landed since the list above was last written** (kept per rule 7 rather than deleted):
 - **PR #100** (aspect backfill, #37) merged as `de75c67`; **PR #107** merged as `6412c7f`. The
@@ -257,15 +261,18 @@ with no local changes:
 
 Result: `pnpm lint` 0 errors · `pnpm -r typecheck` clean · API 376/376 · web 304/304 ·
 `pnpm --filter @keepsake/web e2e` **82/82**, mobile and desktop · preflight all pass except
-`lfs-pointers`, which is this sandbox having no `git-lfs`, not a repository fault.
+`lfs-pointers`, which is this sandbox having no `git-lfs`, not a repository fault. Re-run after
+merging `2108d37` (#139) in, since that landed mid-check.
 
 Two things worth carrying, neither of them a regression:
 
-- **The milestone's plumbing is green and its visible half is not shipped.** Aspects are persisted,
-  indexed, backfillable and reachable through `PublicListing.aspects`, and no view renders one
-  (#135, in PR #139). A tracking issue that reads "5 of 6 done" is true about the code and
-  misleading about what a visitor gets, which is why the table above says where each item lives
-  rather than only that it closed.
+- **The milestone's plumbing was green for a day with no visible half at all.** Aspects were
+  persisted, indexed, backfillable and served through `PublicListing.aspects` — and no view
+  rendered one, which is how the first real production listing showed a visitor the single word
+  `OTHER` (#135). #139 fixed that a few hours after this check and is now on `main`. The lesson
+  outlives the fix: five green PRs closing five issues is true about the code and says nothing
+  about what a visitor gets, which is why the table above records where each item lives rather
+  than only that it closed.
 - **Shelves (#39) have no browser-level coverage.** They are tested at the API (`shelves.test.ts`,
   including the floor and the cache TTL) and in jsdom (`test/app/index.test.tsx`), but no
   `e2e/*.spec.ts` mentions a shelf — `browse.spec.ts` predates them. The 82 green e2e specs
