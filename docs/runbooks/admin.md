@@ -260,6 +260,94 @@ curl -s -X POST "$SITE_URL/api/admin/requests/$REQUEST_ID/remove" \
 # Dashboard counters / operational health
 curl -s "$SITE_URL/api/admin/stats" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 curl -s "$SITE_URL/api/admin/health" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+
+# The Observatory: traffic, funnel, queue ages, recent errors, today's digest.
+# window_days is a closed set — 1, 7 or 30; anything else is a 400.
+curl -s "$SITE_URL/api/admin/observatory?window_days=7" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+
+# Is the Cloudflare half actually wired up, or is it reporting itself off?
+curl -s "$SITE_URL/api/admin/observatory" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  | jq '{edge: .edge.state, logs: .logs.state, why: (.edge.reason // .edge.error)}'
+```
+
+## The Observatory
+
+`/admin` → **Observatory**, or `GET /api/admin/observatory` above. Three sections, and the
+important thing about them is that they fail *separately*:
+
+- **`app`** — listings, requests, the give→get funnel, and how long the moderation queue has been
+  waiting. Comes from D1, needs no credential, and is always present. If this is missing the
+  request 500s, because a Worker that cannot read its own database has nothing to say.
+- **`edge`** — request/error counts and CPU quantiles from Cloudflare's GraphQL Analytics API.
+- **`logs`** — the Worker's own `console.error`/`console.warn` lines, read back out of Workers Logs.
+
+`edge` and `logs` are each one of three states, and the distinction is the point of the whole
+feature: `unconfigured` (no credential — a setup hint, not an alarm), `error` (configured and the
+call failed — an alarm, and the state most easily mistaken for "no traffic"), or `ok`. **A panel
+showing nothing is never ambiguous.** If you find yourself guessing whether a chart is empty
+because nothing happened or because something is broken, that is a bug — file it.
+
+Note `logs` clamps its own window to 3 days whatever you ask for, because that is Workers Logs
+retention on the Free plan, and it reports the window it actually used rather than labelling three
+days of data as thirty.
+
+### Minting `CF_OBSERVATORY_TOKEN`
+
+Only Kiarash can do this — it is the one step no agent can complete, because minting an API token
+is deliberately outside what any automation here is allowed to do.
+
+In the Cloudflare dashboard, **My Profile → API Tokens → Create Token → Custom token**, scoped to
+the `Leapkg@gmail.com` account (`dc6a87ed4a4269ed74c8f508b275b703`), with exactly two permissions:
+
+| Scope   | Permission                   | Access |
+| ------- | ---------------------------- | ------ |
+| Account | Account Analytics            | Read   |
+| Account | Workers Observability        | Read   |
+
+Nothing else. This token is read by request-path code, so it gets the least power that does the
+job: it can read counters and log lines and can change nothing. It is deliberately **not** a reuse
+of `CF_CACHE_PURGE_TOKEN` (which can purge the zone) or of `CLOUDFLARE_API_TOKEN` (the CI deploy
+credential, which has no business being readable from a request handler).
+
+Then, per environment:
+
+```bash
+cd apps/api
+wrangler secret put CF_OBSERVATORY_TOKEN --env production   # and --env preview
+```
+
+`CF_ACCOUNT_ID` and `CF_SCRIPT_NAME` are already set in `wrangler.toml` for both deployed tiers —
+neither is a credential, so neither is a secret. With any of the three missing, the two Cloudflare
+panels say `unconfigured` and name the missing piece; nothing else degrades.
+
+Verify it took, without reading the secret back (you cannot):
+
+```bash
+curl -s "https://keepsake.ing/api/admin/observatory" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  | jq '{edge: .edge.state, logs: .logs.state}'
+# {"edge": "ok", "logs": "ok"}  — anything else, read .edge.reason / .edge.error
+```
+
+## The daily digest
+
+`cron/dailyDigest.ts` runs at **00:07 UTC** and mails the previous UTC day to `ADMIN_DIGEST_TO`
+(a Worker secret, because it is a real address and `wrangler.toml` is committed).
+
+It sends **every day, including quiet ones**, and the subject carries the verdict — `all clear`,
+`N to watch`, or `N needs attention` — so a boring day costs one glance. That is deliberate: a
+digest that only sent on bad news would be silent in the one case that matters most, which is the
+crons having stopped. **The absence of a digest is itself the alarm.**
+
+With `ADMIN_DIGEST_TO` unset the report is still built every night — which proves the queries still
+run — and logged instead of sent. That is a supported state, not a failure, and the cron does not
+fail because of it; if it did, the job would report itself *stale*, which is the exact alarm this
+report exists to raise about everything else.
+
+To see today's digest without waiting for the cron, read `.report` out of the Observatory payload —
+the page and the email render the same object, so they cannot disagree:
+
+```bash
+curl -s "$SITE_URL/api/admin/observatory" -H "Authorization: Bearer $ADMIN_TOKEN" | jq .report
 ```
 
 ## Verification before trusting a ban/approve action in production

@@ -481,6 +481,9 @@ describe("admin routes", () => {
       await seedStandardPostalCodes();
       await env.KV.put("cron:last:orphanSweep", String(Date.now()));
       await env.KV.put("cron:last:moderationRetry", String(Date.now()));
+      // `dailyDigest` joined the cron registry with the Observatory; `/health`
+      // derives `ok` from every job in it, so a green case has to seed all three.
+      await env.KV.put("cron:last:dailyDigest", String(Date.now()));
 
       const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
       expect(res.status).toBe(200);
@@ -548,6 +551,9 @@ describe("admin routes", () => {
       await seedStandardPostalCodes();
       await env.KV.put("cron:last:moderationRetry", String(Date.now()));
       await env.KV.put("cron:last:orphanSweep", String(Date.now()));
+      // `dailyDigest` joined the cron registry with the Observatory; `/health`
+      // derives `ok` from every job in it, so a green case has to seed all three.
+      await env.KV.put("cron:last:dailyDigest", String(Date.now()));
 
       const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
       const health = await readOk<AdminHealth>(res);

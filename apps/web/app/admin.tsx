@@ -47,6 +47,7 @@ import {
 import { ApiError } from "@/api/client";
 import { AdminTokenGate } from "@/features/admin/AdminTokenGate";
 import { StatsStrip } from "@/features/admin/StatsStrip";
+import { Observatory } from "@/features/admin/Observatory";
 import { QueueItemCard, ACTIONS_BY_STATUS } from "@/features/admin/QueueItemCard";
 import { BulkActionBar } from "@/features/admin/BulkActionBar";
 import { ReasonSheet } from "@/features/admin/ReasonSheet";
@@ -111,6 +112,13 @@ export default function AdminPage(): React.ReactElement {
   // `src/lib/adminToken.ts`), so there is nothing to "load" here, just a
   // starting value React should only ever compute once.
   const [token, setToken] = React.useState<string | null>(() => getAdminToken());
+  // Top-level section, separate from `activeTab` below (the queue's own
+  // status filter). The queue is the default and has to stay that way —
+  // `Observatory` isn't rendered at all until this flips, which is what
+  // keeps it from costing the default view a request it never asked for;
+  // see `Observatory.tsx`'s own file header on why that's enough on its own
+  // without a second "loaded" flag or a `React.lazy` split.
+  const [activeSection, setActiveSection] = React.useState<"queue" | "observatory">("queue");
   const [activeTab, setActiveTab] = React.useState<AdminQueueStatus>("needs_review");
   const [stats, setStats] = React.useState<AdminStats | null>(null);
   const [health, setHealth] = React.useState<AdminHealth | null>(null);
@@ -455,6 +463,11 @@ export default function AdminPage(): React.ReactElement {
     if (typeof document === "undefined") return undefined;
 
     function onKeyDown(event: KeyboardEvent): void {
+      // The Observatory tab has no roving focus or sheet of its own — these
+      // are the queue's shortcuts, and firing them into rows the admin can't
+      // currently see would move `focusedIndex`/act on a card with no
+      // visible feedback at all.
+      if (activeSection !== "queue") return;
       if (sheet !== null) return;
       const eventTarget = event.target;
       if (eventTarget instanceof HTMLElement) {
@@ -507,7 +520,7 @@ export default function AdminPage(): React.ReactElement {
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `handleApprove`/`openSheet`/`toggleSelect` are plain functions redefined every render; listing the state and derived values they close over is what actually keeps this current.
-  }, [token, sheet, tab, focusedIndex, actions, selectedIds]);
+  }, [token, activeSection, sheet, tab, focusedIndex, actions, selectedIds]);
 
   if (token === null) {
     return (
@@ -526,58 +539,73 @@ export default function AdminPage(): React.ReactElement {
 
       <StatsStrip stats={stats} health={health} healthAsOf={healthAsOf} />
 
+      {/* Top-level section switch. "Queue" stays the default (`activeSection`'s
+          initializer above) and everything below it is unchanged from before
+          this panel existed; "Observatory" only mounts `<Observatory>` once
+          picked, so the default view never pays for the extra fetch. */}
       <View accessibilityRole="tablist" style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
-        {ADMIN_QUEUE_STATUSES.map((status) => (
-          <Chip key={status} role="tab" label={TAB_LABELS[status]} selected={activeTab === status} onPress={() => setActiveTab(status)} />
-        ))}
+        <Chip role="tab" label="Queue" selected={activeSection === "queue"} onPress={() => setActiveSection("queue")} />
+        <Chip role="tab" label="Observatory" selected={activeSection === "observatory"} onPress={() => setActiveSection("observatory")} />
       </View>
 
-      <BulkActionBar
-        count={selectedIds.size}
-        actions={actions}
-        onApprove={() => openBulkSheet("approve")}
-        onHide={() => openBulkSheet("hide")}
-        onReject={() => openBulkSheet("reject")}
-        onClear={() => setSelectedIds(new Set())}
-      />
+      {activeSection === "queue" ? (
+        <>
+          <View accessibilityRole="tablist" style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+            {ADMIN_QUEUE_STATUSES.map((status) => (
+              <Chip key={status} role="tab" label={TAB_LABELS[status]} selected={activeTab === status} onPress={() => setActiveTab(status)} />
+            ))}
+          </View>
 
-      {tab.error !== null ? (
-        <Text variant="body" color="dangerText">
-          {tab.error}
-        </Text>
-      ) : null}
-
-      {tab.loading && tab.items.length === 0 ? <Skeleton height={240} /> : null}
-
-      {!tab.loading && tab.loadedOnce && tab.items.length === 0 ? (
-        <EmptyState title="Nothing waiting." line="The queue is clear for now." ornament={<Stamp state="idle" label="clear" />} />
-      ) : null}
-
-      <View style={{ gap: space.lg }}>
-        {tab.items.map((item, index) => (
-          <QueueItemCard
-            key={item.id}
-            item={item}
+          <BulkActionBar
+            count={selectedIds.size}
             actions={actions}
-            busy={busyId === item.id}
-            focused={index === focusedIndex}
-            selected={selectedIds.has(item.id)}
-            onToggleSelect={() => toggleSelect(item.id)}
-            onApprove={() => handleApprove(item)}
-            onHide={() => openSheet("hide", item)}
-            onRestore={() => handleRestore(item)}
-            onReject={() => openSheet("reject", item)}
-            onBanOwner={() => openSheet("ban", item)}
-            onUnbanOwner={() => handleUnban(item)}
+            onApprove={() => openBulkSheet("approve")}
+            onHide={() => openBulkSheet("hide")}
+            onReject={() => openBulkSheet("reject")}
+            onClear={() => setSelectedIds(new Set())}
           />
-        ))}
-      </View>
 
-      {tab.cursor !== null ? (
-        <View style={{ flexDirection: "row", justifyContent: "center" }}>
-          <Button label="More" variant="secondary" loading={tab.loading} disabled={tab.loading} onPress={() => loadTab(token, activeTab, true, tab.cursor ?? undefined)} />
-        </View>
-      ) : null}
+          {tab.error !== null ? (
+            <Text variant="body" color="dangerText">
+              {tab.error}
+            </Text>
+          ) : null}
+
+          {tab.loading && tab.items.length === 0 ? <Skeleton height={240} /> : null}
+
+          {!tab.loading && tab.loadedOnce && tab.items.length === 0 ? (
+            <EmptyState title="Nothing waiting." line="The queue is clear for now." ornament={<Stamp state="idle" label="clear" />} />
+          ) : null}
+
+          <View style={{ gap: space.lg }}>
+            {tab.items.map((item, index) => (
+              <QueueItemCard
+                key={item.id}
+                item={item}
+                actions={actions}
+                busy={busyId === item.id}
+                focused={index === focusedIndex}
+                selected={selectedIds.has(item.id)}
+                onToggleSelect={() => toggleSelect(item.id)}
+                onApprove={() => handleApprove(item)}
+                onHide={() => openSheet("hide", item)}
+                onRestore={() => handleRestore(item)}
+                onReject={() => openSheet("reject", item)}
+                onBanOwner={() => openSheet("ban", item)}
+                onUnbanOwner={() => handleUnban(item)}
+              />
+            ))}
+          </View>
+
+          {tab.cursor !== null ? (
+            <View style={{ flexDirection: "row", justifyContent: "center" }}>
+              <Button label="More" variant="secondary" loading={tab.loading} disabled={tab.loading} onPress={() => loadTab(token, activeTab, true, tab.cursor ?? undefined)} />
+            </View>
+          ) : null}
+        </>
+      ) : (
+        <Observatory token={token} onSessionExpired={handleSessionExpired} />
+      )}
 
       <ReasonSheet
         visible={sheet !== null && sheet.kind === "hide"}
