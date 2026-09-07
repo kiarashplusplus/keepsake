@@ -114,6 +114,59 @@ nothing to provision before it's live. See `docs/design/ops.md#observability`.
 Environments → preview/production), used only by `deploy.yml` to run `wrangler` in CI — they are
 not Worker secrets and are never passed to `wrangler secret put`.
 
+## The per-PR preview token (#73)
+
+`deploy.yml` does not use this yet — it exists so the per-PR preview Workers decided in #73 have a
+credential that can actually stand them up. It is a **second, separate** token from
+`keepsake-ci-deploy` (which stays exactly as narrow as it was, and is what
+`CLOUDFLARE_API_TOKEN` still holds): a per-PR job has to *create and delete* resources, not just
+write to two known ones, so its blast radius is genuinely larger and it is kept in its own
+credential rather than widening the everyday deploy token.
+
+- Cloudflare token **`keepsake-pr-preview`** (id `7f49516e…`), account-scoped to the Leapkg
+  account only, permission groups: D1 Write + Read + Metadata Read, Workers R2 Storage Write +
+  Read + Metadata Read, Workers KV Storage Write + Read + Metadata Read, Workers Scripts Write +
+  Read, Account Settings Read.
+- Stored as the GitHub **preview** environment secret **`CLOUDFLARE_PR_PREVIEW_TOKEN`** (rolled
+  and re-stored 2026-09-07, so the secret and the token are known to match — the value predating
+  that was never verified against the token's real scopes).
+
+Every capability below was exercised against the live account with that token on 2026-09-07, then
+cleaned up; none of it is inferred from the permission-group names:
+
+| Operation | Result |
+|---|---|
+| `POST/GET/DELETE /d1/database`, `POST /d1/database/:id/query` | works (created, queried, deleted `keepsake-db-pr-probe`) |
+| `POST/GET/DELETE /r2/buckets` | works (created and deleted `keepsake-photos-pr-probe`) |
+| `POST/DELETE /storage/kv/namespaces` | works |
+| `PUT/DELETE /workers/scripts/:name` + `POST .../subdomain` | works — `keepsake-pr-probe.leapkg.workers.dev` served a live response, then deleted |
+| mint another API token / read or write DNS | **refused** (9109 / 10000), as intended |
+
+Two things that were open questions when #73 was filed, now answered by measurement rather than
+assumption:
+
+- **"D1 Write" already implies read.** Cloudflare's `Write` groups are supersets of their `Read`
+  counterpart, and `keepsake-ci-deploy` — which holds D1 Write and *no* D1 Read — has been running
+  `wrangler d1 migrations apply --remote` (a read of `d1_migrations`) successfully all along. The
+  Read/Metadata Read groups above were added anyway: they cost nothing, and a token whose grants
+  are explicit is one nobody has to re-derive this from CI logs again.
+- **The account is on Workers Paid, not Free.** Probed directly: 12 D1 databases were created in
+  sequence with no refusal, well past the Free plan's ceiling of 10 (paid allows 50,000). One D1
+  database, one R2 bucket, one KV namespace and one Worker per open PR is nowhere near a plan
+  limit; the real cost of per-PR previews is the CI work to provision and tear them down, not the
+  resources themselves.
+
+**Still not solved by this token: Turnstile.** Widget hostnames are not in its scope (it can read
+widgets, not write them), so a `keepsake-pr-<n>.leapkg.workers.dev` origin is not an allowed
+hostname on the `Keepsake` widget and every write path there would fail `turnstile_failed`. That
+is a one-time dashboard action rather than a per-PR one, because Turnstile hostnames cover
+subdomains: adding `leapkg.workers.dev` to the widget covers every future PR Worker at once
+(wildcards are rejected; the free tier allows 10 hostnames per widget). The trade-off to make
+knowingly is that `leapkg.workers.dev` is a *shared* subdomain — every other Worker on this
+account gets to use the Keepsake site key too. The alternative is accepting that PR previews run
+with Turnstile unenforced, which makes them unusable for verifying exactly the write paths most
+worth verifying.
+
 ## What a deploy actually does
 
 1. `pnpm install --frozen-lockfile`
