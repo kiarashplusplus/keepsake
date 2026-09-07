@@ -22,6 +22,7 @@ import { test, expect, type Browser, type BrowserContext, type Page } from "@pla
 import { freshClientIp } from "./support/api";
 import { BASE_URL } from "./support/constants";
 import { CONSENT_STORAGE_KEY, CONSENT_VERSION, consentRecord } from "./support/consent";
+import { seedVisited } from "./support/visited";
 
 const ADS_HOST = "www.googletagmanager.com";
 const ANALYTICS_HOST = "static.cloudflareinsights.com";
@@ -45,6 +46,12 @@ async function openHarness(
     baseURL: BASE_URL,
     extraHTTPHeaders: { "CF-Connecting-IP": freshClientIp() },
   });
+  // Consent state and "has visited before" (issue #44) are independent
+  // variables — a fresh consent decision has nothing to do with whether this
+  // device has been redirected to the explainer already. Without this, every
+  // `goto("/")` below would hit `/welcome` instead of the page these
+  // assertions are actually about.
+  await seedVisited(context);
 
   if (options.gpc === true) {
     await context.addInitScript(() => {

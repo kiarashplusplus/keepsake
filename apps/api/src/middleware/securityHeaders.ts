@@ -19,10 +19,11 @@
  * The CSP string is deliberately identical to the one in
  * `apps/web/public/_headers`, not a stricter "JSON doesn't need scripts"
  * variant: `/item/:id` serves the real exported HTML shell (same inline
- * `THEME_PREHYDRATION_SCRIPT` and Expo Router hydration script as every other
- * route), so a mismatched policy here would silently break theming on that
- * one route only — see that file's comment for what each `script-src` hash
- * is and why `style-src` keeps `'unsafe-inline'`. Kept as a second literal
+ * `PREHYDRATION_SCRIPT` and Expo Router hydration script as every other
+ * route), so a mismatched policy here would silently break theming (and,
+ * since issue #44, the new-visitor redirect) on that one route only — see
+ * that file's comment for what each `script-src` hash is and why
+ * `style-src` keeps `'unsafe-inline'`. Kept as a second literal
  * copy rather than a shared import: the two are read by unrelated runtimes
  * (a Worker module vs. a static `_headers` file consumed by the assets
  * binding) with no natural common module to hold one shared constant.
@@ -45,7 +46,7 @@ type SecurityHeadersCtx = Context<{ Bindings: Env }>;
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com " +
-    "'sha256-AkwQgpToGV6ZVFH02Kxg9hDSbEU98DbN9h+GJM0BMPk=' " +
+    "'sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g=' " +
     "'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' " +
     "'sha256-d6qbtEYff/sB38YyzuzhASbVmmOidU/UFC9mNit47j4='",
   "style-src 'self' 'unsafe-inline'",
