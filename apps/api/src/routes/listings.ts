@@ -23,6 +23,7 @@ import { randomTokenRaw } from "../lib/tokens.js";
 import { clientIPFrom } from "../moderation/budget.js";
 import { parseIntVar } from "../env.js";
 import { moderateListing } from "../moderation/pipeline.js";
+import { containsContactInfo } from "../moderation/contactInfo.js";
 import { serializeOwnerListing, serializePublicListing } from "../lib/serialize.js";
 import { fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
 
@@ -407,8 +408,30 @@ listingRoutes.post(
     const input = c.get("validatedBody") as CreateRequestInput;
 
     const row = await fetchListingRow(c.env, id);
+    // "given" gets its own honest code — the listing existed and was live,
+    // it's just spoken for now. Every other non-approved status (pending,
+    // rejected, withdrawn, needs_review, hidden, or missing entirely) keeps
+    // the plain 404: see the banned-owner check below for why "not found,
+    // not forbidden" is deliberate there too.
+    if (row?.status === "given") {
+      return fail(c, "gone", "This keepsake was just given to someone else.", 410);
+    }
     if (!row || row.status !== "approved") {
       return fail(c, "not_found", "Listing not found.", 404);
+    }
+
+    // A note's own free text is never moderated by the AI gates (that budget
+    // is reserved for the title/story on listing create/edit) — this is the
+    // same local regex check as `moderation/pipeline.ts`'s contact-in-story
+    // guard, applied here so an unmoderated note never lands in the
+    // `requests` table or gets emailed verbatim to the giver.
+    if (containsContactInfo(input.note)) {
+      return fail(
+        c,
+        "bad_request",
+        "Please leave contact details out of your note — we'll share them once the giver chooses you.",
+        400,
+      );
     }
 
     const owner = await c.env.DB.prepare("SELECT email, email_verified_at, banned_at FROM owners WHERE id = ?")

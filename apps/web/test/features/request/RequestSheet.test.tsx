@@ -94,4 +94,13 @@ describe("RequestSheet", () => {
 
     expect(JSON.stringify(instance.toJSON())).toContain("You've already asked for this one.");
   });
+
+  it("shows the 410 gone message inline instead of a generic error", async () => {
+    jest.mocked(createRequest).mockRejectedValue(new ApiError("gone", "Just given away", 410));
+    const instance = render(<RequestSheet visible onClose={jest.fn()} listingId="listing-1" />);
+
+    await fillAndSubmit(instance, "Tell them why it should be mine, please and thank you.", "person@keepsake.ing");
+
+    expect(JSON.stringify(instance.toJSON())).toContain("This keepsake was just given to someone else.");
+  });
 });

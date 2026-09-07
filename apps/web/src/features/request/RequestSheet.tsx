@@ -43,6 +43,7 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
   const [phase, setPhase] = React.useState<Phase>("form");
   const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [conflict, setConflict] = React.useState(false);
+  const [gone, setGone] = React.useState(false);
 
   function reset(): void {
     setNote("");
@@ -52,6 +53,7 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
     setPhase("form");
     setSubmitError(null);
     setConflict(false);
+    setGone(false);
   }
 
   function handleClose(): void {
@@ -75,6 +77,7 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
   async function handleSubmit(): Promise<void> {
     setTouched(true);
     setConflict(false);
+    setGone(false);
     setSubmitError(null);
     if (!noteValidation.success || !emailValidation.success || !phoneValidation.success) return;
 
@@ -92,6 +95,11 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
     } catch (error) {
       if (error instanceof ApiError && error.code === "conflict") {
         setConflict(true);
+        setPhase("form");
+        return;
+      }
+      if (error instanceof ApiError && error.code === "gone") {
+        setGone(true);
         setPhase("form");
         return;
       }
@@ -139,6 +147,11 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
           {conflict ? (
             <Text variant="body" color="dangerText">
               {"You've already asked for this one."}
+            </Text>
+          ) : null}
+          {gone ? (
+            <Text variant="body" color="dangerText">
+              {"This keepsake was just given to someone else."}
             </Text>
           ) : null}
           {submitError !== null ? (
