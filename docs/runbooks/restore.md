@@ -133,8 +133,25 @@ cd apps/api
 pnpm exec wrangler d1 export keepsake-db-production --env production --remote --no-schema \
   --output "keepsake-$(date -u +%Y%m%dT%H%M%SZ).sql" -y \
   --table owners --table listings --table photos --table requests --table reports \
-  --table moderation_events --table recovery_tokens --table email_events
+  --table moderation_events --table recovery_tokens --table email_events \
+  --table listing_aspects
 ```
+
+**This list is enforced, not trusted** (issue #164). `node tools/preflight/preflight.mjs --only
+backup-tables` compares the `--table` names above against the tables
+`apps/api/migrations/*.sql` actually create, minus the exclusions below, and fails the build on
+any difference. Before that check existed the list had already gone stale: `listing_aspects`
+arrived in `0006_aspects.sql`, nobody re-checked, and **every export made by following this
+runbook came back with no aspects for any listing** — no shelves
+(`GET /api/feed/shelves` aggregates that table), degraded embeddings (`embeddingText()` includes
+aspects), and nothing on any listing page. Worse, the loss was permanent: `listings` *is* in the
+export and it carries `aspects_backfilled_at`, and the backfill only considers rows where that
+column is null, so every restored listing said "already done" and its aspects could never be
+re-derived. The recovery path was closed by the restore itself.
+
+That is the same hazard the migration loop below is written to avoid, one paragraph apart. A
+hard-coded list going stale once is a typo; going stale twice is a missing guard, so there is now
+a guard.
 
 - `--no-schema` is deliberate: the export contains **no `CREATE INDEX` and no `CREATE TRIGGER`**
   (verified — zero of each in the file). Importing a schema-ful export would give you tables with
@@ -144,7 +161,13 @@ pnpm exec wrangler d1 export keepsake-db-production --env production --remote --
   reproducible from `apps/api/seeds/postal_codes.sql`, and re-seeding it is one command
   (see below).
 - `listings_fts*` and `_cf_KV` are excluded because they are derived or internal. FTS is rebuilt
-  from `listings`, which is in the export.
+  from `listings`, which is in the export. `d1_migrations` is wrangler's own ledger and is
+  excluded for the same reason `--no-schema` is: migrations own the schema.
+- **Every other table the migrations create belongs in the list.** If you add one, add it here in
+  the same pull request — `backup-tables` will fail CI until you do, and it names the table.
+  If a new table genuinely should not be exported, add it to `BACKUP_EXCLUDED_TABLES` in
+  `tools/preflight/preflight.mjs` *and* write the reason into this section; the check requires
+  both, because an exclusion nobody wrote down is what #164 was.
 - Measured on preview: 11 KB, about 3 seconds. On production it stays small for a long time —
   this is text, and the photos (the actual bulk) live in R2.
 
@@ -174,7 +197,12 @@ pnpm exec wrangler d1 create keepsake-db-production-restore
 #    the listings_fts triggers that the export does not carry.
 #    (`d1 migrations apply` needs a binding in wrangler.toml; executing the files
 #    directly by database name needs no config edit, which is what you want mid-incident.)
-for f in migrations/0001_init.sql migrations/0002_geo.sql migrations/0003_fts.sql migrations/0004_email_events.sql; do
+#    Glob every migration rather than naming them: this loop was written when there
+#    were four, and a hard-coded list silently restores an OLD SCHEMA the moment a
+#    fifth lands. `ls` sorts 0001..0009 ahead of the 14-digit timestamps, which is
+#    the same order wrangler applies them in (docs/runbooks/migrations.md).
+for f in $(ls migrations/*.sql | sort); do
+  echo "applying $f"
   pnpm exec wrangler d1 execute keepsake-db-production-restore --remote --file "$f" -y
 done
 
@@ -190,6 +218,13 @@ pnpm exec wrangler d1 execute keepsake-db-production-restore --remote \
 pnpm exec wrangler d1 execute keepsake-db-production-restore --remote \
   --command "SELECT (SELECT COUNT(*) FROM listings) AS listings, (SELECT COUNT(*) FROM owners) AS owners, (SELECT COUNT(*) FROM postal_codes) AS postal_codes"
 ```
+
+**Check the count before moving on:** `ls migrations/*.sql | wc -l` and the number of lines the
+loop printed must agree. When this section was first written the tree held four migrations and the
+loop named all four by hand; the tree holds ten today (`0001`–`0009` plus one timestamped), and a
+restore that applied only the original four would come back missing `listing_aspects`,
+`requests.notify_failed_reason` and the email-event diagnostic columns — with every query against
+them failing at runtime rather than at restore time.
 
 **FTS needs no separate step on this path.** `listings_fts` is an external-content FTS5 table fed
 by `AFTER INSERT/UPDATE/DELETE` triggers on `listings` (`migrations/0003_fts.sql`), and step 2
@@ -241,8 +276,12 @@ Full details, including regenerating from GeoNames, in [geodata.md](geodata.md).
 ## After any restore
 
 - `curl -s <site>/health | jq` — bindings and D1 reachable.
-- `GET /api/admin/health` — `postal_codes_count > 0`, and `cron_last_run` fresh for both jobs
-  (`ok` is false if either heartbeat is stale; see `docs/runbooks/admin.md`).
+- `GET /api/admin/health` — `postal_codes_count > 0`, and `cron_last_run` fresh for all **three**
+  jobs (`moderationRetry`, `orphanSweep`, `dailyDigest`). `ok` is false if any heartbeat is stale,
+  if postcodes are missing, or if auto-hidden reports are awaiting review; see
+  `docs/runbooks/admin.md`. On a freshly restored KV namespace every heartbeat is missing, which
+  counts as stale — `moderationRetry` clears within five minutes, the two nightly jobs on their
+  next run, so `ok: false` immediately after a restore is expected and is not itself a finding.
 - Search still works: `GET /api/feed?q=<a word you know is in a listing>` returns it. This is the
   one thing a restore can break silently, because an empty FTS index looks exactly like "no
   results".
@@ -254,7 +293,8 @@ Full details, including regenerating from GeoNames, in [geodata.md](geodata.md).
 ## R2 photo backup
 
 Issue #17. Before this section existed, `wrangler.toml` declared the photo bucket with nothing
-but `binding` and `bucket_name`, and a bug in any of `orphanSweep`'s three delete predicates
+but `binding` and `bucket_name`, and a bug in either of `orphanSweep`'s two photo-deleting sweeps
+(`sweepOrphanPhotos`, `sweepTerminalListingPhotos` — the other three sweeps touch D1 rows only)
 (`apps/api/src/cron/orphanSweep.ts`) destroyed a photo with no way back — D1 Time Travel restores
 the `photos` row, but the bytes it points at stay gone forever.
 
@@ -369,6 +409,39 @@ pnpm exec wrangler r2 bucket lifecycle add keepsake-photos-preview-backup \
 terminal-photo grace period, so the backup outlives every other recovery mechanism in this
 document rather than expiring a photo those mechanisms would still consider live.
 
+### The ordering is enforced by the sweep
+
+Issue #178. This runbook used to state, as a fact and one paragraph above the timestamp that
+contradicts it, that the backup runs before `orphanSweep` and therefore always copies a photo
+before the sweep can delete it. The backup was scheduled at 03:00 and the sweep's cron is 03:17:
+seventeen minutes of margin against GitHub's `schedule:` queue, which GitHub documents as
+best-effort. Measured drift on this repository is regularly larger than that — `report-pressure.yml`
+has started up to 18 minutes late — and **the one scheduled run `backup-photos.yml` has ever had
+started at 03:18, after the sweep's trigger.**
+
+When the sweep wins that race it deletes the R2 objects and the `photos` row; the backup then
+queries D1, no longer sees the row, copies nothing, and exits green. The bytes are gone with no
+copy anywhere, and a green run looks identical to a quiet one.
+
+So `orphanSweep` now reads the backup bucket itself and **refuses to delete a photo whose two keys
+are not already there** (`PHOTO_BACKUP_BUCKET` in `apps/api/wrangler.toml`, `isBackedUp` in
+`apps/api/src/cron/orphanSweep.ts`). A late backup delays a deletion by a night instead of losing
+bytes. Deferrals are counted in the sweep's `orphanSweep: done` log line as `photosDeferred`, and
+a `console.warn` names them — a non-zero count on one night is the guard working; a non-zero count
+every night means the backup workflow has stopped, and orphan cleanup has stopped with it.
+
+**Production ran without that guard, on purpose, until #157.** `keepsake-photos-production-backup`
+did not exist, so `wrangler.toml` declared `PHOTO_BACKUP_BUCKET` at the top level and under
+`[env.preview]` only, and with the binding absent the sweep deleted as it always had and logged a
+warn saying deletion was running unguarded — because refusing every deletion for want of a bucket
+nobody had created would turn one missing resource into unbounded R2 growth and a `photos` table
+nothing prunes. The bucket now exists and `[env.production.r2_buckets]` binds it, which is what
+turns the guard on for the live site. **The binding only takes effect on deploy** — a merge to
+`main` does not reach production on its own, so until the production deploy runs, the live Worker
+is still on the degraded path and still logging that warn. The degraded path itself stays in the
+code: it is the right answer to a dropped binding, and after this it should be reachable only by
+one.
+
 ### What this does not fix
 
 **The backup bucket is in the same Cloudflare account as the bucket it insures against.** This is
@@ -383,24 +456,77 @@ Sippy's *other* direction or a direct upload) needs credentials that don't exist
 environment and is Kiarash's call to provision — not something to fake by writing a script that
 would work if the credentials existed.
 
-**Production has no backup bucket yet.** `wrangler r2 bucket create keepsake-photos-production-backup`
-was attempted and blocked by this environment's own safety controls (a production-write action
-requires explicit approval this session didn't have). The one-time setup, for whoever has that
-approval:
+**Production's backup bucket now exists, and holds real bytes.** `keepsake-photos-production-backup`
+was created 2026-09-07 21:59 UTC (location hint `eeur`, matching `keepsake-photos-production`;
+storage class Standard) with the same `expire-after-400d` lifecycle rule the preview bucket
+carries — 400 days is deliberate, longer than D1's 30-day Time Travel window and longer than
+`orphanSweep`'s 30-day terminal-photo grace period, so a backup outlives every other recovery
+mechanism rather than expiring a photo those still consider live. The one-time setup that was run:
 
 ```sh
 cd apps/api
-wrangler r2 bucket create keepsake-photos-production-backup
+wrangler r2 bucket create keepsake-photos-production-backup --location eeur
 wrangler r2 bucket lifecycle add keepsake-photos-production-backup expire-after-400d --expire-days 400 -y
 node tools/backup-photos.mjs --env production
 ```
 
-**No cron runs this automatically yet.** `.github/workflows/backup-photos.yml` (added alongside
-this document) runs `tools/backup-photos.mjs` for both environments on a schedule, but GitHub does
-not evaluate `schedule:` triggers (or allow `workflow_dispatch`) for a workflow file that has never
-been merged to the default branch — confirmed directly: `gh workflow run backup-photos.yml --ref
-give-flow-fixes` returns `HTTP 404: workflow backup-photos.yml not found on the default branch`,
-the same wall `.github/workflows/uptime.yml` hit before it was merged. That is why this section's
-proof is a direct, by-hand run of the script rather than a green Actions run — there is no green
-Actions run possible yet. Confirm the schedule actually fires at least once after this branch
-merges (`gh run list --workflow=backup-photos.yml`) before trusting it unattended.
+That run copied all 4 keys then referenced by production's 2 `photos` rows
+(`copied=4 skipped=0 failed=0`), and a second run immediately after reported
+`copied=0 skipped=4`, which is the additive-only, already-present path doing what it claims.
+Verified past the script's own accounting: `photos/01M1XP59MT3HX470YX69604WFB/full.jpg` pulled
+from both buckets is byte-identical — 672,825 bytes, SHA-256
+`30e0f038bc10c09ba438e1e353ae30b477e4b85b655992890701216f53ed2f95` from each.
+
+One credential note for whoever runs this next by hand: the `cf` token in `~/Documents/.env` has
+R2 but **no D1 read**, so it clears the bucket probe and then dies on the `d1 execute` with a
+7403. A token needs *both* R2 Storage and D1 read for this script to run end to end; the
+GitHub Environment's `CLOUDFLARE_API_TOKEN` that the workflow uses has both.
+
+**The cron fires, and its production leg has now proved something.**
+`.github/workflows/backup-photos.yml` runs `tools/backup-photos.mjs` for both tiers, at 01:00 UTC
+since #178 (03:00 before that). **That time is not what keeps a photo safe** — see
+[The ordering is enforced by the sweep](#the-ordering-is-enforced-by-the-sweep) below, which is
+the correction to what this paragraph used to claim. It has fired once on its `schedule:`
+trigger —
+[run 34079182574](https://github.com/kiarashplusplus/keepsake/actions/runs/34079182574),
+2026-09-07 03:18 UTC, both legs green — which retires the "no green Actions run is possible yet"
+caveat this paragraph used to carry (a workflow file GitHub has never seen on the default branch
+gets neither `schedule:` nor `workflow_dispatch`; merging fixed that).
+
+It has since run against a production tier that actually has photos:
+[run 34165271088](https://github.com/kiarashplusplus/keepsake/actions/runs/34165271088),
+2026-09-07 22:03 UTC, `workflow_dispatch`, production leg green with `backup bucket
+keepsake-photos-production-backup confirmed present` / `4 referenced key(s) in D1` /
+`copied=0 skipped=4`. `copied=0` there is the correct steady state, not a vacuous pass — the
+by-hand run twenty minutes earlier is what copied those 4, and the probe line above it is the
+thing the old green could never say. What to read on any future run: `skipped` tracking the key
+count means the set is fully covered; `copied` non-zero means new photos arrived and were
+protected; `failed` non-zero exits 1.
+
+**That green was the shape `AGENTS.md`'s table warns about, and it has been fixed.** The
+production leg's whole log read `0 referenced key(s) in D1` — production had no `photos` rows at
+03:18 that morning — so the job did no work, touched no bucket, and passed. It proved nothing
+about whether `keepsake-photos-production-backup` exists, and it would have gone on passing until
+the first production photo, at which point the `put` fails and the bytes it was meant to protect
+never were.
+
+`tools/backup-photos.mjs` now **probes the backup bucket before the key count can make the run
+trivially green** (`wrangler r2 bucket info`, account-level and read-only) and exits 1 if it cannot
+confirm it, printing wrangler's own stderr verbatim plus the two create commands. It also says
+plainly when there is nothing to copy, rather than letting a silent success read as "photos are
+backed up." So a green run now means at minimum "the destination exists"; before, it could mean
+nothing at all.
+
+The failure is deliberately not diagnosed past what is honest: a non-zero exit means *could not
+confirm*, which is a missing bucket **or** absent/too-narrow credentials. Wrangler's message
+distinguishes them; the script does not guess.
+
+Verified by breaking it: with the check commented out the script sails past to the D1 query, and
+the "confirmed present" line no longer prints at all — it is emitted inside the check rather than
+by the caller, after a first draft where commenting the call out still printed it, which is the
+same bug one level up. Restored, it stops at the bucket probe with the new message.
+
+**Production still has no backup bucket as far as anyone can show** (the paragraph above stands).
+What has changed is that the next scheduled run will now say so out loud instead of passing.
+Still: read the run's log, not just its check mark, and confirm `copied` is non-zero before
+treating production photos as backed up.

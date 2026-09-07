@@ -54,6 +54,9 @@ async function makeOtherwiseHealthy(): Promise<void> {
   await seedStandardPostalCodes();
   await env.KV.put("cron:last:moderationRetry", String(Date.now()));
   await env.KV.put("cron:last:orphanSweep", String(Date.now()));
+  // `dailyDigest` joined the cron registry with the Observatory; `/health`
+  // derives `ok` from every job in it, so a green case has to seed all three.
+  await env.KV.put("cron:last:dailyDigest", String(Date.now()));
 }
 
 describe("GET /api/admin/health — report pressure (#89)", () => {

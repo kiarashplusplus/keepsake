@@ -25,8 +25,10 @@ contains.
 ## What went wrong (#99), in order
 
 1. A branch added `0007_notify_failed.sql`.
-2. Preview deploys on **every open pull request** into **one shared database** (#66) — so
-   preview's `d1_migrations` recorded `0007_notify_failed.sql` as applied.
+2. Preview deployed on **every open pull request** into **one shared database** (#66) — so
+   preview's `d1_migrations` recorded `0007_notify_failed.sql` as applied. (That trigger is gone
+   as of #73; see "What is still not covered" below. Everything in this section is what was true
+   on 2026-09-07, and is why the naming convention exists.)
 3. PR #81 merged to `main` with a *different* `0007_admin_request_removal.sql`.
 4. Rebasing put both files in the tree. Preflight's `migrations` check rejected the duplicate
    prefix (correctly), so the branch's file was renumbered to `0008_notify_failed.sql`.
@@ -58,7 +60,7 @@ under the old name, and step 5 above happens.
 A timestamp is claimed from the clock instead of from the state of `main`. Two branches cannot
 collide, so a rebase never forces a rename, so the ledger never drifts.
 
-**The existing `0001`–`0008` files are not renamed and never will be.** Renaming them to fit the
+**The existing `0001`–`0009` files are not renamed and never will be.** Renaming them to fit the
 new convention would be exactly the bug this convention exists to prevent — they are already
 applied under those names on preview and production.
 
@@ -103,9 +105,15 @@ Two preflight checks, both in `tools/preflight/preflight.mjs`. Run them with
 
 `migration-drift` covers two distinct hazards. Rule one is the landed set: those files are applied
 on preview *and production*, and touching them is unrecoverable-by-deploy. Rule two is this
-branch's own history: preview redeploys on every push to an open pull request, so a migration you
-committed and pushed is already in preview's ledger even though it has never been near `main` —
-that is the #99 sequence exactly, and only the branch's own git history can see it.
+branch's own history: a migration this branch committed and then renamed is the #99 sequence
+exactly, and only the branch's own git history can see it.
+
+Rule two's *original* justification — "preview redeploys on every push to an open pull request, so
+a pushed migration is already in preview's ledger" — **stopped being true on #73**: pull requests
+deploy nowhere now, so a branch's migrations reach no remote ledger before merge. The rule is kept
+anyway, and deliberately: it is cheap, it catches a rename that would confuse a reviewer reading
+two commits, and it is the guard that would have to be re-derived from scratch if per-PR preview
+environments are ever built (`docs/runbooks/deploy.md#the-per-pr-preview-token-73`).
 
 ### When it cannot run
 
@@ -124,9 +132,11 @@ cannot be silently skipped where it matters. Locally, `git fetch origin main` is
 You cannot. Add a new one.
 
 - Wrong column type, missing index, bad backfill → new migration that alters/creates/fixes it.
-- Migration was wrong and has only ever run on **local** databases → still add a new one if it has
-  been pushed; the branch's preview deploy has applied it. Only if the commit that added it was
-  never pushed may you amend or squash that commit away.
+- Migration was wrong and has only ever run on **local** databases → since #73, a pushed branch no
+  longer deploys anywhere, so a migration that has never been merged to `main` has never reached a
+  remote ledger and may be amended or squashed away. Confirm that first (`git log origin/main --
+  apps/api/migrations/<file>` returns nothing), because the moment it is on `main` it has been
+  applied to preview and the answer goes back to "add a new one".
 - The ledger is genuinely out of step with the schema on a **remote** database (someone renamed a
   file before these guards existed) → that is a manual `UPDATE d1_migrations SET name = …` against
   the remote DB, and it needs Cloudflare credentials only Kiarash has. Do not paper over it by
@@ -134,12 +144,18 @@ You cannot. Add a new one.
 
 ## What is still not covered
 
-Preview is one shared D1 for every open pull request (#66). These guards stop the *rename* that
-corrupts its ledger; they cannot stop two branches whose migrations are individually fine from
-applying **incompatible schema changes** to the same database, and they cannot stop a branch's
-half-finished schema being live for everyone else's preview deploy. Only per-PR preview
-environments with their own D1 (#73) remove that, and that is blocked on credentials and a
-decision only Kiarash can make.
+**The shared-preview-D1 hazard is gone, and this section is smaller than it was.** #73 removed the
+pull-request deploy trigger entirely, so a branch's migrations no longer touch
+`keepsake-db-preview` before merge — which was the whole of "two branches applying incompatible
+schema changes to the same database" and "a branch's half-finished schema live for everyone else's
+preview deploy." Preview is still one database, but only `main` writes to it, so the ordering is
+whatever the merge order was.
+
+What is left is narrower and still real: two migrations that are individually fine, land on `main`
+minutes apart, and are **incompatible with each other** are caught by nothing here — preflight
+reads names and git history, not SQL semantics. Reading both diffs before the second merge is the
+only guard. And nothing in this file protects production, which applies the same migrations later,
+on a manual dispatch, in one batch (`docs/runbooks/deploy.md`).
 
 Nothing here was run against the real preview or production databases; every verification above
 used `--local --persist-to` on a throwaway directory, or a throwaway git repository.

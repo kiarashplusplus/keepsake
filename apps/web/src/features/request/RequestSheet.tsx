@@ -19,7 +19,6 @@ import { createRequest } from "@/api/requests";
 import { ApiError } from "@/api/client";
 import { hashIdempotencyKey } from "@/lib/hashIdempotencyKey";
 import { track } from "@/lib/analytics";
-import { AdsConversions, trackConversion } from "@/lib/adsEvents";
 import { AnalyticsEvents } from "@/lib/analyticsEvents";
 
 const NoteSchema = z
@@ -111,8 +110,10 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
         { turnstileToken, idempotencyKey },
       );
       setPhase("sent");
+      // The matching Google Ads conversion was removed with the rest of the
+      // ads plumbing (#175) — it could never fire, because no deploy passed a
+      // tag id. This line is our own telemetry and is unaffected.
       track(AnalyticsEvents.RequestSent);
-      trackConversion(AdsConversions.RequestSent);
     } catch (error) {
       if (error instanceof ApiError && error.code === "conflict") {
         setConflict(true);
@@ -134,11 +135,19 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
   }
 
   return (
-    <Sheet visible={visible} onClose={handleClose} title={phase === "sent" ? "Sent" : "I'd love this"}>
+    <Sheet visible={visible} onClose={handleClose} title={phase === "sent" ? "Check your email" : "I'd love this"}>
       {phase === "sent" ? (
         <View style={{ gap: space.lg, alignItems: "flex-start" }}>
+          {/* Issue #188: this used to say "Sent." — and it wasn't true any
+              more the moment the server stopped forwarding an ask nobody had
+              confirmed. The request is held until the link in that email is
+              clicked, so the copy names the step instead of implying the
+              giver already has it. Naming it is also what makes it work: a
+              confirmation nobody is expecting is a confirmation people leave
+              unread. */}
           <Text variant="body" color="textSecondary">
-            Sent. The giver will choose in their own time.
+            {"We've emailed you to check it was really you. Click the link and your note goes to the giver — " +
+              "they'll choose in their own time."}
           </Text>
           <Text variant="caption" color="textTertiary">
             {"If you're chosen: meet somewhere public and well-lit, bring a friend or tell " +

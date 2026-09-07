@@ -40,6 +40,8 @@ export function useEditHydration(): void {
             blurhash: photo.blurhash,
             status: "done" as const,
             error: null,
+            errorCode: null,
+            canRetry: false,
           })),
           story: detail.story,
           title: detail.title,

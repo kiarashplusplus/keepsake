@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Capture from "@keepsake/observability/capture";
 import { decide, decideImage, decideText } from "../src/moderation/decide.js";
 import { moderateListing } from "../src/moderation/pipeline.js";
+import { MODERATED_PHOTO_VARIANTS } from "../src/moderation/image.js";
 import { todayISO } from "../src/moderation/budget.js";
 import { moderationRetry } from "../src/cron/moderationRetry.js";
 import { MODELS } from "../src/models.js";
@@ -256,11 +257,19 @@ describe("moderateListing: image outcomes", () => {
     const row = await waitForListingStatus(listing.id, (s) => s === "approved");
     expect(row.published_at).not.toBeNull();
 
-    const imageEvents = await env.DB.prepare("SELECT verdict FROM moderation_events WHERE listing_id = ? AND kind = 'image' ORDER BY created_at")
+    const imageEvents = await env.DB.prepare(
+      "SELECT verdict, flags_json FROM moderation_events WHERE listing_id = ? AND kind = 'image' ORDER BY created_at",
+    )
       .bind(listing.id)
-      .all<{ verdict: string }>();
-    expect(imageEvents.results).toHaveLength(1); // one photo -> one logged image verdict, after the internal retry
-    expect(imageEvents.results[0]?.verdict).toBe("pass");
+      .all<{ verdict: string; flags_json: string | null }>();
+    // One photo -> one logged image verdict *per moderated variant* (#161),
+    // each after its own internal retry. This assertion read `toHaveLength(1)`
+    // while the pipeline looked at the thumb alone.
+    expect(imageEvents.results).toHaveLength(MODERATED_PHOTO_VARIANTS.length);
+    expect(imageEvents.results.map((e) => e.verdict)).toEqual(MODERATED_PHOTO_VARIANTS.map(() => "pass"));
+    expect(imageEvents.results.map((e) => (JSON.parse(e.flags_json ?? "{}") as { variant?: string }).variant)).toEqual([
+      ...MODERATED_PHOTO_VARIANTS,
+    ]);
   });
 
   it("malformed JSON twice -> stays pending with an error event, no approval", async () => {
@@ -435,6 +444,108 @@ describe("moderationRetry cron", () => {
       .all<{ attempt: number; verdict: string }>();
     expect(attempts.results.map((a) => a.attempt)).toEqual([1, 2, 3, 4]);
     expect(attempts.results[3]?.verdict).toBe("needs_review");
+  });
+
+
+  // Issue #179. The audit's repro, kept as a test: with the image budget at
+  // 0, three cron passes used to spend all three attempts (a denial writes a
+  // `decision`/`error` event and `nextAttemptNumber` counted those), so a
+  // budget exhausted at 10:00 UTC turned every listing posted for the next
+  // fourteen hours into `needs_review` about fifteen minutes after it was
+  // posted — a status the cron never selects again, so the midnight reset
+  // freed nothing and each one became manual work forever.
+  it("an exhausted budget does not burn the 3 attempts: still pending after three passes, decided after the reset", async () => {
+    mockAi({}); // would approve, if the budget ever let the pipeline reach it
+    setTestEnvVar("MOD_IMAGE_DAILY_BUDGET", "0");
+    const token = freshOwnerToken();
+    const listing = await createListingWithOnePhoto(token);
+    // The create-triggered run is denial #1.
+    await waitForAttempt1(listing.id);
+
+    for (let i = 0; i < 3; i++) {
+      await env.DB.prepare("UPDATE listings SET updated_at = ? WHERE id = ?")
+        .bind(Date.now() - 3 * 60 * 1000, listing.id)
+        .run();
+      await moderationRetry(env);
+    }
+
+    const denied = await env.DB.prepare("SELECT status, moderation_reason FROM listings WHERE id = ?")
+      .bind(listing.id)
+      .first<{ status: string; moderation_reason: string | null }>();
+    expect(denied?.status, "a budget denial must not escalate the listing").toBe("pending");
+    expect(denied?.moderation_reason).toBe("budget");
+
+    // Every denial is still logged — the owner-facing reason and the audit
+    // trail both depend on it — but none of them advanced the counter.
+    const events = await env.DB.prepare(
+      "SELECT attempt, verdict, reason FROM moderation_events WHERE listing_id = ? AND kind = 'decision' ORDER BY created_at",
+    )
+      .bind(listing.id)
+      .all<{ attempt: number; verdict: string; reason: string | null }>();
+    expect(events.results.length, "the denials are recorded, not silent").toBeGreaterThanOrEqual(4);
+    expect(events.results.every((event) => event.reason === "budget")).toBe(true);
+    expect(events.results.map((event) => event.attempt)).toEqual(events.results.map(() => 1));
+
+    // Midnight UTC: the ceiling resets. The next cron pass must be able to
+    // make a real attempt — this is the half that was permanently lost.
+    setTestEnvVar("MOD_IMAGE_DAILY_BUDGET", "3000");
+    await env.DB.prepare("UPDATE listings SET updated_at = ? WHERE id = ?")
+      .bind(Date.now() - 3 * 60 * 1000, listing.id)
+      .run();
+    await moderationRetry(env);
+
+    const afterReset = await env.DB.prepare("SELECT status, moderation_reason FROM listings WHERE id = ?")
+      .bind(listing.id)
+      .first<{ status: string; moderation_reason: string | null }>();
+    expect(afterReset?.status, "after the reset the listing must actually get moderated").toBe("approved");
+    expect(afterReset?.moderation_reason).toBeNull();
+  });
+
+  // The other side of the same coin: an AI error must still escalate, so the
+  // fix above cannot be "nothing ever escalates now". The test above this one
+  // covers the escalation path itself; this asserts the two reasons are told
+  // apart rather than both being exempt.
+  it("an AI error still counts, even after budget denials on the same listing", async () => {
+    mockAi({
+      image: () => {
+        throw new Error("simulated persistent Workers AI outage");
+      },
+    });
+    setTestEnvVar("MOD_IMAGE_DAILY_BUDGET", "0");
+    const token = freshOwnerToken();
+    const listing = await createListingWithOnePhoto(token);
+    await waitForAttempt1(listing.id);
+
+    // Two budget denials first — they must leave the counter where it was.
+    for (let i = 0; i < 2; i++) {
+      await env.DB.prepare("UPDATE listings SET updated_at = ? WHERE id = ?")
+        .bind(Date.now() - 3 * 60 * 1000, listing.id)
+        .run();
+      await moderationRetry(env);
+    }
+
+    setTestEnvVar("MOD_IMAGE_DAILY_BUDGET", "3000");
+    for (let i = 0; i < 4; i++) {
+      await env.DB.prepare("UPDATE listings SET updated_at = ? WHERE id = ?")
+        .bind(Date.now() - 3 * 60 * 1000, listing.id)
+        .run();
+      await moderationRetry(env);
+    }
+
+    const row = await env.DB.prepare("SELECT status, moderation_reason FROM listings WHERE id = ?")
+      .bind(listing.id)
+      .first<{ status: string; moderation_reason: string | null }>();
+    expect(row?.status).toBe("needs_review");
+    expect(row?.moderation_reason).toBe("held_for_review");
+
+    const attempts = await env.DB.prepare(
+      "SELECT attempt FROM moderation_events WHERE listing_id = ? AND kind = 'decision' AND (reason IS NULL OR reason <> 'budget') ORDER BY created_at",
+    )
+      .bind(listing.id)
+      .all<{ attempt: number }>();
+    // Three real attempts, then the escalation event as attempt 4 — the
+    // budget denials in between changed none of it.
+    expect(attempts.results.map((a) => a.attempt)).toEqual([1, 2, 3, 4]);
   });
 
   it("does not touch a listing that isn't stale yet", async () => {

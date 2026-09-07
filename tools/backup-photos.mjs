@@ -20,6 +20,18 @@
 //     the backup bucket, so a photo copied here survives a bad `BUCKET.delete()`
 //     on the primary bucket, even after the corresponding D1 row is also
 //     gone — restore is "copy it back", not "hope D1 still points at it".
+//   - As of #178 that protection no longer depends on this job winning a race
+//     against orphanSweep. It used to: this workflow is scheduled before the
+//     sweep's cron, GitHub's `schedule:` queue is best-effort, and the one
+//     scheduled run this workflow has ever had started *after* the sweep's
+//     trigger — in which case the sweep deletes the row first, the `SELECT`
+//     below no longer sees it, nothing is copied, and the run passes. The
+//     sweep now reads the backup bucket (`PHOTO_BACKUP_BUCKET`) and refuses
+//     to delete a photo it has not copied, so a late run of this script
+//     delays a deletion instead of losing the bytes. **What that makes this
+//     script responsible for: actually running.** A backup that stops
+//     entirely no longer loses photos, but it does stop orphan cleanup — the
+//     sweep logs `photosDeferred` every night that happens.
 //   - It does NOT fix the weakness restore.md already names for the D1
 //     export path: "a backup living in the same account it insures against
 //     is weak protection." Both buckets sit in the one Cloudflare account.
@@ -142,6 +154,61 @@ function listReferencedKeys(env, database) {
   return [...keys];
 }
 
+// The backup bucket has to exist before any of this means anything, and
+// nothing else in this script notices when it doesn't.
+//
+// This is here because of a real vacuous pass: the first scheduled run of
+// `.github/workflows/backup-photos.yml` (2026-09-07 03:18 UTC) went green on
+// BOTH tiers, and the production leg's whole log was "0 referenced key(s) in
+// D1" — production had no `photos` rows yet, so the loop below never ran, no
+// bucket was ever touched, and the check mark said nothing at all about
+// whether `keepsake-photos-production-backup` had been created. A backup job
+// that reports success without establishing that it has somewhere to back up
+// to is exactly the class of defect AGENTS.md's table catalogues, and it
+// would have kept reporting success right up until the first production
+// photo — at which point the `put` fails and the bytes it was supposed to
+// have been protecting were never protected.
+//
+// So: probe the bucket first, unconditionally, before the key count can make
+// the run trivially green. `wrangler r2 bucket info` is the probe because it
+// is account-level and read-only — it neither creates nor writes anything,
+// and it needs no `--env` because the tier is already baked into the bucket
+// name `readEnvResources` derived.
+//
+// The failure is deliberately not diagnosed further than it can honestly be:
+// a non-zero exit here means "could not confirm the bucket", which is the
+// bucket genuinely missing OR the credentials being absent or too narrow.
+// wrangler's own stderr is printed verbatim so the reader can tell which,
+// rather than this script guessing and naming the wrong one.
+function assertBackupBucketExists(backupBucket) {
+  const result = wrangler(["r2", "bucket", "info", backupBucket]);
+  if (result.status === 0) {
+    // Printed HERE, not by the caller. An earlier draft of this had the
+    // caller log "confirmed present" on the line after the call, and
+    // commenting the call out still printed it — a success message that
+    // could be emitted without the check running is the same bug one level
+    // up. The only code that can claim the bucket was confirmed is the code
+    // that confirmed it.
+    console.log(`backup-photos: backup bucket ${backupBucket} confirmed present`);
+    return;
+  }
+  console.error(
+    `backup-photos: cannot confirm the backup bucket ${backupBucket} exists, so this run would ` +
+      `prove nothing even if it copied zero objects. Refusing to report success.`,
+  );
+  console.error(`  wrangler r2 bucket info ${backupBucket} exited ${result.status}:`);
+  console.error(`  ${(result.stderr || result.stdout || "(no output)").trim()}`);
+  console.error(
+    `  If the bucket does not exist yet, create it (once, per tier) — see ` +
+      `docs/runbooks/restore.md#r2-photo-backup:\n` +
+      `    wrangler r2 bucket create ${backupBucket}\n` +
+      `    wrangler r2 bucket lifecycle add ${backupBucket} expire-after-400d --expire-days 400 -y\n` +
+      `  If it does exist, this is a credentials problem: CLOUDFLARE_API_TOKEN needs Workers R2 ` +
+      `Storage read on this account.`,
+  );
+  process.exit(1);
+}
+
 function existsInBucket(env, bucket, key, tmpFile) {
   const result = wrangler(["r2", "object", "get", `${bucket}/${key}`, "--env", env, "--remote", "-f", tmpFile]);
   return result.status === 0;
@@ -179,8 +246,22 @@ async function main() {
   const { database, bucket, backupBucket } = readEnvResources(env);
   console.log(`backup-photos: env=${env} db=${database} primary=${bucket} backup=${backupBucket}`);
 
+  // Before the key count can make this run trivially green. See the comment
+  // on this function for the vacuous pass that put it here.
+  assertBackupBucketExists(backupBucket);
+
   const keys = listReferencedKeys(env, database);
   console.log(`backup-photos: ${keys.length} referenced key(s) in D1`);
+  if (keys.length === 0) {
+    // Say so rather than letting a silent success be read as "photos are
+    // backed up". It is a legitimate state (a tier with no listings), and it
+    // is also indistinguishable in a check mark from a broken query.
+    console.log(
+      `backup-photos: nothing to copy — no photos row references any object on ${env}. ` +
+        `The backup bucket exists (checked above); this run protected no bytes because there ` +
+        `are none.`,
+    );
+  }
 
   const tmpDir = mkdtempSync(path.join(tmpdir(), "keepsake-backup-photos-"));
   const counts = { copied: 0, skipped: 0, failed: 0 };

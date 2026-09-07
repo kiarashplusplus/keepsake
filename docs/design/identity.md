@@ -1,6 +1,8 @@
 # Identity
 
-Status: `[QA]` (M1 minted the token; M3 recovery implemented on the API side — see "M3 status" below).
+Status: `[DONE]` — M1 mints the token, M3's recovery and email-verification paths are
+implemented and tested (see "M3 status" below), and both were exercised end to end on preview on
+2026-09-06 (link delivered, clicked, verified, token consumed once).
 
 No accounts. A giver's identity is a device-bound secret token; an optional verified email exists
 only for notifications and dashboard recovery — losing the device without one means losing the
@@ -19,17 +21,60 @@ listings, and the email step in `give` says so explicitly.
 
 - `POST /api/recover {email}` — always returns 200 regardless of whether the email matches (no
   account-enumeration signal), Turnstile-gated, emails a link to `/recover/<token>` if it does.
-- `POST /api/recover/:token` — rotates `token_hash`, returns the new owner token once. The old
-  token is dead the instant this succeeds: a device that loses the recovery race gets 401 on its
-  next request, by design (compromise containment, not a bug to smooth over).
-- `recovery_tokens` table: `purpose` `recover` (30 min TTL) or `verify_email` (24 h), single-use
-  (`used_at`).
+- `POST /api/recover/exchange {token}` — rotates `token_hash`, returns the new owner token once.
+  The old token is dead the instant this succeeds: a device that loses the recovery race gets 401
+  on its next request, by design (compromise containment, not a bug to smooth over). **The token
+  goes in the body, never in the URL** (#182, 2026-09-07): it used to be
+  `POST /api/recover/:token`, and the Worker's `onError` logged the request path verbatim, so any
+  request that threw while a giver clicked their link wrote a live takeover credential into
+  Workers Logs. `POST /api/requests/withdraw` already had the right shape and this now copies it.
+  The emailed link is unchanged — `/recover/<token>` is the *web* app's route, and that page reads
+  the token out of its own path and posts it in a body — so mail sent before the change still
+  works.
+- `recovery_tokens` table: `purpose` `recover` (60 min TTL — `RECOVER_TTL_MS`, raised from 30 on
+  2026-09-07) or `verify_email` (24 h), single-use
+  (`used_at`), plus `email` — the address a `verify_email` link was actually mailed to
+  (migration `20260907181446_recovery_tokens_email.sql`).
+
+## Request confirmation (#188)
+
+A requester's email address is the only identity claim they ever make, and until #188 nothing
+checked it. `POST /api/listings/:id/requests` accepted any syntactically valid address, wrote it
+into `requests` as the requester of record, mailed it, and showed the giver a genuine-looking ask
+— so anyone could enrol a third party and, if the giver chose that ask, have Keepsake deliver the
+giver's real address to someone who had never asked for anything. `POST /api/recover` had already
+settled the principle (it refuses to act on an unproven address); this route acted on one.
+
+So a request is now **held, not forwarded**, until the address answers for itself:
+
+- Submitting writes the row as `status = 'unconfirmed'` with `confirm_token_hash` and
+  `confirm_expires_at` (72 h), and mails exactly one message — the `confirmRequest` "was this
+  you?" link. It carries the listing title and *nothing the submitter wrote*: reflecting a
+  stranger's free text into a stranger's inbox would rebuild the harassment channel the step
+  exists to close.
+- `POST /api/requests/confirm` redeems that token. It is the only place the giver's side moves:
+  the row becomes `open`, `request_count` is incremented, the giver is mailed, and the withdraw
+  token below is minted. A POST from `/confirm/<token>` in the web app rather than a GET on the
+  emailed URL, because mail scanners and security proxies fetch links before a human sees them —
+  a confirmation that completed on GET would be completed by the victim's own provider.
+- Nothing confirmed is deleted, not redacted, by the nightly sweep once the link lapses. An
+  address nobody vouched for is data this service was never authorised to hold.
+- Every owner-facing read filters on `confirmed_at IS NOT NULL`, including the choose lookup —
+  the one action that mails a stranger the giver's address.
+
+The confirmation step stops a victim being *enrolled*; on its own it does not stop them being
+*mailed*, and one message per listing across a public feed is a mail-bomb whichever gate it passes
+(the failure mode M3AAWG's web-form recommendation names, where the confirmation is itself the
+payload). So a second control sits beside it: `REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET`, a ceiling
+keyed by the **recipient's** address rather than the caller's IP — the only shape of limit an
+attacker cannot widen by moving. Being over it looks exactly like succeeding, and writes nothing.
 
 ## Request withdrawal
 
 A requester never gets a device token or a dashboard — the only record they have of having asked
 for a keepsake is the `requestReceived` confirmation email (`src/email/templates/requestReceived.ts`),
-sent every time from `POST /api/listings/:id/requests`. That email carries a signed, single-use
+sent from `POST /api/requests/confirm` once the address above is proved (before #188 it went out
+at submit time, when nothing had in fact been passed along to anyone). That email carries a signed, single-use
 link (the same `randomTokenRaw()` + sha256-of-the-raw-value shape every other bearer secret here
 uses) to `POST /api/requests/withdraw`, which erases that request's `note`/`email`/`phone` and
 flips its status to `withdrawn` — no login, no proof of identity beyond possessing the link, by
@@ -42,7 +87,9 @@ implying withdrawal un-sends anything. Withdrawing at that point only erases Kee
 copy and updates what the owner's dashboard shows going forward.
 
 `listings.request_count` is decremented on withdrawal (floored at 0) so it keeps meaning "how many
-live asks does this listing have," not "how many were ever made."
+live asks does this listing have," not "how many were ever made." Since #188 it is *incremented*
+at confirmation rather than submission, for the same reason — which is why the admin removal path
+decrements only for a request that was confirmed, and an unconfirmed one takes nothing with it.
 
 ## Admin
 
@@ -60,14 +107,28 @@ Kiarash alone. Not an owner token with elevated scope — there is no user table
 
 ## M3 status (API side)
 
-`POST /api/recover` and `POST /api/recover/:token` (`apps/api/src/routes/recover.ts`) implement
+`POST /api/recover` and `POST /api/recover/exchange` (`apps/api/src/routes/recover.ts`) implement
 recovery exactly as described above: always `{ sent: true }` regardless of a match (no
 enumeration signal — the D1 lookup and the conditional send happen entirely inside the "always
-200" branch); a matching, *verified* owner gets a 30-minute `recovery_tokens` row (`purpose =
+200" branch); a matching, *verified* owner gets a 60-minute `recovery_tokens` row (`purpose =
 'recover'`) and the `recover` email template; exchanging the token rotates `owners.token_hash` and
 marks the row used in the same request, so the old token 401s on its very next call and the
 recovery token itself can't be replayed. `POST /api/me/email` mints the `verify_email` counterpart
 (24 h TTL) and `GET /api/me/email/verify` redirects to `/mine?verified=1|0&reason=expired|invalid`.
+
+**A verify link is bound to the address it was mailed to, not to the owner row** (#167,
+2026-09-07). It used to be bound only to `owner_id`, so redeeming any unexpired link stamped
+"verified" on whatever address sat on the row at click time — reachable by typing an address,
+correcting it, and then clicking the first link out of your inbox, with no attacker involved.
+Since verification is what gates recovery mail, request notifications, and revealing the giver's
+address to a chosen requester, that attached all three to an address nobody had confirmed. Two
+conditions now both have to hold at redeem time: the address recorded on the token still matches
+`owners.email`, and no newer `verify_email` token exists for that owner. The second is what fails
+a token minted before the column existed — or by `POST /api/listings`, which does not record one —
+closed rather than open. `POST /api/me/email` and `DELETE /api/me/email` also mark outstanding
+`verify_email` tokens used the moment they change or clear the address, so nothing redeemable is
+left in the table; `recover` tokens are deliberately untouched by that, since editing an address
+must not kill a live recovery link for someone who has already lost their device.
 
 Both token kinds share `src/lib/tokens.ts`'s `randomTokenRaw()` — one `crypto.getRandomValues(32)`
 + base64url-without-padding implementation for every raw secret this Worker mints (owner tokens,

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { CursorSchema, MailableEmailSchema, PaginationLimitSchema, TimestampMs, UlidSchema } from "./common";
-import { LISTING_STATUSES, ListingStatusSchema, MODERATION_REASON_CODES, OwnerListing } from "./listing";
+import { AspectSchema, CategorySchema, LISTING_STATUSES, ListingStatusSchema, MODERATION_REASON_CODES, OwnerListing } from "./listing";
 import { ReportReasonSchema } from "./report";
 import { RequestStatusSchema } from "./request";
 
@@ -414,4 +414,48 @@ export type AdminBackfillAspectsResult = {
   failed: number;
   budget_exhausted: boolean;
   remaining: number;
+};
+
+// ---------------------------------------------------------------------------
+// #141: POST /api/admin/listings/:id/resuggest — re-read one listing's cover.
+// ---------------------------------------------------------------------------
+
+/**
+ * What a listing's model-derived fields looked like on one side of a
+ * re-suggestion. Both halves are returned so an operator can see what
+ * actually changed instead of trusting a 200 — the whole reason to run this
+ * is that the prompt improved, and "improved" is a claim worth checking per
+ * listing.
+ */
+export const AdminResuggestSnapshot = z.object({
+  category: CategorySchema,
+  aspects: z.array(AspectSchema),
+});
+export type AdminResuggestSnapshot = z.infer<typeof AdminResuggestSnapshot>;
+
+/**
+ * `POST /api/admin/listings/:id/resuggest` (issue #141): re-runs the vision
+ * suggestion against a listing's cover photo and applies the parts of it a
+ * listing gets from the model — `category` and `aspects`, never `title` and
+ * never `story`.
+ *
+ * Why an endpoint at all, when #37 already built a backfill: that backfill
+ * answers "has anything ever looked at this listing?" and deliberately
+ * skips any listing that already has aspect rows. It has no answer for "the
+ * prompt got better, look again", which is exactly what happened in #135 —
+ * a live listing kept the one vague aspect an older prompt produced, with
+ * no path to the three the current one reads off the same photo.
+ *
+ * `applied` is false, with a `reason`, whenever the model returned nothing
+ * usable. Nothing is written in that case: a failed vision call must never
+ * be the thing that blanks a listing's existing aspects.
+ */
+export type AdminResuggestResult = {
+  listing_id: string;
+  applied: boolean;
+  /** Present only when `applied` is false — `suggestFromPhoto`'s own reason
+   * (a missing thumb, a timeout, two unparseable replies). */
+  reason?: string;
+  before: AdminResuggestSnapshot;
+  after: AdminResuggestSnapshot;
 };

@@ -11,6 +11,18 @@ declare global {
   namespace Cloudflare {
     interface Env {
       TEST_MIGRATIONS: D1Migration[];
+      // Issue #38. Optional, and deliberately not generated from
+      // wrangler.toml: the `[[vectorize]]` blocks there are commented out
+      // until the indexes are confirmed to exist, so `wrangler types` emits
+      // nothing for this. In tests the binding is whatever
+      // `installFakeVectorize()` last put on `env` (or absent, after
+      // `removeFakeVectorize()`), which is exactly the optionality the
+      // fallback path in `src/search/vectorize.ts` branches on.
+      VECTORIZE?: VectorizeIndex;
+      // Injected by vitest.config.ts from the host env: "1" un-skips the
+      // real-Workers-AI block in search.test.ts. Never set in wrangler.toml —
+      // it is a test-runner switch, not a Worker var.
+      REAL_AI?: string;
     }
   }
 }

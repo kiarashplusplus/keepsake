@@ -16,17 +16,18 @@ import { validateBody } from "../middleware/validate.js";
 import { lookupPostalCode } from "../geo/lookup.js";
 import { sendMail } from "../email/sendMail.js";
 import { verifyEmail } from "../email/templates/verifyEmail.js";
-import { newRequest as newRequestTemplate } from "../email/templates/newRequest.js";
-import { requestReceived as requestReceivedTemplate } from "../email/templates/requestReceived.js";
+import { confirmRequest as confirmRequestTemplate } from "../email/templates/confirmRequest.js";
 import { dailyIpDigest, sha256Hex } from "../lib/digest.js";
 import { randomTokenRaw } from "../lib/tokens.js";
-import { clientIPFrom } from "../moderation/budget.js";
-import { reportAutohideThreshold } from "../env.js";
+import { clientIPFrom, checkAndBumpRecipient } from "../moderation/budget.js";
+import { parseIntVar, reportAutohideThreshold } from "../env.js";
 import { moderateListing } from "../moderation/pipeline.js";
 import { purgePhotoCache } from "../lib/photoCache.js";
 import { containsContactInfo } from "../moderation/contactInfo.js";
 import { serializeOwnerListing, serializePublicListing } from "../lib/serialize.js";
 import { fetchAspectRows, fetchListingRow, fetchPhotoRows, replaceListingAspects } from "../lib/listingsDb.js";
+import { reembedListing } from "../search/reembed.js";
+import { deleteListingVector } from "../search/vectorize.js";
 
 type Vars = { owner: OwnerRow; validatedBody: unknown };
 export const listingRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -40,6 +41,101 @@ const DEFAULT_REQUEST_IP_DAILY_BUDGET = 20;
  * person — see `moderation/budget.ts`'s header on CGNAT), but unlike the
  * burst brake it is a real ceiling. */
 const DEFAULT_REPORT_IP_DAILY_BUDGET = 10;
+
+/**
+ * Issue #188. How many "did you ask for this?" confirmations this Worker will
+ * aim at one address in one day, counted per *recipient* — see
+ * `checkAndBumpRecipient`, and `lib/digest.ts`'s `dailyEmailDigest` for why
+ * the counter is keyed the way it is.
+ *
+ * Three, because the confirmation step alone does not make the flood harmless.
+ * Holding the request unconfirmed is what stops a stranger being enrolled as a
+ * requester and mailed the giver's address; it does not stop them being mailed
+ * *at all*, and one message per listing across a public feed is a mail-bomb
+ * with extra steps — the failure mode M3AAWG names in its web-form
+ * recommendation, where the confirmation mail is itself the payload.
+ *
+ * A real person asks for one keepsake at a time and confirms the message they
+ * are already waiting for. Three leaves room for the ordinary case that
+ * genuinely repeats — an ask, a second ask on another listing, and one resend
+ * because the first landed in spam — and turns "twenty unsolicited messages a
+ * day, per attacker address" into three, total, from everyone.
+ */
+const DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET = 3;
+
+/**
+ * How long a "was this you?" link stays redeemable. Long enough to survive a
+ * night, a working day, and a spam folder someone checks on a Monday; short
+ * enough that an address nobody confirmed is not sitting in D1 for a week.
+ * `cron/orphanSweep.ts` deletes the held row once this lapses.
+ */
+const REQUEST_CONFIRM_TTL_MS = 72 * 60 * 60 * 1000;
+
+/**
+ * Issue #171. Aspects arrived as model output (#36) and were treated as
+ * trusted ever since, but `CreateListingInput`/`UpdateListingInput` accept
+ * them straight from the client like any other field — nothing requires a
+ * value to have come from the suggestion call. They were then published
+ * verbatim on `PublicListing.aspects`, grouped into browse shelves and
+ * folded into the embedding text, having passed neither the contact-info
+ * gate nor Llama Guard (both of which read only `title`/`story`). The
+ * measured consequence: the *same* email address auto-rejects in the story
+ * as `contact_in_story` and sails through as an aspect value.
+ *
+ * 48 characters of `value` is ample for an email, a phone number or a short
+ * URL, and `name` is a second uncontrolled 24-character string — so both
+ * halves are checked, not just the value.
+ *
+ * Returned as a 400 before anything is written, exactly the way the request
+ * note at `POST /api/listings/:id/requests` already handles the identical
+ * problem. `moderation/pipeline.ts` re-checks the persisted aspects too, so
+ * a row that reached the DB some other way (a backfill, an older client)
+ * is still caught — this boundary check is the one that gives the giver a
+ * useful error, not the only thing standing in the way.
+ */
+function aspectsContainContactInfo(aspects: readonly { name: string; value: string }[] | undefined): boolean {
+  if (!aspects) return false;
+  return aspects.some((aspect) => containsContactInfo(aspect.name) || containsContactInfo(aspect.value));
+}
+
+const ASPECT_CONTACT_INFO_MESSAGE =
+  "Keep contact details out of the item details — people reach you through Keepsake.";
+
+// ---------------------------------------------------------------------------
+// Router-level write brake (issue #168)
+// ---------------------------------------------------------------------------
+// Until this existed, `adminRoutes.use("*", burst("RL_ADMIN"), adminAuth())`
+// was the only router-level middleware in the Worker and every other
+// owner-authenticated write reached its handler with no metering at all.
+// `POST /api/listings` was carefully triple-guarded (burst + Turnstile +
+// daily budget) while `PATCH /api/listings/:id` — which costs the *same*
+// Workers AI calls, unconditionally scheduling the full moderation pipeline
+// and, on any title/story/aspect change, a re-embed — had nothing. Measured
+// by the audit: 60 PATCHes from one token and one fixed `CF-Connecting-IP`
+// returned 60x200, with `EMBED_DAILY_BUDGET` and the `mod_text` pool moving
+// one-for-one. `EMBED_DAILY_BUDGET` is global with no per-IP twin, so a
+// couple of minutes of that loop leaves every genuine listing created for
+// the rest of the UTC day with no vector at all.
+//
+// Deliberately router-level rather than one more per-route decision: a
+// per-route decision is exactly what let this drift, and a write route added
+// to this file next year is metered by default instead of by remembering.
+//
+// GET is skipped so the read path keeps its own `RL_READ` accounting rather
+// than being charged against two bindings at once; `GET /api/listings/:id`
+// already carries `burst("RL_READ")`, which is sized for reads (300/60s
+// against RL_WRITE's 60/60s). Routes that already name a tighter binding
+// (`RL_CREATE`, `RL_REQUEST`, `RL_REPORT`, all 5/60s) keep it and simply sit
+// behind this one too — the tighter of the two is what a caller actually
+// feels.
+// `.on(methods, "*", ...)` rather than `.use("*", ...)` + a method check
+// inside: it is the same router-level registration, applied before every
+// matching route's own middleware, but Hono does the method filtering itself
+// so there is no hand-written `if (c.req.method === "GET")` to get wrong, and
+// `burst()` keeps its own context type instead of needing a cast. `PUT` is
+// listed although this router has none today — the point of the guard is the
+// route nobody has written yet.
+listingRoutes.on(["POST", "PATCH", "PUT", "DELETE"], "*", burst("RL_WRITE"));
 
 // ---------------------------------------------------------------------------
 // POST /api/listings
@@ -62,6 +158,12 @@ listingRoutes.post(
   async (c) => {
     const owner = c.get("owner");
     const input = c.get("validatedBody") as import("@keepsake/contracts/listing").CreateListingInput;
+
+    // Issue #171 — before any write, and before the photo/postcode lookups,
+    // for the same reason the request-note check sits above its insert.
+    if (aspectsContainContactInfo(input.aspects)) {
+      return fail(c, "bad_request", ASPECT_CONTACT_INFO_MESSAGE, 400);
+    }
 
     // Every photo_id must be this owner's own orphan upload — never someone
     // else's photo, and never one already attached to a listing.
@@ -134,11 +236,25 @@ listingRoutes.post(
 
       const rawVerifyToken = randomTokenRaw();
       const verifyTokenHash = await sha256Hex(rawVerifyToken);
+      // `email` is issue #202, the second half of #167. That fix binds a
+      // `verify_email` token to the address it was mailed to, and
+      // `GET /api/me/email/verify` refuses to redeem one whose recorded
+      // address is no longer the address on the owner row. This mint site was
+      // outside that PR's file scope, so it wrote `NULL` here and leaned on
+      // the redeem check's *second* condition — "no newer token exists for
+      // this owner" — to fail closed. That fallback held, and was load-bearing
+      // and undocumented: it works only because all three writers of
+      // `owners.email` mint a token immediately after writing, so one edit to
+      // any of them would have quietly reopened #167 with nothing failing.
+      // Recording the address makes condition 1 carry the guarantee here on
+      // its own, the same way it already does for `POST /api/me/email`, and
+      // preflight's `verify-email-token` check now refuses a mint site that
+      // omits it.
       await c.env.DB.prepare(
-        `INSERT INTO recovery_tokens (id, owner_id, purpose, token_hash, expires_at, created_at)
-         VALUES (?, ?, 'verify_email', ?, ?, ?)`,
+        `INSERT INTO recovery_tokens (id, owner_id, purpose, email, token_hash, expires_at, created_at)
+         VALUES (?, ?, 'verify_email', ?, ?, ?, ?)`,
       )
-        .bind(ulid(), owner.id, verifyTokenHash, now + 24 * 60 * 60 * 1000, now)
+        .bind(ulid(), owner.id, input.email, verifyTokenHash, now + 24 * 60 * 60 * 1000, now)
         .run();
 
       const verifyUrl = `${c.env.SITE_URL}/api/me/email/verify?token=${rawVerifyToken}`;
@@ -146,6 +262,11 @@ listingRoutes.post(
     }
 
     c.executionCtx.waitUntil(moderateListing(c.env, id, 1, clientIPFrom(c.req.raw)));
+    // Issue #38: indexed for semantic search regardless of moderation
+    // outcome, the same way `listings_fts`'s insert trigger indexes every
+    // new row regardless of status — a listing not yet approved still
+    // needs to be ready to search the moment it is.
+    c.executionCtx.waitUntil(reembedListing(c.env, id));
 
     const row = await fetchListingRow(c.env, id);
     if (!row) return fail(c, "internal", "Listing failed to save.", 500);
@@ -158,98 +279,137 @@ listingRoutes.post(
 // ---------------------------------------------------------------------------
 // PATCH /api/listings/:id
 // ---------------------------------------------------------------------------
-listingRoutes.patch("/:id", ownerAuth(), validateBody(UpdateListingInput), async (c) => {
-  const owner = c.get("owner");
-  const id = requireParam(c, "id");
-  const input = c.get("validatedBody") as import("@keepsake/contracts/listing").UpdateListingInput;
+// `dailyBudget` on the `listing` kind, the same pool and the same per-IP
+// ceiling `POST /` draws on (issue #168). One pool rather than a new
+// `listing_edit` kind on purpose: an edit costs exactly the AI calls a create
+// costs — one moderation run, one re-embed — so rationing the two together is
+// what the number `LISTING_IP_DAILY_BUDGET = 20` already means, and it needs
+// no new `[vars]` entry in three wrangler env blocks to say so.
+//
+// After `ownerAuth`, matching create's relative order (auth, then budget), so
+// a caller with no usable token is refused before spending anyone's
+// allowance. Turnstile is deliberately *not* added here: the web edit step
+// mints no token today, so it would break the real edit flow rather than
+// harden it. Said plainly rather than quietly skipped — the burst brake above
+// and this ceiling are what stand between an owner token (minted client-side,
+// `ownerAuth({createIfMissing:true})` creates the row on sight) and the
+// global AI budgets.
+listingRoutes.patch(
+  "/:id",
+  ownerAuth(),
+  dailyBudget({ kind: "listing", ipDailyLimitVar: "LISTING_IP_DAILY_BUDGET", fallbackIpDailyLimit: DEFAULT_LISTING_IP_DAILY_BUDGET }),
+  validateBody(UpdateListingInput),
+  async (c) => {
+    const owner = c.get("owner");
+    const id = requireParam(c, "id");
+    const input = c.get("validatedBody") as import("@keepsake/contracts/listing").UpdateListingInput;
 
-  const row = await fetchListingRow(c.env, id);
-  if (!row || row.owner_id !== owner.id) {
-    return fail(c, "not_found", "Listing not found.", 404);
-  }
-  if (row.status === "given") {
-    return fail(c, "conflict", "This keepsake has already been given and can't be edited.", 409);
-  }
-
-  let place: { country: Country; code: string; place_name: string; admin1: string | null; lat: number; lng: number } | null = null;
-  if (input.country && input.postal_code) {
-    place = await lookupPostalCode(c.env, input.country, input.postal_code);
-    if (!place) return fail(c, "bad_request", "We don't know that postcode yet.", 400);
-  }
-
-  if (input.photo_ids) {
-    const placeholders = input.photo_ids.map(() => "?").join(",");
-    const { results: ownedPhotos } = await c.env.DB.prepare(
-      `SELECT id FROM photos WHERE owner_id = ? AND (listing_id IS NULL OR listing_id = ?) AND id IN (${placeholders})`,
-    )
-      .bind(owner.id, id, ...input.photo_ids)
-      .all<{ id: string }>();
-    if (ownedPhotos.length !== input.photo_ids.length) {
-      return fail(c, "bad_request", "One or more photos aren't available to attach.", 400);
+    const row = await fetchListingRow(c.env, id);
+    if (!row || row.owner_id !== owner.id) {
+      return fail(c, "not_found", "Listing not found.", 404);
     }
-  }
+    if (row.status === "given") {
+      return fail(c, "conflict", "This keepsake has already been given and can't be edited.", 409);
+    }
 
-  const nextVersion = row.version + 1;
-  const now = Date.now();
+    // Issue #171 — same gate as create. An edit is the other way client-supplied
+    // aspect text reaches `listing_aspects` and `PublicListing.aspects`.
+    if (aspectsContainContactInfo(input.aspects)) {
+      return fail(c, "bad_request", ASPECT_CONTACT_INFO_MESSAGE, 400);
+    }
 
-  await c.env.DB.prepare(
-    `UPDATE listings SET
-       title = ?, story = ?, category = ?,
-       country = ?, postal_code = ?, place_name = ?, admin1 = ?, lat = ?, lng = ?,
-       status = 'pending', moderation_reason = NULL, version = ?, updated_at = ?
-     WHERE id = ? AND version = ?`,
-  )
-    .bind(
-      input.title ?? row.title,
-      input.story ?? row.story,
-      input.category ?? row.category,
-      place?.country ?? row.country,
-      place?.code ?? row.postal_code,
-      place?.place_name ?? row.place_name,
-      place?.admin1 ?? row.admin1,
-      place?.lat ?? row.lat,
-      place?.lng ?? row.lng,
-      nextVersion,
-      now,
-      id,
-      row.version,
+    let place: { country: Country; code: string; place_name: string; admin1: string | null; lat: number; lng: number } | null = null;
+    if (input.country && input.postal_code) {
+      place = await lookupPostalCode(c.env, input.country, input.postal_code);
+      if (!place) return fail(c, "bad_request", "We don't know that postcode yet.", 400);
+    }
+
+    if (input.photo_ids) {
+      const placeholders = input.photo_ids.map(() => "?").join(",");
+      const { results: ownedPhotos } = await c.env.DB.prepare(
+        `SELECT id FROM photos WHERE owner_id = ? AND (listing_id IS NULL OR listing_id = ?) AND id IN (${placeholders})`,
+      )
+        .bind(owner.id, id, ...input.photo_ids)
+        .all<{ id: string }>();
+      if (ownedPhotos.length !== input.photo_ids.length) {
+        return fail(c, "bad_request", "One or more photos aren't available to attach.", 400);
+      }
+    }
+
+    const nextVersion = row.version + 1;
+    const now = Date.now();
+
+    await c.env.DB.prepare(
+      `UPDATE listings SET
+         title = ?, story = ?, category = ?,
+         country = ?, postal_code = ?, place_name = ?, admin1 = ?, lat = ?, lng = ?,
+         status = 'pending', moderation_reason = NULL, version = ?, updated_at = ?
+       WHERE id = ? AND version = ?`,
     )
-    .run();
-
-  if (input.photo_ids) {
-    // Detach anything currently on this listing that isn't in the new set,
-    // then (re)attach the new set in order.
-    const placeholders = input.photo_ids.map(() => "?").join(",");
-    await c.env.DB.prepare(`UPDATE photos SET listing_id = NULL, position = NULL WHERE listing_id = ? AND id NOT IN (${placeholders})`)
-      .bind(id, ...input.photo_ids)
+      .bind(
+        input.title ?? row.title,
+        input.story ?? row.story,
+        input.category ?? row.category,
+        place?.country ?? row.country,
+        place?.code ?? row.postal_code,
+        place?.place_name ?? row.place_name,
+        place?.admin1 ?? row.admin1,
+        place?.lat ?? row.lat,
+        place?.lng ?? row.lng,
+        nextVersion,
+        now,
+        id,
+        row.version,
+      )
       .run();
-    for (let position = 0; position < input.photo_ids.length; position++) {
-      await c.env.DB.prepare("UPDATE photos SET listing_id = ?, position = ? WHERE id = ?")
-        .bind(id, position, input.photo_ids[position])
+
+    if (input.photo_ids) {
+      // Detach anything currently on this listing that isn't in the new set,
+      // then (re)attach the new set in order.
+      const placeholders = input.photo_ids.map(() => "?").join(",");
+      await c.env.DB.prepare(`UPDATE photos SET listing_id = NULL, position = NULL WHERE listing_id = ? AND id NOT IN (${placeholders})`)
+        .bind(id, ...input.photo_ids)
         .run();
+      for (let position = 0; position < input.photo_ids.length; position++) {
+        await c.env.DB.prepare("UPDATE photos SET listing_id = ?, position = ? WHERE id = ?")
+          .bind(id, position, input.photo_ids[position])
+          .run();
+      }
     }
-  }
 
-  // `UpdateListingInput.aspects` is a plain `.optional()` override, not the
-  // usual `.partial()` treatment (see the contract's own comment on why) —
-  // an `aspects` key genuinely absent from the request body parses to
-  // `undefined` here, distinct from an explicit `[]`, which is truthy
-  // (arrays always are) and does replace. Only overwrite when the client
-  // actually sent something, the same rule `input.photo_ids` above already
-  // follows: a re-submit that never touched aspects must not silently wipe
-  // them.
-  if (input.aspects) {
-    await replaceListingAspects(c.env, id, input.aspects);
-  }
+    // `UpdateListingInput.aspects` is a plain `.optional()` override, not the
+    // usual `.partial()` treatment (see the contract's own comment on why) —
+    // an `aspects` key genuinely absent from the request body parses to
+    // `undefined` here, distinct from an explicit `[]`, which is truthy
+    // (arrays always are) and does replace. Only overwrite when the client
+    // actually sent something, the same rule `input.photo_ids` above already
+    // follows: a re-submit that never touched aspects must not silently wipe
+    // them.
+    if (input.aspects) {
+      await replaceListingAspects(c.env, id, input.aspects);
+    }
 
-  c.executionCtx.waitUntil(moderateListing(c.env, id, nextVersion, clientIPFrom(c.req.raw)));
+    c.executionCtx.waitUntil(moderateListing(c.env, id, nextVersion, clientIPFrom(c.req.raw)));
+    // Issue #38: re-embed whenever the request could have changed what's
+    // actually searchable — title, story, or aspects. `input.title`/
+    // `input.story` are `UpdateListingInput`'s normal `.partial()` optionals
+    // (absent means "unchanged", same convention `place`/`photo_ids` above
+    // already follow); `input.aspects` uses the non-defaulting override
+    // `replaceListingAspects`'s own doc comment explains. Skipping this for a
+    // photo-only or location-only edit isn't just an optimization — it also
+    // means a listing that's exhausted EMBED_DAILY_BUDGET for the day doesn't
+    // get charged again for an edit that couldn't have changed its vector.
+    if (input.title !== undefined || input.story !== undefined || input.aspects !== undefined) {
+      c.executionCtx.waitUntil(reembedListing(c.env, id));
+    }
 
-  const updatedRow = await fetchListingRow(c.env, id);
-  if (!updatedRow) return fail(c, "internal", "Listing failed to save.", 500);
-  const photos = await fetchPhotoRows(c.env, id);
-  const aspects = await fetchAspectRows(c.env, id);
-  return ok(c, serializeOwnerListing(updatedRow, photos, aspects));
-});
+    const updatedRow = await fetchListingRow(c.env, id);
+    if (!updatedRow) return fail(c, "internal", "Listing failed to save.", 500);
+    const photos = await fetchPhotoRows(c.env, id);
+    const aspects = await fetchAspectRows(c.env, id);
+    return ok(c, serializeOwnerListing(updatedRow, photos, aspects));
+  },
+);
 
 // ---------------------------------------------------------------------------
 // DELETE /api/listings/:id
@@ -293,7 +453,15 @@ listingRoutes.delete("/:id", ownerAuth(), async (c) => {
   // the schema's foreign keys so a child table added later without a
   // cascade fails rather than quietly orphaning a requester's note, email
   // and phone with no listing left to reach them through.
+  //
+  // The Vectorize row has no such mechanism — D1 cascades don't reach an
+  // external index — so it's deleted explicitly below. Today that is
+  // belt-and-braces rather than load-bearing (`fetchCandidateRows` joins
+  // back to `listings` on `status = 'approved'`, and a deleted row simply
+  // isn't there to match), but there's no reason to leave a dead vector in
+  // the index once the listing it represents is gone.
   await c.env.DB.prepare("DELETE FROM listings WHERE id = ?").bind(id).run();
+  c.executionCtx.waitUntil(deleteListingVector(c.env, id));
 
   return ok(c, { id });
 });
@@ -322,6 +490,11 @@ listingRoutes.post("/:id/given", ownerAuth(), async (c) => {
   return ok(c, serializeOwnerListing(updatedRow, photos, aspects));
 });
 
+// Withdraw deliberately still accepts a `rejected`, `hidden` or
+// `needs_review` listing (issue #162 asked the question explicitly): an owner
+// who wants a taken-down listing gone entirely is doing something legitimate,
+// and refusing here would only teach them to delete it instead. The one-way
+// door is `relist` below, not this guard.
 listingRoutes.post("/:id/withdraw", ownerAuth(), async (c) => {
   const owner = c.get("owner");
   const id = requireParam(c, "id");
@@ -352,16 +525,65 @@ listingRoutes.post("/:id/relist", ownerAuth(), async (c) => {
     return fail(c, "conflict", "Only a withdrawn listing can be relisted.", 409);
   }
 
-  const lastDecision = await c.env.DB.prepare(
-    `SELECT verdict FROM moderation_events WHERE listing_id = ? AND listing_version = ? AND kind = 'decision' ORDER BY created_at DESC LIMIT 1`,
+  // Issue #162. This used to read `kind = 'decision'` only, which meant it
+  // could not see any of the four takedowns this product actually has —
+  // `POST /api/admin/listings/:id/reject`, `.../hide`, the ban sweep (all
+  // three `kind = 'admin'`, see admin.ts's `logAdminEvent`) and the
+  // three-report auto-hide (`kind = 'report_autohide'`, below). None of them
+  // bumps `version`, so the newest `decision` row was still the pipeline's
+  // original `approved` and an owner could undo any of them with
+  // `withdraw` + `relist` — two calls authenticated by nothing but the
+  // device token they already had. Indefinitely, with no cooldown, and the
+  // relisted row dropped out of the admin queue's `report_pressure` view on
+  // the way past.
+  //
+  // So: the newest *status-setting* event of any kind, not the newest
+  // `decision`. `text`/`image` events are excluded because they are
+  // per-model sub-results, not decisions, and `admin`/`request_removed`
+  // (issue #70) is excluded because it is an event about one request inside
+  // the listing and says nothing about the listing's own status.
+  //
+  // `created_at DESC, rowid DESC`: ULIDs are only monotonic across
+  // milliseconds, so two events written in the same millisecond order
+  // randomly by `id`. `rowid` is insertion order, which is the thing we
+  // actually mean, and `moderation_events` is an ordinary rowid table
+  // (0001_init.sql — no `WITHOUT ROWID`).
+  const lastStatusEvent = await c.env.DB.prepare(
+    `SELECT kind, verdict, reason FROM moderation_events
+     WHERE listing_id = ? AND listing_version = ?
+       AND (kind = 'decision'
+            OR kind = 'report_autohide'
+            OR (kind = 'admin' AND verdict IN ('approved', 'restored', 'hidden', 'rejected')))
+     ORDER BY created_at DESC, rowid DESC LIMIT 1`,
   )
     .bind(id, row.version)
-    .first<{ verdict: string }>();
+    .first<{ kind: string; verdict: string; reason: string | null }>();
+
+  // A takedown is never relistable straight back to `approved`, and — the
+  // part that is easy to get wrong — it must not go to `pending` either.
+  // `pending` re-runs the AI pipeline, which is precisely the judgement a
+  // human overrode when they rejected or hid the listing, so the pipeline
+  // would cheerfully re-approve it seconds later and the bypass would be
+  // exactly as complete, just slower. `needs_review` puts it back in front
+  // of a person instead, and `held_for_review` is the honest reason the
+  // owner sees (`MODERATION_REASONS` in @keepsake/contracts/listing).
+  const wasTakenDown =
+    lastStatusEvent !== null &&
+    (lastStatusEvent.kind === "report_autohide" ||
+      (lastStatusEvent.kind === "admin" && (lastStatusEvent.verdict === "hidden" || lastStatusEvent.verdict === "rejected")));
+
+  // `restored` is an admin explicitly putting a hidden listing back — it is
+  // as much an approval as the pipeline's own.
+  const wasApproved =
+    !wasTakenDown &&
+    ((lastStatusEvent?.kind === "decision" && lastStatusEvent.verdict === "approved") ||
+      (lastStatusEvent?.kind === "admin" && (lastStatusEvent.verdict === "approved" || lastStatusEvent.verdict === "restored")));
 
   const now = Date.now();
-  const nextStatus = lastDecision?.verdict === "approved" ? "approved" : "pending";
-  await c.env.DB.prepare("UPDATE listings SET status = ?, moderation_reason = NULL, updated_at = ? WHERE id = ? AND version = ?")
-    .bind(nextStatus, now, id, row.version)
+  const nextStatus = wasTakenDown ? "needs_review" : wasApproved ? "approved" : "pending";
+  const nextReason = wasTakenDown ? "held_for_review" : null;
+  await c.env.DB.prepare("UPDATE listings SET status = ?, moderation_reason = ?, updated_at = ? WHERE id = ? AND version = ?")
+    .bind(nextStatus, nextReason, now, id, row.version)
     .run();
 
   if (nextStatus === "pending") {
@@ -448,19 +670,56 @@ listingRoutes.post(
     )
       .bind(reportId, id, input.reason, input.details ?? null, ipDigest, now)
       .run();
-    await c.env.DB.prepare("UPDATE listings SET report_count = report_count + 1 WHERE id = ?").bind(id).run();
+    // Issue #184: `RETURNING`, not a second read and not `row.report_count + 1`.
+    // The increment was always atomic; the *decision* was not. `row` is
+    // fetched at the top of this handler, before the `reports` insert and
+    // before this update, so three people reporting the same listing in the
+    // same second — which is exactly how reports on genuinely bad content
+    // arrive, because they arrive when the content is being seen — all read
+    // `report_count = 0`, all computed `1`, and `1 >= 3` was false for every
+    // one of them. The stored count was 3 and the listing stayed public
+    // until a fourth, non-concurrent report showed up. A listing at a true
+    // count of 5 could still be evaluated as 1. The `report_autohide` event
+    // and the warning were skipped along with the hide, so nothing recorded
+    // that the threshold had been crossed and the admin queue's
+    // report-pressure view had nothing to join against either.
+    //
+    // `RETURNING` closes the window entirely and keeps it to one round trip:
+    // the count and status this branch reads are the post-increment ones,
+    // read inside the same statement that wrote them, so exactly one of N
+    // concurrent reporters sees the value that crosses the threshold.
+    const incremented = await c.env.DB.prepare(
+      "UPDATE listings SET report_count = report_count + 1 WHERE id = ? RETURNING report_count, status",
+    )
+      .bind(id)
+      .first<{ report_count: number; status: string }>();
 
-    const reportCount = row.report_count + 1;
+    const reportCount = incremented?.report_count ?? row.report_count + 1;
+    const statusAfterIncrement = incremented?.status ?? row.status;
     const threshold = reportAutohideThreshold(c.env);
 
     // Only pulls a listing that's currently public — a report against a
     // listing already `given`/`hidden`/etc. still counts (report_count
     // above already incremented) but never flips status out from under a
-    // state this middleware didn't put it in.
-    if (reportCount >= threshold && row.status === "approved") {
-      await c.env.DB.prepare("UPDATE listings SET status = 'hidden', updated_at = ? WHERE id = ? AND status = 'approved'")
+    // state this middleware didn't put it in. Reading the status off the
+    // same `RETURNING` row is what stops a later concurrent reporter
+    // re-hiding (and re-eventing) a listing an earlier one already hid.
+    if (reportCount >= threshold && statusAfterIncrement === "approved") {
+      // `AND status = 'approved'` was already here; `RETURNING id` is what
+      // makes it usable as a compare-and-set. With five overlapping reports,
+      // two callers can both read `approved` off their own increment (the
+      // third one's hide has not committed yet) and both enter this branch —
+      // measured, two `report_autohide` events for one hide. Only the caller
+      // whose UPDATE actually changed a row writes the event and the warning,
+      // so the record of the hide is exactly one row however many reporters
+      // arrive at once.
+      const hidden = await c.env.DB.prepare(
+        "UPDATE listings SET status = 'hidden', updated_at = ? WHERE id = ? AND status = 'approved' RETURNING id",
+      )
         .bind(now, id)
-        .run();
+        .first<{ id: string }>();
+      if (!hidden) return ok(c, { id: reportId }, 201);
+
       await c.env.DB.prepare(
         `INSERT INTO moderation_events (id, listing_id, listing_version, kind, verdict, reason, attempt, created_at)
          VALUES (?, ?, ?, 'report_autohide', 'hidden', 'report_autohide', 1, ?)`,
@@ -498,6 +757,47 @@ listingRoutes.post(
 // ---------------------------------------------------------------------------
 // POST /api/listings/:id/requests
 // ---------------------------------------------------------------------------
+// Issue #188: this used to accept any syntactically valid address, write it
+// into `requests` as the requester of record, mail it a "we passed your note
+// along" confirmation, and show the giver a genuine-looking ask — with
+// nothing anywhere in the path establishing that the submitter controlled the
+// address. `idempotency()`, `turnstile()`, `burst()` and the per-IP daily
+// budget below all limit *volume*; none of them is evidence of ownership.
+// `POST /api/recover` had already settled the principle for this codebase —
+// it refuses to act on an unproven address — and this route acted on one and
+// mailed it.
+//
+// What that cost the person whose address was used: mail they never asked
+// for, a plausible-looking ask in a stranger's dashboard under their name,
+// and — if the giver chose it — the giver's real address and reply-to
+// delivered to them, with a giver now waiting to meet someone who had never
+// asked for anything. Twenty times a day per attacker address, by walking the
+// public feed (`UNIQUE (listing_id, email)` only stops repeats on one
+// listing).
+//
+// So the route is confirm-then-forward now. It writes the ask down as
+// `status = 'unconfirmed'`, tells nobody, and mails the address one "was this
+// you?" link. `POST /api/requests/confirm` is what makes the request real.
+// Three things follow, and each is load-bearing:
+//
+//   - The giver's side is untouched until confirmation: no `new_request`
+//     mail, no `request_count`, no dashboard row.
+//   - The confirmation mail carries the listing title and nothing the
+//     submitter wrote, so it cannot be used to deliver text to an inbox.
+//   - Unconfirmed rows are deleted, not kept, when the link lapses
+//     (`cron/orphanSweep.ts`).
+//
+// And a fourth control that the issue did not ask for but that the flow needs
+// to be honest: a per-recipient daily ceiling on the confirmation itself. The
+// confirm step stops a victim being *enrolled*; on its own it does not stop
+// them being *mailed*, and one message per listing across a whole feed is a
+// mail-bomb whichever gate it passes through. See
+// `DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET`.
+//
+// The cost, stated because it is real and belongs on the record rather than
+// in a commit message: this adds a step to the one flow the product
+// deliberately kept frictionless, and some genuine requests will be abandoned
+// at it. That trade-off is recorded in docs/product-decisions.md.
 listingRoutes.post(
   "/:id/requests",
   idempotency(),
@@ -536,9 +836,13 @@ listingRoutes.post(
       );
     }
 
-    const owner = await c.env.DB.prepare("SELECT email, email_verified_at, banned_at FROM owners WHERE id = ?")
+    // `email_verified_at` is no longer read here: since #188 nothing on this
+    // path mails the giver at all. Whether their address is confirmed is the
+    // confirm route's question, asked at the moment there is something to
+    // tell them.
+    const owner = await c.env.DB.prepare("SELECT email, banned_at FROM owners WHERE id = ?")
       .bind(row.owner_id)
-      .first<{ email: string | null; email_verified_at: number | null; banned_at: number | null }>();
+      .first<{ email: string | null; banned_at: number | null }>();
 
     // A banned owner's listings are meant to already be hidden (the admin
     // ban action hides every non-given one), but this is the same
@@ -549,87 +853,172 @@ listingRoutes.post(
       return fail(c, "not_found", "Listing not found.", 404);
     }
 
-    // The giver asking for their own keepsake isn't a request anyone can
-    // "choose" — there's no one else to hand it to — and it would otherwise
-    // sit in the queue looking like a real ask.
-    if (owner?.email && owner.email.toLowerCase() === input.email.toLowerCase()) {
-      return fail(c, "bad_request", "That's your own keepsake.", 400);
+    // Issue #189. These two conditions used to answer with distinguishable,
+    // content-bearing errors — `400 "That's your own keepsake."` and
+    // `409 "You've already asked for this one."` — both above the insert and
+    // above both sends, which made probing completely silent to the victim:
+    //
+    // - the 400 confirmed a *specific email address belongs to the giver of
+    //   a specific listing*, an address the privacy page promises is never
+    //   shown publicly, on a stranger's say-so and with no mail sent to warn
+    //   the owner. It matched on `owners.email`, not `email_verified_at`, so
+    //   it confirmed unverified addresses too.
+    // - the 409 confirmed *whether a named person has asked for a named
+    //   keepsake* — a fact the product hides even from other requesters, and
+    //   one that is sensitive in exactly the domestic situations this
+    //   product invites.
+    //
+    // `routes/recover.ts` already enforces the opposite rule, and its comment
+    // says why: a different response for an unknown address "would let a
+    // caller enumerate which addresses have a Keepsake dashboard behind
+    // them." Same rule here. Both cases now return the same shape the success
+    // path returns, having written nothing and sent nothing.
+    //
+    // A *confirmed* duplicate re-sends nothing, for the reason that rule was
+    // written: re-mailing on every repeat submission would turn this endpoint
+    // into an unbounded mailer aimed at any address a stranger cares to name.
+    // Issue #188's reissue path below is the bounded exception — it only ever
+    // reissues a link to a request that is still waiting on that same address,
+    // and the per-recipient ceiling caps the total either way.
+    //
+    // What this costs, said plainly: a giver who types their own address by
+    // mistake now gets a cheerful "sent" and no request. That message was
+    // worth keeping — but it belongs in the client, checked against the
+    // owner address the device already knows, where it helps the one person
+    // it was for without the server answering the question for everyone
+    // else. `apps/web`'s `RequestSheet` still needs that follow-up.
+    const isSelfRequest = Boolean(owner?.email && owner.email.toLowerCase() === input.email.toLowerCase());
+
+    // Issue #188: `confirmed_at` and the confirm-link expiry come back too,
+    // because "a row already exists for this address" now has two very
+    // different meanings. A confirmed row is a real ask and this is a
+    // duplicate; an *unconfirmed* row is a link sitting in an inbox that
+    // nobody has clicked, and refusing to reissue it would mean one lost
+    // email locks that address out of that listing until the row is swept.
+    const existingRequest = await c.env.DB.prepare(
+      "SELECT id, confirmed_at FROM requests WHERE listing_id = ? AND email = ?",
+    )
+      .bind(id, input.email)
+      .first<{ id: string; confirmed_at: number | null }>();
+
+    // A fresh ULID and the current time — the response every path below
+    // returns, indistinguishable by shape, content, or the absence of an id.
+    // The id is deliberately *not* the existing row's on the reissue path:
+    // a ULID encodes its own mint time in its first ten characters, so
+    // echoing a stored one would date the request it belongs to and hand back
+    // exactly the "has this person asked for this?" oracle #189 closed.
+    const acceptedResponse = (): CreateRequestResult => ({ id: ulid(), created_at: Date.now() });
+
+    if (isSelfRequest || existingRequest?.confirmed_at != null) {
+      return ok(c, acceptedResponse(), 201);
     }
 
-    // Pre-check rather than relying on the UNIQUE(listing_id, email)
-    // constraint to reject a duplicate — same style as the reports handler
-    // above and `ownerAuth`'s ON CONFLICT DO NOTHING: an honest, readable
-    // 409 rather than parsing a D1 driver error message.
-    const existingRequest = await c.env.DB.prepare("SELECT id FROM requests WHERE listing_id = ? AND email = ?")
-      .bind(id, input.email)
-      .first<{ id: string }>();
-    if (existingRequest) {
-      return fail(c, "conflict", "You've already asked for this one.", 409);
+    // Issue #188. Checked here — after the two silent-success branches, so a
+    // duplicate never spends a real person's allowance, and *before* the
+    // insert, so an address at its ceiling is never written down at all. A
+    // row we will not mail is a stranger's address held for three days for
+    // nothing, which is the collection this whole change exists to avoid.
+    //
+    // Refusing looks exactly like succeeding, for the same reason every other
+    // branch here does: a distinguishable "that address has had enough mail
+    // today" would answer, for any address a caller names, whether someone
+    // has been aiming requests at it — which is worse than the friction it
+    // would save. What the sender actually loses is small and recoverable:
+    // the ask isn't stored, and tomorrow the same submission works.
+    const confirmBudget = await checkAndBumpRecipient(c.env.KV, {
+      kind: "request_confirm",
+      address: input.email,
+      dailyLimit: parseIntVar(
+        "REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET",
+        c.env.REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET,
+        DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET,
+      ),
+    });
+    if (!confirmBudget.allowed) {
+      return ok(c, acceptedResponse(), 201);
     }
+
+    const now = Date.now();
+    // A random, single-use secret mailed to the address itself and to nowhere
+    // else, so redeeming it is proof the submitter reads mail there. Only the
+    // hash is stored, same as every other bearer secret this Worker mints
+    // (src/lib/tokens.ts).
+    const rawConfirmToken = randomTokenRaw();
+    const confirmTokenHash = await sha256Hex(rawConfirmToken);
+    const confirmExpiresAt = now + REQUEST_CONFIRM_TTL_MS;
 
     const clientIp = clientIPFrom(c.req.raw);
     const ipDigest = await dailyIpDigest(clientIp);
-    const now = Date.now();
-    const requestId = ulid();
 
-    // A random, single-use secret this requester can later present, with no
-    // account, to withdraw this exact request and erase its own PII — see
-    // src/routes/requestWithdraw.ts. Only the hash is stored, same as every
-    // other bearer secret this Worker mints (src/lib/tokens.ts).
-    const rawWithdrawToken = randomTokenRaw();
-    const withdrawTokenHash = await sha256Hex(rawWithdrawToken);
-
-    await c.env.DB.prepare(
-      `INSERT INTO requests (id, listing_id, note, email, phone, ip_digest, status, created_at, age_attested_at, withdraw_token_hash)
-       VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
-    )
-      .bind(
-        requestId,
-        id,
-        input.note,
-        input.email,
-        input.phone ?? null,
-        ipDigest,
-        now,
-        // Same convention as the listing insert above: `input.date_of_birth`
-        // is only reachable here already validated against `MINIMUM_AGE`,
-        // and is never itself bound into this query.
-        input.date_of_birth ? now : null,
-        withdrawTokenHash,
+    let requestId: string;
+    if (existingRequest) {
+      // Reissue onto the held row: a fresh token and a fresh expiry, and the
+      // note/phone from this submission, since this is the ask the person is
+      // making now. The old token stops working the moment its hash is
+      // overwritten — one live link per held request, never a growing set.
+      //
+      // `ip_digest` is rewritten alongside `created_at` rather than left
+      // alone. The two are read together: `cron/orphanSweep.ts` clears a
+      // digest 48 hours after the row's `created_at`, which is the privacy
+      // page's promise. Moving the timestamp while keeping yesterday's digest
+      // would quietly hold that digest past its 48 hours — and this
+      // submission's address is the honest value anyway, since it is the one
+      // that made the request the row now describes.
+      requestId = existingRequest.id;
+      await c.env.DB.prepare(
+        `UPDATE requests SET note = ?, phone = ?, ip_digest = ?, confirm_token_hash = ?, confirm_expires_at = ?, created_at = ?
+         WHERE id = ? AND confirmed_at IS NULL`,
       )
-      .run();
-    await c.env.DB.prepare("UPDATE listings SET request_count = request_count + 1 WHERE id = ?").bind(id).run();
+        .bind(input.note, input.phone ?? null, ipDigest, confirmTokenHash, confirmExpiresAt, now, requestId)
+        .run();
+    } else {
+      requestId = ulid();
 
-    if (owner?.email && owner.email_verified_at !== null) {
-      const dashboardLink = `${c.env.SITE_URL}/mine/${id}`;
-      const template = newRequestTemplate({ listingTitle: row.title, note: input.note, dashboardLink });
-      const result = await sendMail(c.env, { kind: "new_request", to: owner.email, ...template });
-      if (result.sent) {
-        await c.env.DB.prepare("UPDATE requests SET notified_at = ? WHERE id = ?").bind(Date.now(), requestId).run();
-      } else {
-        // Issue #6: this used to be silently discarded — the giver's own
-        // email address rejected the notification and nothing said so
-        // anywhere they could see it. Recorded on the request itself (not
-        // just `email_events`) so the owner dashboard can surface it right
-        // next to the ask it belongs to.
-        await c.env.DB.prepare("UPDATE requests SET notify_failed_reason = ? WHERE id = ?")
-          .bind(result.reason ?? "send_failed", requestId)
-          .run();
-      }
+      // `status = 'unconfirmed'`: written down, and visible to nobody. The
+      // giver's dashboard, the choose path and `request_count` all key off
+      // `confirmed_at IS NOT NULL`, so until the link below is clicked this
+      // row is a held submission and not an ask — which is the whole of the
+      // fix for #188. `withdraw_token_hash` stays NULL and is minted at
+      // confirmation time: a withdraw link is only useful once there is
+      // something to withdraw, and mailing one now would mean mailing a
+      // second bearer token to an address nobody has verified.
+      await c.env.DB.prepare(
+        `INSERT INTO requests (id, listing_id, note, email, phone, ip_digest, status, created_at, age_attested_at,
+                               confirm_token_hash, confirm_expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'unconfirmed', ?, ?, ?, ?)`,
+      )
+        .bind(
+          requestId,
+          id,
+          input.note,
+          input.email,
+          input.phone ?? null,
+          ipDigest,
+          now,
+          // Same convention as the listing insert above: `input.date_of_birth`
+          // is only reachable here already validated against `MINIMUM_AGE`,
+          // and is never itself bound into this query.
+          input.date_of_birth ? now : null,
+          confirmTokenHash,
+          confirmExpiresAt,
+        )
+        .run();
     }
 
-    // Always sent — a requester never gets a dashboard or a device token, so
-    // this confirmation (and the withdraw link inside it) is the only record
-    // they get of having asked, and the only no-account way back in to
-    // remove their own note/email/phone. `/withdraw/<token>` is a web-app
-    // page the other client-side pass still needs to add; it should POST
-    // `{ token }` to `/api/requests/withdraw` the same way `/recover/:token`
-    // already POSTs to `/api/recover/:token`.
-    const withdrawLink = `${c.env.SITE_URL}/withdraw/${rawWithdrawToken}`;
+    // The only message that leaves this handler, and the only one that can be
+    // aimed at an address the sender may not own. Nothing has reached the
+    // giver: no `new_request` mail, no `request_count` increment, no row in
+    // their dashboard. `POST /api/requests/confirm` does all three, once
+    // someone proves they read mail at this address.
+    //
+    // Deliberately never carries the note (see the template's own comment):
+    // reflecting a stranger's free text into a stranger's inbox would rebuild
+    // the harassment channel this step exists to close.
+    const confirmLink = `${c.env.SITE_URL}/confirm/${rawConfirmToken}`;
     await sendMail(c.env, {
-      kind: "request_received",
+      kind: "confirm_request",
       to: input.email,
-      ...requestReceivedTemplate({ listingTitle: row.title, withdrawLink }),
+      ...confirmRequestTemplate({ listingTitle: row.title, confirmLink }),
     });
 
     const result: CreateRequestResult = { id: requestId, created_at: now };

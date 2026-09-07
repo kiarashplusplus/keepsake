@@ -102,6 +102,108 @@ describe("POST /api/me/listings/:id/choose", () => {
     expect(detail.requests.find((r) => r.id === requestId)?.notify_failed).toBe(true);
   });
 
+  // Issue #185. Not the happy path and not the already-decided path — the
+  // *interrupted* one. The old route was three unbatched writes: mark this
+  // request chosen, mark the rest not_chosen, set `chosen_request_id`. If the
+  // first landed and a later one did not (a D1 7403, an isolate eviction, a
+  // timeout), the listing was left with `chosen_request_id = NULL` while one
+  // request already read `chosen`. Nothing in the route looked at the listing,
+  // so the giver's retry with a different request sailed through every guard,
+  // and the "mark the rest not_chosen" statement only touched `open` rows —
+  // so it could not un-choose the first. Two strangers, one object, one of
+  // them travelling to meet someone who is expecting the other.
+  //
+  // This seeds the mirror-image state — the listing already claimed while
+  // another request is still `open`, which is what a *concurrent* choose sees
+  // once the other call has claimed the listing — and asserts the second
+  // choose is refused with nothing written and, above all, nothing mailed.
+  it("refuses a second choose once the listing is claimed, and mails nobody", async () => {
+    const sent = installFakeEmail();
+    const token = freshOwnerToken();
+    const tokenHash = await sha256HexForTest(token);
+    const ownerId = crypto.randomUUID();
+    const now = Date.now();
+    await env.DB.prepare("INSERT INTO owners (id, token_hash, email, email_verified_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(ownerId, tokenHash, "giver@keepsake.ing", now, now, now)
+      .run();
+    const listingId = await insertApprovedListing({ ownerId, title: "A brass thimble" });
+
+    const firstRequestId = await insertRequest(listingId, "first@keepsake.ing");
+    const secondRequestId = await insertRequest(listingId, "second@keepsake.ing");
+
+    // The state a concurrent choose finds after the other call won the race:
+    // the listing is claimed, and this request has not been decided yet.
+    await env.DB.prepare("UPDATE listings SET chosen_request_id = ? WHERE id = ?").bind(firstRequestId, listingId).run();
+    await env.DB.prepare("UPDATE requests SET status = 'chosen', chosen_at = ? WHERE id = ?").bind(now, firstRequestId).run();
+
+    const res = await SELF.fetch(`http://x/api/me/listings/${listingId}/choose`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: secondRequestId, handoff_note: "Saturday morning works." }),
+    });
+    expect(res.status).toBe(409);
+    expect((await readErr(res)).code).toBe("conflict");
+
+    // The one that actually matters: nobody was told they'd been chosen, and
+    // in particular nobody was handed the giver's address.
+    expect(sent).toHaveLength(0);
+
+    // And nothing moved. The loser is still `open`, the winner still holds
+    // the listing.
+    const second = await env.DB.prepare("SELECT status, chosen_at FROM requests WHERE id = ?")
+      .bind(secondRequestId)
+      .first<{ status: string; chosen_at: number | null }>();
+    expect(second?.status).toBe("open");
+    expect(second?.chosen_at).toBeNull();
+
+    const listing = await env.DB.prepare("SELECT chosen_request_id FROM listings WHERE id = ?")
+      .bind(listingId)
+      .first<{ chosen_request_id: string }>();
+    expect(listing?.chosen_request_id).toBe(firstRequestId);
+  });
+
+  // The other half of the interrupted case, and the one the issue calls
+  // "sticky": a listing left with `chosen_request_id = NULL` while a request
+  // already reads `chosen`. Exactly one request per listing may be chosen, so
+  // finishing the decision here has to close the orphan too — the old sweep
+  // said `WHERE status = 'open'`, which by construction could never do it.
+  it("closes a request left chosen by an interrupted earlier attempt", async () => {
+    const sent = installFakeEmail();
+    const token = freshOwnerToken();
+    const tokenHash = await sha256HexForTest(token);
+    const ownerId = crypto.randomUUID();
+    const now = Date.now();
+    await env.DB.prepare("INSERT INTO owners (id, token_hash, email, email_verified_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(ownerId, tokenHash, "giver2@keepsake.ing", now, now, now)
+      .run();
+    const listingId = await insertApprovedListing({ ownerId, title: "A tin lunchbox" });
+
+    const orphanId = await insertRequest(listingId, "orphan@keepsake.ing");
+    const secondRequestId = await insertRequest(listingId, "second@keepsake.ing");
+
+    // First write landed, the other two did not: request chosen, listing not.
+    await env.DB.prepare("UPDATE requests SET status = 'chosen', chosen_at = ? WHERE id = ?").bind(now, orphanId).run();
+
+    const res = await SELF.fetch(`http://x/api/me/listings/${listingId}/choose`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: secondRequestId, handoff_note: "Any evening after six." }),
+    });
+    expect(res.status).toBe(200);
+
+    const orphan = await env.DB.prepare("SELECT status FROM requests WHERE id = ?").bind(orphanId).first<{ status: string }>();
+    expect(orphan?.status).toBe("not_chosen");
+
+    const listing = await env.DB.prepare("SELECT chosen_request_id FROM listings WHERE id = ?")
+      .bind(listingId)
+      .first<{ chosen_request_id: string }>();
+    expect(listing?.chosen_request_id).toBe(secondRequestId);
+
+    // One mail, to one person.
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.to).toBe("second@keepsake.ing");
+  });
+
   it("409s choosing a request that's already been decided", async () => {
     const token = freshOwnerToken();
     const tokenHash = await sha256HexForTest(token);
@@ -135,9 +237,13 @@ async function insertRequest(listingId: string, email: string): Promise<string> 
   const id = ulid();
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at) VALUES (?, ?, ?, ?, ?, 'open', ?)`,
+    // `confirmed_at` is what makes this an ask a giver can act on (#188);
+    // `status = 'open'` without it is a row the Worker never writes and every
+    // owner-facing read ignores.
+    `INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at, confirmed_at)
+     VALUES (?, ?, ?, ?, ?, 'open', ?, ?)`,
   )
-    .bind(id, listingId, "I would love this, thank you for considering me.", email, `test-digest-${freshClientIp()}`, now)
+    .bind(id, listingId, "I would love this, thank you for considering me.", email, `test-digest-${freshClientIp()}`, now, now)
     .run();
   return id;
 }

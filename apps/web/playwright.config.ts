@@ -46,6 +46,79 @@ const WEB_SERVER_COMMAND = [
   ].join(" "),
 ].join(" && ");
 
+/**
+ * `e2e/ux.spec.ts` writes the committed UX baseline in `docs/qa/baseline/`,
+ * and it belongs to neither project above.
+ *
+ * It runs only under `pnpm --filter @keepsake/web e2e:ux`, which sets
+ * `UX_SHOTS`. Two reasons for the switch rather than just another project:
+ * an ordinary `pnpm e2e` (or a bare `playwright test` with no `--project`)
+ * would otherwise rewrite forty-odd committed frames as a side effect of an
+ * unrelated run, and it would do it against a database the functional specs
+ * have been posting random listings into all along — so the "feed" baseline
+ * would show whatever `browse.spec.ts` happened to create that minute. The
+ * capture wants a database holding exactly the fixed catalogue in
+ * `e2e/support/demoCatalog.ts` and nothing else, which is also why
+ * `webServer.reuseExistingServer` is off below when this is set: a capture
+ * always starts its own `wrangler dev` on a freshly wiped `--persist-to`
+ * directory rather than borrowing one whose state is unknown.
+ */
+const UX_SPEC = /ux\.spec\.ts$/;
+const CAPTURING_UX = Boolean(process.env.UX_SHOTS);
+
+/**
+ * Both capture projects run under `prefers-reduced-motion: reduce`, which is
+ * what finally makes the frames comparable.
+ *
+ * `Print.tsx` drops every card in on a Reanimated spring. That is driven from
+ * JavaScript, so Playwright's `animations: "disabled"` never touched it, and a
+ * capture landed wherever the spring happened to be: two runs of the same
+ * commit differed on 24 of 76 frames — the feed, `/mine`, the item page,
+ * every screen with cards on it. Waiting for the pixels to stop moving
+ * (`support/shots.ts`) took that to 17; the spring's tail moves less between
+ * probes than the comparison can see, so a wait alone cannot close it.
+ *
+ * Under `reduce`, `Print` initialises `drop` at 1 instead of animating to it,
+ * and at `drop === 1` the style is `opacity: 1`, `scale: 1`, full `tiltDeg` —
+ * pixel-for-pixel the state the animation was heading for. So this removes
+ * the transient without changing the design being photographed, and the
+ * frames show what a visitor sees a moment after the page settles either way.
+ *
+ * It is not set for the functional projects: how the app behaves mid-animation
+ * is exactly what a test like `scroll.spec.ts` should keep exercising.
+ */
+const UX_REDUCED_MOTION = "reduce" as const;
+
+const UX_PROJECTS = CAPTURING_UX
+  ? [
+      {
+        name: "ux-mobile",
+        testMatch: UX_SPEC,
+        use: {
+          ...devices["Desktop Chrome"],
+          reducedMotion: UX_REDUCED_MOTION,
+          viewport: { width: 390, height: 844 },
+          // 2 rather than the `mobile` project's 3: the page still lays out
+          // and picks assets as it would on a phone, and `support/shots.ts`
+          // writes at `scale: "css"` so the committed file is 390x844 either
+          // way. Three would only make the intermediate bitmap bigger.
+          deviceScaleFactor: 2,
+          isMobile: true,
+          hasTouch: true,
+        },
+      },
+      {
+        name: "ux-desktop",
+        testMatch: UX_SPEC,
+        use: {
+          ...devices["Desktop Chrome"],
+          reducedMotion: UX_REDUCED_MOTION,
+          viewport: { width: 1280, height: 800 },
+        },
+      },
+    ]
+  : [];
+
 export default defineConfig({
   testDir: "./e2e",
   // Every browser spec here is `*.spec.ts`. Playwright's default `testMatch`
@@ -80,6 +153,7 @@ export default defineConfig({
   projects: [
     {
       name: "mobile",
+      testIgnore: UX_SPEC,
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 390, height: 844 },
@@ -90,15 +164,17 @@ export default defineConfig({
     },
     {
       name: "desktop",
+      testIgnore: UX_SPEC,
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 800 } },
     },
+    ...UX_PROJECTS,
   ],
 
   webServer: {
     command: WEB_SERVER_COMMAND,
     cwd: API_DIR,
     url: `${BASE_URL}/health`,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: !process.env.CI && !CAPTURING_UX,
     timeout: 180_000,
     stdout: "pipe",
     stderr: "pipe",

@@ -45,8 +45,16 @@ console.log(`[copy-site] copied ${relative(process.cwd(), src)} → ${relative(p
 // An unset variable leaves the literal `%NAME%` placeholder in place, which
 // `consent.js` treats as "not configured" — the same kill switch an empty
 // value gives the app, and what the standalone `apps/site/serve.mjs` preview
-// always sees.
-const SUBSTITUTIONS = ["EXPO_PUBLIC_GOOGLE_ADS_ID", "EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN"];
+// always sees. That is fine locally and NOT fine on a deployed export, which
+// is why `assertNoPlaceholders` below fails one; see its comment.
+//
+// `EXPO_PUBLIC_GOOGLE_ADS_ID` was in this list until 2026-09-07 and its
+// placeholder shipped, unsubstituted, in every deployed static page — the
+// variable was declared in `.env.example` and read by `config.ts` but passed
+// by no deploy (#175). The ads plumbing is gone (Kiarash's decision: no
+// Google Ads for now), so the placeholder has no source and the pages no
+// longer carry the meta at all.
+const SUBSTITUTIONS = ["EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN"];
 
 function htmlFiles(dir) {
   const out = [];
@@ -58,8 +66,10 @@ function htmlFiles(dir) {
   return out;
 }
 
+const copiedPages = htmlFiles(src).map((p) => join(dist, relative(src, p)));
+
 let substituted = 0;
-for (const file of htmlFiles(src).map((p) => join(dist, relative(src, p)))) {
+for (const file of copiedPages) {
   const original = readFileSync(file, "utf8");
   let next = original;
   for (const name of SUBSTITUTIONS) {
@@ -76,3 +86,45 @@ console.log(
     ? "[copy-site] no EXPO_PUBLIC_* ids set; static pages keep their placeholders (nothing third-party loads)"
     : `[copy-site] substituted public ids into ${substituted} page(s)`,
 );
+
+// A placeholder that survives into a DEPLOYED export is a shipped bug, not a
+// kill switch (#175). `%EXPO_PUBLIC_GOOGLE_ADS_ID%` shipped literally in
+// every production page for the life of that feature because the variable was
+// declared and read but passed by no deploy, and nothing looked at the
+// output. `verify-public-env.mjs` catches the same class one level up — it
+// fails a deployed export when a name declared in `.env.example` is unset —
+// but it reads the JS bundle, and these pages are not in it. So check the
+// artifact that actually ships.
+//
+// Locally and in CI (`EXPO_PUBLIC_ENV` unset or `development`) an
+// unsubstituted placeholder is the documented "not configured" state and is
+// only reported, never fatal — `apps/site/serve.mjs`'s standalone preview
+// never substitutes at all.
+const PLACEHOLDER_RE = /%(EXPO_PUBLIC_[A-Z0-9_]+)%/g;
+const envName = (process.env.EXPO_PUBLIC_ENV ?? "").trim();
+const deployed = envName !== "" && envName !== "development";
+
+const leftover = new Map(); // name -> [files]
+for (const file of copiedPages) {
+  for (const match of readFileSync(file, "utf8").matchAll(PLACEHOLDER_RE)) {
+    if (!leftover.has(match[1])) leftover.set(match[1], []);
+    const files = leftover.get(match[1]);
+    const rel = relative(dist, file);
+    if (!files.includes(rel)) files.push(rel);
+  }
+}
+
+if (leftover.size === 0) {
+  console.log(`[copy-site] no %EXPO_PUBLIC_*% placeholders survive in ${copiedPages.length} copied page(s)`);
+} else {
+  const described = [...leftover].map(([name, files]) => `${name} (${files.join(", ")})`).join("; ");
+  if (deployed) {
+    console.error(
+      `[copy-site] unsubstituted placeholder(s) in a deployed export (EXPO_PUBLIC_ENV=${envName}): ${described}\n` +
+        "  These ship to visitors as literal %NAME% text in the page source. Either pass the variable from\n" +
+        "  .github/workflows/deploy.yml's \"Export web\" step, or remove the placeholder from apps/site/public/.",
+    );
+    process.exit(1);
+  }
+  console.log(`[copy-site] placeholders left unsubstituted (not a deployed export): ${described}`);
+}

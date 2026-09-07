@@ -1,0 +1,30 @@
+-- Issue #180: a listing whose embedding call failed had no vector, and
+-- nothing anywhere recorded that fact. `reembedListing` returns void on
+-- every failure path — budget exhausted, a thrown or timed-out `env.AI.run`,
+-- a malformed response, a Vectorize upsert error — writing no event, no
+-- counter and nothing the Observatory or `/api/admin/health` reads. The call
+-- is fire-and-forget in `waitUntil`, so the create/edit response is a 200
+-- regardless, and nothing ever re-embeds a listing that is never edited
+-- again.
+--
+-- `vector_indexed_at` is the missing fact, made queryable: the epoch-ms
+-- timestamp of the last **successful** Vectorize upsert for this listing's
+-- current text, and NULL when there is no current vector — never indexed,
+-- or indexed once and then invalidated by an edit whose re-embed failed.
+-- "Which listings are missing from the semantic index" is then
+-- `WHERE vector_indexed_at IS NULL`, which is something a re-index pass can
+-- select on rather than a fact that exists only as a `console.warn` nobody
+-- reads.
+--
+-- Every row that predates this migration gets NULL, which is the honest
+-- answer: this Worker has no way to ask Vectorize whether a given id is in
+-- the index, so "we did not record it" and "it is not there" are the same
+-- state as far as anything here can tell. That is deliberately the
+-- conservative direction — a re-index pass re-embedding a listing that was
+-- already indexed costs one AI call; skipping one that was not costs a
+-- listing that can never be found.
+--
+-- The partial index is the query above: it holds only the rows that need
+-- work, so it stays small even as the catalogue grows.
+ALTER TABLE listings ADD COLUMN vector_indexed_at INTEGER;
+CREATE INDEX listings_vector_missing ON listings(id) WHERE vector_indexed_at IS NULL;

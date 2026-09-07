@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { UploadPhotoFields } from "@keepsake/contracts/photo";
 import type { Env } from "../env.js";
-import { parseIntVar } from "../env.js";
+import { DEFAULT_SUGGEST_DAILY_BUDGET, parseIntVar } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
-import { extensionForSniffedType, sniffImageType } from "../lib/imageSniff.js";
+import { extensionForSniffedType, sniffImageDimensions, sniffImageType } from "../lib/imageSniff.js";
 import { requireParam } from "../lib/params.js";
 import { ownerAuth, type OwnerRow } from "../middleware/ownerAuth.js";
 import { burst, dailyBudget } from "../middleware/rateLimit.js";
@@ -15,6 +15,30 @@ type Vars = { owner: OwnerRow };
 export const photoRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 const DEFAULT_MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+/**
+ * The `thumb` variant gets its own, much tighter ceiling. Both variants used
+ * to share `MAX_PHOTO_BYTES`, which meant a caller could PUT a 5 MiB
+ * "thumbnail" — stored, served from `/i/:id/thumb`, and base64'd into a
+ * vision-model prompt by `suggest/suggest.ts`. A real 640px thumb from our
+ * own client is tens of kilobytes; 768 KiB is loose enough that no honest
+ * encode can hit it and tight enough that the abuse case can't.
+ */
+const DEFAULT_MAX_THUMB_BYTES = 768 * 1024;
+
+/**
+ * Server-side backstop for the degenerate-aspect refusal the web client now
+ * makes in `lib/images/validateImage.ts`. This route is reachable with an
+ * owner token and nothing else (see the Turnstile note below), so a client
+ * that isn't ours can still present a 16000x8 strip — which renders in the
+ * feed as a wildly cropped sliver and gives the moderation model a few dozen
+ * pixels of height to judge.
+ *
+ * Only applied when the dimensions were actually read off the bytes: a
+ * declared aspect ratio is a claim, and refusing an upload on a claim we
+ * can't verify would be worse than storing it.
+ */
+const MAX_STORED_ASPECT_RATIO = 64;
+const MIN_STORED_EDGE_PX = 8;
 const DEFAULT_UPLOAD_IP_DAILY_BUDGET = 60;
 // Global ceiling far past what a real day of givers reaches (~15 neurons per
 // call, about $0.17/1000 listings per the plan) — runaway protection only,
@@ -23,7 +47,8 @@ const DEFAULT_UPLOAD_IP_DAILY_BUDGET = 60;
 // exhausted image-moderation budget leaves listings `pending` until midnight
 // UTC (moderation/pipeline.ts), so a burst of autofill calls must never be
 // able to spend the budget a real listing needs to finish moderating.
-const DEFAULT_SUGGEST_DAILY_BUDGET = 1000;
+// `DEFAULT_SUGGEST_DAILY_BUDGET` now lives in `../env.js` — three call sites
+// share it (see that constant's comment).
 // One giver's give flow calls this once per cover-photo change — 30/day/IP
 // is loose on purpose (see budget.ts's per-IP-is-not-a-person note) and only
 // exists to stop a single retry loop from working through the global ceiling
@@ -59,6 +84,36 @@ interface OrphanOrOwnedPhotoRow {
 // `burst` keys on the caller's IP digest, not on identity. The daily KV budget
 // stays behind `ownerAuth` — it is a write, and there is no reason to spend it
 // before the token is even syntactically valid.
+//
+// ---------------------------------------------------------------------------
+// There is deliberately no `turnstile()` here, and #183 is open about it.
+//
+// The obvious fix to #183 is to add `turnstile()` after `ownerAuth`, and the
+// issue itself suggests it on the grounds that "the give flow already holds a
+// Turnstile token at that point in the wizard". **It does not.** Checked
+// 2026-09-07:
+//
+//   - `apps/web/app/give/index.tsx` is step 1 of 5 (photos) and uploads
+//     immediately on pick, not at submit — `processFile` -> `uploadPhoto`.
+//   - The only `<Turnstile>` widgets in the web app are on `give/review.tsx`
+//     (step 5), `mine/email.tsx` and `recover/index.tsx`.
+//   - `uploadPhoto` (`apps/web/src/api/photos.ts`) passes no `turnstileToken`,
+//     so `apiFetch` sends no `cf-turnstile-response` header.
+//
+// `TURNSTILE_SECRET` *is* set on preview and production, where the middleware
+// then enforces unconditionally — so mounting it here would 403 the first
+// photo every real giver picks. A parallel session found the identical trap on
+// `PATCH` (the web edit step mints no token either). Mounting this without
+// changing the client is the more expensive mistake of the two available.
+//
+// Closing #183 needs a client change first, and a design decision with it: a
+// Turnstile token is single-use and expires after 300s, while this step
+// uploads up to 5 photos one at a time, so one widget on the photos step means
+// either a challenge per photo, or a short-lived server-side upload grant
+// (one challenge per give flow, exchanged for a token this route accepts N
+// times). `apps/api/test/photoUploadTurnstile.test.ts` pins both halves so
+// whoever mounts it here finds out that the client is still silent.
+// ---------------------------------------------------------------------------
 photoRoutes.put(
   "/",
   burst("RL_UPLOAD"),
@@ -93,12 +148,18 @@ photoRoutes.put(
     const { width, height, blurhash } = fieldsResult.data;
 
     const maxBytes = parseIntVar("MAX_PHOTO_BYTES", c.env.MAX_PHOTO_BYTES, DEFAULT_MAX_PHOTO_BYTES);
+    const maxThumbBytes = parseIntVar("MAX_THUMB_BYTES", c.env.MAX_THUMB_BYTES, DEFAULT_MAX_THUMB_BYTES);
 
     const fullBytes = new Uint8Array(await full.arrayBuffer());
     const thumbBytes = new Uint8Array(await thumb.arrayBuffer());
 
-    if (fullBytes.byteLength > maxBytes || thumbBytes.byteLength > maxBytes) {
+    if (fullBytes.byteLength > maxBytes) {
       return fail(c, "payload_too_large", "Photo exceeds the maximum upload size.", 413);
+    }
+    // Its own message, so a 413 says which half blew rather than sending the
+    // caller to check the wrong number.
+    if (thumbBytes.byteLength > maxThumbBytes) {
+      return fail(c, "payload_too_large", "Photo thumbnail exceeds the maximum upload size.", 413);
     }
 
     // Never trust the multipart part's declared content-type — sniff the
@@ -107,6 +168,25 @@ photoRoutes.put(
     const thumbType = sniffImageType(thumbBytes);
     if (!fullType || !thumbType) {
       return fail(c, "unsupported_media", "Photos must be JPEG, PNG, or WebP.", 415);
+    }
+
+    // The client's declared width/height are a hint; the bytes we are about
+    // to store are the authority. These numbers drive the masonry layout and
+    // the public `PublicPhoto`, and nothing before this made a caller's claim
+    // agree with what it actually sent.
+    //
+    // `null` (a header this parser can't read) is not a failure — it falls
+    // back to the declared values, exactly as this route behaved before.
+    const sniffedDims = sniffImageDimensions(fullBytes);
+    const storedWidth = sniffedDims?.width ?? width;
+    const storedHeight = sniffedDims?.height ?? height;
+
+    if (sniffedDims) {
+      const shorter = Math.min(sniffedDims.width, sniffedDims.height);
+      const longer = Math.max(sniffedDims.width, sniffedDims.height);
+      if (shorter < MIN_STORED_EDGE_PX || longer / shorter > MAX_STORED_ASPECT_RATIO) {
+        return fail(c, "bad_request", "That photo is too long and thin to use.", 400);
+      }
     }
 
     const id = ulid();
@@ -122,15 +202,15 @@ photoRoutes.put(
         (id, owner_id, listing_id, position, r2_key_full, r2_key_thumb, width, height, bytes_full, blurhash, content_type, moderation_status, created_at)
        VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?)`,
     )
-      .bind(id, owner.id, fullKey, thumbKey, width, height, fullBytes.byteLength, blurhash, fullType, now)
+      .bind(id, owner.id, fullKey, thumbKey, storedWidth, storedHeight, fullBytes.byteLength, blurhash, fullType, now)
       .run();
 
     return ok(
       c,
       {
         id,
-        width,
-        height,
+        width: storedWidth,
+        height: storedHeight,
         blurhash,
         url_full: `/i/${id}/full`,
         url_thumb: `/i/${id}/thumb`,

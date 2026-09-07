@@ -45,7 +45,10 @@ landed on top of the one just verified, and got a commit belonging to neither.
 runs the whole product against real `workerd` with local D1/R2/KV — the same arrangement
 production runs, including the `[assets]` binding, `/item/:id`'s HTMLRewriter OG injection, the
 SPA fallback and the moderation pipeline (`apps/web/playwright.config.ts` explains why this is
-closer to production than `expo start` ever was). CI runs it on every pull request. For a
+closer to production than `expo start` ever was). CI runs it on every pull request **that touches `apps/web`, `packages/`, `tools/`, `apps/site`
+or the root manifests** — `test-web` is gated on those filters and `build-web`/`e2e` hang off it,
+so an api-only pull request runs zero e2e specs and `ci-complete` still goes green (#147;
+`.github/workflows/ci.yml`, `tools/ci/assert-coverage.mjs`'s `api` row lists no `e2e`). For a
 one-off manual poke, `wrangler dev --local` from `apps/api/`.
 
 **Checking preview still matters after a merge**, because "the newest commit on `main`" and "the
@@ -89,8 +92,8 @@ wrangler kv namespace create KV --env production
 # → paste the returned id into wrangler.toml [env.<name>.kv_namespaces]
 
 # Apply schema, then load the postal-code seed (see docs/runbooks/geodata.md)
-wrangler d1 migrations apply keepsake-db --env preview --remote
-wrangler d1 execute keepsake-db --env preview --remote --file ../api/seeds/postal_codes.sql
+wrangler d1 migrations apply keepsake-db-preview --env preview --remote
+wrangler d1 execute keepsake-db-preview --env preview --remote --file ../api/seeds/postal_codes.sql
 ```
 
 Turnstile: create a widget per domain (preview subdomain, `keepsake.ing`) in the Cloudflare
@@ -104,6 +107,115 @@ rather than failing if it isn't working yet).
 
 DNS: point `keepsake.ing` at the Worker via a route/custom domain in the Cloudflare dashboard,
 once `wrangler deploy --env production` has run at least once.
+
+## Vectorize / semantic search (issue #38) — DONE, on in every environment
+
+Semantic search (`SEMANTIC_SEARCH`) is **on** in every deployed environment — preview and production — as of
+**2026-09-07**. This section is now the operating and rollback notes, not an
+errand. The history is kept because two of its warnings are still live.
+
+### What was actually verified, and how
+
+All three questions this section used to list as unanswerable were answered
+with a real credential (a token with `Vectorize` · Account · `Edit`, plus
+Workers AI):
+
+| Question | Answer | Evidence |
+| --- | --- | --- |
+| Do the indexes exist? | **Yes** | Vectorize API lists `keepsake-listings-{dev,preview,production}`, all `dimensions: 768, metric: cosine`. |
+| Does the real model work? | **Yes** | `REAL_AI=1` suite run for the first time: 370 passed, 0 skipped. Returns 768-dim, non-degenerate vectors. |
+| Does the round trip work? | **Yes** | embed → upsert → query against the real **dev** index returned the correct nearest neighbour (0.7305) ahead of the decoy (0.4695). Probe vectors deleted. |
+
+Re-run the gated block any time with:
+
+```sh
+CLOUDFLARE_API_TOKEN=… REAL_AI=1 pnpm --filter @keepsake/api test
+```
+
+Without a token that command fails loudly rather than passing on mocks — that
+is deliberate (`remoteBindings` in `vitest.config.ts` follows `REAL_AI`).
+
+### `MIN_SCORE`
+
+Re-derived from measurement, not taste: **0.5**. Full run and reasoning in
+`docs/design/min-score-calibration.md`; reproduce with
+`node tools/calibrate-min-score.mjs`.
+
+The one thing to know before touching it: **the true-match and off-corpus score
+distributions overlap** (true matches down to 0.5693, off-corpus junk up to
+0.6151), so no cutoff separates them. `MIN_SCORE` is a floor that lets the FTS
+fallback fire on an empty or degenerate index — it is *not* a relevance
+classifier, and raising it toward 0.62 to "improve precision" trades a graceful
+fallback for silently dropped matches. Two tests in `test/search.test.ts` pin it
+to the justified band and fail if it moves out either side.
+
+The previous value, 0.3, was below every score this model produces for anything
+at all, which made the "nothing cleared the bar" fallback unreachable.
+
+### Listings that predate the feature — do this after the first deploy
+
+`reembedListing` runs on listing **create**, listing **edit**
+(`routes/listings.ts`), and each listing the **#37 aspects backfill** touches
+(`src/backfill/aspects.ts`). There is no vector-only backfill and no admin
+endpoint that drives one directly.
+
+So a listing written while `SEMANTIC_SEARCH` was `"0"` has no vector and is
+invisible to vector search until something writes it again.
+
+**This applies to production right now.** The comment this section used to
+carry said the flag was flipped while the production catalogue was still empty,
+so no backfill would ever be needed. That was not true: #135 measured a real
+production listing (the KastKing fishing-line spool,
+`01M1XP7SYFDR05M1CPAH0020EE`) against production's own `GET /api/feed` hours
+before this merged, and the feature has never been deployed anywhere. Every
+listing that exists today therefore predates it.
+
+After the first deploy that carries this, run the aspects backfill — it now
+embeds each listing it processes:
+
+```sh
+curl -X POST https://<host>/api/admin/backfill-aspects -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+Note the one listing that needs a nudge first: the spool already has a
+`listing_aspects` row (`material: braided`), and the job skips any listing that
+already has rows (#139 flagged the same thing for its new prompt), so it will
+not be reached until that row is cleared. Everything else with no aspects is
+picked up on the first pass.
+
+**If you switch the flag off while listings are being created**, switching it
+back on means running that backfill again for the gap — or writing a
+vector-only one (model it on `src/backfill/aspects.ts`: batched,
+budget-respecting, resumable, idempotent).
+
+### Rolling back
+
+`SEMANTIC_SEARCH = "0"` in the relevant `wrangler.toml` env block and deploy.
+That is a complete rollback: the flag is checked before any embedding or
+Vectorize call on both the read and write paths, so with it off no AI budget is
+spent and `GET /api/feed?q=` is exactly the FTS5 search `main` has always
+served. There is a test asserting that equivalence against a no-binding control.
+
+Do **not** roll back by re-commenting the `[[vectorize]]` bindings. The flag is
+the kill switch; the binding is not. Note the asymmetry that made this section
+so cautious originally: an uncommented binding naming an index that does *not*
+exist fails the Worker upload and takes down **every** deploy of this Worker,
+including changes unrelated to search. The indexes are confirmed to exist now,
+so the bindings are safe — but if anyone ever deletes one, deploys break rather
+than search degrading.
+
+Index config cannot be altered after creation. Changing `MODELS.embedding` to a
+model of a different width means deleting and recreating all three indexes, and
+re-embedding everything in them.
+
+### Privacy
+
+`apps/site/public/privacy.html`'s "Search by meaning" section says the feature
+**is running**, that the vectors are stored with Cloudflare beside the listing
+id, and that deleting a listing deletes them.
+`apps/web/test/guards/privacyPolicy.test.ts` (#88) asserts those sentences and
+fails the build if they disappear. If the feature is ever switched off for good,
+the policy and that guard have to change together.
 
 ## Secrets
 
@@ -124,10 +236,23 @@ nothing to provision before it's live. See `docs/design/ops.md#observability`.
 Environments → preview/production), used only by `deploy.yml` to run `wrangler` in CI — they are
 not Worker secrets and are never passed to `wrangler secret put`.
 
-## The per-PR preview token (#73)
+## The per-PR preview token (#73) — provisioned, then not used
 
-`deploy.yml` does not use this yet — it exists so the per-PR preview Workers decided in #73 have a
-credential that can actually stand them up. It is a **second, separate** token from
+**Read the decision history before reaching for this.** #73 was decided twice on 2026-09-07: first
+for per-PR preview Workers (option 1), which is why this token exists and was verified; then
+**reversed to main-only preview deploys, per-PR Workers declined**, which is what shipped in #107
+and is what `deploy.yml` does today. The token below is therefore *stranded capability* — real,
+verified, rolled, sitting in a GitHub environment secret, and used by nothing. Nothing uses it and
+nothing is waiting on it.
+
+Kept rather than revoked because the reversal was a cost call (the CI work to provision and tear
+down, not the resources), not a discovery that the approach doesn't work — so if per-PR previews
+are ever revisited, this section is the measurement that need not be repeated. See
+[`docs/product-decisions.md`](../product-decisions.md). If the answer stays no, the honest cleanup
+is to revoke `keepsake-pr-preview` and delete the secret rather than leave a create-and-delete
+credential live for a feature nobody is building.
+
+`deploy.yml` does not use this. It is a **second, separate** token from
 `keepsake-ci-deploy` (which stays exactly as narrow as it was, and is what
 `CLOUDFLARE_API_TOKEN` still holds): a per-PR job has to *create and delete* resources, not just
 write to two known ones, so its blast radius is genuinely larger and it is kept in its own
@@ -166,7 +291,7 @@ assumption:
   limit; the real cost of per-PR previews is the CI work to provision and tear them down, not the
   resources themselves.
 
-**Still not solved by this token: Turnstile.** Widget hostnames are not in its scope (it can read
+**Still not solved by this token, and moot while per-PR previews stay declined: Turnstile.** Widget hostnames are not in its scope (it can read
 widgets, not write them), so a `keepsake-pr-<n>.leapkg.workers.dev` origin is not an allowed
 hostname on the `Keepsake` widget and every write path there would fail `turnstile_failed`. That
 is a one-time dashboard action rather than a per-PR one, because Turnstile hostnames cover
@@ -180,8 +305,23 @@ worth verifying.
 ## What a deploy actually does
 
 1. `pnpm install --frozen-lockfile`
-2. `pnpm --filter @keepsake/web export` with that environment's `EXPO_PUBLIC_*` values baked in
-3. `wrangler d1 migrations apply keepsake-db --env <env> --remote`
+2. `pnpm --filter @keepsake/web export` with every `EXPO_PUBLIC_*` value `.env.example` declares
+   baked in. The export step used to pass four of the seven (`SITE_URL`,
+   `TURNSTILE_SITE_KEY`, `CF_WEB_ANALYTICS_TOKEN`, `ENV`) while `config.ts` read all seven, so
+   `EXPO_PUBLIC_GOOGLE_ADS_ID`, `_GIVE_LABEL` and `_REQUEST_LABEL` baked as `""` in every
+   deployed bundle with nothing failing — the guard meant to catch that built its expectations
+   from `process.env`, i.e. from the very environment that was missing them. Both halves are
+   fixed: `deploy.yml` now names all seven, `verify-public-env.mjs` derives its expected set from
+   `.env.example` and fails a deployed export when a declared name is unset, and preflight's
+   `public-env-passthrough` compares the two lists on every pull request.
+   **This step fails today**, deliberately: the three Google Ads variables are listed in the
+   workflow but are not set in either GitHub Environment, so no ads tag has ever loaded. Setting
+   them (or removing the three names from `.env.example` and `config.ts`) is the open decision —
+   leaving them declared, read, described in `docs/legal-considerations.md`, and passed by
+   nothing is the state that produced #175.
+3. `wrangler d1 migrations apply keepsake-db-<env> --env <env> --remote` — the database is named
+   per tier (`keepsake-db-preview` / `keepsake-db-production`); plain `keepsake-db` is the
+   top-level dev name only and matches neither deploy env
 4. `wrangler deploy --env <env> --var COMMIT_SHA:<sha>`
 5. `curl <site>/health` and assert `.commit == github.sha` — a deploy that doesn't match its own
    commit fails the workflow rather than silently serving stale code.

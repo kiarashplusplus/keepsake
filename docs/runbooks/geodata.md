@@ -55,11 +55,11 @@ this is bulk data, and re-running it is idempotent (`INSERT OR REPLACE`) rather 
 
 ```sh
 # Preview
-pnpm --filter @keepsake/api exec wrangler d1 execute keepsake-db --env preview --remote \
+pnpm --filter @keepsake/api exec wrangler d1 execute keepsake-db-preview --env preview --remote \
   --file apps/api/seeds/postal_codes.sql
 
 # Production
-pnpm --filter @keepsake/api exec wrangler d1 execute keepsake-db --env production --remote \
+pnpm --filter @keepsake/api exec wrangler d1 execute keepsake-db-production --env production --remote \
   --file apps/api/seeds/postal_codes.sql
 ```
 
@@ -67,7 +67,7 @@ Run this once per environment after `0002_geo.sql` (which creates the `postal_co
 been applied. Sanity-check afterward:
 
 ```sh
-wrangler d1 execute keepsake-db --env preview --remote --command \
+wrangler d1 execute keepsake-db-preview --env preview --remote --command \
   "SELECT country, code, place_name, admin1 FROM postal_codes WHERE country='US' AND code='02144'"
 ```
 should return `Somerville, MA`.

@@ -1,9 +1,13 @@
 # Runbook: admin
 
-Status: `[DONE]` (API side, 2026-09-06) — `src/routes/admin.ts` + `src/middleware/adminAuth.ts`,
-tests in `test/admin.test.ts`, `test/adminAuth.test.ts`, `test/ownerAuth.test.ts`,
-`test/orphanSweep.test.ts`. The `/admin` web page itself is a separate,
-not-yet-started piece of M4/M5 — everything below is the API a future admin page (or `curl`) talks to.
+Status: `[DONE]`, both halves. API side 2026-09-06 — `src/routes/admin.ts` +
+`src/middleware/adminAuth.ts`, tests in `test/admin.test.ts`, `test/adminAuth.test.ts`,
+`test/ownerAuth.test.ts`, `test/orphanSweep.test.ts`. **The `/admin` page exists too**
+(`apps/web/app/admin.tsx` + `src/features/admin/`: token gate, queue cards, bulk actions, reason
+sheet, stats strip, and the Observatory panel from #150) — this line used to say it was "a
+separate, not-yet-started piece of M4/M5", which stopped being true when #11 shipped the queue.
+Everything below is the API; the page is a client of it, and `curl` remains a first-class way to
+drive every one of these routes.
 
 Kiarash is the only admin. Auth is a single secret (`ADMIN_TOKEN`), sent as
 `Authorization: Bearer <ADMIN_TOKEN>` and compared constant-time — there is no admin user table
@@ -14,6 +18,31 @@ row, no session, no second admin.
 Web: `/admin` prompts for the token, stores it in `sessionStorage` only (cleared on tab close —
 deliberately not `localStorage`, since this is the one credential in the app that grants access
 to everything). API: any `Authorization: Bearer <ADMIN_TOKEN>` request to `/api/admin/*`.
+
+### Where a session gets the token
+
+**Both tokens are written down in `AGENTS.md`, under "Admin tokens".** That is a deliberate
+decision for this private repo (2026-09-07): a session — local, phone, or claude.ai — should be
+able to read the Observatory without asking a human for a credential first. A claude.ai session
+in particular has only the repository, so a token that lives anywhere else is a token it cannot
+use.
+
+The two tiers do **not** share a token, and nothing in the response tells you which one you are
+holding: a production token against preview is an ordinary `401`, indistinguishable from a typo.
+
+What follows from writing them down, and what the rest of this runbook assumes:
+
+- **Rotation is now two steps, not one.** `wrangler secret put ADMIN_TOKEN --env <tier>` changes
+  what the Worker accepts; the table in `AGENTS.md` has to change in the same breath or every
+  session is holding a dead token. And the old value stays in git history — rotating makes it
+  useless, it does not erase it.
+- **Rotate both before this repo becomes public or gains a collaborator who should not have
+  admin.** These tokens reach real givers' email addresses through
+  `GET /api/admin/requests/:id`; that is the exposure to reason about, not the tier name.
+
+`ADMIN_TOKEN` itself is still a Worker secret and is still set with `wrangler secret put` — what
+is committed is the value a session presents, not the Worker's configuration. Every other
+credential remains outside the repo.
 
 Rotate with:
 
@@ -64,7 +93,7 @@ last changed. Each item is every `OwnerListing` field (title, story, photos, sta
 | `GET /api/admin/requests/:id` | one request's `note`/`email`/`phone`/`status`/`age_attested_at` plus its parent listing's `id`/`title`/`status` — a targeted, on-demand lookup, not a queue field (see "Minors" section below) |
 | `POST /api/admin/requests/:id/remove` | redacts that request's `note`/`email`/`phone` (`status` → `removed`), decrements the listing's `request_count`; doesn't touch the listing itself; optional `{ reason }` in the body; 409s if already `withdrawn`/`removed` |
 | `GET /api/admin/stats` | listing counts by status, requests today, email failures today, today's `mod_text`/`mod_image` AI budget usage (KV `budget:<kind>:<day>`) |
-| `GET /api/admin/health` | `postal_codes` row count (warns if 0) and `cron_last_run` timestamps (`cron:last:moderationRetry`, `cron:last:orphanSweep`, from KV) |
+| `GET /api/admin/health` | `ok`, `postal_codes` row count (warns if 0), `cron_last_run` for all **three** registered crons (`moderationRetry`, `orphanSweep`, `dailyDigest`, from KV) and `report_pressure` (auto-hidden listings awaiting review — which also flips `ok` — plus listings one report from the threshold) |
 | `POST /api/admin/test-email` | sends a real message through the real `sendMail()` path to `{ to }` and reports back `{ sent, reason, provider }` — see below |
 | `POST /api/admin/test-error` | **diagnostic only, not product API** — deliberately calls `captureException`/`captureMessage` (`{ kind: "exception" \| "message" }`, defaults to `"exception"`) so a real event can be confirmed in Workers Logs / `wrangler tail` — see below |
 
@@ -260,7 +289,148 @@ curl -s -X POST "$SITE_URL/api/admin/requests/$REQUEST_ID/remove" \
 # Dashboard counters / operational health
 curl -s "$SITE_URL/api/admin/stats" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 curl -s "$SITE_URL/api/admin/health" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+
+# The Observatory: traffic, funnel, queue ages, recent errors, today's digest.
+# window_days is a closed set — 1, 7 or 30; anything else is a 400.
+curl -s "$SITE_URL/api/admin/observatory?window_days=7" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+
+# Is the Cloudflare half actually wired up, or is it reporting itself off?
+curl -s "$SITE_URL/api/admin/observatory" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  | jq '{edge: .edge.state, logs: .logs.state, why: (.edge.reason // .edge.error)}'
+
+# Re-read one listing's cover photo with the CURRENT vision prompt (#141),
+# replacing its category and aspects. Reports before/after so you can see what
+# changed. Never touches the title or the story — those are the giver's words.
+curl -s -X POST "$SITE_URL/api/admin/listings/$LISTING_ID/resuggest" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+
+# One batch of the aspects backfill (#37) — for listings that have NEVER been
+# looked at. Repeat until `.data.remaining` is 0. It deliberately skips any
+# listing that already has aspects, so it is not the tool for "the prompt
+# improved"; that is `resuggest` above.
+curl -s -X POST "$SITE_URL/api/admin/backfill-aspects" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"limit":5}' | jq
 ```
+
+## The Observatory
+
+`/admin` → **Observatory**, or `GET /api/admin/observatory` above. Three sections, and the
+important thing about them is that they fail *separately*:
+
+- **`app`** — listings, requests, the give→get funnel, and how long the moderation queue has been
+  waiting. Comes from D1, needs no credential, and is always present. If this is missing the
+  request 500s, because a Worker that cannot read its own database has nothing to say.
+- **`edge`** — request/error counts and CPU quantiles from Cloudflare's GraphQL Analytics API.
+- **`logs`** — the Worker's own `console.error`/`console.warn` lines, read back out of Workers Logs.
+
+`edge` and `logs` are each one of three states, and the distinction is the point of the whole
+feature: `unconfigured` (no credential — a setup hint, not an alarm), `error` (configured and the
+call failed — an alarm, and the state most easily mistaken for "no traffic"), or `ok`. **A panel
+showing nothing is never ambiguous.** If you find yourself guessing whether a chart is empty
+because nothing happened or because something is broken, that is a bug — file it.
+
+Note `logs` clamps its own window to 3 days whatever you ask for, because that is Workers Logs
+retention on the Free plan, and it reports the window it actually used rather than labelling three
+days of data as thirty.
+
+### Minting `CF_OBSERVATORY_TOKEN`
+
+Only Kiarash can do this — it is the one step no agent can complete, because minting an API token
+is deliberately outside what any automation here is allowed to do.
+
+In the Cloudflare dashboard, **My Profile → API Tokens → Create Token → Custom token**, scoped to
+the `Leapkg@gmail.com` account (`dc6a87ed4a4269ed74c8f508b275b703`), with exactly two permissions:
+
+| Scope   | Permission                   | Access |
+| ------- | ---------------------------- | ------ |
+| Account | Account Analytics            | Read   |
+| Account | Workers Observability        | Read   |
+
+Nothing else. This token is read by request-path code, so it gets the least power that does the
+job: it can read counters and log lines and can change nothing. It is deliberately **not** a reuse
+of `CF_CACHE_PURGE_TOKEN` (which can purge the zone) or of `CLOUDFLARE_API_TOKEN` (the CI deploy
+credential, which has no business being readable from a request handler).
+
+Then, per environment:
+
+```bash
+cd apps/api
+wrangler secret put CF_OBSERVATORY_TOKEN --env production   # and --env preview
+```
+
+`CF_ACCOUNT_ID` and `CF_SCRIPT_NAME` are already set in `wrangler.toml` for both deployed tiers —
+neither is a credential, so neither is a secret. With any of the three missing, the two Cloudflare
+panels say `unconfigured` and name the missing piece; nothing else degrades.
+
+Verify it took, without reading the secret back (you cannot):
+
+```bash
+curl -s "https://keepsake.ing/api/admin/observatory" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  | jq '{edge: .edge.state, logs: .logs.state}'
+# {"edge": "ok", "logs": "ok"}  — anything else, read .edge.reason / .edge.error
+```
+
+## The daily digest
+
+`cron/dailyDigest.ts` runs at **00:07 UTC** and mails the previous UTC day to `ADMIN_DIGEST_TO`
+(a Worker secret, because it is a real address and `wrangler.toml` is committed).
+
+It sends **every day, including quiet ones**, and the subject carries the verdict — `all clear`,
+`N to watch`, or `N needs attention` — so a boring day costs one glance. That is deliberate: a
+digest that only sent on bad news would be silent in the one case that matters most, which is the
+crons having stopped. **The absence of a digest is itself the alarm.**
+
+With `ADMIN_DIGEST_TO` unset the report is still built every night — which proves the queries still
+run — and logged instead of sent. That is a supported state, not a failure, and the cron does not
+fail because of it.
+
+**A non-failing digest keeps itself out of the stale alarm**, and that is now mechanically true
+rather than a claim in a comment. `runCron` (`index.ts`) writes `cron:last:<name>` for **every**
+registered job the moment the job's promise resolves, and writes nothing when it throws — so the
+key means "this job finished", the heartbeat is written whether or not `ADMIN_DIGEST_TO` is set,
+and a job that dies stops refreshing it.
+
+That was not true until 2026-09-07. Each job used to write its own key as its last statement, and
+`cron/dailyDigest.ts` — the last one added — wrote none, while the comments in `index.ts` and
+`cron/registry.ts` already described `runCron` as the writer. A never-written key is stale by
+definition, so `GET /api/admin/health` answered `ok: false` on every deployed tier permanently,
+every digest listed its own cron under `needs_attention`, and the only "the crons died" channel
+this system has was jammed in the alarm position — which carries exactly as much information as
+one jammed in the all-clear position. Fixed by moving the write into the dispatcher, so a new cron
+cannot be added without a heartbeat: the job author no longer writes one at all. History in #165.
+
+One consequence to know rather than rediscover: the digest builds its report *before* its own
+heartbeat is written, so the very first run on an environment that has never written the key still
+lists `dailyDigest` as stale in that one email. It clears itself the next night.
+
+To see today's digest without waiting for the cron, read `.report` out of the Observatory payload —
+the page and the email render the same object, so they cannot disagree:
+
+```bash
+curl -s "$SITE_URL/api/admin/observatory" -H "Authorization: Bearer $ADMIN_TOKEN" | jq .report
+```
+
+## Re-reading listings after a prompt change
+
+When the vision prompt improves, existing listings keep whatever the old one said. #135 is the
+worked example: the prompt learned to read the words printed on an object, and the live listing
+for a fishing-line spool kept `category: other` and the single aspect `material: braided` that a
+weaker prompt had produced, with no path to anything better.
+
+`POST /api/admin/listings/:id/resuggest` is that path. What to know before running it:
+
+- **It costs a real vision call**, metered against the same `SUGGEST_DAILY_BUDGET` ceiling the
+  give flow's live autofill pays. A 429 means today's budget is spent, not that anything broke.
+- **It applies nothing when the model returns nothing.** `applied: false` with a `reason` means
+  the listing is untouched — a timeout must never be the thing that blanks real aspects.
+- **It only ever writes `category` and `aspects`.** The title and story are the giver's, and
+  `privacy.html` promises that "anything you type over it wins".
+- It stamps `aspects_backfilled_at`, so a listing it has touched is no longer a backfill
+  candidate.
+
+Check the result, rather than trusting the 200 — `.data.before` and `.data.after` are both in the
+response for exactly that reason.
 
 ## Verification before trusting a ban/approve action in production
 

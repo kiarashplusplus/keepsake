@@ -140,8 +140,17 @@ meRoutes.get("/listings/:id", ownerAuth(), async (c) => {
   const aspects = await fetchAspectRows(c.env, id);
   const ownerListing = serializeOwnerListing(row, photos, aspects);
 
+  // `confirmed_at IS NOT NULL` (issue #188) is what keeps an unverified
+  // address out of a giver's dashboard. A held request is a submission
+  // nobody has proved they made: showing it here is the harm — it is what
+  // made a stranger's address look like a real ask, and what put the giver
+  // one tap away from mailing them their own address. The status column says
+  // the same thing (`'unconfirmed'`), but the filter is on the timestamp
+  // because that is the column every other reader keys off, and one rule in
+  // one shape is what stops two readers disagreeing.
   const { results: requestRows } = await c.env.DB.prepare(
-    "SELECT id, note, email, phone, status, created_at, notify_failed_reason FROM requests WHERE listing_id = ? ORDER BY created_at",
+    `SELECT id, note, email, phone, status, created_at, notify_failed_reason FROM requests
+     WHERE listing_id = ? AND confirmed_at IS NOT NULL ORDER BY created_at`,
   )
     .bind(id)
     .all<RequestRow>();
@@ -170,8 +179,15 @@ meRoutes.post("/listings/:id/choose", ownerAuth(), validateBody(ChooseRequestInp
     return fail(c, "not_found", "Listing not found.", 404);
   }
 
+  // `confirmed_at IS NOT NULL` again, belt and braces: `status !== "open"`
+  // below already refuses an unconfirmed request, but choose is the one
+  // action that mails a stranger the giver's own address, and it should be
+  // impossible to reach with an unverified one by any route — including a
+  // request id a giver kept from somewhere else, and including whatever the
+  // status column comes to mean later.
   const request = await c.env.DB.prepare(
-    "SELECT id, listing_id, note, email, phone, status, created_at, notify_failed_reason FROM requests WHERE id = ?",
+    `SELECT id, listing_id, note, email, phone, status, created_at, notify_failed_reason FROM requests
+     WHERE id = ? AND confirmed_at IS NOT NULL`,
   )
     .bind(input.request_id)
     .first<RequestRow & { listing_id: string }>();
@@ -191,12 +207,66 @@ meRoutes.post("/listings/:id/choose", ownerAuth(), validateBody(ChooseRequestInp
   }
   const requestEmail = request.email;
 
+  // Issue #185. This was three separate `.run()` calls with no transaction
+  // and no guard at the listing level — the only concurrency check was
+  // `request.status !== "open"`, read several awaits above. If the first
+  // write landed and a later one did not (a D1 7403, an isolate eviction, a
+  // timeout), the listing was left with `chosen_request_id = NULL` while one
+  // request was already `chosen`. The giver retries, picks someone else,
+  // every guard passes — and the "mark the rest not_chosen" statement only
+  // touched rows `WHERE status = 'open'`, so it could not un-choose the
+  // first one. Two strangers then hold a "you've been chosen, here is the
+  // giver's email" message for one object, and one of them travels to meet
+  // someone who is expecting the other. Two concurrent chooses reach the
+  // same end state, both having passed the stale `status = 'open'` read.
+  //
+  // `env.DB.batch()` is a single atomic transaction — these commit together
+  // or not at all. This is the Worker's first use of it; `grep -rn "\.batch("
+  // apps/api/src` found none before.
+  //
+  // Claim first, then act. The listing row is the thing being competed for,
+  // so the batch opens by claiming it (`AND chosen_request_id IS NULL`) and
+  // the two request writes are each conditional on that claim having been
+  // won by *this* request. Statements in a batch run in order inside the one
+  // transaction, so they see the claim; a caller that lost the race changes
+  // zero rows in all three rather than leaving a request marked `chosen` for
+  // a listing that went to someone else. That distinction matters because a
+  // batch whose statements merely match nothing still commits — atomicity
+  // alone would not have been enough here.
+  //
+  // The `not_chosen` sweep now also takes `chosen` rows, not just `open`
+  // ones. That is what un-sticks a listing left inconsistent by the old code
+  // (or by any future partial write): a listing has exactly one chosen
+  // request by definition, so every *other* request that reads as live must
+  // be closed. `withdrawn`, `removed` and already-`not_chosen` rows are left
+  // alone — those carry a requester's or an admin's decision, not this one.
   const now = Date.now();
-  await c.env.DB.prepare("UPDATE requests SET status = 'chosen', chosen_at = ? WHERE id = ?").bind(now, request.id).run();
-  await c.env.DB.prepare("UPDATE requests SET status = 'not_chosen' WHERE listing_id = ? AND id != ? AND status = 'open'")
-    .bind(id, request.id)
-    .run();
-  await c.env.DB.prepare("UPDATE listings SET chosen_request_id = ?, updated_at = ? WHERE id = ?").bind(request.id, now, id).run();
+  const writes = await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE listings SET chosen_request_id = ?, updated_at = ? WHERE id = ? AND chosen_request_id IS NULL").bind(
+      request.id,
+      now,
+      id,
+    ),
+    c.env.DB.prepare(
+      `UPDATE requests SET status = 'chosen', chosen_at = ?
+       WHERE id = ? AND (SELECT chosen_request_id FROM listings WHERE id = ?) = ?`,
+    ).bind(now, request.id, id, request.id),
+    c.env.DB.prepare(
+      `UPDATE requests SET status = 'not_chosen'
+       WHERE listing_id = ? AND id != ? AND status IN ('open', 'chosen')
+         AND (SELECT chosen_request_id FROM listings WHERE id = ?) = ?`,
+    ).bind(id, request.id, id, request.id),
+  ]);
+
+  // Checked before anything is mailed, which is the whole point: a lost race
+  // must send nothing rather than mail a second stranger the giver's
+  // address. Zero rows changed on the claim means the listing already had a
+  // chosen request — either a concurrent call won, or an earlier attempt
+  // did — and the two writes behind it are no-ops too, so this request is
+  // exactly as it was.
+  if ((writes[0]?.meta.changes ?? 0) === 0) {
+    return fail(c, "conflict", "This listing already has a chosen request.", 409);
+  }
 
   const giverVerified = owner.email !== null && owner.email_verified_at !== null;
   const itemLink = `${c.env.SITE_URL}/item/${id}`;
@@ -272,13 +342,19 @@ meRoutes.post(
 
     await c.env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = NULL WHERE id = ?").bind(input.email, owner.id).run();
 
+    // Issue #167: the address just changed, so every link already sitting in
+    // an inbox was mailed to a *different* address and must stop working.
+    // This is the write-side half; `GET /email/verify` carries the read-side
+    // half, which is what covers tokens minted by routes that don't run this.
+    await invalidateOutstandingVerifyTokens(c.env, owner.id, now);
+
     const rawToken = randomTokenRaw();
     const tokenHash = await sha256Hex(rawToken);
     await c.env.DB.prepare(
-      `INSERT INTO recovery_tokens (id, owner_id, purpose, token_hash, expires_at, created_at)
-       VALUES (?, ?, 'verify_email', ?, ?, ?)`,
+      `INSERT INTO recovery_tokens (id, owner_id, purpose, email, token_hash, expires_at, created_at)
+       VALUES (?, ?, 'verify_email', ?, ?, ?, ?)`,
     )
-      .bind(ulid(), owner.id, tokenHash, now + VERIFY_EMAIL_TTL_MS, now)
+      .bind(ulid(), owner.id, input.email, tokenHash, now + VERIFY_EMAIL_TTL_MS, now)
       .run();
 
     const verifyUrl = `${c.env.SITE_URL}/api/me/email/verify?token=${rawToken}`;
@@ -291,6 +367,10 @@ meRoutes.post(
 meRoutes.delete("/email", ownerAuth(), async (c) => {
   const owner = c.get("owner");
   await c.env.DB.prepare("UPDATE owners SET email = NULL, email_verified_at = NULL WHERE id = ?").bind(owner.id).run();
+  // Issue #167: same reasoning as `POST /email` — an address that has been
+  // removed cannot be confirmed later by a link that was mailed before it
+  // went away.
+  await invalidateOutstandingVerifyTokens(c.env, owner.id, Date.now());
   // Email cleared: report it gone rather than echoing the stale row.
   const { email: _removed, ...cleared } = ownerMe(owner);
   return ok(c, { ...cleared, email_verified: false });
@@ -299,6 +379,18 @@ meRoutes.delete("/email", ownerAuth(), async (c) => {
 // Not `ownerAuth()`-guarded: this is a link clicked from an email, not an
 // API call carrying the owner's bearer token — the single-use recovery
 // token in the query string *is* the credential here.
+//
+// Issue #167: this used to stamp `email_verified_at` on the owner row and
+// nothing else, so the token's only subject was the *owner*. Clicking any
+// unexpired link marked whatever address happened to be on the row at click
+// time as verified — including one nobody had ever confirmed. Reachable by
+// ordinary typo-then-correct, not just by attack, and what it unlocks is
+// recovery mail, requesters' private notes, and the giver's own address at
+// choose time. Two independent conditions below now have to hold, and
+// between them they cover every way `owners.email` can move (there are
+// exactly three writers of that column: `POST /email` and `DELETE /email`
+// here, and `POST /api/listings`, which always mints a fresh token straight
+// after writing).
 meRoutes.get("/email/verify", async (c) => {
   const siteUrl = c.env.SITE_URL;
   const token = c.req.query("token");
@@ -309,10 +401,10 @@ meRoutes.get("/email/verify", async (c) => {
   const tokenHash = await sha256Hex(token);
   const now = Date.now();
   const row = await c.env.DB.prepare(
-    `SELECT id, owner_id, expires_at, used_at FROM recovery_tokens WHERE token_hash = ? AND purpose = 'verify_email'`,
+    `SELECT id, owner_id, email, created_at, expires_at, used_at FROM recovery_tokens WHERE token_hash = ? AND purpose = 'verify_email'`,
   )
     .bind(tokenHash)
-    .first<{ id: string; owner_id: string; expires_at: number; used_at: number | null }>();
+    .first<{ id: string; owner_id: string; email: string | null; created_at: number; expires_at: number; used_at: number | null }>();
 
   if (!row || row.used_at !== null) {
     return c.redirect(`${siteUrl}/mine?verified=0&reason=invalid`, 302);
@@ -321,8 +413,66 @@ meRoutes.get("/email/verify", async (c) => {
     return c.redirect(`${siteUrl}/mine?verified=0&reason=expired`, 302);
   }
 
+  // Condition 1 — the address this link was mailed to, where we recorded it
+  // (migration 20260907181446_recovery_tokens_email.sql), must still be the
+  // address on the owner row. `NULL` means a mint site that predates the
+  // column, which condition 2 covers instead.
+  const owner = await c.env.DB.prepare("SELECT email FROM owners WHERE id = ?")
+    .bind(row.owner_id)
+    .first<{ email: string | null }>();
+  const addressMatches = row.email !== null ? owner?.email === row.email : true;
+
+  // Condition 2 — no newer `verify_email` token exists for this owner. All
+  // three writers of `owners.email` mint one immediately after changing it,
+  // so a newer token is proof the address moved after this link was sent.
+  // This is what fails a `NULL`-address token closed: rows minted before
+  // migration 20260907181446 added the column are still refused the moment
+  // the address is changed again by any route.
+  //
+  // It is no longer the only thing holding at the listing-create mint site:
+  // `POST /api/listings` records the address too as of #202, so condition 1
+  // covers every token this Worker mints today, and preflight's
+  // `verify-email-token` check refuses a new mint site that omits it. Both
+  // conditions stay — condition 2 is what covers the pre-migration rows, and
+  // a redeem path that fails closed two ways is the right shape for the one
+  // check standing between a swapped address and a verified badge.
+  const newer = await c.env.DB.prepare(
+    `SELECT id FROM recovery_tokens WHERE owner_id = ? AND purpose = 'verify_email' AND created_at > ? LIMIT 1`,
+  )
+    .bind(row.owner_id, row.created_at)
+    .first<{ id: string }>();
+
+  if (!addressMatches || newer !== null || owner?.email == null) {
+    // Burn it rather than leaving it live: a link that has been overtaken is
+    // never going to become correct again, and leaving it redeemable is the
+    // whole bug. Reported as `invalid` — the same undifferentiated answer
+    // this route already gives for unknown and already-used tokens, and from
+    // the clicker's side that is exactly what it is.
+    await c.env.DB.prepare("UPDATE recovery_tokens SET used_at = ? WHERE id = ?").bind(now, row.id).run();
+    return c.redirect(`${siteUrl}/mine?verified=0&reason=invalid`, 302);
+  }
+
   await c.env.DB.prepare("UPDATE recovery_tokens SET used_at = ? WHERE id = ?").bind(now, row.id).run();
   await c.env.DB.prepare("UPDATE owners SET email_verified_at = ? WHERE id = ?").bind(now, row.owner_id).run();
 
   return c.redirect(`${siteUrl}/mine?verified=1`, 302);
 });
+
+/**
+ * Mark every unused, unexpired `verify_email` token for this owner as used.
+ *
+ * Issue #167's write-side half: called from both routes here that change
+ * `owners.email`, so a link already in an inbox stops working the instant
+ * the address it was mailed to stops being the address on file. `recover`
+ * tokens are deliberately untouched — losing your device and correcting a
+ * typo are unrelated events, and killing a live recovery link because
+ * someone edited their address would break the one path that exists for
+ * people who have already lost access.
+ */
+async function invalidateOutstandingVerifyTokens(env: Env, ownerId: string, now: number): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE recovery_tokens SET used_at = ? WHERE owner_id = ? AND purpose = 'verify_email' AND used_at IS NULL`,
+  )
+    .bind(now, ownerId)
+    .run();
+}

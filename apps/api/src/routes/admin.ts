@@ -23,17 +23,23 @@ import {
   type AdminQueueItem,
   type AdminRequestRemoveResult,
   type AdminRequestView,
+  type AdminResuggestResult,
   type AdminStats,
   type AdminTestEmailResult,
   type AdminTestErrorResult,
 } from "@keepsake/contracts/admin";
-import { LISTING_STATUSES, type ListingStatus, type OwnerListing } from "@keepsake/contracts/listing";
+import { LISTING_STATUSES, type Category, type ListingStatus, type OwnerListing } from "@keepsake/contracts/listing";
+import { readCronHeartbeats } from "../cron/registry.js";
+import { ObservatoryQuery, type Observatory } from "@keepsake/contracts/observatory";
+import { buildAppMetrics } from "../observatory/appMetrics.js";
+import { fetchEdgeTelemetry, fetchLogTelemetry } from "../observatory/cloudflare.js";
+import { buildDailyReport } from "../report/daily.js";
 import type { FeedPage } from "@keepsake/contracts/feed";
 import { maskEmail, type RequestStatus } from "@keepsake/contracts/request";
 import type { ReportReason } from "@keepsake/contracts/report";
 import { captureException, captureMessage } from "@keepsake/observability/capture";
 import type { Env } from "../env.js";
-import { emailProviderName, reportAutohideThreshold } from "../env.js";
+import { DEFAULT_SUGGEST_DAILY_BUDGET, emailProviderName, parseIntVar, reportAutohideThreshold } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
 import { requireParam } from "../lib/params.js";
@@ -48,11 +54,15 @@ import {
   fetchListingRow,
   fetchPhotoRows,
   fetchPhotoRowsForListings,
+  replaceListingAspects,
 } from "../lib/listingsDb.js";
 import { serializeOwnerListing, type ListingRow } from "../lib/serialize.js";
 import { recipientDomain, sendMail } from "../email/sendMail.js";
 import { adminTest as adminTestTemplate } from "../email/templates/adminTest.js";
 import { runAspectsBackfillBatch } from "../backfill/aspects.js";
+import { suggestFromPhoto } from "../suggest/suggest.js";
+import { reembedListing } from "../search/reembed.js";
+import { checkAndBump } from "../moderation/budget.js";
 
 type Vars = { validatedBody: unknown; validatedQuery: unknown };
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -516,17 +526,22 @@ adminRoutes.post("/requests/:id/remove", validateBody(AdminRemoveRequestInput), 
   const id = requireParam(c, "id");
   const input = c.get("validatedBody") as AdminRemoveRequestInput;
 
-  const row = await c.env.DB.prepare("SELECT id, listing_id, status FROM requests WHERE id = ?")
+  const row = await c.env.DB.prepare("SELECT id, listing_id, status, confirmed_at FROM requests WHERE id = ?")
     .bind(id)
-    .first<{ id: string; listing_id: string; status: string }>();
+    .first<{ id: string; listing_id: string; status: string; confirmed_at: number | null }>();
   if (!row) return fail(c, "not_found", "Request not found.", 404);
   if (ALREADY_REDACTED_STATUSES.has(row.status)) {
     return fail(c, "conflict", "This request's contact info has already been removed.", 409);
   }
 
   const now = Date.now();
+  // `confirm_token_hash = NULL` for the same reason `POST /api/requests/
+  // withdraw` nulls it (issue #188): a removal that left the confirm link
+  // live would let whoever holds that email undo a moderator's decision, and
+  // an admin removal is the one the minor-takedown rule depends on.
   await c.env.DB.prepare(
-    `UPDATE requests SET status = 'removed', removed_at = ?, removed_reason = ?, note = NULL, email = NULL, phone = NULL
+    `UPDATE requests SET status = 'removed', removed_at = ?, removed_reason = ?, note = NULL, email = NULL, phone = NULL,
+                         confirm_token_hash = NULL
      WHERE id = ?`,
   )
     .bind(now, input.reason ?? null, id)
@@ -534,9 +549,18 @@ adminRoutes.post("/requests/:id/remove", validateBody(AdminRemoveRequestInput), 
 
   // Same reasoning as `POST /api/requests/withdraw`: a removed request is no
   // longer a live ask, and the floor costs nothing.
-  await c.env.DB.prepare("UPDATE listings SET request_count = MAX(request_count - 1, 0) WHERE id = ?")
-    .bind(row.listing_id)
-    .run();
+  //
+  // Only for a request that was counted in the first place, though (#188): an
+  // unconfirmed request never incremented `request_count` — that happens at
+  // confirmation, not submission — so decrementing for one would take a
+  // number off the giver's listing on behalf of an ask they were never shown.
+  // The `MAX(…, 0)` floor would have hidden it at zero and quietly
+  // under-counted everywhere else.
+  if (row.confirmed_at !== null) {
+    await c.env.DB.prepare("UPDATE listings SET request_count = MAX(request_count - 1, 0) WHERE id = ?")
+      .bind(row.listing_id)
+      .run();
+  }
 
   const listing = await c.env.DB.prepare("SELECT version FROM listings WHERE id = ?")
     .bind(row.listing_id)
@@ -728,12 +752,10 @@ adminRoutes.get("/stats", async (c) => {
  * The value was present and the verdict ignored it, which is the same class
  * of bug as a limiter that never fires.
  */
-const CRON_STALE_AFTER_MS: Record<string, number> = {
-  moderationRetry: 30 * 60 * 1000,
-  orphanSweep: 26 * 60 * 60 * 1000,
-};
-
-const CRON_JOB_NAMES = ["moderationRetry", "orphanSweep"] as const;
+// The thresholds this docblock describes now live in `src/cron/registry.ts`,
+// beside the schedule each one is a multiple of. They were duplicated here
+// and in `index.ts`'s dispatch switch, so adding a third job meant editing
+// three files and hoping; `readCronHeartbeats` below is the shared read.
 
 /**
  * Issue #89: three independent reporters can hide a live listing on their
@@ -831,21 +853,17 @@ adminRoutes.get("/health", async (c) => {
   }
 
   const now = Date.now();
-  const cronLastRun: Record<string, number | null> = {};
-  const staleCrons: string[] = [];
-  for (const name of CRON_JOB_NAMES) {
-    const value = await c.env.KV.get(`cron:last:${name}`);
-    const lastRun = value ? Number.parseInt(value, 10) : null;
-    cronLastRun[name] = Number.isFinite(lastRun) ? lastRun : null;
-    // `null` counts as stale too. A cron that has never once written its
-    // heartbeat is not a neutral state — it is the same observable situation
-    // as a cron that stopped, and on a fresh environment it clears itself
-    // within one tick.
-    const staleAfter = CRON_STALE_AFTER_MS[name] ?? 26 * 60 * 60 * 1000;
-    if (cronLastRun[name] === null || now - (cronLastRun[name] ?? 0) > staleAfter) {
-      staleCrons.push(name);
-    }
-  }
+  // `null` counts as stale too. A cron that has never once written its
+  // heartbeat is not a neutral state — it is the same observable situation
+  // as a cron that stopped, and on a fresh environment it clears itself
+  // within one tick. That rule lives in `readCronHeartbeats` so this
+  // endpoint and the daily digest cannot come to different conclusions
+  // about the same KV keys.
+  const heartbeats = await readCronHeartbeats(c.env.KV, now);
+  const cronLastRun: Record<string, number | null> = Object.fromEntries(
+    heartbeats.map((beat) => [beat.name, beat.last_run_at]),
+  );
+  const staleCrons = heartbeats.filter((beat) => beat.stale).map((beat) => beat.name);
 
   if (staleCrons.length > 0) {
     console.warn("admin/health: cron heartbeat stale", { crons: staleCrons, cronLastRun });
@@ -968,4 +986,144 @@ adminRoutes.post("/backfill-aspects", validateBody(AdminBackfillAspectsInput), a
     remaining: batch.remaining,
   };
   return ok(c, result);
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/admin/observatory
+// ---------------------------------------------------------------------------
+/**
+ * The system-level view: traffic, throughput, the give→get funnel, the
+ * moderation queue's age, recent errors, and today's digest — one payload,
+ * one round trip, one auth gate.
+ *
+ * Deliberately separate from `/stats` and `/health` rather than folded into
+ * them, because the three answer different questions and are read at
+ * different moments. `/health` is a liveness verdict a monitor polls;
+ * `/stats` is the strip above the moderation queue; this is the thing you
+ * open when you want to know how the site is *doing*. Merging them would
+ * have meant either making the cheap endpoints expensive or making this one
+ * shallow.
+ *
+ * ## Failure isolation
+ *
+ * The three sections fail independently and on purpose. `app` comes from D1
+ * and is awaited normally — if that throws, the request 500s, because a
+ * Worker that cannot read its own database has nothing useful to render.
+ * `edge` and `logs` call out to Cloudflare's API and can be unconfigured,
+ * slow, or rejected; both are wrapped in `ObservatorySource` by the client
+ * module and neither can throw, so a revoked telemetry token degrades two
+ * panels instead of taking down the page. `Promise.all` is still correct
+ * here — the two telemetry calls resolve to error *values*, never rejections.
+ *
+ * The window is clamped by `ObservatoryQuery` to 1, 7 or 30 days; see the
+ * schema for why it is a closed set. Note the logs half silently clamps
+ * further to Workers Logs' 3-day Free-plan retention and reports the window
+ * it actually used, rather than labelling three days of data as thirty.
+ */
+adminRoutes.get("/observatory", validateQuery(ObservatoryQuery), async (c) => {
+  const query = c.get("validatedQuery") as ObservatoryQuery;
+  const windowDays = query.window_days;
+  const now = Date.now();
+
+  const [app, edge, logs, report] = await Promise.all([
+    buildAppMetrics(c.env, windowDays, now),
+    fetchEdgeTelemetry(c.env, windowDays, now),
+    fetchLogTelemetry(c.env, windowDays, now),
+    buildDailyReport(c.env, now),
+  ]);
+
+  const observatory: Observatory = {
+    generated_at: now,
+    environment: c.env.ENVIRONMENT as string,
+    commit: c.env.COMMIT_SHA as string,
+    window_days: windowDays,
+    app,
+    edge,
+    logs,
+    report,
+  };
+  return ok(c, observatory);
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/listings/:id/resuggest
+// ---------------------------------------------------------------------------
+/**
+ * Issue #141: re-read one listing's cover photo with the *current* prompt and
+ * apply what comes back.
+ *
+ * `POST /api/admin/backfill-aspects` cannot do this and should not learn to.
+ * Its candidate query is `aspects_backfilled_at IS NULL AND NOT EXISTS
+ * (listing_aspects ...)`, which answers "has anything ever looked at this
+ * listing?" — the right question for #37, and the wrong one here. #135
+ * improved the prompt and left a live listing holding the single vague
+ * aspect an older one produced, permanently, because it already had a row.
+ *
+ * **Category and aspects only.** Not the title, not the story. The give flow
+ * pre-fills a title from a suggestion and `privacy.html` promises in these
+ * words that "anything you type over it wins"; an admin endpoint that
+ * replaced a giver's own title with a model's would make that false. Category
+ * has no picker at all (#35), so the model's answer is the only one a listing
+ * ever gets — which is exactly why it needs a way to be corrected.
+ *
+ * Costs one real vision call, metered against the same `SUGGEST_DAILY_BUDGET`
+ * ceiling live traffic pays.
+ */
+adminRoutes.post("/listings/:id/resuggest", async (c) => {
+  const id = requireParam(c, "id");
+  const row = await fetchListingRow(c.env, id);
+  if (!row) return fail(c, "not_found", "Listing not found.", 404);
+
+  const cover = await c.env.DB.prepare(
+    "SELECT r2_key_thumb, content_type FROM photos WHERE listing_id = ? AND position = 0",
+  )
+    .bind(id)
+    .first<{ r2_key_thumb: string; content_type: string }>();
+  if (!cover) return fail(c, "conflict", "Listing has no cover photo to read.", 409);
+
+  const before = { category: row.category as Category, aspects: await fetchAspectRows(c.env, id) };
+
+  const budget = await checkAndBump(c.env.KV, {
+    kind: "suggest",
+    dailyLimit: parseIntVar("SUGGEST_DAILY_BUDGET", c.env.SUGGEST_DAILY_BUDGET, DEFAULT_SUGGEST_DAILY_BUDGET),
+  });
+  if (!budget.allowed) {
+    return fail(c, "rate_limited", "Today's suggestion budget is spent. Try again tomorrow.", 429);
+  }
+
+  const result = await suggestFromPhoto(c.env, { r2_key_thumb: cover.r2_key_thumb, content_type: cover.content_type });
+  if (!result.suggestion) {
+    // Nothing is written. A timeout or two unparseable replies must never be
+    // the thing that blanks a listing's existing aspects — the listing is
+    // strictly better off keeping the old answer than losing it to a failed
+    // call.
+    const unchanged: AdminResuggestResult = { listing_id: id, applied: false, reason: result.reason, before, after: before };
+    return ok(c, unchanged);
+  }
+
+  const now = Date.now();
+  await c.env.DB.prepare("UPDATE listings SET category = ?, updated_at = ?, aspects_backfilled_at = ? WHERE id = ?")
+    .bind(result.suggestion.category, now, now, id)
+    .run();
+  // Stamping `aspects_backfilled_at` above keeps this listing out of the #37
+  // backfill's candidate set, which would otherwise be a second, dumber pass
+  // over a listing that has just had the best look available.
+  await replaceListingAspects(c.env, id, result.suggestion.aspects);
+  // Issue #38 × #141, and the same trap #37 fell into: every other path that
+  // can change a listing's aspects re-embeds it — create and edit in
+  // `routes/listings.ts`, and the aspects backfill. This route rewrites them
+  // wholesale, so without this the vector index keeps the *old* aspects and
+  // semantic search goes on matching the stale word while never matching the
+  // new ones. `waitUntil`, fire-and-forget, exactly as the two listing routes
+  // do it: `reembedListing` never throws, and a listing whose vector is
+  // momentarily stale is still findable through FTS.
+  c.executionCtx.waitUntil(reembedListing(c.env, id));
+
+  const applied: AdminResuggestResult = {
+    listing_id: id,
+    applied: true,
+    before,
+    after: { category: result.suggestion.category, aspects: await fetchAspectRows(c.env, id) },
+  };
+  return ok(c, applied);
 });

@@ -11,9 +11,25 @@ name: Backup photos
 # buckets are in the one Cloudflare account — see restore.md for why that is
 # accepted for now rather than solved.
 #
-# Scheduled before orphanSweep's own cron (wrangler.toml's `[triggers]`,
-# 03:17 UTC) so a photo that becomes eligible for deletion overnight has
-# already been copied by the time the sweep can remove it.
+# **The ordering is not this schedule's job any more** (issue #178). This
+# comment used to say the run at 03:00 is what keeps a photo safe from
+# orphanSweep's 03:17 cron — 17 minutes of margin against a queue GitHub
+# documents as best-effort. Measured drift on this repository is routinely
+# larger than that (report-pressure has started up to 18 minutes late), and
+# the single scheduled run this workflow has ever had started at 03:18,
+# *after* the sweep's trigger. A fixed offset between two independent
+# schedulers is a bet, and this one had already lost.
+#
+# So `orphanSweep` now refuses to delete a photo whose keys are not already
+# in the backup bucket (`PHOTO_BACKUP_BUCKET` in wrangler.toml,
+# `isBackedUp` in apps/api/src/cron/orphanSweep.ts). A late backup delays a
+# deletion by a night instead of losing the bytes, and the deferral is
+# counted in the sweep's own log line.
+#
+# 01:00 rather than 03:00 is belt-and-braces on top of that, not the safety
+# argument: it just means a photo that became eligible overnight is usually
+# copied before the sweep looks at it, so deletions are not routinely
+# deferred a day. Nothing breaks if this drifts past 03:17 now.
 #
 # Runs against both tiers from one workflow, each against its own D1/R2 via
 # its GitHub Environment's secrets — same credentials deploy.yml uses, nothing
@@ -22,17 +38,23 @@ name: Backup photos
 # and CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID secrets actually exist for a
 # given environment.
 #
-# This workflow has not yet run on its `schedule:` trigger as of the commit
-# that adds it — GitHub does not evaluate `schedule:` (or accept
-# `workflow_dispatch`) for a workflow file that has never been merged to the
-# default branch (confirmed: `gh workflow run backup-photos.yml --ref
-# give-flow-fixes` → 404). The script itself was run directly against preview
-# and its output is in restore.md; confirm this workflow's first scheduled
-# run succeeds after merge (`gh run list --workflow=backup-photos.yml`)
-# before treating the schedule as proven.
+# The schedule is proven: this fired on its `schedule:` trigger for the first
+# time on 2026-09-07 03:18 UTC (run 34079182574), both legs green. (GitHub
+# evaluates neither `schedule:` nor `workflow_dispatch` for a workflow file
+# that has never been merged to the default branch, which is why the original
+# proof in restore.md is a by-hand run of the script.)
+#
+# But read what a green leg means here. That first production leg's entire
+# log was "0 referenced key(s) in D1": no photos rows yet, so it copied
+# nothing, touched no bucket, and passed — a check mark that said nothing
+# about whether keepsake-photos-production-backup even exists. The script now
+# probes the backup bucket up front and exits 1 when it cannot confirm it, so
+# a green run means at least "the destination exists". It still does not mean
+# "photos are backed up" unless `copied` is non-zero: read the log.
 on:
   schedule:
-    - cron: "0 3 * * *"
+    # 01:00 UTC. See the ordering note above: this is latency, not safety.
+    - cron: "0 1 * * *"
   workflow_dispatch:
     inputs:
       environment:

@@ -1,13 +1,20 @@
 # What's blocked on Kiarash
 
-Everything here is now done except the production cutover, one Turnstile hostname (#73), and the
-two paper things in §7 that the sole-proprietor decision left open (#108). Kept as the record of what was set up and how it was verified. Everything else in M0–M4 is built, tested and
-running on preview. Do them in this order — each one unblocks the next round of verification.
+**Everything on this page is done except §7.** The production cutover (§6) happened on
+2026-09-07 — `keepsake.ing` is live (#46) — and §5 turned out not to be needed at all (#73 was
+reversed the same day it was decided). What is left is the two paper errands in §7, off this
+computer entirely, tracked as **#142**.
+
+The rest is kept as the record of what was set up and how it was verified, not as a to-do list.
+Two things a human still owes that are *not* on this page, because they are verification rather
+than setup: walking the app on a phone (**#42**) and running
+[verify-production.md](verify-production.md) against the live apex (**#47**).
 
 Account: **Leapkg@gmail.com's Account**, id `dc6a87ed4a4269ed74c8f508b275b703`
 Zone: **keepsake.ing**, id `dcc1fb09eeeba27a343fc1d98aff9094`
 Preview Worker: **keepsake-preview** → <https://keepsake-preview.leapkg.workers.dev>
-Production Worker (not deployed yet): **keepsake-production**
+Production Worker: **keepsake-production** → <https://keepsake.ing> (live since 2026-09-07; both
+of its `workers.dev` hostnames are disabled, so the apex is the only way in)
 
 Paste anything you get back (site keys, tokens) into chat and I'll wire it up and verify.
 
@@ -45,9 +52,17 @@ sitemap all use the real domain. Verified: `/health` 200, `/`, `/about`, `/give/
 - **Production is manual only.** GitHub's required-reviewers gate is a paid feature on private
   repos, so instead of letting a merge to main ship the public site, `deploy.yml` now takes
   production only from a `workflow_dispatch` run (Actions tab → Deploy → choose `production`).
-  Preview deploys itself on every PR and every push to main.
+  Preview deploys itself on **every push to `main`, and nothing else** — the "and every PR" half
+  of this line was true when it was written and was removed by #73 later the same day.
 
-## 5. Turnstile hostname for per-PR previews — one click, only when #73's CI work starts
+## 5. ~~Turnstile hostname for per-PR previews~~ — NOT NEEDED, #73 reversed 2026-09-07
+
+**Do not do this.** #73 was decided for per-PR previews in the morning and reversed the same day:
+preview deploys from `main` only, per-PR Workers declined (shipped in #107). There is no
+`keepsake-pr-<n>.leapkg.workers.dev` origin to allow, so adding `leapkg.workers.dev` to the widget
+would buy nothing and would hand the Keepsake site key to every other Worker on the account for no
+return. Kept as the record of what the errand was, and what it would cost, if per-PR previews are
+ever reconsidered.
 
 The `keepsake-pr-preview` Cloudflare token is done and verified (see
 `docs/runbooks/deploy.md#the-per-pr-preview-token-73`): it can create and delete the Worker, D1
@@ -65,12 +80,20 @@ verifying a write path.
 
 Nothing is waiting on this until the per-PR deploy job in #73 is actually built.
 
-## 6. Production cutover — only when you're ready to be public
+## 6. ~~Production cutover~~ ✅ DONE 2026-09-07 (#46)
 
-**Do not do this until 1–4 are done and you've used preview yourself.** Nothing is on
-`keepsake.ing` today.
+`keepsake.ing` serves `keepsake-production`, both of that Worker's `workers.dev` hostnames are
+disabled, `PRODUCTION_LIVE = true` is set so `uptime.yml` genuinely probes the apex every 15
+minutes, and production deploys stay manual (`workflow_dispatch`). Steps 1–5 and 7 below all
+happened; the "Nothing is on `keepsake.ing` today" line this section opened with is the single
+most out-of-date sentence this file has carried.
 
-When you say go, I will:
+**Step 6 is the one that did not.** Nobody has posted a real keepsake from a phone and watched it
+through moderation on the live apex — that is #47 (with #42 for the phone walkthrough), and
+[verify-production.md](verify-production.md) is the copy-pasteable version of the rest. An agent
+container cannot do either: egress answers `403` to `CONNECT keepsake.ing:443`.
+
+The original plan, kept because it is the record of what was actually done:
 1. Apply the migrations and load the postal-code table into the production database.
 2. Set the production secrets (`TURNSTILE_SECRET`, `ADMIN_TOKEN`). Observability no longer needs
    one: issue #14 replaced `@sentry/cloudflare` (blocked on a Sentry account only you could create)
@@ -91,7 +114,7 @@ When you say go, I will:
    was fully indexable until 2026-09-06 (launch audit finding 2); this is the one-command check
    that it still is not.
 
-## 7. Two paper things, off this computer entirely (#108)
+## 7. Two paper things, off this computer entirely (#108, tracked as #142)
 
 Neither is a Cloudflare click and neither blocks a deploy. Both fall out of the 2026-09-07 decision
 to keep Keepsake a sole proprietorship rather than form an LLC — the reasoning, the numbers and the
@@ -183,5 +206,10 @@ Verified live on preview 2026-09-06: `nobody@example.com` → `blocked_reserved_
 
 Already working on preview and verified against the live stack: give flow with real Workers AI
 moderation, feed with search and postcode-radius, item pages with link previews, requests,
-choosing a recipient, the admin queue, bans, and the nightly cleanup. The one thing I cannot
-prove without step 1 is that an email actually arrives.
+choosing a recipient, the admin queue, bans, the nightly cleanup, and (since #150) the Observatory
+and the daily digest. Step 1 landed long ago, so the sentence that used to close this file — "the
+one thing I cannot prove without step 1 is that an email actually arrives" — no longer names a
+blocker. What is still true is narrower and does not depend on you unblocking anything: `ok = 1`
+in `email_events` records that the provider *accepted* a message, and there is no bounce webhook
+or complaint feedback loop behind it, so nothing in this system can tell acceptance from
+delivery.

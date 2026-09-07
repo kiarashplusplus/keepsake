@@ -48,6 +48,8 @@ const AGE_GATE_DIR = path.resolve(WEB_ROOT, "src/features/ageGate");
 const LISTINGS_ROUTE = path.join(API_SRC, "routes/listings.ts");
 const ME_ROUTE = path.join(API_SRC, "routes/me.ts");
 const ORPHAN_SWEEP = path.join(API_SRC, "cron/orphanSweep.ts");
+const REQUEST_WITHDRAW_ROUTE = path.join(API_SRC, "routes/requestWithdraw.ts");
+const BUDGET = path.join(API_SRC, "moderation/budget.ts");
 const MIGRATIONS = path.resolve(WEB_ROOT, "../api/migrations");
 const EMAIL_SCREEN = path.join(WEB_ROOT, "app/mine/email.tsx");
 
@@ -71,6 +73,7 @@ const EXPECTED_SECTIONS = [
   "Location",
   "Screening",
   "Autofill from your photo",
+  "Search by meaning",
   "Rate limiting",
   "Your choice, before anything loads",
   "Changing your mind",
@@ -215,6 +218,29 @@ const AI_CALL_SITES: AiCallSite[] = [
       // calls with two purposes, and one paragraph covering both would be
       // the same omission in a different shape.
       "a separate call from the safety screening",
+    ],
+  },
+  {
+    file: "search/embedding.ts",
+    purpose: "semantic search: embedding a listing's words, and a search query",
+    discloses: [
+      "into a list of numbers that",
+      // The policy must say what is sent, not just that a model is called —
+      // "only the words already public on the listing" is the whole claim.
+      "Only your listing's own public words are",
+      // SEMANTIC_SEARCH was flipped to "1" in every deployed environment on
+      // 2026-09-07, so the policy's previous "switched off today and is not
+      // running" sentence became false and was replaced. The policy had
+      // promised in its own words to come back and change that paragraph
+      // rather than leave it stale, which is what this pair of assertions
+      // now holds it to.
+      "This is running",
+      // Switching it on created something the earlier version had nothing to
+      // disclose: a stored derivative of the listing that outlives the
+      // request. The policy has to say it is stored, what it is stored
+      // beside, and that deleting the listing deletes it.
+      "stored with Cloudflare",
+      "Delete your listing and it is deleted too",
     ],
   },
 ];
@@ -505,5 +531,92 @@ describe("privacy policy vs. how long an email is kept (#60)", () => {
     expect(fs.readFileSync(EMAIL_SCREEN, "utf8")).toContain('label="Remove"');
     expect(withoutComments(fs.readFileSync(ME_ROUTE, "utf8"))).toContain('meRoutes.delete("/email"');
     expect(PRIVACY_TEXT).toContain('href="/mine/email"');
+  });
+});
+
+/**
+ * IP-hash retention (issue #169). The page promises, in two places, that a
+ * hashed IP expires after 48 hours. That was true of the KV budget counters
+ * and false of the two D1 columns holding the *same* value —
+ * `requests.ip_digest` and `reports.ip_digest` had no TTL, no sweep and no
+ * delete path, and the requester's own withdraw link left the hash behind.
+ * The fourth false claim this page has shipped (after #87, #88, #112), and
+ * the first that is a retention promise.
+ *
+ * The audit that found it demonstrated why this block has to exist: changing
+ * `budget.ts`'s `TTL_SECONDS` from 48 hours to 100 days broke **nothing** in
+ * the whole API suite, and this file — which already locks the analytics, AI
+ * and Rhode Island passages — had no assertion mentioning retention at all.
+ * So the number is locked from both ends here, the way the Rhode Island
+ * passages are: the sentence on the page, and each of the three mechanisms
+ * that has to hold for the sentence to be true.
+ */
+describe("privacy policy vs. how long a hashed IP is kept (#169)", () => {
+  /** 48 hours, as the page states it, in each unit the code expresses it in. */
+  const HOURS = 48;
+
+  it("says 48 hours on the page, in both places that make the promise", () => {
+    // `PRIVACY_TEXT` is whitespace-collapsed, so the hard wrap inside "48\n
+    // hours" still matches — the sentence the audit quoted is split across
+    // lines in the source.
+    expect(PRIVACY_TEXT).toContain(`We keep each day's hash for ${HOURS} hours, then it expires automatically`);
+    expect(PRIVACY_TEXT).toContain(`Hashes of your IP address expire automatically after ${HOURS} hours`);
+    // And that the promise is explicitly about every copy, not only the
+    // counters — the exact gap between the old sentence and the code.
+    expect(PRIVACY_TEXT).toContain(`The ${HOURS} hours covers every copy, not just the counters`);
+  });
+
+  it("expires the KV counters at that number", () => {
+    // The one mechanism that was always real. Comment-stripped for the same
+    // reason the #60 block is: the line's own trailing comment says "48
+    // hours", so an assertion against the raw file would pass on a changed
+    // constant with a stale comment beside it.
+    const code = withoutComments(fs.readFileSync(BUDGET, "utf8"));
+    expect(code).toContain(`const TTL_SECONDS = ${(HOURS * 60 * 60).toString().replace(/^(\d+)(\d{3})$/, "$1_$2")};`);
+  });
+
+  it("sweeps the D1 copies at that number, on both tables", () => {
+    const code = withoutComments(fs.readFileSync(ORPHAN_SWEEP, "utf8"));
+    // The window itself...
+    expect(code).toContain(`const IP_DIGEST_RETENTION_MS = ${HOURS} * 60 * 60 * 1000;`);
+    // ...and the two statements that apply it. Deleting either leaves one
+    // table's hashes in place forever, which is the state #169 found.
+    expect(code).toContain("UPDATE requests SET ip_digest = NULL");
+    expect(code).toContain("UPDATE reports SET ip_digest = NULL");
+    // ...and that the sweep is actually wired into the nightly run rather
+    // than defined and never called — the shape of the rate limiter in
+    // AGENTS.md's table that was declared everywhere and called from nowhere.
+    expect(code).toContain("await sweepExpiredIpDigests(");
+    expect(code).toContain("IP_DIGEST_RETENTION_MS,");
+  });
+
+  it("erases the hash on withdrawal, not just the note and the contact details", () => {
+    // `POST /api/requests/withdraw` is the only control a requester has over
+    // their own data — they have no device token and no dashboard. It nulled
+    // note/email/phone and left `ip_digest`, which is what made "we removed
+    // your information" not quite true.
+    const code = withoutComments(fs.readFileSync(REQUEST_WITHDRAW_ROUTE, "utf8"));
+    expect(code).toMatch(/UPDATE requests SET[^`]*ip_digest = NULL/);
+  });
+
+  it("has no migration that reintroduces a NOT NULL on either ip_digest column", () => {
+    // The sweep cannot null a column the schema forbids nulling. A later
+    // migration rebuilding either table with `ip_digest TEXT NOT NULL` would
+    // make every nightly sweep throw and the page false again — so what is
+    // asserted is the *newest* definition of each table, not merely that some
+    // migration once dropped the constraint.
+    const migrations = filesUnder(MIGRATIONS)
+      .filter((file) => file.endsWith(".sql"))
+      .sort();
+    expect(migrations.length).toBeGreaterThan(0);
+    for (const table of ["requests", "reports"]) {
+      const definitions = migrations
+        .map((file) => new RegExp(`CREATE TABLE ${table} \\(([\\s\\S]*?)\\);`).exec(fs.readFileSync(file, "utf8"))?.[1])
+        .filter((body): body is string => body !== undefined);
+      expect(definitions.length).toBeGreaterThan(0);
+      const newest = definitions[definitions.length - 1] ?? "";
+      expect(newest).toContain("ip_digest");
+      expect(newest).not.toMatch(/ip_digest\s+TEXT\s+NOT NULL/);
+    }
   });
 });

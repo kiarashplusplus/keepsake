@@ -8,7 +8,49 @@
  * ambient global for every reference in the file, hoisting included.
  * `Cloudflare.Env` names the same generated shape without that trap.
  */
-export type Env = Cloudflare.Env;
+/**
+ * `VECTORIZE` (issue #38) is declared here by hand, as **optional**, and
+ * deliberately stays that way now that the `[[vectorize]]` blocks in
+ * `wrangler.toml` are uncommented and `wrangler types` emits the binding
+ * itself.
+ *
+ * It was originally hand-declared out of necessity: with the blocks
+ * commented out, `wrangler types` emitted no `VECTORIZE` at all and every
+ * `env.VECTORIZE` reference in `search/vectorize.ts` stopped compiling. That
+ * necessity is gone. The declaration is kept because optional is the
+ * truthful shape, and a more useful one than the generated type gives.
+ *
+ * `search/vectorize.ts` has always branched on `if (!env.VECTORIZE)` to fall
+ * back to FTS. That branch is the feature's safety net and it is exercised
+ * by tests that stub the binding away entirely. Against a generated
+ * non-optional binding it would be unreachable-by-type — the compiler would
+ * let it rot, or flag it as dead. Declaring it optional keeps the fallback a
+ * live, type-checked path.
+ *
+ * The intersection is correct either way: where `wrangler types` emits a
+ * non-optional `VECTORIZE`, the generated property narrows this one.
+ */
+export type Env = Cloudflare.Env & { VECTORIZE?: VectorizeIndex };
+
+/**
+ * The `<bucket>-backup` R2 bucket `tools/backup-photos.mjs` copies photos
+ * into, read (never written) by `cron/orphanSweep.ts` so a photo is not
+ * deleted before its bytes are safe — issue #178.
+ *
+ * Reached through a function rather than `env.PHOTO_BACKUP_BUCKET` because
+ * **it is genuinely absent in production**: `keepsake-photos-production-backup`
+ * does not exist yet (#157), so `wrangler.toml` declares the binding at the
+ * top level and under `[env.preview]` and deliberately not under
+ * `[env.production]`. `wrangler types` generates the binding as non-optional
+ * from the blocks that do exist, which would make the absent case
+ * unreachable-by-type and let the fallback rot — the same reasoning the
+ * `VECTORIZE?` declaration above records, applied where the two environments
+ * really do differ. Returning `R2Bucket | undefined` keeps
+ * `orphanSweep`'s degrade-and-warn path a live, type-checked branch.
+ */
+export function photoBackupBucket(env: Env): R2Bucket | undefined {
+  return (env as { PHOTO_BACKUP_BUCKET?: R2Bucket }).PHOTO_BACKUP_BUCKET;
+}
 
 /** One of the five bindings `/health` and `assertBindings` care about. */
 type CheckedBinding = "DB" | "BUCKET" | "KV" | "AI" | "ASSETS" | "EMAIL";
@@ -25,6 +67,36 @@ export interface AssertBindingsResult {
  * sender domain onboarding are unverified as of the plan (Risks #1), and a
  * Worker that can serve the feed and take listings shouldn't report itself
  * down just because notification email isn't wired up yet.
+ *
+ * **This is presence only, and presence is not health.** `/health` does a
+ * real read past this check for `DB`, `BUCKET`, `KV` (issue #15) and, since
+ * #191, `ASSETS` — a binding can exist and still be unreachable, and for
+ * `ASSETS` a binding that exists over a broken or partial `dist/` is exactly
+ * the state `deploy.yml`'s "does /health report this commit" step verifies
+ * across without noticing.
+ *
+ * `AI` and `EMAIL` deliberately stay presence-only, and the reason is
+ * written here so the next audit does not re-file them (#191 considered it
+ * and left them):
+ *
+ *  - A real `AI` read is an inference. It costs money on every health poll
+ *    and draws down the same per-day moderation budget #18 flags as
+ *    exhaustible, so a monitor hitting `/health` on a loop could spend the
+ *    budget that keeps listings moving through the queue. The failure mode
+ *    that would catch — the binding present but Workers AI refusing — is
+ *    already visible where it matters, because `moderation/pipeline.ts`
+ *    captures its own errors and `orphanSweep`/`moderationRetry` heartbeats
+ *    go stale if the queue stops draining.
+ *  - A real `EMAIL` read is a delivered message. There is no no-op probe: a
+ *    send goes to a real inbox and spends deliverability reputation on a
+ *    `p=reject` domain. `POST /api/admin/test-email` is the on-demand,
+ *    authenticated version of that check, and `email_events` plus the daily
+ *    digest's `email_failures_today` are the standing one.
+ *
+ * `VECTORIZE` is not in this list at all because it is optional by
+ * construction (see the type above) — its absence is a supported state, not
+ * a missing binding — so `/health` grades it separately against
+ * `SEMANTIC_SEARCH` rather than folding it in here.
  */
 export function assertBindings(env: Env): AssertBindingsResult {
   const checks = {
@@ -89,6 +161,39 @@ export function isProduction(env: Env): boolean {
 }
 
 /**
+ * Issue #38's kill switch: is semantic search (Vectorize + Workers AI
+ * embeddings) allowed to run at all?
+ *
+ * **On in every environment** as of 2026-09-07, after the two things this
+ * comment used to say it must wait for were actually done with a real
+ * credential (recorded in `docs/runbooks/deploy.md` → "Vectorize / semantic
+ * search"): the three indexes were confirmed to exist at `768 / cosine`, and
+ * `MIN_SCORE` was re-derived against the real embedding model
+ * (`docs/design/min-score-calibration.md`).
+ *
+ * It stays a kill switch. Setting it back to `"0"` is the first thing to try
+ * if search misbehaves: with it off, `GET /api/feed?q=` behaves exactly as it
+ * does without any of this — FTS5 via `db/fts.ts`, the fallback path the
+ * issue asked to keep rather than replace — and no embedding call, Vectorize
+ * call or AI budget spend happens on either the read or the write path.
+ * `test/search.test.ts` asserts that equivalence against a no-binding control
+ * rather than assuming it.
+ *
+ * One thing to know before switching it off: `reembedListing` runs only on
+ * listing create/edit and on the #37 aspects backfill, so any listing created
+ * while this is `"0"` has no vector and is invisible to vector search until
+ * it is next written. See the runbook section above for the backfill that
+ * does not exist.
+ *
+ * Opt-in on `"1"` only — an unset, empty, malformed or absent var reads as
+ * off, so no environment can enable this by accident or by omission. Same
+ * string-literal widening as `isMockAi` above.
+ */
+export function semanticSearchEnabled(env: Env): boolean {
+  return (env.SEMANTIC_SEARCH as string | undefined) === "1";
+}
+
+/**
  * True in the two environments that run as a deployed Worker on Cloudflare —
  * `preview` and `production` — and false for local `wrangler dev`, `vitest`
  * and Playwright.
@@ -122,6 +227,19 @@ export function parseIntVar(name: string, value: string | undefined, fallback: n
   }
   return parsed;
 }
+
+/**
+ * Fallback for `SUGGEST_DAILY_BUDGET` when the var is unset or malformed.
+ *
+ * Lives here, rather than route-local, because three call sites now need the
+ * same number: `routes/photos.ts` (the give flow's live autofill),
+ * `backfill/aspects.ts` (#37's batch job) and
+ * `routes/admin.ts`'s re-suggest (#141). The second of those already carried
+ * a hand-copied duplicate with a comment explaining that it "mirrors
+ * routes/photos.ts exactly" — a comment is not a mechanism, and a third copy
+ * would have been the point where they quietly diverged.
+ */
+export const DEFAULT_SUGGEST_DAILY_BUDGET = 1000;
 
 /**
  * Issue #39's floor: an aspect value needs at least this many approved

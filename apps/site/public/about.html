@@ -27,7 +27,18 @@
          time by `apps/web/scripts/copy-site.mjs` from `EXPO_PUBLIC_*`; an
          unsubstituted `%NAME%` placeholder means "not configured" and nothing
          third-party loads. -->
-    <meta name="ks-google-ads-id" content="%EXPO_PUBLIC_GOOGLE_ADS_ID%" />
+    <!-- Google Ads: deliberately empty, and this is the kill switch (#175).
+         Kiarash decided against running ads for now, so the three
+         EXPO_PUBLIC_GOOGLE_ADS_* variables and the code reading them are
+         gone. The tag is left DECLARED-AND-EMPTY rather than deleted because
+         consent.js still registers an "advertising" provider that this page
+         must stay in sync with, and because an empty content= makes the
+         "not configured" state explicit instead of implicit. consent.js
+         reads this, gets "", fails its /^(AW|G|GT)-/ test, and returns before
+         touching the network. Putting a real AW- id here would start loading
+         a tag on an advertising grant — do not, without reading
+         docs/legal-considerations.md's Rhode Island paragraph first. -->
+    <meta name="ks-google-ads-id" content="" />
     <meta name="ks-cf-beacon-token" content="%EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN%" />
     <script src="/consent.js" defer></script>
     <script>

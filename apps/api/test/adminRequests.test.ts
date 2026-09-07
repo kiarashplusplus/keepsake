@@ -19,6 +19,12 @@ function adminHeaders(): Record<string, string> {
 
 interface InsertRequestOptions {
   status?: string;
+  /** Issue #188. Defaults to "confirmed", because that is what every status
+   * this file exercises implies: a request only reaches `open` (and from
+   * there `chosen`, `withdrawn`, `removed`) once its address was proved. Pass
+   * `null` for the held case — an unconfirmed row, which never counted toward
+   * `request_count` and so must not be decremented when an admin removes it. */
+  confirmedAt?: number | null;
   note?: string | null;
   email?: string | null;
   phone?: string | null;
@@ -33,8 +39,9 @@ async function insertRequest(listingId: string, options: InsertRequestOptions = 
   const now = Date.now();
   await env.DB.prepare(
     `INSERT INTO requests
-      (id, listing_id, note, email, phone, ip_digest, status, created_at, age_attested_at, withdrawn_at, removed_at, removed_reason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, listing_id, note, email, phone, ip_digest, status, created_at, age_attested_at, withdrawn_at, removed_at, removed_reason,
+       confirmed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       id,
@@ -49,9 +56,14 @@ async function insertRequest(listingId: string, options: InsertRequestOptions = 
       options.withdrawnAt ?? null,
       options.removedAt ?? null,
       options.removedReason ?? null,
+      options.confirmedAt === undefined ? now : options.confirmedAt,
     )
     .run();
-  await env.DB.prepare("UPDATE listings SET request_count = request_count + 1 WHERE id = ?").bind(listingId).run();
+  // Mirrors the Worker: `request_count` moves when a request is confirmed, so
+  // a held row does not bump it.
+  if (options.confirmedAt !== null) {
+    await env.DB.prepare("UPDATE listings SET request_count = request_count + 1 WHERE id = ?").bind(listingId).run();
+  }
   return id;
 }
 

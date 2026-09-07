@@ -22,7 +22,18 @@
          time by `apps/web/scripts/copy-site.mjs` from `EXPO_PUBLIC_*`; an
          unsubstituted `%NAME%` placeholder means "not configured" and nothing
          third-party loads. -->
-    <meta name="ks-google-ads-id" content="%EXPO_PUBLIC_GOOGLE_ADS_ID%" />
+    <!-- Google Ads: deliberately empty, and this is the kill switch (#175).
+         Kiarash decided against running ads for now, so the three
+         EXPO_PUBLIC_GOOGLE_ADS_* variables and the code reading them are
+         gone. The tag is left DECLARED-AND-EMPTY rather than deleted because
+         consent.js still registers an "advertising" provider that this page
+         must stay in sync with, and because an empty content= makes the
+         "not configured" state explicit instead of implicit. consent.js
+         reads this, gets "", fails its /^(AW|G|GT)-/ test, and returns before
+         touching the network. Putting a real AW- id here would start loading
+         a tag on an advertising grant — do not, without reading
+         docs/legal-considerations.md's Rhode Island paragraph first. -->
+    <meta name="ks-google-ads-id" content="" />
     <meta name="ks-cf-beacon-token" content="%EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN%" />
     <script src="/consent.js" defer></script>
     <script>
@@ -135,6 +146,17 @@
           chosen" notification we send you, the same way the giver's is (see above).
         </p>
         <p>
+          Nothing is passed to the giver until you confirm the address. When a request is
+          submitted we send one email to the address given, asking whether it was really you, and
+          we hold the request without showing it to anyone until the link in that email is
+          followed. If it never is, the note, email, and phone number are deleted within a few
+          days and the giver never sees them. That is also what to do if you receive one of these
+          emails and didn't ask for anything: nothing. There is no account to secure and nothing
+          to click, and the details someone entered are erased on their own. We limit how many of
+          these confirmations any one address can be sent in a day, so this can't be used to fill
+          someone's inbox.
+        </p>
+        <p>
           Every request-confirmation email includes a link to withdraw that request. Following it
           deletes your note, email, and phone number from our records and marks the request
           withdrawn — no account or login needed, since you never had one. If the giver already
@@ -207,6 +229,28 @@
           is kept — the photo itself goes after 24 hours, as above.
         </p>
 
+        <h2>Search by meaning</h2>
+        <p>
+          There is a third kind of AI call in the code, for search. It turns the words already
+          public on your listing — its title, story and tags — into a list of numbers that
+          captures roughly what they mean, so someone searching for "grandmother's teapot" can
+          find a listing that says "my nan's old brown betty" without the words having to match.
+          The same is done to whatever a searcher types. Only your listing's own public words are
+          sent; nothing private, and no photo.
+        </p>
+        <p>
+          <strong>This is running.</strong> It was switched on in September 2026; an earlier
+          version of this page said it was built but disabled, and we said we would come back and
+          change this paragraph rather than quietly leave it. The list of numbers for each listing
+          is stored with Cloudflare, alongside the listing's id and nothing else — no name, no
+          email, no address. Delete your listing and it is deleted too. What a searcher types is
+          turned into numbers to compare against them and is not kept.
+        </p>
+        <p>
+          If this ever produces odd results, ordinary word matching is still there underneath and
+          we can switch back to it on its own.
+        </p>
+
         <h2>Rate limiting</h2>
         <p>
           To stop abuse, we keep a short-lived, hashed record of your IP address combined with
@@ -221,9 +265,18 @@
           hours, then it expires automatically.
         </p>
         <p>
-          Two things use that hash: a brake that slows down a burst of requests within a single
-          minute, and a counter for how much you've done today. Both use the same date-scoped
-          hash, so neither one can follow you from one day into the next.
+          Three things use that hash: a brake that slows down a burst of requests within a single
+          minute, a counter for how much you've done today, and a check that stops the same person
+          asking for one keepsake twice or reporting the same listing twice on the same day. All
+          three use the same date-scoped hash, so none of them can follow you from one day into
+          the next.
+        </p>
+        <p>
+          The 48 hours covers every copy, not just the counters. The last of those checks means a
+          copy of the hash is written next to the request or the report itself, in our database —
+          so a nightly job clears it from there at 48 hours too, and withdrawing a request
+          (see below) clears it immediately along with your note, email and phone number. After
+          that the row keeps no trace of the address it came from.
         </p>
 
         <h2>Your choice, before anything loads</h2>
@@ -339,9 +392,10 @@
           above) or you ask us to remove them. A link we send to verify an email or recover your
           dashboard expires in 24 hours (or 30 minutes for a recovery link) and the record of it is
           cleared within a further week.
-          Rate-limit hashes expire automatically after 48 hours (see "Rate limiting" above), and
-          moderation and email-delivery logs are kept for 90 days as an abuse-prevention audit
-          trail.
+          Hashes of your IP address expire automatically after 48 hours (see "Rate limiting"
+          above) — both the rate-limit counters and the copy stored alongside a request or a
+          report — and moderation and email-delivery logs are kept for 90 days as an
+          abuse-prevention audit trail.
         </p>
         <p>
           Your own email is the one thing on that list with no expiry date, and it's worth stating
@@ -399,6 +453,26 @@
             A date at the top of a policy tells you something moved but not what, so this is the
             record. It's kept by hand, newest first, and it starts the day we started keeping it —
             there's no entry here for anything before that date.
+          </p>
+          <p>
+            <strong>7 September 2026.</strong> The 48-hour expiry on hashes of your IP address is
+            now true of every copy. It always was for the rate-limit counters, and it was not for
+            the copy stored next to a request or a report: that one had no expiry at all, so it
+            stayed in our database indefinitely, including after someone used their withdraw link
+            to remove their note, email and phone number. The page said otherwise, twice, and the
+            page was wrong. The code changed rather than the promise — a nightly job now clears
+            those hashes at 48 hours, and withdrawing a request clears its hash immediately along
+            with everything else. "Rate limiting" now also says plainly that a third thing uses
+            the hash: the check that stops the same person asking for one keepsake twice, or
+            reporting the same listing twice, on the same day.
+          </p>
+          <p>
+            <strong>7 September 2026.</strong> Search by meaning was switched on. This one is a
+            real change in what Keepsake does, not the page catching up: that section used to say
+            the feature was built but switched off, and it now says it is running. It also says
+            something the old paragraph had no reason to — that the list of numbers made from your
+            listing's public words is <em>stored</em>, next to the listing's id and nothing else,
+            and is deleted when you delete the listing. What a searcher types is not kept.
           </p>
           <p>
             <strong>7 September 2026.</strong> "Who runs this" names the operator in full —

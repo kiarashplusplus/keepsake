@@ -16,29 +16,214 @@ is a real site with real visitors possible, not a staging exercise.
   still **manual** — `workflow_dispatch` — so merging to `main` does not ship the public site.
 - `preview.keepsake.ing` deploys from **`main` only**; pull requests deploy nowhere (#73, which
   also resolved #66). Verify a branch with `pnpm --filter @keepsake/web e2e`, not on preview.
-- Production email is `live` for all recipients (#43). **What that rests on is still unproven**:
-  delivery to any address other than Kiarash's has never been observed arriving (#6). That is the
-  single most important open fact in this file.
-- `PRODUCTION_LIVE=true` is set, so `uptime.yml` now genuinely probes production every 15 minutes
-  rather than only checking that it *isn't* answering.
+- Production email is `live` for all recipients (#43), and **it has still never delivered to any
+  address other than Kiarash's — because it has never been asked to.** This is the single most
+  important open fact in this file. #6 was closed on 2026-09-07 at 08:54 UTC with no closing
+  comment, thirteen minutes after its own last comment said it must stay open until someone reads
+  the `leapkg@gmail.com` inbox. This bullet hedged about which of the two had happened; **it was
+  asked on 2026-09-07 and the answer is neither ambiguous nor "probably proven"**. Kiarash: *"No
+  emails were sent to leapkg yet."* The Cloudflare Email Sending activity log for `keepsake.ing`
+  over the preceding 7 days shows **3 sends, all three to `kiarasha@alum.mit.edu`, all delivered,
+  and none to any other address**. So the second-address test was not merely unrecorded — it was
+  never sent, and no amount of reading that inbox could have proven anything. **#6 is reopened**
+  and still carries `launch-blocker`. What is structurally true and unchanged: `email_events.ok = 1`
+  records only that the provider *accepted* the message, and there is no bounce webhook and no
+  complaint feedback loop behind it — which is exactly why the provider-side log, and not our own
+  success rows, is what settled this.
+- `PRODUCTION_LIVE=true` is set, so `uptime.yml` genuinely probes production every 15 minutes
+  rather than only checking that it *isn't* answering. That probe is also the one way an agent
+  container can observe the live site at all (egress `403`s `CONNECT keepsake.ing:443`): it prints
+  the commit each tier is serving, every 15 minutes, in a log anyone can read.
+- **The Observatory is live on preview** (#150, PR #151): `GET /api/admin/observatory` and an
+  `/admin` → Observatory panel, plus a daily digest cron at 00:07 UTC. Its D1 half — funnel, queue
+  ages, per-day series — needs no credential; its Cloudflare half reads edge analytics and the
+  Worker's own log lines through `CF_OBSERVATORY_TOKEN`, a read-only token scoped to exactly
+  `Account Analytics Read` + `Workers Observability Read`. That secret is set on **both** tiers and
+  the panels were verified returning real data on preview at `3534a94`. Production has the secret
+  but not yet the code — see the tier drift below.
 
-**In flight**
-- **PR #107** — ten issues (#43, #66, #73, #86, #87, #88, #89, #90, #91, #92, #99, #106).
-  **Must not merge before #100**: #100 carries a sequential `0009_aspects_backfill.sql` that
-  preview D1 has already applied, and #99's new rule requires timestamped names — renaming it to
-  comply would be exactly the drift #99 exists to prevent. Merge #100, then #107.
-- **PR #100** (aspect backfill, #37) — CI green, review not completed.
-- **PR #101** (semantic search, #38) — CI red on one preflight rule: a `@cf/` id in a *doc
-  comment* in `search/search.ts`. The id itself is correctly declared in `models.ts`. Because
-  preflight fails, every other job skipped, so the rest of that PR has never been tested.
+**Tier state — observed, not inferred, at 2026-09-07 17:03 UTC**
+([uptime run 34145949309](https://github.com/kiarashplusplus/keepsake/actions/runs/34145949309)).
+`uptime.yml` prints the commit each tier serves every 15 minutes, and reading that log is the only
+observation of the live site an agent container can make (egress `403`s `CONNECT keepsake.ing:443`
+— re-confirmed this session):
 
-**Open and genuinely blocked on a human**: #6 (read an inbox), #31 (a lawyer), #42 (walk it on a
-phone), #47 (`/health` on the apex plus the first real listing), #94 (a zone cache-purge token),
-#105 (whether Cloudflare Access should gate preview).
+| Tier | Serving | Means |
+|---|---|---|
+| preview | `3980c9d` | the newest commit on `main` |
+| production | `b0f5eba` | **functionally current** — see below |
 
-**Open and workable by anyone**: #103 (CI on `main` is cancelled by back-to-back merges, so
-merged commits reach preview with no completed run), #104 (`wrangler dev` dies mid-e2e with no
-diagnostic and the restart wrapper hides it).
+**Production is no longer meaningfully behind.** A manual dispatch on 2026-09-07 took it from
+`7afeb92` to `b0f5eba`, which carries semantic search (#114), the constants sweep (#143), the
+raised AI budgets (#146), the labeling-milestone note (#148), **the Observatory (#151)**, **the
+`resuggest` endpoint (#149)** and the zero-filled edge series (#153). The only commits it lacks are
+`22e8f86` and the four from the 2026-09-07 docs sweep — all documentation, one `tools/` script and
+one workflow comment, none of which the Worker runs. Do not read this gap as drift.
+
+Production also deployed the `[[vectorize]]` bindings and did not fall over, which retires "an
+uncommented binding naming a missing index fails the Worker upload" as a *deploy* risk — the three
+indexes are real, at least as far as upload cares. It does not retire the rule: deleting an index
+still breaks every deploy of this Worker, search-related or not.
+
+**Two errands are now unblocked and still owed. Both need a human — an agent container cannot
+reach the apex.** Run them in this order:
+
+1. **`resuggest` the fishing-line spool** (`01M1XP7SYFDR05M1CPAH0020EE`). It shows a visitor
+   `OTHER` with the single aspect `material: braided`, and the backfill will never reach it — that
+   job skips any listing that already has `listing_aspects` rows. `POST
+   /api/admin/listings/:id/resuggest` (#149) is the path built for exactly this, and **it is on
+   production now**. Check `.data.before` / `.data.after` rather than trusting the 200.
+2. **Run the aspects backfill.** `reembedListing` fires on create, on edit, and on each row the #37
+   backfill touches; there is no vector-only backfill. Every production listing predates semantic
+   search, so until this runs production's vector index is empty and `?q=` silently falls through
+   to FTS5 — working, but not the feature that shipped. `POST /api/admin/backfill-aspects`, repeat
+   until `.data.remaining` is 0. `docs/runbooks/deploy.md` → "Vectorize / semantic search" has the
+   detail.
+
+**Landed since this list was last written** (kept per rule 7 rather than deleted):
+- **PR #100** (aspect backfill, #37) merged as `de75c67`; **PR #107** merged as `6412c7f`. The
+  ordering constraint that entry carried was honoured — `0009_aspects_backfill.sql` kept its
+  sequential name, and preflight's `migrations` rule reads the tree as "9 legacy 0001-contiguous,
+  1 timestamped", so nothing was renamed under a database that had already applied it.
+- **PR #139** (#135, #136) merged as `2108d37` — the prompt now reads the object's own markings
+  first, `features/item/AspectList` renders aspects under the story, and the category list went
+  from five to twelve. Its two deliberate leftovers touch **live production rows** and are tracked
+  nowhere: the fishing-line spool keeps its single `material: braided` row, so the backfill skips
+  it, and nothing re-runs a suggestion to re-categorise an existing listing off the new prompt.
+- **PR #114** (semantic search, #38) merged as `97eed3e`, superseding the draft #101. It shipped
+  *on*, not inert as an earlier version of this entry said — a credential arrived mid-day, the
+  indexes were confirmed, the `REAL_AI=1` block ran once, and `MIN_SCORE` was re-derived to 0.5
+  from a real-model run whose central finding is that true-match and off-corpus scores **overlap**,
+  so ranking does the relevance work and the threshold is only a floor.
+  Two things the pre-merge review caught, both of the same shape: **the #37 backfill never
+  re-embedded anything** despite `reembed.ts` saying it should (it landed first, so nothing did),
+  and **four comments across the branch still asserted the feature was off** after it had been
+  turned on — including the runbook's reasoning that no vector backfill would ever be needed
+  because production's catalogue was empty, which #135 had already disproved. Confident prose
+  ages badly next to a flag; that is row six of `AGENTS.md`'s table wearing a different hat, and
+  it is now the third time it has been written down on this feature.
+
+**Open issues — re-read against GitHub on 2026-09-07 evening. There are 46 open.** These lists
+have now gone stale in the direction that flatters the project twice in one day. The morning
+re-read found four "blocked on a human" issues (#6, #31, #94) and one "workable by anyone" (#103)
+already closed, and four open issues nothing in `docs/` mentioned. This re-read found worse:
+**30 open issues nothing in `docs/` mentioned at all** — the adversarial audit wave #161–#191,
+filed after the last docs commit — and **#158 sitting in the list below as an open blocker when
+it had been deleted outright** (`GET /issues/158` → `410 This issue was deleted`). Treat GitHub,
+not this file, as the count; what this file is for is which of them matter and why.
+
+*Blocked on a human:*
+- **#6** — **reopened 2026-09-07 evening** (it is back in this list, having been closed out of it
+  that morning). Send to a second address and read that inbox; see the email bullet above for why
+  the close was premature.
+- **#42** — walk the app on a phone. Never done on the live apex.
+- **#47** — the first real listing. [verify-production.md](../runbooks/verify-production.md) is the
+  copy-pasteable form. **§1–§4 were run against the live apex on 2026-09-07 and all pass** (as did
+  launch audit finding 1's re-measurement), so what is left is **§5 alone**: a keepsake posted
+  through `keepsake.ing/give` from a phone and watched go `pending` → `approved`. That needs a
+  person because Turnstile enforces on production, and the runbook is explicit that §1–§4 passing
+  is not enough to close the issue.
+- **#105** — whether Cloudflare Access should gate `preview.keepsake.ing`. Preview is open to the
+  internet today; `noindex` keeps it out of search but does not keep anyone out.
+- **#142** — bind general-liability cover and file the Harris County assumed-name certificate. The
+  two paper halves of the #108 sole-proprietor decision, which is only the conservative choice if
+  they actually happen.
+- **#156** — revoke `keepsake-pr-preview` or build the job it was minted for. #73 was reversed and
+  the create-and-delete token it produced is still live and used by nothing.
+
+*The 2026-09-07 adversarial audit — #161–#191.* Filed against the data, moderation, auth, ops
+and CI layers hours after this file's previous sweep. Roughly half have since been fixed and the
+rest are being worked in parallel, so the counts this paragraph used to carry went stale within
+hours and are gone: **read the labels on GitHub before starting any of these**, and per "Picking
+up work" in `AGENTS.md` that label is the lock. The lists below mark what is fixed and by what;
+five — **#162, #168, #171, #184, #189** — are fixed on the branch behind PR #197 and close on
+merge, so until then they are open issues whose work is written and whose behaviour these docs
+already describe in the fixed tense.
+
+- **Launch blockers:** all three closed. **#161** (#205): the pipeline moderated only the
+  client-uploaded thumbnail while `/i/:id/full` published the never-inspected full-resolution
+  file, so a caller could pass on one image and publish another — every stored variant is now
+  moderated, see moderation.md step 4. **#162** (PR #197): `withdraw`+`relist` undid an admin
+  rejection, a hide, a ban sweep or a three-report auto-hide; `relist` now reads the newest
+  status-setting event of *any* kind and sends a takedown to `needs_review` rather than back to
+  `approved`. **#165** (#209): `dailyDigest` never wrote its heartbeat, so `/api/admin/health`
+  was permanently `ok: false` and the crons alarm was stuck on — `runCron` now writes the
+  heartbeat for every registered job on success and for none that throws, so a new cron cannot be
+  added without one.
+- **Personal data and email:** #188 is the one left — a request's email address is never
+  verified, so anyone can enrol a third party as a requester. **#167, #170, #182 and #190 are
+  fixed** (2026-09-07): a `verify_email` token is bound to the address it was mailed to rather
+  than to the owner row, the recovery token travels in a POST body instead of a URL path segment
+  (both in `docs/design/identity.md`), and the redactor has rules for path segments and for the
+  PII Keepsake actually holds, with the recipient scrubbed out of `email_events.error_detail`.
+  **#169 is fixed** (#209): `orphanSweep` nulls both `ip_digest` columns at 48 hours, withdrawal
+  nulls its own immediately, and the number is locked against the page and all three mechanisms
+  in `privacyPolicy.test.ts`. **#189's server half is fixed in PR #197**: the request endpoint was
+  an oracle for the giver's address and for who else had asked — both the self-request `400` and
+  the duplicate `409` now return the same `201` the success path returns, having written and sent
+  nothing. Its client half — the helpful "that's your own keepsake" message, checked in `apps/web`
+  against the owner address the device already knows — is still to do.
+- **More checks that could not fail:** all closed. **#166, #175 and #176 are fixed** (PR #198):
+  preflight's `shell-syntax` now parses the workflow `run:` blocks that hold all this repo's shell
+  and fails rather than skips when it finds none; `cron-triggers` reads `cron/registry.ts` and
+  asserts the three-way agreement two documents already claimed; and `verify-public-env` derives
+  its expectations from `.env.example` instead of from the environment that forgot the variable.
+  **#194 is fixed** in the same PR — the CSP script hashes are now computed from the script they
+  authorise. Six instances of `AGENTS.md`'s table found in a single pass; the table is now at
+  eleven rows and should be read as a pattern, not a closed list. **#191 is fixed**
+  (#209): `/health` gives `ASSETS` a real read and reports `VECTORIZE` as `ok`/`error`/`off`
+  rather than not looking at it at all. **#173 and #181 are fixed**
+  (2026-09-07): the consent banner was never scanned by axe, because every a11y context seeded a
+  consent decision and two comments in the tree claimed a scan that did not exist —
+  `e2e/a11y.spec.ts` now builds its own unseeded contexts for the banner and runs a dark-mode
+  pass, and both comments say what is true.
+- **Moderation and abuse surface:** #183. **#179 is fixed** (#206): a budget denial no longer
+  counts against the 3 retry attempts, so an exhausted daily ceiling stops turning every listing
+  posted afterwards into permanent manual review — moderation.md step 2. **#168 and #171 are
+  fixed in PR #197**: every non-GET route on `listingRoutes` is behind a router-level
+  `burst("RL_WRITE")` and `PATCH` charges the same daily budget create does, and listing aspects
+  now run through `containsContactInfo` and reach Llama Guard. #168's siblings in
+  `routes/photos.ts` and `routes/me.ts` are untouched and still unmetered.
+- **Correctness:** all fixed. **#163, #180 and #186** (#206) — the search sanitizer, and the two
+  that ran with it. **#172, #174 and #187** (2026-09-07): a failed Delete on `/mine/[id]` no
+  longer navigates as though it succeeded; a Turnstile challenge failure reports `unconfigured`
+  and lets the server's `siteverify` decide, instead of disabling every submit button in the app
+  with no message and no retry; and `useFeed`'s `loadMore` drops a page belonging to a query the
+  visitor has already left. **#185**: choosing a recipient is one `env.DB.batch()` with a
+  conditional claim on the listing, checked before any mail goes out — see
+  `docs/design/email.md`'s "Contact reveal rule". It is also the Worker's first use of `batch()`;
+  the other multi-write sequences that issue named (create-listing + photos + aspects,
+  `replaceListingAspects`) are still unbatched. **#184 is fixed in PR #197** — the report
+  auto-hide decides on the count returned by its own `UPDATE … RETURNING`, so concurrent reports
+  trip the threshold instead of each reading zero.
+- **Ops and backup:** both closed. **#164** (PR #198): the documented D1 backup omitted
+  `listing_aspects`, and because `aspects_backfilled_at` *is* in the export the loss was
+  unrecoverable — `restore.md`'s `--table` list now includes it, and preflight's new
+  `backup-tables` check compares that list against the tables the migrations create, so the next
+  migration that adds a table fails the build instead of the backup. #178 (**fixed** — `orphanSweep` refuses
+  to delete a photo the backup bucket does not have, so the ordering no longer rests on two
+  independent schedulers). **#157** (this PR): `keepsake-photos-production-backup` now exists
+  with the same 400-day expiry preview has, production's 4 referenced keys are in it (one
+  verified byte-identical by SHA-256 out of both buckets), and `PHOTO_BACKUP_BUCKET` is bound
+  on production — so the sweep's guard is live there rather than degrading to an unguarded
+  delete with a warn.
+
+*Workable by anyone (pre-audit):*
+- **#104** — `wrangler dev` dies mid-e2e with no diagnostic and `serve.mjs`'s restart hides it.
+- **#116** — the `adminAuth` brute-force test is flaky again on unmodified `main`. **Note the
+  supersession**: `AGENTS.md` and several docs still explain this flake by pointing at #65, which
+  is closed; #116's own title says #65 either regressed or was never fixed at the cause.
+- **#145** — DNSSEC is disabled on the `keepsake.ing` zone.
+- **#147** — an api-only pull request never runs `e2e`, because the job is scoped by
+  `dorny/paths-filter` like everything else. This is the mirror image of row four of `AGENTS.md`'s
+  "checks that could not fail" table.
+- **#155** — a listing's category comes from the model alone and no human can correct it, at any
+  layer. A product decision (#35) whose premise has been tested and half-failed.
+- **#159** — decide whether a Tail Worker or Logpush is worth it. Nothing pushes an alert anywhere;
+  "no" is a legitimate close, an unwritten default is not.
+
+*Tracking issues, open by design*: #49 (launch blockers), #50 (legal & compliance), #52
+(production cutover). They stay open until every child does.
 
 **The lesson worth carrying, because it is now row six of `AGENTS.md`'s table.** Two separate
 alerting/verification paths turned out never to have executed: `tools/preflight/preflight.test.mjs`
@@ -87,7 +272,7 @@ condensed to what actually earns its keep on a solo-agent-driven repo:
 | M1 Give + moderation | `[DONE]` | Migrations 0001–0003, geodata seed loaded on preview, owner token middleware, photo upload, create listing, moderation pipeline + cron retry + budgets, web give flow (5 steps), breathing seal, reviewing states, read-only dashboard. |
 | M2 Browse + share | `[DONE]` | Feed (keyset/category/FTS/geo), item page, `/i/:id/:variant` edge cache, `/item/:id` OG injection, masonry feed, location bar, share, `+not-found`. |
 | M3 Requests, email, recovery | `[DONE]` | Turnstile, requests, giver email add/verify, `sendMail()` (cf + resend fallback), choose flow + contact reveal, given/withdraw/relist/edit/delete, recovery. |
-| M4 Trust and operations | `[DONE]`, version skew guard excepted (`[TODO]` on the client — issue #23) | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Workers Logs observability (issue #14, replaced a never-configured Sentry), Web Analytics, Playwright in CI, runbooks. Version skew: server half (`/version.json`, `no-store`) is done and tested; nothing in `apps/web` polls it yet — see `docs/design/ops.md#version-skew`. |
+| M4 Trust and operations | `[DONE]` | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Workers Logs observability (issue #14, replaced a never-configured Sentry), Web Analytics, Playwright in CI, runbooks. Version skew: **both halves shipped** — the server's `/version.json` (`no-store`) and the client's `useVersionSkewGuard`/`VersionSkewBanner`, closed by #23 via PR #78 and covered by `e2e/versionSkew.spec.ts`. This row read "`[TODO]` on the client — nothing in `apps/web` polls it yet" until 2026-09-07, three commits after that stopped being true; `docs/design/ops.md#version-skew` had the correct account the whole time. |
 | M5 Polish and launch | `[QA]` — cutover done, apex unverified | About/Privacy/Terms, empty states, motion + reduce-motion pass, keyboard/focus audit, robots/sitemap, cache-header audit, production secrets, `keepsake.ing` cutover. |
 
 Definition of done per milestone lives with the plan (`M0`–`M5` DoD bullets); the short version:
@@ -129,6 +314,9 @@ instead of before it.
 
 ## Topic docs
 
+- [**Product decisions**](../product-decisions.md) — the choices this build rests on, each with
+  what it cost and what would change the answer. Read a row before reopening the decision it
+  names; add a row when you make one.
 - [Moderation](./moderation.md)
 - [Identity](./identity.md)
 - [Email](./email.md)
@@ -230,3 +418,48 @@ mobile+desktop) passed against `MOCK_AI=1`, including `give.spec.ts` walking all
 category-chip click and a filled date-of-birth field, and `request.spec.ts`'s two-context
 stranger/giver flow with the same field. Not verified against a live (non-mocked) Workers AI call —
 neither issue touches the suggestion endpoint's own model-facing behavior.
+
+### 2026-09-07 — Labeling & search (#51): five of six items landed, checked as a combination
+
+The milestone's six issues merged as six separate pull requests over one day, each verified on its
+own branch. Nobody had run the combination since, so this is that run — first against `main` at
+`7307f06` (five items; #38 was still open in #114), then re-run after #114 merged:
+
+| | Landed as | Where it lives on `main` |
+|---|---|---|
+| #35 give-flow category picker dropped | #93 | `app/give/details.tsx` has no `Chip` row; `category` column deliberately kept |
+| #36 aspects persisted and indexed | #77 (`0006_aspects.sql`) | `listing_aspects` + `listing_aspects_name_value`, `apps/api/test/aspects.test.ts` |
+| #37 backfill from cover photos | #100 (`0009_aspects_backfill.sql`) | `src/backfill/aspects.ts`, `aspects_backfilled_at` distinguishes "no aspects" from "never tried" |
+| #39 shelves with a floor | #98 | `routes/feed.ts` `/shelves` + `shelfMinItems(env)`, `features/feed/AspectShelves.tsx` |
+| #40 zero-aspect listings still surface | #98 | asserted on **both** sides: `apps/api/test/aspects.test.ts` (default feed + broad FTS) and `apps/web/test/app/index.test.tsx` (renders in the grid while a shelf it can't join is on screen) |
+| #38 semantic search | #114 | `src/search/{embedding,vectorize,search,reembed}.ts` behind `SEMANTIC_SEARCH`, FTS5 kept as the fallback |
+
+Result at `7307f06`: `pnpm lint` 0 errors · `pnpm -r typecheck` clean · API 376/376 · web 304/304 ·
+`pnpm --filter @keepsake/web e2e` **82/82**, mobile and desktop · preflight all pass except
+`lfs-pointers`, which is this sandbox having no `git-lfs`, not a repository fault. Re-run at
+`2108d37` after #139 landed mid-check, and again on #114's merged head before merging it (API
+397 passed / 3 skipped, web 316, two full CI runs green including e2e).
+
+The three skips are the `REAL_AI=1` block and are expected: CI sets no `CLOUDFLARE_API_TOKEN`, so
+that block is skipped everywhere except a run someone starts by hand with a credential. It has
+been run exactly once, by the session that had one.
+
+Two things worth carrying, neither of them a regression:
+
+- **The milestone's plumbing was green for a day with no visible half at all.** Aspects were
+  persisted, indexed, backfillable and served through `PublicListing.aspects` — and no view
+  rendered one, which is how the first real production listing showed a visitor the single word
+  `OTHER` (#135). #139 fixed that a few hours after this check and is now on `main`. The lesson
+  outlives the fix: five green PRs closing five issues is true about the code and says nothing
+  about what a visitor gets, which is why the table above records where each item lives rather
+  than only that it closed.
+- **Shelves (#39) have no browser-level coverage.** They are tested at the API (`shelves.test.ts`,
+  including the floor and the cache TTL) and in jsdom (`test/app/index.test.tsx`), but no
+  `e2e/*.spec.ts` mentions a shelf — `browse.spec.ts` predates them. The 82 green e2e specs
+  therefore say nothing about a shelf rendering in a real browser.
+- **The same gap, one layer down, was real rather than theoretical.** #37's backfill and #38's
+  re-embedding were each green on their own branch and did not meet: the backfill wrote aspects
+  and never embedded them, so the only path that reaches pre-existing listings left them out of
+  vector search entirely. Nothing failed, because nothing tested the pair. Found by reading #114
+  against `main` before merging it, not by a test — which is the argument for merging early that
+  `docs/runbooks/issue-workflow.md` already makes, arriving a second time.

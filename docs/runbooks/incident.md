@@ -1,6 +1,8 @@
 # Runbook: incident
 
-Status: current for M0; expand as M4 observability (Workers Logs, admin queue) lands.
+Status: current. M4's observability landed — Workers Logs, the admin queue, `/api/admin/health`,
+the report-pressure alert and (since #150) the Observatory and the daily digest are all live and
+described below.
 
 ## First, check `/health`
 
@@ -8,9 +10,14 @@ Status: current for M0; expand as M4 observability (Workers Logs, admin queue) l
 curl -s https://keepsake.ing/health | jq
 ```
 
-`{ok, commit, env, checks}` — asserts DB/BUCKET/KV/AI/EMAIL/ASSETS bindings. `EMAIL: degraded`
-is expected-and-known if Cloudflare Email Service onboarding hasn't landed yet (see
-`docs/runbooks/deploy.md`); any other binding degraded or `ok: false` is a real incident.
+`{ok, commit, env, checks}` — asserts DB/BUCKET/KV/AI/EMAIL/ASSETS bindings, with D1/R2/KV doing
+real reads rather than presence checks (#15). Email Service onboarding **is** done (2026-09-06), so
+`EMAIL: degraded` is no longer an expected steady state on either tier — treat it as a real
+incident like any other degraded binding. `ok: false` returns HTTP 503.
+
+If every path answers `503` naming `COMMIT_SHA`, that is the production guard, not an outage:
+someone ran `wrangler deploy --env production` without `--var COMMIT_SHA:$(git rev-parse HEAD)`.
+Redeploy with the flag — see [deploy.md](deploy.md#manual-deploys-and-commit_sha-issue-24).
 
 ## Common failure modes and where to look
 
@@ -22,6 +29,7 @@ is expected-and-known if Cloudflare Email Service onboarding hasn't landed yet (
 | A listing that should be held is publicly visible | moderation decide logic regression — this should never happen (fail-closed by design) | `apps/api/src/moderation/decide.ts` + its test matrix; treat as a P0, not a queue item |
 | Web bundle blank/broken in production | a barrel import slipped past lint (see `docs/design/README.md#barrel-ban`), or a version-skew client is running against a moved API contract | check the deployed commit's bundle for a bare `@keepsake/*` import; check `/version.json` |
 | A captured log line has an unredacted secret in it | `@keepsake/observability/redact`'s `SENSITIVE_KEY_RE` doesn't cover a new field name | extend the regex, add a test that breaks without the fix, treat any live leak as urgent regardless of severity elsewhere |
+| A captured log line has an unredacted **email or phone** in it | a *shape* problem, not a field-name one — `SENSITIVE_KEY_RE` is the wrong lever | fix the pattern in `packages/observability/src/patterns.ts` (one definition, shared with moderation's `contactInfo.ts`), and add a must-survive case alongside it so the fix can't over-redact. If the line came from a bare `console.*` rather than `captureException`, no redactor was ever in the path — scrub at the call site, as `sendMail.ts` does |
 
 ## Data loss
 
@@ -166,16 +174,33 @@ Cron failures reach Workers Logs: `scheduled` awaits each job and rethrows
 (`apps/api/src/index.ts`), so a failing sweep is both a structured `captureException` log line
 tagged with the cron name and a failed invocation in the Cloudflare dashboard, rather than a
 detached unhandled rejection. `moderationRetry` additionally catches per listing, so one poisoned
-row no longer aborts the batch. `GET /api/admin/health` returns `ok: false` when either
-`cron:last:<name>` heartbeat goes stale (30 minutes for `moderationRetry`, 26 hours for
-`orphanSweep`).
+row no longer aborts the batch. `GET /api/admin/health` returns `ok: false` when any
+`cron:last:<name>` heartbeat goes stale. The names, schedules and thresholds all live in
+`apps/api/src/cron/registry.ts` — 30 minutes for `moderationRetry`, 26 hours for `orphanSweep`
+and `dailyDigest` — and both `/api/admin/health` and the digest read them through the same
+`readCronHeartbeats`, so the two cannot disagree about whether a job has stopped.
 
 Unlike the Sentry setup this replaced (issue #14), none of that depends on a secret being
 provisioned — Workers Logs is enabled by `[observability]` in `wrangler.toml`, not a DSN, so it's
-live on every deploy with nothing left to set up. What it does **not** give you: push
-notification (nobody's phone buzzes — check the dashboard or `wrangler tail`), more than 3 days of
-retention on the Free plan, or issue grouping across repeated occurrences of the same error. A
-Tail Worker or Logpush could add push alerting later; nothing here does that yet.
+live on every deploy with nothing left to set up. What it does **not** give you: more than 3 days of
+retention on the Free plan, or issue grouping across repeated occurrences of the same error.
+
+Two things now read it back, so "check the dashboard or `wrangler tail`" is no longer the only
+option (#150):
+
+- **`GET /api/admin/observatory`** queries the Workers Observability API and returns the error and
+  warning lines, with counts over the window as well as the capped feed — so one stray error and
+  four thousand identical ones are distinguishable, which the feed alone cannot do. It clamps its
+  own window to the 3-day retention above and reports the window it actually used, rather than
+  labelling three days of data as thirty.
+- **The daily digest** (00:07 UTC) mails a summary whether or not anything is wrong. That is the
+  closest thing to push notification here, and it is deliberately unconditional: a digest that
+  only sent on bad news would be silent in the case where the thing that notices is the thing that
+  broke, so **the absence of the email is itself the alarm**.
+
+Neither is a Tail Worker or Logpush — there is still no streaming consumer, so nothing buzzes a
+phone within seconds of an error. The gap this closes is "nobody would ever look", not "nobody
+finds out immediately".
 
 ## Reports / abuse
 
@@ -187,8 +212,9 @@ admin queue (`docs/runbooks/admin.md`). This is not itself an incident — it's 
 **It does need a human, though, and until issue #89 nothing said so.** `GET /health` is a Worker
 liveness check: an auto-hide changes a *listing's* `status`, so `/health` (and therefore
 `uptime.yml`) reported `ok: true` right through the whole event. The auto-hide's
-`captureMessage` writes to Workers Logs, which — see above — has no Tail Worker and no Logpush
-reading it on a schedule. The admin queue knew, but only for someone who opened the admin queue.
+`captureMessage` writes to Workers Logs, which — see above — still has no streaming consumer; at
+the time #89 was filed nothing read it on any schedule at all. The admin queue knew, but only for
+someone who opened the admin queue.
 
 Two things now escalate it, both keyed on the same predicate — a listing that is currently
 `hidden`, has a `report_autohide` moderation event, and has no `kind = 'admin'` event at or after
@@ -228,6 +254,23 @@ before raising any limit.
 ## Escalation
 
 There is no on-call rotation — Kiarash is the only admin (`ADMIN_TOKEN`, one secret). If the
-admin token is compromised, rotate it immediately with `wrangler secret put ADMIN_TOKEN --env
-production` and check `moderation_events` for any `admin`-kind events since the suspected
-compromise window.
+admin token is compromised, check `moderation_events` for any `admin`-kind events since the
+suspected compromise window, and rotate — **which is two steps now, not one**:
+
+```sh
+wrangler secret put ADMIN_TOKEN --env production   # what the Worker accepts
+# then edit the table in AGENTS.md → "Admin tokens" in the same breath, and commit
+```
+
+Since 2026-09-07 both tiers' tokens are written down in `AGENTS.md` on purpose (see
+[admin.md](admin.md#where-a-session-gets-the-token)), so rotating only the Worker secret leaves
+every session — local, phone and claude.ai — holding a dead token, and rotating only the file
+leaves the live one valid. The old value stays in git history either way: rotation makes it
+useless, it does not erase it. Rotating also invalidates every open admin browser session
+immediately, which is expected after a suspected leak, not a bug.
+
+One consequence worth stating in an incident: **there are no scopes.** The same string that reads
+the Observatory can hide listings, ban owners, and read a requester's email address and phone
+number, so a leaked production token is a personal-data exposure — go to
+[Data breach (PIPEDA)](#data-breach-pipeda--a-suspected-exposure-of-personal-data) above, do not
+treat it as availability-only.
