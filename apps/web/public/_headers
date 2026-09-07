@@ -49,10 +49,17 @@
 # apps/web/src/lib/geoReverse.ts's exported REVERSE_GEOCODE_ORIGINS;
 # apps/web/test/guards/reverseGeocodeCsp.test.ts fails if this line or
 # securityHeaders.ts stops covering one of them. The Google Ads and
-# Cloudflare Web Analytics *beacons* are connect-src too and are deliberately
-# NOT listed: neither provider is configured in any environment today, and
-# whoever enables one has to add its endpoint here or ship a tag that reports
-# nothing.
+# Cloudflare Web Analytics *beacons* are connect-src too, and they ARE listed
+# now: script-src alone let a tag load and then silently drop every beacon it
+# tried to send, which is the same "reports nothing" shape #132 already shipped
+# once. The same guard now also fails if a consent.js PROVIDERS host is missing
+# from connect-src, so a provider can't be added without its endpoint.
+#   UNVERIFIED, and it matters before ads go live: www.google.com and
+#   googleads.g.doubleclick.net are where a gtag conversion ping actually goes,
+#   taken from Google's documented endpoints and NOT observed against a real
+#   tag — no Google Ads id is configured in any environment, so there has never
+#   been a live tag here to watch. Confirm the real host set in a browser's
+#   network panel before enabling advertising; do not trust this list.
 #
 # https://challenges.cloudflare.com is Turnstile's script (loaded via a
 # dynamically-inserted <script src>, src/ui/Turnstile.web.tsx) and its widget
@@ -80,7 +87,7 @@
 # only honor the older header) stops the give flow and the admin page from
 # being framed at all — the concrete risk named in the issue.
 /*
-  Content-Security-Policy: default-src 'self'; connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org; script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com 'sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g=' 'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' 'sha256-d6qbtEYff/sB38YyzuzhASbVmmOidU/UFC9mNit47j4='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
+  Content-Security-Policy: default-src 'self'; connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org https://static.cloudflareinsights.com https://www.googletagmanager.com https://www.google.com https://googleads.g.doubleclick.net; script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com 'sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g=' 'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' 'sha256-d6qbtEYff/sB38YyzuzhASbVmmOidU/UFC9mNit47j4='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
   X-Frame-Options: DENY
   Referrer-Policy: strict-origin-when-cross-origin
   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload

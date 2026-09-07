@@ -219,9 +219,11 @@
         </p>
         <p>
           <strong>Strictly necessary.</strong> Not a choice, because without it there is no site:
-          the device key that proves a listing is yours, your light/dark preference, and the
-          record of this very decision. All of it stays in your browser's local storage. None of
-          it goes to anyone else.
+          the device key that proves a listing is yours, your light/dark preference, a flag
+          recording that you've been here before (it's what shows a first-time visitor a short
+          explainer instead of dropping them straight into the feed), and the record of this very
+          decision. All of it stays in your browser's local storage. None of it goes to anyone
+          else.
         </p>
         <p>
           <strong>Analytics.</strong> Off unless you say yes. If you say yes, we load
@@ -233,8 +235,11 @@
           <strong>Advertising.</strong> Off unless you say yes. If you say yes, we load the
           Google Ads tag from <code>www.googletagmanager.com</code> so we can tell
           which advert brought you here. Google is the recipient, and it may set cookies on this
-          site. We never send it your photos, your story text, your email, or anything a
-          requester wrote to you.
+          site. Two things you go on to do are reported to Google as well, and it's worth naming
+          them rather than leaving them under "measurement": when a listing you posted goes live,
+          and when you send a request for someone's keepsake. Those are bare signals that it
+          happened &mdash; we never send your photos, your story text, your email, your postcode,
+          or anything a requester wrote to you.
         </p>
         <p>
           One more thing worth saying plainly: if we haven't switched a tool on for a particular
@@ -317,8 +322,9 @@
           answer.
         </p>
         <p>
-          What we keep and for how long: your device key, preferences, and last search location
-          live in your own browser's storage, not ours, until you clear them. Photos and listing
+          What we keep and for how long: your device key, preferences, the been-here-before flag,
+          and last search location live in your own browser's storage, not ours, until you clear
+          them. Photos and listing
           text live for as long as the listing exists, plus 30 days if it's rejected, withdrawn, or
           hidden. Request notes/emails/phone numbers live until the request is withdrawn (see
           above) or you ask us to remove them. A link we send to verify an email or recover your
@@ -397,6 +403,17 @@
             address is unbreakable; it says what the hashing does and doesn't buy you. The email
             retention rule is unchanged and now stated plainly, alongside the self-service button
             that removes it.
+          </p>
+          <p>
+            Later the same day, a review of every page against the code behind it turned up three
+            more things this page had not been saying. "Advertising" described the Google tag as
+            telling us which advert brought you here, and left out that two of your actions &mdash;
+            a listing going live, and a request being sent &mdash; are reported to Google too; that
+            section now names both. The list of what lives in your browser's storage was written as
+            a complete list and wasn't: it never mentioned the flag that records you've been here
+            before, which is what shows a first-time visitor an explainer instead of the feed. Both
+            the "Strictly necessary" group and the retention list now include it. Nothing about what
+            Keepsake does changed &mdash; these are the page catching up with the code again.
           </p>
         </section>
 

@@ -80,6 +80,19 @@ jobs:
           EXPO_PUBLIC_SITE_URL: ${{ vars.EXPO_PUBLIC_SITE_URL }}
           EXPO_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.EXPO_PUBLIC_TURNSTILE_SITE_KEY }}
           EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN: ${{ vars.EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN }}
+          # The advertising half of the consent banner. These were missing, so
+          # `consent.js`'s `meta()` kill switch saw an unsubstituted
+          # `%EXPO_PUBLIC_GOOGLE_ADS_ID%` on every deployed build and nothing
+          # ever loaded — the Advertising group offered a choice that could not
+          # take effect, whatever a visitor clicked. Passing them here does not
+          # turn ads on: with the GitHub Environment variables unset (they are),
+          # each resolves to an empty string and the kill switch still holds.
+          # Setting the variables is the deliberate act that enables the tag —
+          # and before doing that, confirm the conversion endpoints in
+          # `apps/web/public/_headers`'s connect-src against a real browser.
+          EXPO_PUBLIC_GOOGLE_ADS_ID: ${{ vars.EXPO_PUBLIC_GOOGLE_ADS_ID }}
+          EXPO_PUBLIC_GOOGLE_ADS_GIVE_LABEL: ${{ vars.EXPO_PUBLIC_GOOGLE_ADS_GIVE_LABEL }}
+          EXPO_PUBLIC_GOOGLE_ADS_REQUEST_LABEL: ${{ vars.EXPO_PUBLIC_GOOGLE_ADS_REQUEST_LABEL }}
           EXPO_PUBLIC_ENV: ${{ env.DEPLOY_ENV }}
           COMMIT_SHA: ${{ github.sha }}
         run: pnpm --filter @keepsake/web export

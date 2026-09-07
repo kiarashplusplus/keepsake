@@ -72,6 +72,16 @@ export function AppFooter(): React.ReactElement {
             Terms
           </Text>
         </View>
+        {/* `AppHeader` hides its own About link below NARROW_BREAKPOINT, so on
+            a phone this footer is the only route to `/about` — the page
+            carrying the how-it-works explanation and the US/Canada
+            availability line. `/welcome`, the first screen a new visitor
+            sees, links only to `/` and `/give`. */}
+        <View accessibilityRole="link" {...({ href: "/about" } as object)}>
+          <Text variant="caption" color="ink">
+            About
+          </Text>
+        </View>
         {/* Web-only: `/consent.js` is a browser script, and there is nothing
             to reopen on a platform that never showed the banner. */}
         {Platform.OS === "web" ? (
@@ -86,6 +96,13 @@ export function AppFooter(): React.ReactElement {
             </Text>
           </Pressable>
         ) : null}
+        {/* The three static pages carry this in their own footers, but the
+            app is where postcode search and the per-listing distances
+            actually render — CC BY 4.0 asks for attribution where the
+            material is used, not only on the marketing pages. */}
+        <Text variant="caption" color="textSecondary">
+          Data: postal codes © GeoNames, CC BY 4.0
+        </Text>
         {gpc ? (
           <Text variant="caption" color="textSecondary">
             Global Privacy Control honoured — no advertising, no sale or sharing.

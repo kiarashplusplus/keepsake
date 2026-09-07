@@ -541,7 +541,7 @@
       'ks-consent-necessary',
       'Strictly necessary',
       true,
-      'Your device key, your theme, and this choice itself. Always on — it is what makes the site work, not a preference.'
+      'Your device key, your theme, whether you have been here before, and this choice itself. Always on — it is what makes the site work, not a preference.'
     );
     necessary.input.checked = true;
 
@@ -555,7 +555,7 @@
       'ks-consent-advertising',
       'Advertising',
       false,
-      'Google Ads measurement, so we can tell which advert brought you here.'
+      'Google Ads measurement — which advert brought you here, and whether you went on to give something or ask for one.'
     );
     let sale = categoryRow(
       'ks-consent-sale',

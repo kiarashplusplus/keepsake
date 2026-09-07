@@ -22,6 +22,7 @@ import { Turnstile, type TurnstileHandle, type TurnstileStatus } from "@/ui/Turn
 import { Page } from "@/ui/Page";
 import { useColors } from "@/ui/theme";
 import { AgeGateField, isAgeGateValid } from "@/features/ageGate/AgeGateField";
+import { LegalAssent } from "@/ui/LegalAssent";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { coverPhoto, makeClientId } from "@/features/give/giveDraft";
 import { editStepForReason, resolveReviewOutcome } from "@/features/give/reviewOutcome";
@@ -346,6 +347,8 @@ export default function GiveReview(): React.ReactElement {
             {submitError}
           </Text>
         ) : null}
+
+        <LegalAssent action="give" />
 
         <View style={{ flexDirection: "row" }}>
           <Button

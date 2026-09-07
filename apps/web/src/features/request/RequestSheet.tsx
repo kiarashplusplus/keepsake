@@ -20,6 +20,7 @@ import { ApiError } from "@/api/client";
 import { hashIdempotencyKey } from "@/lib/hashIdempotencyKey";
 import { track } from "@/lib/analytics";
 import { AdsConversions, trackConversion } from "@/lib/adsEvents";
+import { LegalAssent } from "@/ui/LegalAssent";
 import { AnalyticsEvents } from "@/lib/analyticsEvents";
 
 const NoteSchema = z
@@ -198,6 +199,8 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
               {submitError}
             </Text>
           ) : null}
+
+          <LegalAssent action="request" />
 
           <View style={{ flexDirection: "row" }}>
             <Button

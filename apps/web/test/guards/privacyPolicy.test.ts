@@ -50,6 +50,7 @@ const ME_ROUTE = path.join(API_SRC, "routes/me.ts");
 const ORPHAN_SWEEP = path.join(API_SRC, "cron/orphanSweep.ts");
 const MIGRATIONS = path.resolve(WEB_ROOT, "../api/migrations");
 const EMAIL_SCREEN = path.join(WEB_ROOT, "app/mine/email.tsx");
+const ADS_EVENTS = path.join(WEB_ROOT, "src/lib/adsEvents.ts");
 
 /**
  * Every `<h2>` on the page, in source order. The list is the point: the two
@@ -488,5 +489,63 @@ describe("privacy policy vs. how long an email is kept (#60)", () => {
     expect(fs.readFileSync(EMAIL_SCREEN, "utf8")).toContain('label="Remove"');
     expect(withoutComments(fs.readFileSync(ME_ROUTE, "utf8"))).toContain('meRoutes.delete("/email"');
     expect(PRIVACY_TEXT).toContain('href="/mine/email"');
+  });
+});
+
+/**
+ * What Google is told, as against what the page says Google is told.
+ *
+ * The Advertising section described the tag as telling us "which advert
+ * brought you here" — inbound attribution, and nothing else. `adsEvents.ts`
+ * also reports a conversion when a listing goes live and when a request is
+ * sent. No content rides along (neither call site passes `params`), so the
+ * page's "we never send it your photos, your story text, your email" was
+ * true; but a reader was told about attribution and not told that two of
+ * their own actions are reported. Purpose is the thing a privacy notice
+ * exists to state — the same omission #88 was written for, one provider
+ * over.
+ *
+ * Built like `AI_CALL_SITES`: the registry below is hand-maintained, the
+ * list it is checked against is parsed out of the code, and the two
+ * disagreeing is the failure. A third conversion fails here until the policy
+ * says what it reports.
+ */
+const ADS_CONVERSION_DISCLOSURES: Record<string, string> = {
+  // `AdsConversions.GiveLive` — fired from the status-transition effect in
+  // `app/give/review.tsx` once moderation approves, not on submit.
+  GiveLive: "when a listing you posted goes live",
+  // `AdsConversions.RequestSent` — fired from `RequestSheet.tsx` on send.
+  RequestSent: "when you send a request for someone's keepsake",
+};
+
+/** Key names of the `AdsConversions` object literal in `src/lib/adsEvents.ts`. */
+function adsConversionNames(): string[] {
+  const source = fs.readFileSync(ADS_EVENTS, "utf8");
+  const block = /export const AdsConversions = \{([\s\S]*?)\n\} as const;/.exec(source);
+  if (block?.[1] === undefined) throw new Error("could not find AdsConversions in src/lib/adsEvents.ts");
+  // Two-space indent is what makes a key top-level in the object literal;
+  // doc comments between entries are indented two as well, so require the
+  // key shape rather than just the indent.
+  return [...block[1].matchAll(/^ {2}(\w+):\s*"/gm)].map((m) => m[1] ?? "").sort();
+}
+
+describe("privacy policy vs. the Google Ads conversions", () => {
+  it("finds the conversion registry (positive control)", () => {
+    expect(adsConversionNames().length).toBeGreaterThan(0);
+  });
+
+  it("has a disclosure registered for every conversion the app reports", () => {
+    expect(adsConversionNames()).toEqual(Object.keys(ADS_CONVERSION_DISCLOSURES).sort());
+  });
+
+  it.each(Object.entries(ADS_CONVERSION_DISCLOSURES))("privacy.html says %s is reported", (_name, phrase) => {
+    expect(PRIVACY_TEXT).toContain(phrase);
+  });
+
+  it("still says no listing content goes with them", () => {
+    // The reassurance is only worth keeping if it stays true alongside the
+    // new disclosure — the conversions are bare signals, and the page has to
+    // go on saying what does not accompany them.
+    expect(PRIVACY_TEXT).toContain("we never send your photos");
   });
 });

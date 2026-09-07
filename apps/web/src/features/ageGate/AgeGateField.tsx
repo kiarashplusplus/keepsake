@@ -86,7 +86,13 @@ export function AgeGateField({ value, onChangeText, touched, onBlur }: AgeGateFi
       onBlur={onBlur}
       min={bounds.min}
       max={bounds.max}
-      helper={error === undefined ? "Not stored — only checked against our minimum age." : undefined}
+      // "Not stored" was true but read as "never leaves your browser", which
+      // is the exact impression `privacy.html`'s Minimum age section goes out
+      // of its way NOT to give: "It is sent to us along with the listing or
+      // the request — we're saying so plainly rather than implying it never
+      // leaves your browser". The helper now says the same thing the policy
+      // does, in the one place a person actually reads it.
+      helper={error === undefined ? "Sent with your post, checked against our minimum age, then discarded." : undefined}
       error={error}
       accessibilityHint="Pick your date of birth"
     />

@@ -56,14 +56,24 @@ const CONTENT_SECURITY_POLICY = [
   // `apps/web/test/guards/reverseGeocodeCsp.test.ts` fails if this string
   // or `_headers` stops covering one.
   //
-  // Note for whoever turns analytics on: `script-src` already permits the
-  // Google Ads and Cloudflare Web Analytics *scripts*, but their beacons are
-  // `connect-src` and are NOT permitted here. Neither is configured in any
-  // environment today (no `ks-google-ads-id` / `ks-cf-beacon-token` meta is
-  // served), so nothing is broken right now — but enabling one without
-  // adding its endpoint here would load a tag that silently reports nothing,
-  // which is exactly the drift `launch-audit.md` §7 already caught once.
-  "connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org",
+  // The Google Ads and Cloudflare Web Analytics *beacons* are `connect-src`,
+  // not `script-src`, and they are permitted here now. They were not, which
+  // meant turning either provider on would have loaded a tag whose every
+  // beacon the browser then dropped — a tag that silently reports nothing,
+  // the same shape #132 shipped for "Use my location" and the same shape
+  // `launch-audit.md` §7 caught in the policy. `reverseGeocodeCsp.test.ts`
+  // now also fails if a `consent.js` PROVIDERS host is missing from this
+  // directive, so a provider cannot be added without its endpoint.
+  //
+  // UNVERIFIED, and it matters before ads go live: `www.google.com` and
+  // `googleads.g.doubleclick.net` are where a gtag conversion ping actually
+  // goes, taken from Google's documented endpoints and NOT observed against
+  // a real tag — no Google Ads id is configured in any environment, so there
+  // has never been a live tag here to watch. Confirm the real host set in a
+  // browser's network panel before enabling advertising.
+  "connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org " +
+    "https://static.cloudflareinsights.com https://www.googletagmanager.com " +
+    "https://www.google.com https://googleads.g.doubleclick.net",
   "script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com " +
     "'sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g=' " +
     "'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' " +
