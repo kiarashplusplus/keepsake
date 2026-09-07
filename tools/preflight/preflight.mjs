@@ -190,7 +190,70 @@ function checkFonts(ctx) {
 }
 
 const MIGRATIONS_DIR = "apps/api/migrations";
-const MIGRATION_NAME_RE = /^(\d+)_[A-Za-z0-9_]+\.sql$/;
+
+// Two accepted filename forms, both `<digits>_slug.sql`:
+//
+//   0001_init.sql              legacy, four-digit sequential (0001..0008 on main)
+//   20260907143012_slug.sql    current, a UTC timestamp: YYYYMMDDHHMMSS
+//
+// Why two. D1 records applied migrations in `d1_migrations` **by filename**,
+// so a rename de-registers an already-applied migration and the next deploy
+// re-runs it (issue #99: a renumbered `0007_notify_failed.sql` -> `0008_...`
+// re-ran `ALTER TABLE ... ADD COLUMN` and died on `duplicate column name`,
+// breaking `deploy (preview)` for every concurrent pull request, because
+// preview is one shared database — #66/#73). Renaming the legacy files to fit
+// the new convention would *be* that bug, so they stay exactly as they are and
+// only new migrations get timestamps.
+//
+// Why timestamps for new ones. A sequential number has to be claimed when the
+// file is written, and two branches cut from the same `main` claim the same
+// one. Whoever merges second must renumber on rebase — and by then the shared
+// preview D1 has already applied the file under the old name. A timestamp is
+// claimed from the clock, not from the state of `main`, so two concurrent
+// branches cannot collide and a rebase never forces a rename.
+const LEGACY_MIGRATION_NAME_RE = /^(\d{4})_[A-Za-z0-9_]+\.sql$/;
+const TIMESTAMP_MIGRATION_NAME_RE = /^(\d{14})_[A-Za-z0-9_]+\.sql$/;
+
+// `wrangler d1 migrations apply` orders files by `parseInt(basename.split("_")[0])`
+// ascending, falling back to a plain string compare when two prefixes parse to
+// the same number (wrangler-dist/cli.js `compareSegments`/`leadingMigrationNumber`);
+// `@cloudflare/vitest-pool-workers`'s `readD1Migrations`, which the apps/api
+// suite applies against a fresh D1 on every run, sorts by the identical
+// expression. Mirrored here so preflight asserts the order that actually runs
+// rather than a lexicographic guess.
+export function migrationApplyOrder(basenames) {
+  const leading = (name) => Number.parseInt(name.split("_")[0], 10);
+  return [...basenames].sort((a, b) => {
+    const an = leading(a);
+    const bn = leading(b);
+    if (an !== bn) {
+      if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
+      if (Number.isFinite(an)) return -1;
+      if (Number.isFinite(bn)) return 1;
+    }
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+}
+
+// A 14-digit prefix has to be a real UTC instant, not just fourteen digits: a
+// typo'd month or hour still sorts fine but stops the name meaning what a
+// reader thinks it means. Year >= 2000 is the load-bearing part — it is what
+// guarantees every timestamped migration sorts after every legacy 000N one.
+function timestampPrefixProblem(prefix) {
+  const year = Number(prefix.slice(0, 4));
+  const month = Number(prefix.slice(4, 6));
+  const day = Number(prefix.slice(6, 8));
+  const hour = Number(prefix.slice(8, 10));
+  const minute = Number(prefix.slice(10, 12));
+  const second = Number(prefix.slice(12, 14));
+  if (year < 2000 || year > 2999) return `year ${prefix.slice(0, 4)} is not 2000-2999`;
+  if (month < 1 || month > 12) return `month ${prefix.slice(4, 6)} is not 01-12`;
+  if (day < 1 || day > 31) return `day ${prefix.slice(6, 8)} is not 01-31`;
+  if (hour > 23) return `hour ${prefix.slice(8, 10)} is not 00-23`;
+  if (minute > 59) return `minute ${prefix.slice(10, 12)} is not 00-59`;
+  if (second > 59) return `second ${prefix.slice(12, 14)} is not 00-59`;
+  return null;
+}
 
 function stripTrailingSqlComments(text) {
   let t = text.replace(/[ \t\r\n]+$/, "");
@@ -206,24 +269,42 @@ function stripTrailingSqlComments(text) {
   return t;
 }
 
-function checkMigrations(ctx) {
-  if (!ctx.exists(MIGRATIONS_DIR)) return { status: "skip", details: [`${MIGRATIONS_DIR} not present`] };
-  const files = ctx.walk(MIGRATIONS_DIR)
+// Top-level *.sql in the migrations directory, which is exactly what wrangler
+// picks up (`migrations_pattern` defaults to `<migrations_dir>/*.sql`).
+function migrationFiles(ctx) {
+  return ctx.walk(MIGRATIONS_DIR)
     .filter((f) => path.posix.dirname(f) === MIGRATIONS_DIR && f.endsWith(".sql"))
     .sort();
+}
+
+function checkMigrations(ctx) {
+  if (!ctx.exists(MIGRATIONS_DIR)) return { status: "skip", details: [`${MIGRATIONS_DIR} not present`] };
+  const files = migrationFiles(ctx);
 
   if (files.length === 0) return { status: "skip", details: [`${MIGRATIONS_DIR} has no *.sql files yet`] };
 
   const details = [];
   const prefixToFiles = new Map();
+  const legacyNumbers = [];
+  let timestamped = 0;
   for (const file of files) {
     const base = path.posix.basename(file);
-    const match = base.match(MIGRATION_NAME_RE);
-    if (!match || match[1].length !== 4) {
-      details.push(`${file}: name must be NNNN_slug.sql with a four-digit prefix`);
+    const legacy = base.match(LEGACY_MIGRATION_NAME_RE);
+    const stamped = base.match(TIMESTAMP_MIGRATION_NAME_RE);
+    if (!legacy && !stamped) {
+      details.push(
+        `${file}: name must be YYYYMMDDHHMMSS_slug.sql (UTC, e.g. \`date -u +%Y%m%d%H%M%S\`) — or the legacy NNNN_slug.sql form, which is frozen at the migrations already on main`,
+      );
       continue;
     }
-    const prefix = match[1];
+    const prefix = (legacy ?? stamped)[1];
+    if (stamped) {
+      timestamped += 1;
+      const problem = timestampPrefixProblem(prefix);
+      if (problem) details.push(`${file}: ${problem} — the prefix must be a real UTC timestamp`);
+    } else {
+      legacyNumbers.push(Number.parseInt(prefix, 10));
+    }
     if (!prefixToFiles.has(prefix)) prefixToFiles.set(prefix, []);
     prefixToFiles.get(prefix).push(file);
 
@@ -235,23 +316,187 @@ function checkMigrations(ctx) {
 
   for (const [prefix, group] of prefixToFiles) {
     if (group.length > 1) {
-      details.push(`duplicate migration prefix ${prefix}: ${group.join(", ")}`);
+      details.push(
+        `duplicate migration prefix ${prefix}: ${group.join(", ")} — renaming one of these to break the tie de-registers it in d1_migrations if a deploy already applied it (#99); pick a fresh timestamp for whichever has not been deployed`,
+      );
     }
   }
 
-  const numbers = [...prefixToFiles.keys()].map((p) => Number.parseInt(p, 10)).sort((a, b) => a - b);
-  for (let i = 0; i < numbers.length; i += 1) {
+  // The legacy block is still required to be 0001-contiguous: a gap there
+  // means a file was deleted, which is the drift `migration-drift` exists to
+  // catch and is worth reporting even without git.
+  // Deduplicated so a duplicate prefix reports once, as a duplicate, instead
+  // of also dragging a confusing "gap" line along behind it.
+  const distinctLegacy = [...new Set(legacyNumbers)].sort((a, b) => a - b);
+  for (let i = 0; i < distinctLegacy.length; i += 1) {
     const expected = i + 1;
-    if (numbers[i] !== expected) {
+    if (distinctLegacy[i] !== expected) {
       details.push(
-        `migration numbering has a gap or does not start at 0001: expected ${String(expected).padStart(4, "0")}, found ${numbers[i] !== undefined ? String(numbers[i]).padStart(4, "0") : "nothing"}`,
+        `legacy migration numbering has a gap or does not start at 0001: expected ${String(expected).padStart(4, "0")}, found ${String(distinctLegacy[i]).padStart(4, "0")}`,
       );
       break;
     }
   }
 
+  // The invariant wrangler's ordering rests on: every timestamped migration
+  // must run after every legacy one. Guaranteed by the year >= 2000 rule
+  // above, asserted here so a future loosening of that rule fails loudly.
+  const order = migrationApplyOrder(files.map((f) => path.posix.basename(f)));
+  const lastLegacyAt = order.reduce((acc, name, i) => (LEGACY_MIGRATION_NAME_RE.test(name) ? i : acc), -1);
+  const firstStampedAt = order.findIndex((name) => TIMESTAMP_MIGRATION_NAME_RE.test(name));
+  if (firstStampedAt !== -1 && lastLegacyAt > firstStampedAt) {
+    details.push(
+      `apply order interleaves the two naming schemes (${order[firstStampedAt]} would run before ${order[lastLegacyAt]}); every timestamped migration must sort after every legacy one`,
+    );
+  }
+
   if (details.length > 0) return { status: "fail", details };
-  return { status: "pass", details: [`${files.length} migration(s), 0001-contiguous`] };
+  return {
+    status: "pass",
+    details: [
+      `${files.length} migration(s) (${distinctLegacy.length} legacy 0001-contiguous, ${timestamped} timestamped), apply order ${order[0]} … ${order[order.length - 1]}`,
+    ],
+  };
+}
+
+// ── migration-drift: D1's ledger is keyed on the filename ────────────────
+//
+// `d1_migrations` stores the filename, not a content hash or a stable id. So
+// once a deploy has applied `0007_notify_failed.sql`, that exact string is the
+// only thing that stops it running again — rename the file and the next deploy
+// re-runs its SQL against a schema that already has the change. Preview
+// deploys on **every** open pull request into one shared database (#66), so
+// the blast radius is every concurrent branch, not just yours.
+//
+// This is the one guard that needs history rather than the working tree, so it
+// shells out to git. Three rules:
+//
+//   1. Nothing that has landed on `main` may be modified, renamed or deleted.
+//   2. Nothing this branch has already committed (and therefore may already
+//      have deployed to preview) may vanish.
+//   3. A migration this branch *adds* must use the timestamp form, because the
+//      sequential form is what forces the rename in rule 2 after a rebase.
+//
+// It cannot run without a baseline to compare against. Rather than pass
+// silently — the failure mode AGENTS.md catalogues five times over — it
+// reports SKIP with the reason, and turns that SKIP into a FAIL wherever a
+// baseline is guaranteed to be fetchable (GitHub Actions, or an explicit
+// PREFLIGHT_REQUIRE_GIT_BASELINE=1).
+const BASELINE_REF = "origin/main";
+
+function gitRun(root, args) {
+  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
+  return {
+    ok: result.status === 0,
+    stdout: (result.stdout ?? "").trim(),
+    stderr: (result.stderr ?? "").trim(),
+  };
+}
+
+function baselineRequired(env = process.env) {
+  return env.GITHUB_ACTIONS === "true" || env.PREFLIGHT_REQUIRE_GIT_BASELINE === "1";
+}
+
+function cannotRun(reason) {
+  const required = baselineRequired();
+  const line = `${reason} — this check did NOT run`;
+  return {
+    status: required ? "fail" : "skip",
+    details: required
+      ? [`${line}, and a baseline is required here (GITHUB_ACTIONS/PREFLIGHT_REQUIRE_GIT_BASELINE)`]
+      : [line, `set PREFLIGHT_REQUIRE_GIT_BASELINE=1 to make this a failure instead of a skip`],
+  };
+}
+
+function isMigrationPath(p) {
+  return p.startsWith(`${MIGRATIONS_DIR}/`) && p.endsWith(".sql") && path.posix.dirname(p) === MIGRATIONS_DIR;
+}
+
+function checkMigrationDrift(ctx) {
+  if (!ctx.exists(MIGRATIONS_DIR)) return { status: "skip", details: [`${MIGRATIONS_DIR} not present`] };
+
+  if (!gitRun(ctx.root, ["rev-parse", "--git-dir"]).ok) {
+    return cannotRun(`${ctx.root} is not a git work tree (or git is not installed)`);
+  }
+  if (!gitRun(ctx.root, ["rev-parse", "--verify", "--quiet", `${BASELINE_REF}^{commit}`]).ok) {
+    return cannotRun(`no ${BASELINE_REF} ref — run: git fetch origin main`);
+  }
+  const mergeBase = gitRun(ctx.root, ["merge-base", BASELINE_REF, "HEAD"]);
+  if (!mergeBase.ok || mergeBase.stdout === "") {
+    return cannotRun(
+      `${BASELINE_REF} and HEAD share no merge base (a shallow clone will do this — fetch with depth 0)`,
+    );
+  }
+  const base = mergeBase.stdout;
+
+  const details = [];
+  const reported = new Set();
+
+  // Rule 1 — landed migrations are frozen. `git diff <commit> -- <path>`
+  // compares the commit against the *working tree*, so an edit that has not
+  // even been staged is caught.
+  const landed = gitRun(ctx.root, [
+    "diff", "--name-status", "-M", "--diff-filter=DMR", base, "--", MIGRATIONS_DIR,
+  ]);
+  if (!landed.ok) return cannotRun(`git diff against ${base.slice(0, 8)} failed: ${landed.stderr || "unknown error"}`);
+  for (const line of landed.stdout.split("\n").filter(Boolean)) {
+    const [status, from, to] = line.split("\t");
+    if (!isMigrationPath(from)) continue;
+    reported.add(from);
+    const applied = `d1_migrations already records "${path.posix.basename(from)}" as applied on preview and production`;
+    if (status.startsWith("R")) {
+      details.push(`${from} -> ${to}: renamed after landing on ${BASELINE_REF} — ${applied}, so the new name re-runs the SQL. Restore the name and add a new migration instead.`);
+    } else if (status.startsWith("D")) {
+      details.push(`${from}: deleted after landing on ${BASELINE_REF} — ${applied}; deleting it does not undo it. Restore the file and add a new migration that reverses the change.`);
+    } else {
+      details.push(`${from}: edited after landing on ${BASELINE_REF} — ${applied}, so this edit will never run anywhere it has already been applied. Revert it and add a new migration.`);
+    }
+  }
+
+  // Rule 2 — anything this branch committed may already be on shared preview,
+  // which redeploys on every push to an open pull request. `--no-renames` so a
+  // rename shows up as its old path being touched, which is what we want to
+  // notice. Bounded so a long-lived branch cannot make preflight slow.
+  const branchLog = gitRun(ctx.root, [
+    "log", "--max-count=500", "--pretty=format:", "--name-only", "--no-renames", `${base}..HEAD`, "--", MIGRATIONS_DIR,
+  ]);
+  if (branchLog.ok) {
+    for (const p of new Set(branchLog.stdout.split("\n").map((s) => s.trim()).filter(Boolean))) {
+      if (!isMigrationPath(p) || reported.has(p) || ctx.exists(p)) continue;
+      reported.add(p);
+      details.push(
+        `${p}: committed on this branch and then removed or renamed — every push to an open pull request deploys to the one shared preview D1 (#66), which has already recorded "${path.posix.basename(p)}" as applied. Keep the name. If the commit that added it was never pushed, amend or squash it away rather than renaming the file.`,
+      );
+    }
+  }
+
+  // Rule 3 — new migrations must be timestamped. A sequential number is
+  // claimed from the state of `main` at the moment the file is written, so two
+  // branches cut from the same `main` claim the same one, and the second to
+  // merge has to renumber — which is rule 2's failure, arrived at honestly.
+  const addedTracked = gitRun(ctx.root, ["diff", "--name-only", "--diff-filter=A", base, "--", MIGRATIONS_DIR]);
+  const addedUntracked = gitRun(ctx.root, ["ls-files", "--others", "--exclude-standard", "--", MIGRATIONS_DIR]);
+  const added = new Set(
+    [addedTracked, addedUntracked]
+      .filter((r) => r.ok)
+      .flatMap((r) => r.stdout.split("\n").map((s) => s.trim()))
+      .filter((p) => p && isMigrationPath(p) && ctx.exists(p)),
+  );
+  for (const p of [...added].sort()) {
+    if (TIMESTAMP_MIGRATION_NAME_RE.test(path.posix.basename(p))) continue;
+    details.push(
+      `${p}: new migrations must be named YYYYMMDDHHMMSS_slug.sql (UTC — \`date -u +%Y%m%d%H%M%S\`). A sequential prefix is a shared namespace: another branch cut from the same ${BASELINE_REF} can claim it too, and the one that merges second must rename on rebase, which de-registers it in d1_migrations (#99).`,
+    );
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+  const trackedCount = migrationFiles(ctx).length;
+  return {
+    status: "pass",
+    details: [
+      `${trackedCount} migration(s) checked against ${BASELINE_REF} (merge-base ${base.slice(0, 8)}): none renamed, edited or deleted; ${added.size} added, all timestamped`,
+    ],
+  };
 }
 
 const ENV_EXAMPLE_PATH = ".env.example";
@@ -523,7 +768,8 @@ function checkShellSyntax(ctx) {
 
 export const CHECKS = {
   fonts: { description: "@font-face url(/fonts/*) vs apps/web/public/fonts/*.ttf", run: checkFonts },
-  migrations: { description: "apps/api/migrations/NNNN_*.sql numbering and terminators", run: checkMigrations },
+  migrations: { description: "apps/api/migrations/*.sql naming, apply order and terminators", run: checkMigrations },
+  "migration-drift": { description: "no landed migration is renamed/edited/deleted (git)", run: checkMigrationDrift },
   "env-parity": { description: ".env.example vs wrangler.toml [vars] / [env.*.vars]", run: checkEnvParity },
   models: { description: '"@cf/" model ids confined to apps/api/src/models.ts', run: checkModels },
   exports: { description: "packages/*/package.json subpath exports (no \".\")", run: checkExports },

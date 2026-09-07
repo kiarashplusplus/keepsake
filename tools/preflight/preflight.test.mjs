@@ -15,7 +15,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { runChecks, parseEnvExample, parseToml } from "./preflight.mjs";
+import { runChecks, parseEnvExample, parseToml, migrationApplyOrder } from "./preflight.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PREFLIGHT_BIN = path.join(HERE, "preflight.mjs");
@@ -134,6 +134,233 @@ test("migrations: a trailing comment after the semicolon is fine", () => {
 test("migrations: skips when the directory is absent", () => {
   const result = runOne("migrations", {});
   assert.equal(result.status, "skip");
+});
+
+test("migrations: accepts the legacy block alongside timestamped migrations", () => {
+  const result = runOne("migrations", {
+    "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
+    "apps/api/migrations/0002_geo.sql": "CREATE TABLE b (id TEXT);\n",
+    "apps/api/migrations/20260907120000_notify_failed.sql": "ALTER TABLE a ADD COLUMN x TEXT;\n",
+  });
+  assert.equal(result.status, "pass");
+  assert.match(result.details.join("\n"), /2 legacy 0001-contiguous, 1 timestamped/);
+});
+
+test("migrations: fails on a name that is neither NNNN_ nor a 14-digit timestamp", () => {
+  const result = runOne("migrations", {
+    "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
+    "apps/api/migrations/add_a_column.sql": "ALTER TABLE a ADD COLUMN x TEXT;\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /YYYYMMDDHHMMSS_slug\.sql/);
+});
+
+test("migrations: fails on a 14-digit prefix that is not a real UTC instant", () => {
+  const result = runOne("migrations", {
+    "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
+    "apps/api/migrations/20261307120000_oops.sql": "ALTER TABLE a ADD COLUMN x TEXT;\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /month 13 is not 01-12/);
+});
+
+test("migrations: a duplicate prefix explains why renaming one is not the fix", () => {
+  const result = runOne("migrations", {
+    "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
+    "apps/api/migrations/0002_mine.sql": "CREATE TABLE b (id TEXT);\n",
+    "apps/api/migrations/0002_theirs.sql": "CREATE TABLE c (id TEXT);\n",
+  });
+  assert.equal(result.status, "fail");
+  const text = result.details.join("\n");
+  assert.match(text, /duplicate migration prefix 0002/);
+  assert.match(text, /d1_migrations/);
+  // The old code also emitted a bogus "gap" line for the duplicate; it should
+  // report the duplicate once and nothing else.
+  assert.doesNotMatch(text, /gap/);
+});
+
+// The order wrangler actually applies migrations in: `parseInt` on the leading
+// segment, not a string sort. `0009` before `20260101000000` is the property
+// the whole two-scheme arrangement rests on.
+test("migrationApplyOrder sorts numerically, legacy before timestamped", () => {
+  const order = migrationApplyOrder([
+    "20260101000000_b.sql",
+    "0010_ten.sql",
+    "0009_nine.sql",
+    "20250101000000_a.sql",
+    "0001_init.sql",
+  ]);
+  assert.deepEqual(order, [
+    "0001_init.sql",
+    "0009_nine.sql",
+    "0010_ten.sql",
+    "20250101000000_a.sql",
+    "20260101000000_b.sql",
+  ]);
+});
+
+// ── migration-drift ────────────────────────────────────────────────────
+//
+// These need real git history, so each builds a throwaway repository with an
+// `origin/main` ref planted by `git update-ref` — no network, no remote.
+
+function git(root, ...args) {
+  execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+// Commits `files` as `main`, points `refs/remotes/origin/main` at it, then
+// checks out a branch and applies `branchFiles` (a map of path -> string to
+// write, or `null` to delete) — committing them when `commitBranch` is set.
+function makeGitRepo({ main: mainFiles, branch: branchFiles = {}, commitBranch = false, plantOriginMain = true }) {
+  const root = makeTree(mainFiles);
+  git(root, "init", "-q", "-b", "main");
+  git(root, "config", "user.email", "preflight@example.com");
+  git(root, "config", "user.name", "preflight test");
+  git(root, "add", "-A");
+  git(root, "commit", "-q", "-m", "main");
+  if (plantOriginMain) git(root, "update-ref", "refs/remotes/origin/main", "HEAD");
+  if (Object.keys(branchFiles).length > 0 || commitBranch) {
+    git(root, "checkout", "-q", "-b", "feature");
+    for (const [rel, content] of Object.entries(branchFiles)) {
+      const abs = path.join(root, rel);
+      if (content === null) rmSync(abs, { force: true });
+      else {
+        mkdirSync(path.dirname(abs), { recursive: true });
+        writeFileSync(abs, content);
+      }
+    }
+    if (commitBranch) {
+      git(root, "add", "-A");
+      git(root, "commit", "-q", "-m", "feature");
+    }
+  }
+  return root;
+}
+
+function runDrift(options) {
+  const root = makeGitRepo(options);
+  try {
+    return runChecks(["migration-drift"], root)[0];
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const LANDED = {
+  "apps/api/migrations/0001_init.sql": "CREATE TABLE requests (id TEXT);\n",
+  "apps/api/migrations/0007_admin_request_removal.sql": "ALTER TABLE requests ADD COLUMN removed_at TEXT;\n",
+};
+
+test("migration-drift: passes when nothing that landed on origin/main moved", () => {
+  const result = runDrift({ main: LANDED });
+  assert.equal(result.status, "pass");
+});
+
+test("migration-drift: fails when a landed migration's contents are edited", () => {
+  const result = runDrift({
+    main: LANDED,
+    branch: {
+      "apps/api/migrations/0007_admin_request_removal.sql":
+        "ALTER TABLE requests ADD COLUMN removed_at TEXT;\nALTER TABLE requests ADD COLUMN sneaky TEXT;\n",
+    },
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /edited after landing on origin\/main/);
+});
+
+test("migration-drift: fails when a landed migration is renamed", () => {
+  const result = runDrift({
+    main: LANDED,
+    branch: {
+      "apps/api/migrations/0007_admin_request_removal.sql": null,
+      "apps/api/migrations/0008_admin_request_removal.sql": "ALTER TABLE requests ADD COLUMN removed_at TEXT;\n",
+    },
+    commitBranch: true,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /renamed after landing on origin\/main|deleted after landing on origin\/main/);
+  assert.match(result.details.join("\n"), /d1_migrations/);
+});
+
+test("migration-drift: fails when a landed migration is deleted", () => {
+  const result = runDrift({
+    main: LANDED,
+    branch: { "apps/api/migrations/0007_admin_request_removal.sql": null },
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /deleted after landing on origin\/main/);
+});
+
+test("migration-drift: fails when a new migration uses the legacy sequential form", () => {
+  const result = runDrift({
+    main: LANDED,
+    branch: { "apps/api/migrations/0008_notify_failed.sql": "ALTER TABLE requests ADD COLUMN n TEXT;\n" },
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /must be named YYYYMMDDHHMMSS_slug\.sql/);
+});
+
+test("migration-drift: passes when a new migration is timestamped", () => {
+  const result = runDrift({
+    main: LANDED,
+    branch: { "apps/api/migrations/20260907120000_notify_failed.sql": "ALTER TABLE requests ADD COLUMN n TEXT;\n" },
+  });
+  assert.equal(result.status, "pass");
+  assert.match(result.details.join("\n"), /1 added, all timestamped/);
+});
+
+// The #99 sequence itself: the branch adds a migration, pushes (so the shared
+// preview D1 applies it), then a rebase forces a rename. Nothing on
+// origin/main moved, so only the branch's own history can catch this.
+test("migration-drift: fails when a migration this branch already committed is renamed away", () => {
+  const root = makeGitRepo({
+    main: LANDED,
+    branch: { "apps/api/migrations/20260907120000_notify_failed.sql": "ALTER TABLE requests ADD COLUMN n TEXT;\n" },
+    commitBranch: true,
+  });
+  try {
+    assert.equal(runChecks(["migration-drift"], root)[0].status, "pass");
+    git(root, "mv",
+      "apps/api/migrations/20260907120000_notify_failed.sql",
+      "apps/api/migrations/20260908120000_notify_failed.sql");
+    git(root, "commit", "-q", "-m", "renumber on rebase");
+    const result = runChecks(["migration-drift"], root)[0];
+    assert.equal(result.status, "fail");
+    assert.match(result.details.join("\n"), /committed on this branch and then removed or renamed/);
+    assert.match(result.details.join("\n"), /20260907120000_notify_failed\.sql/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// A check that cannot run must say so, not pass. Locally that is a SKIP;
+// anywhere the baseline is guaranteed fetchable it is a FAIL.
+test("migration-drift: skips with a reason when origin/main cannot be resolved", () => {
+  const result = runDrift({ main: LANDED, plantOriginMain: false });
+  assert.equal(result.status, "skip");
+  assert.match(result.details.join("\n"), /no origin\/main ref/);
+  assert.match(result.details.join("\n"), /did NOT run/);
+});
+
+test("migration-drift: that skip becomes a failure when a baseline is required", () => {
+  const previous = process.env.PREFLIGHT_REQUIRE_GIT_BASELINE;
+  process.env.PREFLIGHT_REQUIRE_GIT_BASELINE = "1";
+  try {
+    const result = runDrift({ main: LANDED, plantOriginMain: false });
+    assert.equal(result.status, "fail");
+    assert.match(result.details.join("\n"), /a baseline is required here/);
+  } finally {
+    if (previous === undefined) delete process.env.PREFLIGHT_REQUIRE_GIT_BASELINE;
+    else process.env.PREFLIGHT_REQUIRE_GIT_BASELINE = previous;
+  }
+});
+
+test("migration-drift: skips outside a git work tree rather than passing", () => {
+  const result = runOne("migration-drift", {
+    "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
+  });
+  assert.equal(result.status, "skip");
+  assert.match(result.details.join("\n"), /not a git work tree/);
 });
 
 // ── env-parity ─────────────────────────────────────────────────────────

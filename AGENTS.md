@@ -109,6 +109,16 @@ which need a decision and possibly credentials only Kiarash has.
   Reserved domains (`example.com`, `.test`, `.invalid`) are refused everywhere, which is why the
   repo's fixtures cannot bounce the sending domain. `EMAIL_MODE=test` bypasses the guard and a
   config test fails the build if it ever appears in `wrangler.toml`.
+- **Name a new migration `YYYYMMDDHHMMSS_slug.sql`** (UTC — `date -u +%Y%m%d%H%M%S`), never
+  `0009_slug.sql`. D1's `d1_migrations` ledger is keyed on the **filename**, and a sequential
+  number is a shared namespace: two sessions cut from the same `main` both claim `0009`, the one
+  that merges second must renumber on rebase, and renaming a file the shared preview has already
+  applied makes the next deploy re-run its SQL. That broke `deploy (preview)` for every
+  concurrent pull request once already (#99). The existing `0001`–`0008` stay exactly as they
+  are — renaming them would *be* the bug. `node tools/preflight/preflight.mjs --only
+  migrations,migration-drift` enforces both halves; `docs/runbooks/migrations.md` has the detail.
+- **Never edit, rename or delete a migration that has landed on `main`, or that this branch has
+  already pushed.** Add a new migration instead. There is no exception; a deploy cannot undo one.
 - **`wrangler d1 export` refuses any database with FTS5 tables** — ours has one. Migrations own
   the schema; exports only carry rows. See `docs/runbooks/restore.md`.
 - **A lone `7403` from the D1 API is transient.** Retry once before believing it.
@@ -135,7 +145,7 @@ The accessibility specs carry **no exclusions**. If your change fails them, it i
 - `docs/design/moderation.md` — how moderation works and two measured model weaknesses.
 - `docs/runbooks/launch-audit.md` — 18 findings, several still open.
 - `docs/legal-considerations.md` — compliance research, with eight questions marked for a lawyer.
-- `docs/runbooks/` — deploy, restore, admin, geodata, uk-block, issue-workflow.
+- `docs/runbooks/` — deploy, restore, migrations, admin, geodata, uk-block, issue-workflow.
 
 ## Writing for Kiarash
 
