@@ -16,16 +16,20 @@ is a real site with real visitors possible, not a staging exercise.
   still **manual** — `workflow_dispatch` — so merging to `main` does not ship the public site.
 - `preview.keepsake.ing` deploys from **`main` only**; pull requests deploy nowhere (#73, which
   also resolved #66). Verify a branch with `pnpm --filter @keepsake/web e2e`, not on preview.
-- Production email is `live` for all recipients (#43). **#6 — the issue that carried "delivery to
-  an address that is not Kiarash's has never been observed arriving" — was closed on 2026-09-07 at
-  08:54 UTC.** This bullet used to call that the single most important open fact in the file; it is
-  no longer an open *issue*, and that is the honest limit of what can be said here. Nothing in the
-  repository records the inbox actually being read: the last comment on #6, thirteen minutes before
-  it closed, says "Issue stays open, stays a launch blocker, until someone reads that inbox," and
-  the close carries no comment. Treat delivery as **probably** proven and ask Kiarash, rather than
-  either repeating the old claim or asserting a test that has no written result. What is
-  structurally true either way, and unchanged: `email_events.ok = 1` records that the provider
-  accepted the message, and there is no bounce webhook and no complaint feedback loop behind it.
+- Production email is `live` for all recipients (#43), and **it has still never delivered to any
+  address other than Kiarash's — because it has never been asked to.** This is the single most
+  important open fact in this file. #6 was closed on 2026-09-07 at 08:54 UTC with no closing
+  comment, thirteen minutes after its own last comment said it must stay open until someone reads
+  the `leapkg@gmail.com` inbox. This bullet hedged about which of the two had happened; **it was
+  asked on 2026-09-07 and the answer is neither ambiguous nor "probably proven"**. Kiarash: *"No
+  emails were sent to leapkg yet."* The Cloudflare Email Sending activity log for `keepsake.ing`
+  over the preceding 7 days shows **3 sends, all three to `kiarasha@alum.mit.edu`, all delivered,
+  and none to any other address**. So the second-address test was not merely unrecorded — it was
+  never sent, and no amount of reading that inbox could have proven anything. **#6 is reopened**
+  and still carries `launch-blocker`. What is structurally true and unchanged: `email_events.ok = 1`
+  records only that the provider *accepted* the message, and there is no bounce webhook and no
+  complaint feedback loop behind it — which is exactly why the provider-side log, and not our own
+  success rows, is what settled this.
 - `PRODUCTION_LIVE=true` is set, so `uptime.yml` genuinely probes production every 15 minutes
   rather than only checking that it *isn't* answering. That probe is also the one way an agent
   container can observe the live site at all (egress `403`s `CONNECT keepsake.ing:443`): it prints
@@ -105,9 +109,16 @@ issues (#6, #31, #94) and one of the two "workable by anyone" (#103) had been cl
 issues nothing in `docs/` mentioned at all were missing.
 
 *Blocked on a human:*
+- **#6** — **reopened 2026-09-07 evening** (it is back in this list, having been closed out of it
+  that morning). Send to a second address and read that inbox; see the email bullet above for why
+  the close was premature.
 - **#42** — walk the app on a phone. Never done on the live apex.
-- **#47** — `/health` on the apex plus the first real listing. [verify-production.md](../runbooks/verify-production.md)
-  is the copy-pasteable form; §1–§4 need a human on an ordinary network, §5 needs a real keepsake.
+- **#47** — the first real listing. [verify-production.md](../runbooks/verify-production.md) is the
+  copy-pasteable form. **§1–§4 were run against the live apex on 2026-09-07 and all pass** (as did
+  launch audit finding 1's re-measurement), so what is left is **§5 alone**: a keepsake posted
+  through `keepsake.ing/give` from a phone and watched go `pending` → `approved`. That needs a
+  person because Turnstile enforces on production, and the runbook is explicit that §1–§4 passing
+  is not enough to close the issue.
 - **#105** — whether Cloudflare Access should gate `preview.keepsake.ing`. Preview is open to the
   internet today; `noindex` keeps it out of search but does not keep anyone out.
 - **#142** — bind general-liability cover and file the Harris County assumed-name certificate. The
