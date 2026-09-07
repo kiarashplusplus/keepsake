@@ -1472,11 +1472,11 @@ test("public-env-passthrough: passes when the two lists agree", () => {
 
 test("public-env-passthrough: fails on a declared name deploy.yml never passes (#175's shape)", () => {
   const result = runOne("public-env-passthrough", {
-    ".env.example": "EXPO_PUBLIC_SITE_URL=http://localhost:8081\nEXPO_PUBLIC_GOOGLE_ADS_ID=\nEXPO_PUBLIC_ENV=development\n",
+    ".env.example": "EXPO_PUBLIC_SITE_URL=http://localhost:8081\nEXPO_PUBLIC_NEW_THING=\nEXPO_PUBLIC_ENV=development\n",
     ".github/workflows/deploy.yml": DEPLOY_WORKFLOW,
   });
   assert.equal(result.status, "fail");
-  assert.match(result.details.join("\n"), /declares EXPO_PUBLIC_GOOGLE_ADS_ID but .* never passes it/);
+  assert.match(result.details.join("\n"), /declares EXPO_PUBLIC_NEW_THING but .* never passes it/);
 });
 
 test("public-env-passthrough: fails on a name deploy.yml passes that nothing declares", () => {
@@ -1499,8 +1499,22 @@ test("public-env-passthrough: a commented-out declaration is not a declaration",
 test("public-env-passthrough: this repository's deploy.yml passes every declared name", () => {
   const result = runChecks(["public-env-passthrough"], REPO_ROOT)[0];
   assert.equal(result.status, "pass", result.details.join("\n"));
-  const deploy = createContext(REPO_ROOT).readText(".github/workflows/deploy.yml");
-  assert.match(deploy, /EXPO_PUBLIC_GOOGLE_ADS_ID:/, "#175's fix: the ads ids are wired through");
+});
+
+test("no EXPO_PUBLIC_GOOGLE_ADS_* survives anywhere that would make it a declared variable again", () => {
+  // #175's resolution: Kiarash decided against Google Ads, so the three names
+  // were removed rather than wired up. This asserts the removal is complete
+  // in the two files that decide whether the variable exists at all — a name
+  // reappearing in `.env.example` alone is what created the bug the first
+  // time (declared, read, passed by nothing).
+  const ctx = createContext(REPO_ROOT);
+  for (const file of [".env.example", ".github/workflows/deploy.yml"]) {
+    const text = ctx.readText(file) ?? "";
+    const declarations = text
+      .split("\n")
+      .filter((line) => /^\s*EXPO_PUBLIC_GOOGLE_ADS_[A-Z_]+\s*[:=]/.test(line));
+    assert.deepEqual(declarations, [], `${file} still declares a Google Ads variable`);
+  }
 });
 
 // ── csp-script-hash ────────────────────────────────────────────────────

@@ -76,32 +76,25 @@ jobs:
       # tools/preflight's public-env check: nothing EXPO_PUBLIC_* may be a
       # secret, because this step bakes it into a public bundle).
       #
-      # **This list must name every EXPO_PUBLIC_* in `.env.example`** (#175).
-      # It used to name four of the seven, and `verify-public-env.mjs` built
-      # its expectations from `process.env` — so a variable this block forgot
-      # was absent from the expectation set too, and could never be reported
-      # missing. The three Google Ads ids shipped as `""` in every preview and
-      # production bundle for the life of the feature, with nothing failing
-      # and nothing logged. The script now derives its list from
-      # `.env.example` instead, and fails a deployed export when a declared
-      # name is unset.
+      # **This list must name every EXPO_PUBLIC_* in `.env.example`** (#175),
+      # and preflight's `public-env-passthrough` check fails the pull request
+      # if it does not. It used to name four of seven, and
+      # `verify-public-env.mjs` built its expectations from `process.env` — so
+      # a variable this block forgot was absent from the expectation set too,
+      # and could never be reported missing. Three Google Ads ids shipped as
+      # `""` in every preview and production bundle for the life of the
+      # feature, with nothing failing and nothing logged.
       #
-      # The three ads variables below are therefore listed but, as far as this
-      # repo can tell, not yet set in either GitHub Environment. Until they
-      # are, this step fails — deliberately. See the PR for #175: the choice
-      # is Kiarash's, and it is either "set these three and the tag starts
-      # loading" or "remove them from .env.example and apps/web/src/lib/
-      # config.ts". What is not a choice is the state that produced #175:
-      # declared, read, described in docs/legal-considerations.md, and passed
-      # by nothing.
+      # Both sides are fixed. The script derives its expectations from
+      # `.env.example` and fails a deployed export when a declared name is
+      # unset; the ads variables are **gone** rather than wired up — Kiarash's
+      # decision, 2026-09-07: no Google Ads for now. So this list is four
+      # names again, but now because four is all there are.
       - name: Export web
         env:
           EXPO_PUBLIC_SITE_URL: ${{ vars.EXPO_PUBLIC_SITE_URL }}
           EXPO_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.EXPO_PUBLIC_TURNSTILE_SITE_KEY }}
           EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN: ${{ vars.EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN }}
-          EXPO_PUBLIC_GOOGLE_ADS_ID: ${{ vars.EXPO_PUBLIC_GOOGLE_ADS_ID }}
-          EXPO_PUBLIC_GOOGLE_ADS_GIVE_LABEL: ${{ vars.EXPO_PUBLIC_GOOGLE_ADS_GIVE_LABEL }}
-          EXPO_PUBLIC_GOOGLE_ADS_REQUEST_LABEL: ${{ vars.EXPO_PUBLIC_GOOGLE_ADS_REQUEST_LABEL }}
           EXPO_PUBLIC_ENV: ${{ env.DEPLOY_ENV }}
           COMMIT_SHA: ${{ github.sha }}
         run: pnpm --filter @keepsake/web export
