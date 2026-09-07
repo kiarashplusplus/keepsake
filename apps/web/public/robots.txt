@@ -6,8 +6,14 @@
 # `X-Robots-Tag: noindex, nofollow` header on every response — otherwise
 # preview.keepsake.ing is a crawlable, brand-named clone of the product whose
 # notification email is silently dropped (launch audit finding 2).
+#
+# No `Disallow: /admin` here (issue #84, launch audit "worth knowing"): the
+# token gate is the real protection either way, and this file is public and
+# unauthenticated, so itemizing the one endpoint worth attacking is a free
+# recon shortcut for no benefit. `/admin` is kept out of search results
+# instead by an unconditional `X-Robots-Tag: noindex` on that path
+# (apps/api/src/index.ts), which doesn't require telling anyone where to look.
 User-agent: *
 Allow: /
-Disallow: /admin
 
 Sitemap: https://keepsake.ing/sitemap.xml

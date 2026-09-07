@@ -50,7 +50,18 @@ app.use("*", async (c, next) => {
   // just HTML: `/item/:id`'s OG shell, `/i/:id/:variant` photos and the JSON
   // API are all indexable surfaces, and image search is exactly how a
   // stranger's keepsake photo would surface from a host nobody is watching.
-  if (!isProduction(c.env)) {
+  //
+  // Issue #84: also noindex `/admin` unconditionally, including in
+  // production. `apps/web/public/robots.txt` used to `Disallow: /admin`,
+  // which stops a well-behaved crawler from *fetching* it but does nothing
+  // about a page some other link already got indexed, and — worse — hands
+  // anyone who reads a public, unauthenticated file a free pointer at the
+  // one endpoint worth attacking. The token gate (`adminAuth`) is the actual
+  // security boundary and is unchanged either way; this only keeps the page
+  // out of search results without advertising that it exists. Reaching this
+  // path at all on production requires `/admin` in `wrangler.toml`'s
+  // `run_worker_first` — see that file's comment.
+  if (!isProduction(c.env) || c.req.path === "/admin") {
     c.header("X-Robots-Tag", "noindex, nofollow");
   }
 });

@@ -20,29 +20,47 @@
  * argument `email-mode-config.test.ts` already makes for `EMAIL_MODE`, and
  * the same `WRANGLER_TOML_TEXT` seam.
  *
+ * Issue #84 raised the same question for a bigger set of paths: a literal
+ * list only protects the paths someone remembered to add, and `/` itself —
+ * the page a searcher actually lands on — was never on it. Dev and preview
+ * now use `run_worker_first = true` (every request), which can't go stale
+ * the way a list can; production keeps an explicit list for cost reasons, so
+ * it's still checked by name, `/admin` included (same issue — advertising it
+ * in `robots.txt` was worse than not gating it with the Worker at all).
+ *
  * Verified out-of-band against `wrangler dev` (real workerd, real
- * `apps/web/dist`) for both `--env preview` and `--env production`; see
- * docs/runbooks/deploy.md.
+ * `apps/web/dist`) for `--env preview` and default (dev) with `true`, and
+ * `--env production` with the explicit list; see docs/runbooks/deploy.md.
  */
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 const wrangler = (env as unknown as { WRANGLER_TOML_TEXT: string }).WRANGLER_TOML_TEXT;
 
+function runWorkerFirstBooleans(): string[] {
+  return [...wrangler.matchAll(/^run_worker_first\s*=\s*(true)\s*$/gm)].map((m) => m[1] ?? "");
+}
+
 function runWorkerFirstLists(): string[] {
   return [...wrangler.matchAll(/^run_worker_first\s*=\s*\[([^\]]*)\]/gm)].map((m) => m[1] ?? "");
 }
 
 describe("run_worker_first configuration", () => {
-  it("declares one list per environment block", () => {
-    // Top-level [assets], [env.preview.assets], [env.production.assets].
-    expect(runWorkerFirstLists()).toHaveLength(3);
+  it("routes every request through the Worker on dev and preview", () => {
+    // Top-level [assets] (dev) and [env.preview.assets] — a literal path
+    // list is exactly the fragility issue #84 found (it silently excluded
+    // `/`), so both use the boolean form instead of a list that can go stale.
+    expect(runWorkerFirstBooleans()).toHaveLength(2);
   });
 
-  it("routes /robots.txt and /sitemap.xml through the Worker in every environment", () => {
-    for (const list of runWorkerFirstLists()) {
-      expect(list).toContain('"/robots.txt"');
-      expect(list).toContain('"/sitemap.xml"');
-    }
+  it("routes /robots.txt, /sitemap.xml and /admin through the Worker on production", () => {
+    // [env.production.assets] is the one remaining list — kept narrow on
+    // purpose so a hashed static asset request doesn't pay for a Worker hop
+    // on the live site.
+    expect(runWorkerFirstLists()).toHaveLength(1);
+    const [list] = runWorkerFirstLists();
+    expect(list).toContain('"/robots.txt"');
+    expect(list).toContain('"/sitemap.xml"');
+    expect(list).toContain('"/admin"');
   });
 });

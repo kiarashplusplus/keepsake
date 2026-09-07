@@ -10,11 +10,24 @@ compatibility_flags = ["nodejs_compat"]
 # path (an old `/health` snapshot, a stale `/version.json`) — everything else
 # falls through to the SPA shell on a 404, which is what makes client-side
 # routing on `/item/:id` work on a hard refresh.
+# Issue #84 (launch audit finding 2, round two): a `run_worker_first` list of
+# literal paths only protects the paths someone remembered to add. `/`,
+# `/about`, `/give`, `/mine` and every other pre-rendered SPA page matched a
+# real static asset and so were answered by Cloudflare's assets system
+# *without ever invoking this Worker* — which meant the non-production
+# `X-Robots-Tag: noindex` middleware in `src/index.ts` never ran for the one
+# page (the feed root) a searcher would actually land on, even though
+# `/robots.txt`/`/sitemap.xml`/`/item/*` were correctly covered. `true` routes
+# every request through the Worker first; the catch-all at the bottom of
+# `src/index.ts` still hands anything it doesn't own straight to `ASSETS`, so
+# behavior for an actual asset fetch is unchanged — only production (below)
+# keeps the narrower list, since production doesn't need this and an extra
+# Worker hop on every hashed asset request is a real cost on the live site.
 [assets]
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt"]
+run_worker_first = true
 
 [ai]
 binding = "AI"
@@ -238,11 +251,15 @@ simple = { limit = 120, period = 60 }
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Issue #84: `true`, not a literal-path list — see the top-level `[assets]`
+# comment. Preview is the environment the noindex header exists to protect,
+# so it gets the same blanket coverage as dev rather than the narrower,
+# performance-motivated list production uses below.
 [env.preview.assets]
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt"]
+run_worker_first = true
 
 [env.preview.ai]
 binding = "AI"
@@ -340,11 +357,20 @@ simple = { limit = 120, period = 60 }
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Kept as an explicit list rather than `true` (unlike dev/preview above):
+# production doesn't need the noindex middleware to run on every static asset
+# request, and routing every hashed `/_expo/static/*` fetch through the
+# Worker first would be a real, needless cost on the live site. `/admin` is
+# added here (issue #84) so the same middleware's admin-specific noindex
+# override (`src/index.ts`) actually reaches that one page — it's a static
+# SPA route like `/` or `/about` and was silently bypassing the Worker the
+# same way those were on preview, just for a different reason (nobody wants
+# `/admin` in production ever indexed, on top of the token gate).
 [env.production.assets]
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt"]
+run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt", "/admin"]
 
 [env.production.ai]
 binding = "AI"
