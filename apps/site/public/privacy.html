@@ -185,10 +185,11 @@
           Separately from screening, and for a completely different reason, the first photo you
           upload is also read by an AI vision model run by Cloudflare — to save you typing. It
           proposes a title for your keepsake, picks a category, writes one line about visible wear
-          it can make out, suggests a handful of short tags (like "mug", "ceramic", "blue"), and
-          returns a plain description of what it sees in the frame. This is a convenience and
-          nothing more: it's a separate call from the safety screening above, and none of it
-          decides whether your listing goes live.
+          it can make out, suggests a handful of short tags (like "mug", "ceramic", "blue"),
+          copies out any words printed on the object itself &mdash; a brand, a model name, a
+          size &mdash; and returns a plain description of what it sees in the frame. This is a
+          convenience and nothing more: it's a separate call from the safety screening above,
+          and none of it decides whether your listing goes live.
         </p>
         <p>
           What happens to the result. The title is a starting point — it's filled into the form
@@ -197,9 +198,12 @@
           similar keepsakes together, so they're public in the same way your title and photo are.
           There's no category picker when you post, so the model's answer is the one that's
           saved — if it's wrong on your listing, write to us and we'll fix it. The line about
-          visible wear and the description of what it sees never reach our records at all: the
-          wear line is only offered as a prompt while you write your story, and both live in your
-          browser's draft until you post or clear it. If you never finish the listing, none of it
+          visible wear, the words read off the object, and the description of what it sees never
+          reach our records at all: they are the model's working, used only to produce the title
+          and tags above, and they live in your browser's draft until you post or clear it. (The
+          words read off the object can end up in a tag &mdash; a brand name becomes a "brand"
+          tag &mdash; and a tag <em>is</em> saved, as described above. The read-out itself is
+          not.) If you never finish the listing, none of it
           is kept — the photo itself goes after 24 hours, as above.
         </p>
 

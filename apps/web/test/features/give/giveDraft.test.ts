@@ -15,6 +15,7 @@ function photo(clientId: string, overrides: Partial<GiveDraftPhoto> = {}): GiveD
 
 const SUGGESTION: PhotoSuggestion = {
   subject: "a ceramic mug",
+  markings: "",
   title: "Blue ceramic mug",
   category: "home_kitchen",
   condition: "small chip near the handle",

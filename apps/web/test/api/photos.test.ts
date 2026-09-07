@@ -15,6 +15,7 @@ describe("suggestPhoto", () => {
       data: {
         suggestion: {
           subject: "a ceramic mug",
+          markings: "",
           title: "Blue ceramic mug",
           category: "home_kitchen",
           condition: "small chip near the handle",
