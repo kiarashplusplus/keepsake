@@ -125,6 +125,25 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
   migrations,migration-drift` enforces both halves; `docs/runbooks/migrations.md` has the detail.
 - **Never edit, rename or delete a migration that has landed on `main`, or that this branch has
   already pushed.** Add a new migration instead. There is no exception; a deploy cannot undo one.
+- **The e2e suite runs entirely locally — use it, it is the best verification available.**
+  `pnpm --filter @keepsake/web export` then `pnpm --filter @keepsake/web e2e` stands up real
+  `workerd` with local D1/R2/KV via `wrangler dev` (see `apps/web/playwright.config.ts`), which is
+  closer to production than preview ever was and needs no credentials. Baseline is ~80-82 passing.
+  Now that pull requests no longer deploy anywhere, this is *the* way to verify a branch.
+  - If Playwright reports `Executable doesn't exist at .../chromium_headless_shell-<n>/...`, the
+    container's browser build predates the pinned `@playwright/test`. Do not run
+    `playwright install` blindly; point the expected path at the build that is present.
+  - `test/adminAuth.test.ts`'s brute-force case can time out at 30 s when the root runner fans API
+    and web out concurrently on a loaded machine. Measured on both `main` and a feature branch with
+    no difference, so it is load, not a regression — the flake its own comment and #65 describe.
+    Re-run it alone before believing it.
+- **A sandboxed agent may not be able to reach the product at all.** Some environments' egress
+  policy answers `403` to `CONNECT` for `keepsake.ing`, `preview.keepsake.ing` and
+  `workers.cloudflare.com`, and blocks GitHub's Actions-configuration API paths. That is a policy
+  denial, not a broken tool: do not retry it and do not route around it. Say plainly that you could
+  not observe the thing, and use CI's own logs as evidence instead — `uptime.yml` prints the commit
+  each tier is serving every 15 minutes, which is a real observation of the live site that you can
+  read without reaching it.
 - **`wrangler d1 export` refuses any database with FTS5 tables** — ours has one. Migrations own
   the schema; exports only carry rows. See `docs/runbooks/restore.md`.
 - **A lone `7403` from the D1 API is transient.** Retry once before believing it.
