@@ -95,6 +95,24 @@ results.
 a few lines in the Worker, which already has `ENVIRONMENT` in hand. Consider Cloudflare Access in
 front of the preview host as well; there is no reason it should be open to the internet.
 
+**Superseded 2026-09-07 (issue #84, following an initial pass in commit `af6f0c6`):** fixed, in two
+rounds. The first pass added exactly the `robots.ts`/`sitemap.ts` handlers this section describes,
+gated on `ENVIRONMENT`, reached via `run_worker_first` for `/robots.txt` and `/sitemap.xml`. Curling
+the real host after that pass confirmed both were fixed — but also turned up a gap the first pass
+didn't cover: `run_worker_first` was a literal-path list, and `/` (the feed root — the one page a
+searcher would actually land on) matched a real static asset and so was answered by Cloudflare's
+assets system *without ever invoking the Worker*, meaning the `X-Robots-Tag: noindex` middleware
+never ran for it, or for `/about`, `/give`, `/mine`, or any other pre-rendered page. `/item/:id` was
+fine (explicitly listed), which is exactly why the gap was easy to miss from the code alone.
+`run_worker_first` is now `true` (every request) on dev and preview, so a future page can't silently
+land in the same hole a list requires remembering to update. Verified against real `wrangler dev`
+(the local test suite can't see this class of bug — miniflare doesn't reproduce the asset-precedence
+rule; see `apps/api/test/robotsConfig.test.ts`) for both `--env preview` (header present on `/`) and
+`--env production` (absent, no regression). Also closed the adjacent "worth knowing" item below:
+`Disallow: /admin` is gone from the public `robots.txt`, replaced by an unconditional
+`X-Robots-Tag: noindex` on that one path in every environment. Issue #85 (blocked on Kiarash) covers
+whether anything indexed during the window before this landed needs a Search Console removal.
+
 ### 3. `EMAIL_MODE=live` has never been exercised against a real stranger, and every failure is silent. [code]
 
 `docs/runbooks/kiarash-checklist.md` records the only proven delivery as one to
@@ -447,6 +465,9 @@ otherwise, correctly. Fix the docs — those are the sentences someone reads at 
   copy is not addressed.
 - **`Disallow: /admin` in robots.txt advertises the admin path** to anyone who reads it. The token
   gate is what matters, but combined with finding 6 the endpoint is both findable and unthrottled.
+  **Fixed 2026-09-07 (issue #84):** the line is gone from `apps/web/public/robots.txt`; `/admin` is
+  kept out of search results instead by an unconditional `X-Robots-Tag: noindex` on that path in
+  every environment (`apps/api/src/index.ts`), which doesn't require telling anyone where to look.
 - **`/mine` with no token is good.** "You haven't given anything yet… Once you give something,
   it'll show up here" with a "Lost your listings?" link. That is the right sentence for a first
   user, and every other dead end I walked reads like a human wrote it: a missing item says "That

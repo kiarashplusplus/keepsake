@@ -87,4 +87,23 @@ describe("X-Robots-Tag", () => {
     const spa = await SELF.fetch("http://x/some/spa/route");
     expect(spa.headers.get("x-robots-tag")).toBeNull();
   });
+
+  // Issue #84: `/admin` is noindex'd unconditionally, in every environment —
+  // not just non-production — because `apps/web/public/robots.txt` no longer
+  // advertises the path with a `Disallow` line, so this header is the only
+  // thing keeping it out of search results. Both assertions matter: a
+  // version of this check that only exercised production could pass just as
+  // happily if the override applied everywhere by accident and preview's
+  // dedicated `/some/spa/route` case above happened to share the path.
+  it("marks /admin noindex on production, same as everywhere else", async () => {
+    setTestEnvVar("ENVIRONMENT", "production");
+
+    const admin = await SELF.fetch("http://x/admin");
+    expect(admin.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+
+    // The control: a production path that isn't /admin still gets nothing,
+    // so this isn't just isProduction() silently inverted.
+    const other = await SELF.fetch("http://x/some/other/route");
+    expect(other.headers.get("x-robots-tag")).toBeNull();
+  });
 });
