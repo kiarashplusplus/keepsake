@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgeAttestationSchema,
   apiErr,
   apiOk,
   EmailSchema,
   isReservedEmailDomain,
   MailableEmailSchema,
+  MINIMUM_AGE,
   PaginationLimitSchema,
   RESERVED_EMAIL_DOMAIN_MESSAGE,
   UlidSchema,
@@ -108,6 +110,24 @@ describe("MailableEmailSchema", () => {
 
   it("still rejects malformed addresses", () => {
     expect(MailableEmailSchema.safeParse("not-an-email").success).toBe(false);
+  });
+});
+
+describe("AgeAttestationSchema (minimum age, docs/legal-considerations.md)", () => {
+  it("accepts true", () => {
+    expect(AgeAttestationSchema.safeParse(true).success).toBe(true);
+  });
+
+  it("rejects false — merely present-and-false must not pass", () => {
+    expect(AgeAttestationSchema.safeParse(false).success).toBe(false);
+  });
+
+  it("rejects undefined", () => {
+    expect(AgeAttestationSchema.safeParse(undefined).success).toBe(false);
+  });
+
+  it("MINIMUM_AGE is 18, higher than COPPA's 13 — the product arranges in-person meetups with strangers", () => {
+    expect(MINIMUM_AGE).toBe(18);
   });
 });
 

@@ -7,6 +7,7 @@ import { apiErr } from "@keepsake/contracts/common";
 import { assertBindings, isProduction, type Env } from "./env.js";
 import { moderationRetry } from "./cron/moderationRetry.js";
 import { orphanSweep } from "./cron/orphanSweep.js";
+import { ukBlock } from "./middleware/ukBlock.js";
 import { geoRoutes } from "./routes/geo.js";
 import { photoRoutes } from "./routes/photos.js";
 import { listingRoutes } from "./routes/listings.js";
@@ -18,6 +19,7 @@ import { robotsRoutes } from "./routes/robots.js";
 import { sitemapRoutes } from "./routes/sitemap.js";
 import { recoverRoutes } from "./routes/recover.js";
 import { adminRoutes } from "./routes/admin.js";
+import { requestWithdrawRoutes } from "./routes/requestWithdraw.js";
 
 type Variables = {
   requestId: string;
@@ -45,6 +47,11 @@ app.use("*", async (c, next) => {
     c.header("X-Robots-Tag", "noindex, nofollow");
   }
 });
+
+// Mounted early, before any route: see src/middleware/ukBlock.ts and
+// docs/runbooks/uk-block.md. Reads and writes both, `/api/*` and the SPA
+// shell alike — nothing behind this line should ever see a UK visitor.
+app.use("*", ukBlock());
 
 app.onError((err, c) => {
   const status: ContentfulStatusCode = err instanceof HTTPException ? err.status : 500;
@@ -125,6 +132,7 @@ app.route("/api/listings", listingRoutes);
 app.route("/api/me", meRoutes);
 app.route("/api/feed", feedRoutes);
 app.route("/api/recover", recoverRoutes);
+app.route("/api/requests", requestWithdrawRoutes);
 app.route("/api/admin", adminRoutes);
 app.route("/i", imageRoutes);
 // Mounted at the Worker root, per the plan's route table — not under /api/*,

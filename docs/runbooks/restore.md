@@ -216,9 +216,11 @@ pnpm exec wrangler d1 execute keepsake-db-production --env production --remote \
 ```
 
 ~46k rows across US/CA/GB, batched as `INSERT OR REPLACE` — idempotent, so re-running it is safe
-and a partial load can simply be repeated. `seeds/postal_codes.sql` is stored in Git LFS: if the
-file is a few hundred bytes it is an unfetched pointer, not the seed — `git lfs pull` first. Full
-details, including regenerating from GeoNames, in [geodata.md](geodata.md).
+and a partial load can simply be repeated. (The GB rows are dormant since the 2026-09-06 UK
+geo-block — see [uk-block.md](uk-block.md) — but restoring them is still correct: they're inert,
+harmless data, not reachable through the API.) `seeds/postal_codes.sql` is stored in Git LFS: if
+the file is a few hundred bytes it is an unfetched pointer, not the seed — `git lfs pull` first.
+Full details, including regenerating from GeoNames, in [geodata.md](geodata.md).
 
 ## After any restore
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CursorSchema, PaginationLimitSchema, TimestampMs, UlidSchema } from "./common";
+import { CursorSchema, MailableEmailSchema, PaginationLimitSchema, TimestampMs, UlidSchema } from "./common";
 import { LISTING_STATUSES, MODERATION_REASON_CODES, OwnerListing } from "./listing";
 import { ReportReasonSchema } from "./report";
 
@@ -155,6 +155,28 @@ export type AdminStats = {
     mod_text: number;
     mod_image: number;
   };
+};
+
+/**
+ * `POST /api/admin/test-email` — launch-audit finding: email failures are
+ * invisible and production has never delivered to anyone but Kiarash. This
+ * sends a real message through the real `sendMail()` path (not a stub) to a
+ * given address and reports back exactly what happened, so delivery is
+ * verifiable on demand instead of inferred from whether a real giver
+ * complained.
+ */
+export const AdminTestEmailInput = z.object({
+  to: MailableEmailSchema,
+});
+export type AdminTestEmailInput = z.infer<typeof AdminTestEmailInput>;
+
+/** `sent`/`reason` mirror `apps/api/src/email/sendMail.ts`'s `SendMailResult`
+ * exactly — this endpoint is a thin, honest window onto that function, not a
+ * reinterpretation of it. */
+export type AdminTestEmailResult = {
+  sent: boolean;
+  reason: string | null;
+  provider: string;
 };
 
 /** `GET /api/admin/health` — same "plain data, not client input" rule as

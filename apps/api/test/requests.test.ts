@@ -19,7 +19,11 @@ async function requestListing(listingId: string, body: Record<string, unknown>, 
   });
 }
 
-const VALID_REQUEST_BODY = { note: "This would mean so much to my family, thank you for considering us.", email: "requester@keepsake.ing" };
+const VALID_REQUEST_BODY = {
+  note: "This would mean so much to my family, thank you for considering us.",
+  email: "requester@keepsake.ing",
+  age_attested: true,
+};
 
 describe("POST /api/listings/:id/requests", () => {
   afterEach(() => removeFakeEmail());
@@ -66,7 +70,7 @@ describe("POST /api/listings/:id/requests", () => {
     expect(res.status).toBe(404);
   });
 
-  it("emails the giver and records notified_at when the owner has a verified email", async () => {
+  it("emails the giver and records notified_at when the owner has a verified email, and always confirms the requester", async () => {
     const sent = installFakeEmail();
     const ownerId = await insertOwner();
     const now = Date.now();
@@ -77,9 +81,14 @@ describe("POST /api/listings/:id/requests", () => {
     expect(res.status).toBe(201);
     const body = await readOk<CreateRequestResult>(res);
 
-    expect(sent).toHaveLength(1);
+    // Two sends: the giver's new-request notification, then the requester's
+    // own "we passed your note along" confirmation (with the withdraw link).
+    expect(sent).toHaveLength(2);
     expect(sent[0]?.to).toBe("giver@keepsake.ing");
     expect(sent[0]?.subject).toContain("A quiet teacup");
+    expect(sent[1]?.to).toBe("requester@keepsake.ing");
+    expect(sent[1]?.subject).toContain("We passed your note along");
+    expect(sent[1]?.text).toContain("/withdraw/");
 
     const requestRow = await env.DB.prepare("SELECT notified_at FROM requests WHERE id = ?").bind(body.id).first<{ notified_at: number | null }>();
     expect(requestRow?.notified_at).not.toBeNull();
@@ -89,14 +98,16 @@ describe("POST /api/listings/:id/requests", () => {
     expect(emailEvent?.ok).toBe(1);
   });
 
-  it("sends no email when the owner has no verified email", async () => {
+  it("sends only the requester confirmation when the owner has no verified email", async () => {
     const sent = installFakeEmail();
     const ownerId = await insertOwner();
     const listingId = await insertApprovedListing({ ownerId });
 
     const res = await requestListing(listingId, VALID_REQUEST_BODY);
     expect(res.status).toBe(201);
-    expect(sent).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.to).toBe("requester@keepsake.ing");
+    expect(sent[0]?.subject).toContain("We passed your note along");
   });
 
   it("404s a listing whose owner is banned, same as if the listing didn't exist", async () => {
@@ -133,5 +144,39 @@ describe("POST /api/listings/:id/requests", () => {
 
     const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, email: "GIVER@Keepsake.ING" });
     expect(res.status).toBe(400);
+  });
+
+  it("400s when age_attested is missing (docs/legal-considerations.md Minimum age)", async () => {
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId });
+    const { age_attested: _omit, ...withoutAttestation } = VALID_REQUEST_BODY;
+
+    const res = await requestListing(listingId, withoutAttestation);
+    expect(res.status).toBe(400);
+    const error = await readErr(res);
+    expect(error.code).toBe("bad_request");
+  });
+
+  it("400s when age_attested is false, not just missing", async () => {
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId });
+
+    const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, age_attested: false });
+    expect(res.status).toBe(400);
+  });
+
+  it("mints a single-use withdraw token every time (age attestation recorded, but never exposed to the client)", async () => {
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId });
+
+    const res = await requestListing(listingId, VALID_REQUEST_BODY);
+    const body = await readOk<CreateRequestResult>(res);
+    expect(Object.keys(body)).toEqual(["id", "created_at"]);
+
+    const row = await env.DB.prepare("SELECT withdraw_token_hash, age_attested_at FROM requests WHERE id = ?")
+      .bind(body.id)
+      .first<{ withdraw_token_hash: string | null; age_attested_at: number | null }>();
+    expect(row?.withdraw_token_hash).toBeTruthy();
+    expect(row?.age_attested_at).not.toBeNull();
   });
 });

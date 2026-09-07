@@ -57,6 +57,20 @@
           place. Here's exactly what we hold, and why.
         </p>
 
+        <h2>Who runs this</h2>
+        <p>
+          Keepsake is run by one person, Kiarash, not a company. He's the controller for the
+          purposes of this policy — the one responsible for what's described here, and the one
+          you'd contact or complain to.
+        </p>
+        <!-- TODO(kiarash): postal address — UK GDPR Art. 13 wants a controller postal address
+             here. A sole proprietor's registered or business address is enough; no company
+             needed. Do not invent one; fill this in and remove the placeholder paragraph below. -->
+        <p>
+          Postal address: <em>[TODO(kiarash): postal address]</em>. Until this is filled in, reach
+          him at <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a>.
+        </p>
+
         <h2>No accounts, just a device key</h2>
         <p>
           When you post your first keepsake, your browser generates a private token and stores it
@@ -69,14 +83,30 @@
         <p>
           You can add an email address when you give something. We store it only to notify you
           when someone asks for your keepsake and to help you recover access to your dashboard if
-          you lose your device key. We never use it for marketing, and it's never shown publicly.
+          you lose your device key. We never use it for marketing, and it's never shown publicly on
+          the site.
+        </p>
+        <p>
+          It is shared privately, though, in one case: if you choose a request, we send your email
+          address to that requester directly (in their notification, and as the reply-to address on
+          it) so the two of you can arrange the handoff. This is the one moment either of your
+          contact details becomes visible to the other person — see the next section.
         </p>
 
         <h2>What a requester shares</h2>
         <p>
           If you ask for someone's keepsake, we store the note, email, and optional phone number
           you provide with that request. This contact information is only shown to the giver, and
-          only once they choose you.
+          only once they choose you — and if they do, your email is also included in the "you were
+          chosen" notification we send you, the same way the giver's is (see above).
+        </p>
+        <p>
+          Every request-confirmation email includes a link to withdraw that request. Following it
+          deletes your note, email, and phone number from our records and marks the request
+          withdrawn — no account or login needed, since you never had one. If the giver already
+          chose you before you withdraw, they may already have your contact information by email;
+          withdrawing removes it from our database and the giver's dashboard going forward, but we
+          can't recall an email that's already been delivered.
         </p>
 
         <h2>Photos</h2>
@@ -96,8 +126,14 @@
         <h2>Rate limiting</h2>
         <p>
           To stop abuse, we keep a short-lived, hashed record of your IP address combined with
-          the date (for example, <code>sha256("2026-09-05:203.0.113.4")</code>). We never store
-          your raw IP address, and the hash can't be reversed back into one.
+          the date (for example, <code>sha256("2026-09-05:203.0.113.4")</code>) instead of your raw
+          IP address. We're being precise rather than absolute about what that buys you: the point
+          is minimization, not secrecy. IPv4 addresses are a small enough space (a few billion) that
+          someone who wanted to unmask one specific day's hash could brute-force it by hashing every
+          possible address — this isn't a strong cryptographic guarantee against a motivated
+          adversary. What it does do: we never handle or store your address in the clear at all,
+          and the hash is scoped to a single day, so two days' records can't be joined into a
+          history of your address the way a raw IP log could be.
         </p>
 
         <h2>Your choice, before anything loads</h2>
@@ -143,10 +179,12 @@
         <h2>Global Privacy Control</h2>
         <p>
           If your browser sends a Global Privacy Control signal — Brave, Firefox, DuckDuckGo and
-          several extensions can — we take it as a refusal of advertising and as a "do not sell or
-          share" request, without asking you about it. We say so on the banner and in the footer
-          rather than just doing it quietly, and we honour it wherever you are, not only in the
-          states that require it.
+          several extensions can — our code checks for it and, when present, turns off advertising
+          and treats it as a "do not sell or share" request automatically, without asking you about
+          it. We check for this signal on every visit, everywhere, not only in the handful of
+          U.S. states that legally require honoring it at our size — that part is a choice we're
+          making, not a legal obligation we're claiming, and we say so here so the promise stays
+          accurate if it ever changes.
         </p>
 
         <h2>We don't sell or share data</h2>
@@ -160,9 +198,41 @@
 
         <h2>Deleting your information</h2>
         <p>
-          You can delete a listing (and its photos) at any time from your dashboard. To remove
-          your email or ask us to delete anything else we hold about you, write to
-          <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a> and we'll take care of it.
+          You can delete a listing (and its photos) at any time from your dashboard. If you asked
+          for someone's keepsake, the confirmation email you received has a link to withdraw that
+          request and erase your note, email, and phone number — see "What a requester shares"
+          above for the one thing that link can't undo (a chosen request whose contact info the
+          giver already has by email). To remove your email or ask us to delete anything else we
+          hold about you, write to <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a> and
+          we'll take care of it.
+        </p>
+        <p>
+          What we keep and for how long: your device key and preferences live in your own
+          browser's storage, not ours, until you clear them. Photos and listing text live for as
+          long as the listing exists, plus a short grace period. Request notes/emails/phone numbers
+          live until the request is withdrawn (see above) or you ask us to remove them. Rate-limit
+          hashes and moderation records are kept only as long as they're useful for abuse
+          prevention and the audit trail described elsewhere on this page.
+        </p>
+
+        <h2>Minimum age</h2>
+        <p>
+          Keepsake asks everyone posting or requesting a keepsake to confirm they're 18 or older —
+          see <a href="/terms">Terms</a> for why. We can't verify anyone's age; the point of asking
+          is a documented, honest basis for removing an account the moment we learn someone using it
+          is a minor.
+        </p>
+
+        <h2>Other services we rely on</h2>
+        <p>
+          Beyond what's named above (Cloudflare for hosting, storage, and AI screening; Google for
+          the advertising tag, only after you consent), a few smaller services touch limited data
+          on our behalf: Cloudflare Turnstile checks that a submission is coming from a real browser,
+          not a bot, before it reaches our server; Sentry receives error reports if something breaks,
+          so we can fix it, with obvious personal data redacted before it's sent; and Resend is a
+          backup email provider we can fall back to if Cloudflare's own email sending isn't
+          available. None of them receive your photos or story text beyond what's needed to run the
+          service itself.
         </p>
 
         <h2>Questions</h2>

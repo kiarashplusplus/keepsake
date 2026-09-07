@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundingBox, haversineMiles, normalizePostalCode } from "../src/geo";
+import { boundingBox, COUNTRIES, CountrySchema, haversineMiles, normalizePostalCode } from "../src/geo";
 
 describe("normalizePostalCode", () => {
   it("US: keeps 5 digits, drops +4", () => {
@@ -21,16 +21,16 @@ describe("normalizePostalCode", () => {
     expect(normalizePostalCode("CA", "12345")).toBeNull();
   });
 
-  it("GB: outward code before the space", () => {
-    expect(normalizePostalCode("GB", "sw1a 1aa")).toBe("SW1A");
+});
+
+describe("COUNTRIES (UK geo-block, docs/runbooks/uk-block.md)", () => {
+  it("no longer lists GB", () => {
+    expect(COUNTRIES).not.toContain("GB");
+    expect(COUNTRIES).toEqual(["US", "CA"]);
   });
 
-  it("GB: leading chars when no space is given", () => {
-    expect(normalizePostalCode("GB", "ec1a")).toBe("EC1A");
-  });
-
-  it("GB: invalid input returns null", () => {
-    expect(normalizePostalCode("GB", "!!!!")).toBeNull();
+  it("CountrySchema rejects GB as a listing/lookup country", () => {
+    expect(CountrySchema.safeParse("GB").success).toBe(false);
   });
 });
 

@@ -20,9 +20,11 @@ works out.
 | Trigger | To | Notes |
 |---|---|---|
 | `POST /api/listings/:id/requests` | giver (if verified) | new request on their listing |
+| `POST /api/listings/:id/requests` | requester, always | "we passed your note along" confirmation + a signed, single-use link to `POST /api/requests/withdraw` — the requester's only no-account way back in; see `docs/design/identity.md`'s "Request withdrawal" section |
 | `POST /api/me/listings/:id/choose` | requester | handoff note, reply-to set to the giver's email — this is the one place both parties' emails become mutually visible |
 | `POST/POST verify` on `/api/me/email` | giver | verification link |
 | `POST /api/recover` | the address given | recovery link, always sent as if the address matched (see identity.md) |
+| `POST /api/admin/test-email` | whatever address the admin gives | on-demand delivery proof — a real send through the real path, reported back honestly (sent/blocked and why); see `docs/runbooks/admin.md` |
 
 ## Contact reveal rule
 
@@ -49,23 +51,32 @@ or the send itself throwing all fall through to a `[email:stub]` log and `{ sent
 in `email_events` (migration `0004_email_events.sql`), keyed by `sha256(lowercased address)`
 (`to_hash`) — never the raw address.
 
-Four templates in `src/email/templates/*.ts` (`verifyEmail`, `newRequest`, `chosen`, `recover`),
-sharing `templates/shared.ts`'s table-based HTML shell styled with `@keepsake/tokens/colors`'
+Six templates in `src/email/templates/*.ts` (`verifyEmail`, `newRequest`, `requestReceived`,
+`chosen`, `recover`, `adminTest`), sharing `templates/shared.ts`'s table-based HTML shell styled
+with `@keepsake/tokens/colors`'
 *light* palette only (email clients don't reliably honor `prefers-color-scheme`). Each ends with
 the one-line footer "Keepsake · keepsake.ing · you're getting this because …", the reason varying
 per template. `chosen`'s `giverEmail` param and the `replyTo` set on the message itself always
 agree (both come from the same "does the giver have a verified email" check in
 `src/routes/me.ts`'s choose handler).
 
-Wired at every send point from the table above: `POST /api/listings/:id/requests` (→ `newRequest`,
-only when the giver's email is verified, `notified_at` set on success), `POST
-/api/me/listings/:id/choose` (→ `chosen`, reply-to the giver when verified), `POST /api/me/email`
-+ `POST /api/listings` with an `email` field (→ `verifyEmail`, the same path — M1's stub link now
-actually resolves via `GET /api/me/email/verify`), `POST /api/recover` (→ `recover`, only for a
-verified match, but always 200 either way).
+Wired at every send point from the table above: `POST /api/listings/:id/requests` (→ `newRequest`
+to the giver, only when their email is verified, `notified_at` set on success; **and** always →
+`requestReceived` to the requester, carrying the withdraw link — the giver-side send is
+conditional, the requester-side confirmation is not), `POST /api/me/listings/:id/choose` (→
+`chosen`, reply-to the giver when verified), `POST /api/me/email` + `POST /api/listings` with an
+`email` field (→ `verifyEmail`, the same path — M1's stub link now actually resolves via
+`GET /api/me/email/verify`), `POST /api/recover` (→ `recover`, only for a verified match, but
+always 200 either way), `POST /api/requests/withdraw` (consumes the `requestReceived` link's token;
+sends nothing itself — it's the destination, not another trigger), `POST /api/admin/test-email`
+(→ `adminTest`, to whatever address the admin gives).
 
-Tests: `apps/api/test/requests.test.ts` (notified + `email_events` row when verified, no send when
-unverified), `test/choose.test.ts` (reveal + reply-to), `test/email.test.ts` (verify single-use +
-expiry, `POST /api/listings` reusing the same flow, recover new-token/old-401/unknown-still-200).
-A fake `EMAIL` binding (`test/helpers.ts`'s `installFakeEmail`/`removeFakeEmail`) captures sends
-per test rather than exercising a real provider.
+Tests: `apps/api/test/requests.test.ts` (notified + `email_events` row when verified, requester
+confirmation sent either way, missing/false age attestation 400s), `test/requestWithdraw.test.ts`
+(token consumes once, erases note/email/phone, decrements `request_count`, still works on an
+already-`chosen` request), `test/choose.test.ts` (reveal + reply-to), `test/email.test.ts` (verify
+single-use + expiry, `POST /api/listings` reusing the same flow, recover
+new-token/old-401/unknown-still-200), `test/admin.test.ts` (test-email reports the real
+sent/blocked outcome). A fake `EMAIL` binding (`test/helpers.ts`'s
+`installFakeEmail`/`removeFakeEmail`) captures sends per test rather than exercising a real
+provider.

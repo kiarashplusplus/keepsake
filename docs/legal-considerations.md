@@ -16,6 +16,33 @@ and a consent banner being added now.
 
 ---
 
+**Status update (2026-09-06), left in place rather than edited into the research above so this
+stays an honest record of what was found and when:**
+
+- **UK Online Safety Act (recommendation 3): resolved by geo-blocking the UK**, not by completing
+  the assessments. Kiarash decided against taking on the risk assessment / children's-access
+  assessment / complaints-procedure work for now. See
+  [`docs/runbooks/uk-block.md`](runbooks/uk-block.md) for the decision record and what would have
+  to be true to reverse it. The product now serves **US/Canada only** — every "serves US/Canada/UK"
+  line above should be read as historical context for why the research covered UK law at all, not
+  as the current product surface.
+- **Minimum age (recommendation 1): done.** 18+, self-attested, required on both create-listing and
+  create-request (`@keepsake/contracts/common`'s `AgeAttestationSchema`/`MINIMUM_AGE`), recorded
+  server-side (`age_attested_at`), and stated in `terms.html`.
+- **Prohibited items (recommendation 6): done.** The table below is now in `terms.html`, with the
+  statute-vs-hazard-only column preserved.
+- **Privacy page overclaims (recommendations 4-5): done** — see `apps/site/public/privacy.html`'s
+  IP-hash, email-forwarding, and GPC sections.
+- **Controller name and postal address (recommendation 2): blocked on Kiarash.** The page names him
+  as controller; the postal address is a `TODO(kiarash)` placeholder in the HTML, not invented.
+- **Requester data removal (launch-audit's open item, not numbered above): done.** See
+  `POST /api/requests/withdraw` and `docs/design/identity.md`'s "Request withdrawal" section.
+- Everything else below — Rhode Island/Montana, in-person safety copy, the Article 27
+  representative question, the eight lawyer questions — is **still open**, unchanged from the
+  original research.
+
+---
+
 ## What I would do before launch (or before turning ads on)
 
 ### Legal requirements — do these regardless of size or budget

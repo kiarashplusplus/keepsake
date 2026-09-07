@@ -87,6 +87,7 @@ describe("POST /api/me/email + GET /api/me/email/verify", () => {
         postal_code: "02144",
         photo_ids: [photo.id],
         email: "on-create@keepsake.ing",
+        age_attested: true,
       }),
     });
     expect(res.status).toBe(201);

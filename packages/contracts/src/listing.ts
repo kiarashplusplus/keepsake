@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
+import { AgeAttestationSchema, MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
 import { CountrySchema } from "./geo";
 import { PublicPhoto } from "./photo";
 // Re-exported below so nothing outside the package needs to know these live
@@ -42,6 +42,11 @@ export const CreateListingInput = z.object({
   postal_code: PostalCodeSchema,
   photo_ids: z.array(UlidSchema).min(1).max(5),
   email: MailableEmailSchema.optional(),
+  // Minimum age (docs/legal-considerations.md): required only on create, not
+  // on `UpdateListingInput` below (`.partial()` makes it optional there) —
+  // attesting once at posting time is the point, not re-attesting on every
+  // edit.
+  age_attested: AgeAttestationSchema,
 });
 export type CreateListingInput = z.infer<typeof CreateListingInput>;
 

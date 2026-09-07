@@ -110,6 +110,26 @@ export const MailableEmailSchema = EmailSchema.refine((email) => !isReservedEmai
   message: RESERVED_EMAIL_DOMAIN_MESSAGE,
 });
 
+/**
+ * A self-declared 18+ attestation, required on `CreateListingInput` and
+ * `CreateRequestInput` (see docs/legal-considerations.md "Minimum age").
+ * `z.literal(true)` rather than a plain boolean: the field must be
+ * affirmatively checked, not merely present-and-false, so a client that
+ * forgets to render the checkbox fails closed instead of silently posting
+ * `age_attested: false` as if it meant something. This can't verify anyone's
+ * age — the point is a documented basis for banning a token the moment
+ * there's actual knowledge a user is a minor, and an honest signal that this
+ * product (in-person handoffs with strangers) isn't built or screened for
+ * minors.
+ */
+export const AgeAttestationSchema = z.literal(true, "You must confirm you're 18 or older to continue.");
+
+/** The minimum age Keepsake asks givers and requesters to self-attest to.
+ * Higher than COPPA's 13: the product arranges in-person meetings between
+ * strangers, a different calculus than an ordinary content site. See
+ * docs/legal-considerations.md "Minimum age" and apps/site/public/terms.html. */
+export const MINIMUM_AGE = 18;
+
 /** Unix epoch milliseconds. */
 export const TimestampMs = z.number().int().nonnegative();
 

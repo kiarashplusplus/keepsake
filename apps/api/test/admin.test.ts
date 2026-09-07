@@ -1,12 +1,23 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FeedPage } from "@keepsake/contracts/feed";
-import type { AdminHealth, AdminQueueItem, AdminStats } from "@keepsake/contracts/admin";
+import type { AdminHealth, AdminQueueItem, AdminStats, AdminTestEmailResult } from "@keepsake/contracts/admin";
 import type { OwnerMe } from "@keepsake/contracts/owner";
 import { todayISO } from "../src/lib/day.js";
 import { sha256Hex } from "../src/lib/digest.js";
 import { ulid } from "../src/lib/ids.js";
-import { authHeaders, freshOwnerToken, insertApprovedListing, insertOwner, readErr, readOk, seedStandardPostalCodes, setTestEnvVar } from "./helpers.js";
+import {
+  authHeaders,
+  freshOwnerToken,
+  insertApprovedListing,
+  insertOwner,
+  installFakeEmail,
+  readErr,
+  readOk,
+  removeFakeEmail,
+  seedStandardPostalCodes,
+  setTestEnvVar,
+} from "./helpers.js";
 
 const ADMIN_TOKEN = "test-admin-token-abcdef0123456789";
 
@@ -379,6 +390,95 @@ describe("admin routes", () => {
       const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
       const health = await readOk<AdminHealth>(res);
       expect(health.ok).toBe(false);
+    });
+  });
+
+  // Launch-audit finding: email failures are invisible, and production has
+  // never delivered to anyone but Kiarash. This endpoint sends a real
+  // message through the real sendMail() path and reports back exactly what
+  // happened, so delivery is verifiable on demand.
+  describe("POST /api/admin/test-email", () => {
+    afterEach(() => {
+      removeFakeEmail();
+      // Every other test file in this suite relies on `EMAIL_MODE: "test"`
+      // (set in vitest.config.ts) short-circuiting `guardRecipient` entirely
+      // — restore it after the one test below that deliberately overrides
+      // it to exercise the real reserved-domain guard.
+      setTestEnvVar("EMAIL_MODE", "test");
+    });
+
+    it("sends a real message and reports sent:true", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      const sent = installFakeEmail();
+
+      const res = await SELF.fetch("http://x/api/admin/test-email", {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ to: "leapkg@gmail.com" }),
+      });
+      expect(res.status).toBe(200);
+      const result = await readOk<AdminTestEmailResult>(res);
+      expect(result.sent).toBe(true);
+      expect(result.reason).toBeNull();
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.to).toBe("leapkg@gmail.com");
+      expect(sent[0]?.subject).toContain("Keepsake test email");
+
+      const emailEvent = await env.DB.prepare(
+        "SELECT kind, ok FROM email_events WHERE kind = 'admin_test' ORDER BY created_at DESC LIMIT 1",
+      ).first<{ kind: string; ok: number }>();
+      expect(emailEvent?.ok).toBe(1);
+    });
+
+    it("reports sent:false with the real reason when EMAIL_MODE is off, rather than pretending it worked", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      // `EMAIL_MODE: "test"` (the suite-wide default) short-circuits every
+      // guard, on purpose, so the rest of the suite can use `@example.com`
+      // fixtures freely — override it here to exercise the real guard this
+      // test is actually about: an address `AdminTestEmailInput` accepts
+      // (unlike a reserved domain, which 400s before this route ever runs)
+      // but that `sendMail`'s own `guardRecipient` still refuses.
+      setTestEnvVar("EMAIL_MODE", "off");
+      installFakeEmail();
+
+      const res = await SELF.fetch("http://x/api/admin/test-email", {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ to: "leapkg@gmail.com" }),
+      });
+      expect(res.status).toBe(200);
+      const result = await readOk<AdminTestEmailResult>(res);
+      expect(result.sent).toBe(false);
+      expect(result.reason).toBe("blocked_email_mode_off");
+
+      const emailEvent = await env.DB.prepare(
+        "SELECT ok, error FROM email_events WHERE kind = 'admin_test' ORDER BY created_at DESC LIMIT 1",
+      ).first<{ ok: number; error: string | null }>();
+      expect(emailEvent?.ok).toBe(0);
+      expect(emailEvent?.error).toBe("blocked_email_mode_off");
+    });
+
+    it("401s without a valid admin token, same as every other /api/admin/* route", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+
+      const res = await SELF.fetch("http://x/api/admin/test-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: "leapkg@gmail.com" }),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("400s a malformed address", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+
+      const res = await SELF.fetch("http://x/api/admin/test-email", {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ to: "not-an-email" }),
+      });
+      expect(res.status).toBe(400);
     });
   });
 });

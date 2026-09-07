@@ -149,6 +149,7 @@ const VALID_LISTING_BODY = {
   category: "home_kitchen",
   country: "US",
   postal_code: "02144",
+  age_attested: true,
 };
 
 async function createListingWithOnePhoto(token: string, overrides: Record<string, unknown> = {}): Promise<OwnerListing> {

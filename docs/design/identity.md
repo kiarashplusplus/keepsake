@@ -25,6 +25,25 @@ listings, and the email step in `give` says so explicitly.
 - `recovery_tokens` table: `purpose` `recover` (30 min TTL) or `verify_email` (24 h), single-use
   (`used_at`).
 
+## Request withdrawal
+
+A requester never gets a device token or a dashboard — the only record they have of having asked
+for a keepsake is the `requestReceived` confirmation email (`src/email/templates/requestReceived.ts`),
+sent every time from `POST /api/listings/:id/requests`. That email carries a signed, single-use
+link (the same `randomTokenRaw()` + sha256-of-the-raw-value shape every other bearer secret here
+uses) to `POST /api/requests/withdraw`, which erases that request's `note`/`email`/`phone` and
+flips its status to `withdrawn` — no login, no proof of identity beyond possessing the link, by
+design: the link *is* the identity claim, same as a recovery link is for an owner.
+
+A request that was already `chosen` can still be withdrawn. Its contact info may already have been
+revealed to the giver and mailed to them (see `docs/design/email.md`'s "contact reveal rule") —
+that disclosure can't be recalled, and `apps/site/public/privacy.html` says so plainly rather than
+implying withdrawal un-sends anything. Withdrawing at that point only erases Keepsake's own stored
+copy and updates what the owner's dashboard shows going forward.
+
+`listings.request_count` is decremented on withdrawal (floored at 0) so it keeps meaning "how many
+live asks does this listing have," not "how many were ever made."
+
 ## Admin
 
 Separate identity plane entirely: `Bearer <ADMIN_TOKEN>`, one secret, constant-time compared,
