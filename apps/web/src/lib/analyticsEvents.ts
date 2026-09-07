@@ -5,6 +5,7 @@ export const AnalyticsEvents = {
   ItemViewed: "item_viewed",
   GiveStarted: "give_started",
   GivePhotoUploaded: "give_photo_uploaded",
+  GivePhotoFailed: "give_photo_failed",
   GiveSubmitted: "give_submitted",
   GiveLive: "give_live",
   GiveRejected: "give_rejected",

@@ -15,7 +15,16 @@ import { SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OwnerListing } from "@keepsake/contracts/listing";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
-import { authHeaders, freshOwnerToken, readOk, seedStandardPostalCodes, uploadPhoto, waitForListingStatus } from "./helpers.js";
+import {
+  authHeaders,
+  fakeJpegBytes,
+  fakePngBytes,
+  freshOwnerToken,
+  readOk,
+  seedStandardPostalCodes,
+  uploadPhoto,
+  waitForListingStatus,
+} from "./helpers.js";
 
 beforeEach(async () => {
   await seedStandardPostalCodes();
@@ -102,5 +111,29 @@ describe("GET /i/:id/:variant — cache purge on delete (issue #22)", () => {
     // cache.
     const after = await SELF.fetch(`http://x/i/${photoId}/full`);
     expect(after.status).toBe(404);
+  });
+});
+
+describe("GET /i/:id/:variant Content-Type", () => {
+  // There is one `content_type` column and `PUT /api/photos` fills it from
+  // the **full** variant's sniff, so a photo whose two variants differ in
+  // format used to serve its thumb under the full's type. The two files are
+  // independent client uploads — nothing derives one from the other — so
+  // nothing stops them differing.
+  it("serves each variant under its own stored type, not the row's", async () => {
+    const token = freshOwnerToken();
+    const upload = await uploadPhoto({
+      token,
+      fullBytes: fakeJpegBytes(),
+      thumbBytes: fakePngBytes(64, 64),
+    });
+    expect(upload.status).toBe(201);
+    const photo = await readOk<PublicPhoto>(upload);
+
+    const full = await SELF.fetch(`http://x/i/${photo.id}/full`, { headers: authHeaders(token) });
+    const thumb = await SELF.fetch(`http://x/i/${photo.id}/thumb`, { headers: authHeaders(token) });
+
+    expect(full.headers.get("Content-Type")).toBe("image/jpeg");
+    expect(thumb.headers.get("Content-Type")).toBe("image/png");
   });
 });
