@@ -73,6 +73,7 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
   const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [conflict, setConflict] = React.useState(false);
   const [ageAttested, setAgeAttested] = React.useState(false);
+  const [gone, setGone] = React.useState(false);
 
   const turnstileReady = turnstileStatus.status === "ready" || turnstileStatus.status === "unconfigured";
   const turnstileToken = turnstileStatus.status === "ready" ? turnstileStatus.token : "";
@@ -86,6 +87,7 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
     setSubmitError(null);
     setConflict(false);
     setAgeAttested(false);
+    setGone(false);
   }
 
   function handleClose(): void {
@@ -109,6 +111,7 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
   async function handleSubmit(): Promise<void> {
     setTouched(true);
     setConflict(false);
+    setGone(false);
     setSubmitError(null);
     if (!noteValidation.success || !emailValidation.success || !phoneValidation.success || !ageAttested) return;
 
@@ -137,6 +140,11 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
     } catch (error) {
       if (error instanceof ApiError && error.code === "conflict") {
         setConflict(true);
+        setPhase("form");
+        return;
+      }
+      if (error instanceof ApiError && error.code === "gone") {
+        setGone(true);
         setPhase("form");
         return;
       }
@@ -190,6 +198,11 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
           {conflict ? (
             <Text variant="body" color="dangerText">
               {"You've already asked for this one."}
+            </Text>
+          ) : null}
+          {gone ? (
+            <Text variant="body" color="dangerText">
+              {"This keepsake was just given to someone else."}
             </Text>
           ) : null}
           {submitError !== null ? (

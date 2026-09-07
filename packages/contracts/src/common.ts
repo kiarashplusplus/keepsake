@@ -11,6 +11,7 @@ export const ERROR_CODES = [
   "unauthorized",
   "forbidden",
   "not_found",
+  "gone",
   "rate_limited",
   "turnstile_failed",
   "conflict",

@@ -65,6 +65,24 @@ describe("CreateListingInput", () => {
     const result = CreateListingInput.safeParse(validInput({ country: "GB" }));
     expect(result.success).toBe(false);
   });
+
+  // Issue #20: the title gets interpolated straight into email subject
+  // headers (apps/api/src/email/templates/newRequest.ts/chosen.ts), which
+  // are never HTML-escaped — a raw newline there could inject extra header
+  // lines. This is the schema-level half of the fix; `sanitizeSubject`
+  // (apps/api/src/email/templates/shared.ts) is the runtime backstop.
+  it.each([
+    ["a bare \\n", "Grandmother's\nteacup"],
+    ["a bare \\r", "Grandmother's\rteacup"],
+    ["a \\r\\n pair", "Grandmother's\r\nteacup"],
+  ])("rejects a title containing %s", (_label, title) => {
+    const result = CreateListingInput.safeParse(validInput({ title }));
+    expect(result.success).toBe(false);
+  });
+
+  it("still accepts a title with ordinary punctuation", () => {
+    expect(CreateListingInput.safeParse(validInput({ title: "Grandmother's teacup — chipped, but loved" })).success).toBe(true);
+  });
 });
 
 describe("MODERATION_REASONS", () => {

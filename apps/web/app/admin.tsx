@@ -18,6 +18,7 @@ import { sectionRhythm, space } from "@keepsake/tokens/spacing";
 import {
   ADMIN_QUEUE_STATUSES,
   ADMIN_REJECT_REASONS,
+  type AdminHealth,
   type AdminQueueItem,
   type AdminQueueStatus,
   type AdminStats,
@@ -35,6 +36,7 @@ import { getAdminToken, setAdminToken, clearAdminToken } from "@/lib/adminToken"
 import {
   approveListing,
   banOwner,
+  getAdminHealth,
   getAdminQueue,
   getAdminStats,
   hideListing,
@@ -111,6 +113,8 @@ export default function AdminPage(): React.ReactElement {
   const [token, setToken] = React.useState<string | null>(() => getAdminToken());
   const [activeTab, setActiveTab] = React.useState<AdminQueueStatus>("needs_review");
   const [stats, setStats] = React.useState<AdminStats | null>(null);
+  const [health, setHealth] = React.useState<AdminHealth | null>(null);
+  const [healthAsOf, setHealthAsOf] = React.useState<number | null>(null);
   const [queue, dispatch] = React.useReducer(queueReducer, undefined, initialQueueState);
   const [busyId, setBusyId] = React.useState<string | null>(null);
   const [sheet, setSheet] = React.useState<SheetState>(null);
@@ -137,6 +141,27 @@ export default function AdminPage(): React.ReactElement {
     (currentToken: string) => {
       getAdminStats(currentToken)
         .then(setStats)
+        .catch((err: unknown) => {
+          if (err instanceof ApiError && err.status === 401) handleSessionExpired();
+        });
+    },
+    [handleSessionExpired],
+  );
+
+  // Fetched alongside stats, not folded into `loadStats`: `AdminHealth` and
+  // `AdminStats` are two separate endpoints and either one failing shouldn't
+  // block the other from rendering.
+  const loadHealth = React.useCallback(
+    (currentToken: string) => {
+      getAdminHealth(currentToken)
+        .then((data) => {
+          // Captured here, in the fetch's own callback, rather than inside
+          // `StatsStrip`'s render: that's the one place this timestamp is
+          // allowed to be read impurely (see `StatsStripProps.healthAsOf`'s
+          // doc comment).
+          setHealth(data);
+          setHealthAsOf(Date.now());
+        })
         .catch((err: unknown) => {
           if (err instanceof ApiError && err.status === 401) handleSessionExpired();
         });
@@ -209,7 +234,8 @@ export default function AdminPage(): React.ReactElement {
   React.useEffect(() => {
     if (token === null) return;
     loadStats(token);
-    // Runs once per token, not per stats reload elsewhere on the page.
+    loadHealth(token);
+    // Runs once per token, not per stats/health reload elsewhere on the page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
@@ -228,6 +254,8 @@ export default function AdminPage(): React.ReactElement {
     clearAdminToken();
     setToken(null);
     setStats(null);
+    setHealth(null);
+    setHealthAsOf(null);
   }
 
   async function runAction(
@@ -496,7 +524,7 @@ export default function AdminPage(): React.ReactElement {
         <Button label="Forget" variant="ghost" onPress={handleForget} />
       </View>
 
-      <StatsStrip stats={stats} />
+      <StatsStrip stats={stats} health={health} healthAsOf={healthAsOf} />
 
       <View accessibilityRole="tablist" style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
         {ADMIN_QUEUE_STATUSES.map((status) => (

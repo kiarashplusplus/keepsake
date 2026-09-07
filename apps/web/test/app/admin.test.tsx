@@ -1,11 +1,12 @@
 import * as React from "react";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import type { ReactTestInstance } from "react-test-renderer";
-import type { AdminQueueItem, AdminStats } from "@keepsake/contracts/admin";
+import type { AdminHealth, AdminQueueItem, AdminStats } from "@keepsake/contracts/admin";
 import { ToastProvider } from "@/ui/Toast";
 import { ADMIN_TOKEN_STORAGE_KEY } from "@/lib/adminToken";
 import {
   approveListing,
+  getAdminHealth,
   getAdminQueue,
   getAdminStats,
   hideListing,
@@ -64,6 +65,7 @@ jest.mock("@/ui/Sheet", () => {
 });
 
 jest.mock("@/api/admin", () => ({
+  getAdminHealth: jest.fn(),
   getAdminQueue: jest.fn(),
   getAdminStats: jest.fn(),
   approveListing: jest.fn(),
@@ -87,6 +89,12 @@ const STATS: AdminStats = {
   requests_today: 0,
   email_failures_today: 0,
   ai_budget_used_today: { mod_text: 0, mod_image: 0 },
+};
+
+const HEALTH: AdminHealth = {
+  ok: true,
+  postal_codes_count: 1,
+  cron_last_run: { moderationRetry: 0, orphanSweep: 0 },
 };
 
 function item(id: string, title: string): AdminQueueItem {
@@ -153,6 +161,7 @@ describe("/admin queue: keyboard and bulk actions", () => {
   beforeEach(() => {
     window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, "e2e-admin");
     jest.mocked(getAdminStats).mockResolvedValue(STATS);
+    jest.mocked(getAdminHealth).mockResolvedValue(HEALTH);
     jest.mocked(getAdminQueue).mockImplementation(async (_token, options) => {
       if (options.status === "needs_review") {
         return { items: [item("a", "Rusty key"), item("b", "Broken locket")], next_cursor: null };

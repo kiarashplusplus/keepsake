@@ -48,6 +48,32 @@ and no session replay — replay would capture uploaded photos and story text. C
 Analytics is cookieless and storage-free, so no consent banner is needed for it; the privacy page
 says so explicitly rather than leaving it implied.
 
+## Health checks
+
+`/health` performs a real operation per binding, not a presence check: `SELECT 1` on D1, a
+`head()` on R2, a `get()` on KV. A `null` result from either of the last two still grades `ok` —
+an absent key proves the service answered, and only a thrown error is a failure. `AI` stays
+presence-only on purpose: a real inference on every health poll would draw down the same daily
+moderation budget #18 flags as exhaustible. `EMAIL` stays presence-only and grades `degraded`
+rather than failing the whole check.
+
+`GET /api/admin/health` is the separate, authenticated signal: it grades each cron's
+`cron:last:<name>` heartbeat against `CRON_STALE_AFTER_MS` (30 min for `moderationRetry`, 26 h
+for `orphanSweep`), counts a never-run cron as stale, and folds that into `ok`. The admin stats
+strip renders it, so a stopped cron is visible on the page rather than only in logs.
+
+## Security headers
+
+Set in two places because they cover disjoint responses. `apps/web/public/_headers` is read only
+by the Cloudflare assets binding, so it covers the SPA shell and static files;
+`src/middleware/securityHeaders.ts` covers what that binding never touches — `/item/:id`'s
+rewritten HTML and every `/api/*` JSON response. The CSP string is duplicated verbatim between
+them rather than shared: they are consumed by unrelated runtimes with no common module, and
+`/item/:id` serves the real exported shell, so a stricter policy on the Worker side would break
+theming on that one route. `script-src` is hash-based rather than `'unsafe-inline'`. If the
+pre-hydration theme script's text ever changes, its hash goes stale silently — nothing in the
+suite currently protects that pair.
+
 ## Version skew
 
 **`[PARTIAL]`, corrected 2026-09-06 (issue #23)** — this section used to describe the guard as

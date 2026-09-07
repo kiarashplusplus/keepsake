@@ -21,6 +21,15 @@ concurrency:
 env:
   NODE_VERSION: 22
 
+# `dorny/paths-filter` asks the API for a pull request's changed files, which
+# needs `pull-requests: read`. Without it the action fails with "Resource not
+# accessible by integration", the `changes` job goes red, and — because every
+# other job depends on its outputs — lint, typecheck and every test **skip**.
+# A pull request then shows mostly-green with no tests having run at all.
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   changes:
     name: changes

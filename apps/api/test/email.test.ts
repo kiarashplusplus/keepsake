@@ -1,9 +1,21 @@
 import { OwnerMe } from "@keepsake/contracts/owner";
 import { guardRecipient } from "../src/email/sendMail.js";
+import { sanitizeSubject } from "../src/email/templates/shared.js";
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
-import { authHeaders, freshOwnerToken, installFakeEmail, readOk, removeFakeEmail, seedStandardPostalCodes, uploadPhoto } from "./helpers.js";
+import {
+  authHeaders,
+  freshClientIp,
+  freshOwnerToken,
+  insertApprovedListing,
+  insertOwner,
+  installFakeEmail,
+  readOk,
+  removeFakeEmail,
+  seedStandardPostalCodes,
+  uploadPhoto,
+} from "./helpers.js";
 import { randomTokenRaw } from "../src/lib/tokens.js";
 import { sha256Hex } from "../src/lib/digest.js";
 import { ulid } from "../src/lib/ids.js";
@@ -239,6 +251,96 @@ describe("owner identity responses conform to OwnerMe", () => {
     const delBody = OwnerMe.safeParse((await del.json<{ data: unknown }>()).data);
     expect(delBody.success, JSON.stringify(delBody.error?.issues)).toBe(true);
     expect(delBody.data?.email).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #20: a listing title reaches both `newRequest` and `chosen`'s
+// subject line unescaped. `TitleSchema` (packages/contracts/src/listing.ts)
+// now rejects control characters on new input, but `sanitizeSubject`
+// (src/email/templates/shared.ts) is the runtime backstop for rows already
+// sitting in D1 from before that check existed — these tests insert such a
+// row directly, bypassing the schema entirely, exactly like that scenario.
+// ---------------------------------------------------------------------------
+describe("email subjects strip CR/LF from the listing title (issue #20)", () => {
+  afterEach(() => removeFakeEmail());
+
+  const DIRTY_TITLE = "Grandma's\nletters\rfrom\r\nthe war";
+
+  async function insertOpenRequest(listingId: string, email: string): Promise<string> {
+    const id = ulid();
+    await env.DB.prepare(
+      `INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at) VALUES (?, ?, ?, ?, ?, 'open', ?)`,
+    )
+      .bind(id, listingId, "I would love this, thank you for considering me.", email, `test-digest-${freshClientIp()}`, Date.now())
+      .run();
+    return id;
+  }
+
+  it("POST /api/listings/:id/requests: the new-request subject has no raw CR/LF and keeps the readable title", async () => {
+    const sent = installFakeEmail();
+    const ownerId = await insertOwner();
+    const now = Date.now();
+    await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE id = ?")
+      .bind("giver@keepsake.ing", now, ownerId)
+      .run();
+    // Inserted directly into D1 to bypass `TitleSchema` — a pre-existing row
+    // written before the schema's control-character check landed.
+    const listingId = await insertApprovedListing({ ownerId, title: DIRTY_TITLE });
+
+    const res = await SELF.fetch(`http://x/api/listings/${listingId}/requests`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "CF-Connecting-IP": freshClientIp() },
+      body: JSON.stringify({
+        note: "This would mean so much, thank you for considering us.",
+        email: "requester@keepsake.ing",
+        age_attested: true,
+      }),
+    });
+    expect(res.status).toBe(201);
+
+    // Two sends: the giver's new-request notification (subject under test
+    // below), then the requester's own "we passed your note along"
+    // confirmation — see requests.test.ts's happy-path test for the full
+    // rationale.
+    expect(sent).toHaveLength(2);
+    const subject = sent[0]?.subject ?? "";
+    expect(subject).not.toMatch(/[\r\n]/);
+    expect(subject).toContain("Grandma's");
+    expect(subject).toContain("letters");
+    expect(subject).toContain("from");
+    expect(subject).toContain("the war");
+  });
+
+  it("POST /api/me/listings/:id/choose: the chosen subject has no raw CR/LF and keeps the readable title", async () => {
+    const sent = installFakeEmail();
+    const token = freshOwnerToken();
+    const ownerId = await insertOwner();
+    // `insertOwner` doesn't attach `token_hash` to `token` itself; hash and
+    // attach it here so the choose route's `ownerAuth()` accepts `token`.
+    await env.DB.prepare("UPDATE owners SET token_hash = ? WHERE id = ?").bind(await sha256Hex(token), ownerId).run();
+    const listingId = await insertApprovedListing({ ownerId, title: DIRTY_TITLE });
+    const requestId = await insertOpenRequest(listingId, "chosen-me@keepsake.ing");
+
+    const res = await SELF.fetch(`http://x/api/me/listings/${listingId}/choose`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: requestId, handoff_note: "I'll leave it on the porch Saturday morning." }),
+    });
+    expect(res.status).toBe(200);
+
+    expect(sent).toHaveLength(1);
+    const subject = sent[0]?.subject ?? "";
+    expect(subject).not.toMatch(/[\r\n]/);
+    expect(subject).toContain("Grandma's");
+    expect(subject).toContain("letters");
+    expect(subject).toContain("from");
+    expect(subject).toContain("the war");
+  });
+
+  it("sanitizeSubject collapses control characters (CR, LF, CRLF) to spaces and trims", () => {
+    expect(sanitizeSubject('Someone would love "' + DIRTY_TITLE + '"')).toBe('Someone would love "Grandma\'s letters from the war"');
+    expect(sanitizeSubject("\ntrim me\r")).toBe("trim me");
   });
 });
 
