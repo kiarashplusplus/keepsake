@@ -64,10 +64,13 @@ Set per environment, never committed (see root `.env.example`'s `# secrets:` blo
 ```sh
 wrangler secret put TURNSTILE_SECRET --env preview
 wrangler secret put ADMIN_TOKEN --env preview
-wrangler secret put SENTRY_DSN --env preview
 wrangler secret put RESEND_API_KEY --env preview   # fallback provider only
 # repeat with --env production
 ```
+
+No `SENTRY_DSN` here (issue #14): observability runs on Workers Logs now
+(`[observability]` in `apps/api/wrangler.toml`), which is a config flag, not a secret — there is
+nothing to provision before it's live. See `docs/design/ops.md#observability`.
 
 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` are GitHub Environment secrets (Settings →
 Environments → preview/production), used only by `deploy.yml` to run `wrangler` in CI — they are

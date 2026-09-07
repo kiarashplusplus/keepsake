@@ -162,6 +162,15 @@ lands, via a temporary `adminAuth()`-guarded throwing route; the existing `test/
 only asserts the return value of a pure function and cannot tell you whether anything is received.
 Then make `/health` do a real R2 `head` and a KV read so `ok` means something.
 
+**Superseded 2026-09-06 (issue #14):** `SENTRY_DSN` was never set — it needs a Sentry account only
+Kiarash can create, which is exactly the "provision a secret" step this section recommended and
+the reason it never happened. Rather than wait on that account, Sentry was replaced outright with
+Workers Logs (`[observability]` in `wrangler.toml`, no secret involved), and the "temporary
+throwing route" this section imagined is now a permanent, named diagnostic —
+`POST /api/admin/test-error` — see `docs/runbooks/admin.md`. `test/sentry.test.ts` is deleted;
+its successor test file exercises the real capture path the same way. `/health`'s real R2/KV
+checks landed separately and are unaffected by any of this.
+
 ### 5. There is no restore path for the production database. [observed]
 
 A repo-wide search for `backup|time.?travel|restore|d1 export|point.in.time|versioning` returns
@@ -258,9 +267,10 @@ also charged **once per listing**, not once per image, while the pipeline then m
 vision calls. The real ceiling is 15,000 inferences/day, five times what the configuration reads.
 
 **Fix:** raise the global ceilings and put a floor under them — reserve a slice of the daily budget
-that per-IP-exhausted callers cannot reach — and, more importantly, emit a Sentry message when
-either global budget is first exhausted in a day. Right now the only symptom is a queue filling up
-that nobody is watching.
+that per-IP-exhausted callers cannot reach — and, more importantly, emit a captured warning when
+either global budget is first exhausted in a day (`alertBudgetExhaustedOnce`,
+`moderation/pipeline.ts` — done, and since issue #14 that capture goes to Workers Logs rather than
+Sentry). Right now the only symptom is a queue filling up that nobody is watching.
 
 ### 9. `RL_READ` is declared in all three environments and used by nothing. [observed]
 
@@ -410,11 +420,15 @@ otherwise, correctly. Fix the docs — those are the sentences someone reads at 
   live, and `S11` self-harm is now handled as `review` rather than falling through
   (`decide.ts:22`) — that one is genuinely closed.
 - **The takedown path at 3am is: nobody.** Three independent reporters auto-hide a listing
-  (`REPORT_AUTOHIDE_THRESHOLD = 3`) and fire `Sentry.captureMessage` — which is a no-op with no
+  (`REPORT_AUTOHIDE_THRESHOLD = 3`) and fire `Sentry.captureMessage` — which was a no-op with no
   DSN set. Below three reports, the only route is the admin page, and only the founder has the
   token. Realistically: minutes if he is awake and sees it, hours if he is not, and there is
-  currently no notification that would wake him. Setting `SENTRY_DSN` (finding 4) is what turns
-  the auto-hide message into an actual page.
+  currently no notification that would wake him. **Superseded 2026-09-06 (issue #14):**
+  `Sentry.captureMessage` is now `captureMessage` writing to Workers Logs, which needed no DSN and
+  is live unconditionally — the auto-hide message reaches a log line the moment it happens. It is
+  still not a page: Workers Logs has no push/alerting on the Free plan, so "nobody is woken up" is
+  still true today, just for a different reason (no alerting mechanism at all, rather than an
+  unset secret). A Tail Worker or Logpush is the real fix for that half and remains undone.
 - **The request note is not moderated and is quoted verbatim into an email.** Listing title and
   story go through the contact-info regex and both AI gates; `requests.note` goes through neither
   and is emailed to the giver (`newRequest.ts:23`). HTML escaping is correct throughout the
@@ -502,8 +516,10 @@ blocked in devtools. None of the three has a test today that could fail.
 - Photo bytes are magic-byte sniffed, not trusted from the multipart content-type, and the served
   content-type comes from the sniff.
 - Owner deletion of a listing really does delete the R2 objects, R2 first and the row second.
-- Sentry's redaction layer strips `?token=`, `Bearer`, `owner_token`, `cf-turnstile-response` and
-  `idempotency-key`, with `sendDefaultPii: false` and no Replay.
+- The capture redaction layer (`@keepsake/observability/redact`, originally built for Sentry and
+  carried over unchanged when issue #14 replaced it with Workers Logs) strips `?token=`, `Bearer`,
+  `owner_token`, `cf-turnstile-response` and `idempotency-key`. There is no session replay and
+  never was — Workers Logs has no such feature to disable.
 - No cookies are set anywhere, on any route — the privacy page's "no tracking cookies, no ad
   pixels, no ads" is true, and confirmed on the wire.
 - No third-party script loads from the browser except Turnstile.

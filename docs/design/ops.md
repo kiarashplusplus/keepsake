@@ -1,7 +1,7 @@
 # Ops
 
-Status: `[IN PROGRESS]` (preflight + CI landed in M0; Worker-side Sentry + admin API + orphan
-sweep landed in M4 2026-09-06, see below; web-side Sentry/Analytics/runbooks/e2e are still M4–M5).
+Status: `[IN PROGRESS]` (preflight + CI landed in M0; Worker-side observability + admin API +
+orphan sweep landed in M4 2026-09-06, see below; web-side Analytics/runbooks/e2e are still M4–M5).
 
 ## CI shape
 
@@ -40,13 +40,44 @@ a broken fixture" (`preflight.test.mjs`).
 
 ## Observability
 
-`@sentry/cloudflare` (Worker) and `@sentry/react` (web), both routed through
-`@keepsake/observability/redact` before anything leaves the process — ported from Finderly's
-`initSentry.ts` redaction (no lookbehind, since it has to run everywhere including engines that
-don't support it), `SENSITIVE_KEY_RE` extended with `cf-turnstile-response`. `tracesSampleRate 0`
-and no session replay — replay would capture uploaded photos and story text. Cloudflare Web
-Analytics is cookieless and storage-free, so no consent banner is needed for it; the privacy page
-says so explicitly rather than leaving it implied.
+**Workers Logs, not Sentry** (issue #14, 2026-09-06). The original plan was `@sentry/cloudflare`
+on the Worker and `@sentry/react` on the web client, both routed through
+`@keepsake/observability/redact`. It shipped half-built: `SENTRY_DSN` needs a Sentry account only
+Kiarash can create, so it was never set on either environment, and `buildSentryOptions` returning
+`undefined` made every `Sentry.captureException`/`captureMessage` call a silent no-op — the
+auto-hide alert, the cron-failure alert, every unhandled route error, all going nowhere (launch
+audit finding 4). `@sentry/react` was never even added to `apps/web`.
+
+The fix Kiarash asked for was a Cloudflare-native alternative rather than waiting on an account:
+**Workers Logs**, enabled via `[observability]` in `apps/api/wrangler.toml` (`enabled = true`,
+`head_sampling_rate = 1`), available on the Free plan. It captures uncaught exceptions
+automatically, no SDK or client needed. `packages/observability/src/capture.ts` replaces the old
+`@sentry/*` call sites with `captureException(err, opts?)` / `captureMessage(message, level,
+opts?)` — plain functions that write one structured object to `console.error`/`console.warn`
+(objects, not `JSON.stringify`'d strings, so Workers Logs can index and filter on individual
+fields like `tags.cron`). Every message/tag/extra/error still runs through
+`@keepsake/observability/redact`'s `redactDeep`/`redactString` first — that redaction is the part
+of the original Sentry work worth keeping, and it survived the SDK's removal unchanged.
+`SENSITIVE_KEY_RE` covers `cf-turnstile-response` and `idempotency[-_]?key` alongside the
+originals. `POST /api/admin/test-error` (`src/routes/admin.ts`, `adminAuth()`-guarded) exists
+purely to prove an event actually lands against a real deployment — a unit test asserting
+`captureException`'s return value can't tell you that.
+
+**Why this over Sentry:** no third-party account or secret to provision (removes the blocker
+outright), and one fewer subprocessor that ever sees error data — it stays inside Cloudflare, the
+platform already hosting the app.
+
+**What's lost, honestly:** the Free plan's Workers Logs retains events for **3 days**, versus
+Sentry's much longer history. There is **no alerting or push notification** — nobody's phone buzzes
+when an error lands, the same "no notification that would wake him" gap launch-audit finding 4
+originally described, just without a DSN to blame anymore. There is **no issue grouping or release
+tracking** — every event is a flat log line, not a deduplicated, trending issue. A **Tail Worker or
+Logpush** could push events somewhere alerting *is* possible; that is a real follow-up, not
+something built here — see `docs/runbooks/incident.md`.
+
+Cloudflare Web Analytics is unrelated to any of this and unaffected: cookieless and storage-free,
+so no consent banner is needed for it; the privacy page says so explicitly rather than leaving it
+implied.
 
 ## Health checks
 
@@ -99,22 +130,22 @@ What's actually true today:
 
 ## M4 status (API side, 2026-09-06)
 
-`[DONE]` — `apps/api`'s M4 slice: `@sentry/cloudflare` `withSentry()` wraps the default export
-(`src/index.ts`), instrumenting both `fetch` and `scheduled` from one call; `beforeSend`/
-`beforeBreadcrumb` go through `@keepsake/observability/redact` via a `buildSentryOptions(env)`
-helper that returns `undefined` (no client, no network) whenever `SENTRY_DSN` is unset.
-`SENSITIVE_KEY_RE` (`packages/observability/src/redact.ts`) extended with `idempotency[-_]?key`
+`[DONE]` — `apps/api`'s M4 slice: the default export (`src/index.ts`) is a plain
+`{ fetch, scheduled }` object; Workers Logs (`[observability]` in `wrangler.toml`) captures
+uncaught exceptions on its own, and `captureException`/`captureMessage`
+(`@keepsake/observability/capture`, see "Observability" above) cover the handled cases, both
+still routed through `@keepsake/observability/redact`. `SENSITIVE_KEY_RE`
+(`packages/observability/src/redact.ts`) extended with `idempotency[-_]?key`
 (`cf-turnstile-response`/`turnstile` were already there). `GET /health` gained `degraded` +
 `version` fields — `degraded` fires only in `production` and only when `TURNSTILE_SECRET` or
 `ADMIN_TOKEN` is unset, never naming which. Admin API (`src/routes/admin.ts` +
 `src/middleware/adminAuth.ts`, constant-time token compare, `RL_ADMIN`-limited) and a real
 `orphanSweep` cron (photos >24h orphaned, `recovery_tokens` >7d expired,
 `moderation_events`/`email_events` >90d old) replace their M0 stubs — see
-[`docs/runbooks/admin.md`](../runbooks/admin.md). 41 new API-side tests (149 total in
-`apps/api`); `packages/contracts/src/admin.ts` extended additively (`AdminQueueItem` now carries
-`owner`/`report_count`/`events`/`reports`; the old bare-`OwnerListing` shape had no callers to
-break). Web-side Sentry, the `/admin` page itself, and Playwright `e2e` are not part of this
-slice.
+[`docs/runbooks/admin.md`](../runbooks/admin.md). `packages/contracts/src/admin.ts` extended
+additively (`AdminQueueItem` now carries `owner`/`report_count`/`events`/`reports`; the old
+bare-`OwnerListing` shape had no callers to break). The `/admin` page itself and Playwright `e2e`
+are not part of this slice.
 
 ## Launch-audit fixes (2026-09-06)
 
@@ -122,12 +153,13 @@ Four things in this document's territory changed after the launch audit
 ([`docs/runbooks/launch-audit.md`](../runbooks/launch-audit.md)):
 
 - **Crons are awaited, not detached.** `scheduled` used to hand both jobs to `ctx.waitUntil(...)`
-  and return, so `withSentry`'s scheduled instrumentation had already resolved — and disposed its
-  client — before the job did any work. A rejection was a detached unhandled rejection nothing
-  caught, and Cloudflare recorded the invocation as a success because the handler it was watching
-  resolved. `runCron()` in `src/index.ts` now awaits, captures with a `cron` tag, and rethrows.
-  `moderationRetry` additionally catches per listing, so one poisoned row no longer aborts the
-  batch, skips the heartbeat and repeats identically every five minutes forever.
+  and return, so `@sentry/cloudflare`'s scheduled instrumentation (in place at the time) had
+  already resolved — and disposed its client — before the job did any work. A rejection was a
+  detached unhandled rejection nothing caught, and Cloudflare recorded the invocation as a success
+  because the handler it was watching resolved. `runCron()` in `src/index.ts` now awaits, captures
+  with a `cron` tag, and rethrows. `moderationRetry` additionally catches per listing, so one
+  poisoned row no longer aborts the batch, skips the heartbeat and repeats identically every five
+  minutes forever.
 - **`GET /api/admin/health` reads its own heartbeats.** `cron:last:<name>` was written correctly
   and returned correctly, and then ignored: `ok` came from `postal_codes_count > 0` alone. It is
   now false when either heartbeat is stale (30 min for `moderationRetry`, 26 h for `orphanSweep`).
@@ -139,6 +171,7 @@ Four things in this document's territory changed after the launch audit
   Note the finding buried in it: `wrangler d1 export` **fails on this database** — `cannot export
   databases with Virtual Tables (fts5)` — so any backup has to name its tables with `--table`.
 
-None of the Sentry-side work means anything until `SENTRY_DSN` is actually set on the Worker.
-`buildSentryOptions` returns `undefined` without it, and every `captureException` above is then a
-no-op.
+The "None of the Sentry-side work means anything until `SENTRY_DSN` is set" caveat that used to
+live here is gone along with `SENTRY_DSN` itself — issue #14 replaced Sentry with Workers Logs,
+which needs no secret and no account, so every `captureException`/`captureMessage` call above is
+live as soon as the Worker deploys. See "Observability" above for what that switch cost.

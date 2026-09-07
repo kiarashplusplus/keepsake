@@ -1,6 +1,6 @@
 # Runbook: incident
 
-Status: current for M0; expand as M4 observability (Sentry, admin queue) lands.
+Status: current for M0; expand as M4 observability (Workers Logs, admin queue) lands.
 
 ## First, check `/health`
 
@@ -21,7 +21,7 @@ is expected-and-known if Cloudflare Email Service onboarding hasn't landed yet (
 | Listings stuck in `pending` | moderation budget exhausted (`MOD_TEXT_DAILY_BUDGET`/`MOD_IMAGE_DAILY_BUDGET`), or Workers AI erroring | `moderation_events` table, `reason` column; cron `moderationRetry` should clear transient errors within ~15 min (3 attempts) |
 | A listing that should be held is publicly visible | moderation decide logic regression — this should never happen (fail-closed by design) | `apps/api/src/moderation/decide.ts` + its test matrix; treat as a P0, not a queue item |
 | Web bundle blank/broken in production | a barrel import slipped past lint (see `docs/design/README.md#barrel-ban`), or a version-skew client is running against a moved API contract | check the deployed commit's bundle for a bare `@keepsake/*` import; check `/version.json` |
-| Sentry event has an unredacted secret in it | `@keepsake/observability/redact`'s `SENSITIVE_KEY_RE` doesn't cover a new field name | extend the regex, add a test that breaks without the fix, treat any live leak as urgent regardless of severity elsewhere |
+| A captured log line has an unredacted secret in it | `@keepsake/observability/redact`'s `SENSITIVE_KEY_RE` doesn't cover a new field name | extend the regex, add a test that breaks without the fix, treat any live leak as urgent regardless of severity elsewhere |
 
 ## Data loss
 
@@ -42,15 +42,20 @@ files a deduplicated `Uptime: /health failing` issue. A failed scheduled run als
 repository owner. That is the whole of the alerting: GitHub's scheduler is best-effort, so treat
 it as "we will know within the hour", not as monitoring.
 
-Cron failures now reach Sentry: `scheduled` awaits each job and rethrows
-(`apps/api/src/index.ts`), so a failing sweep is both a Sentry event tagged with the cron name and
-a failed invocation in the Cloudflare dashboard, rather than a detached unhandled rejection.
-`moderationRetry` additionally catches per listing, so one poisoned row no longer aborts the
-batch. `GET /api/admin/health` returns `ok: false` when either `cron:last:<name>` heartbeat goes
-stale (30 minutes for `moderationRetry`, 26 hours for `orphanSweep`).
+Cron failures reach Workers Logs: `scheduled` awaits each job and rethrows
+(`apps/api/src/index.ts`), so a failing sweep is both a structured `captureException` log line
+tagged with the cron name and a failed invocation in the Cloudflare dashboard, rather than a
+detached unhandled rejection. `moderationRetry` additionally catches per listing, so one poisoned
+row no longer aborts the batch. `GET /api/admin/health` returns `ok: false` when either
+`cron:last:<name>` heartbeat goes stale (30 minutes for `moderationRetry`, 26 hours for
+`orphanSweep`).
 
-All of that is a no-op without `SENTRY_DSN` set on the Worker. It is still listed as "optional" in
-the cutover checklist; it is not.
+Unlike the Sentry setup this replaced (issue #14), none of that depends on a secret being
+provisioned — Workers Logs is enabled by `[observability]` in `wrangler.toml`, not a DSN, so it's
+live on every deploy with nothing left to set up. What it does **not** give you: push
+notification (nobody's phone buzzes — check the dashboard or `wrangler tail`), more than 3 days of
+retention on the Free plan, or issue grouping across repeated occurrences of the same error. A
+Tail Worker or Logpush could add push alerting later; nothing here does that yet.
 
 ## Reports / abuse
 

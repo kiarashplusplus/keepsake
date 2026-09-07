@@ -1,7 +1,14 @@
 import { env, SELF } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as Capture from "@keepsake/observability/capture";
 import type { FeedPage } from "@keepsake/contracts/feed";
-import type { AdminHealth, AdminQueueItem, AdminStats, AdminTestEmailResult } from "@keepsake/contracts/admin";
+import type {
+  AdminHealth,
+  AdminQueueItem,
+  AdminStats,
+  AdminTestEmailResult,
+  AdminTestErrorResult,
+} from "@keepsake/contracts/admin";
 import type { OwnerMe } from "@keepsake/contracts/owner";
 import { todayISO } from "../src/lib/day.js";
 import { sha256Hex } from "../src/lib/digest.js";
@@ -522,6 +529,77 @@ describe("admin routes", () => {
         method: "POST",
         headers: adminHeaders(),
         body: JSON.stringify({ to: "not-an-email" }),
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  // Issue #14: proves the capture path actually runs against this deployed
+  // route, not just that `captureException`/`captureMessage` return `void`
+  // in isolation — the whole point of a diagnostic endpoint a human (or
+  // `wrangler tail` against preview) can hit on demand.
+  describe("POST /api/admin/test-error (diagnostic)", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("defaults to kind: exception and calls captureException once", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      const captureExceptionSpy = vi.spyOn(Capture, "captureException");
+
+      const res = await SELF.fetch("http://x/api/admin/test-error", {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(200);
+      const result = await readOk<AdminTestErrorResult>(res);
+      expect(result).toEqual({ captured: true, kind: "exception" });
+
+      expect(captureExceptionSpy).toHaveBeenCalledTimes(1);
+      const [error, opts] = captureExceptionSpy.mock.calls[0] ?? [];
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("admin/test-error");
+      expect(opts?.tags?.source).toBe("admin_test_error");
+    });
+
+    it("kind: message calls captureMessage at warning level instead", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      const captureMessageSpy = vi.spyOn(Capture, "captureMessage");
+
+      const res = await SELF.fetch("http://x/api/admin/test-error", {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ kind: "message" }),
+      });
+      expect(res.status).toBe(200);
+      const result = await readOk<AdminTestErrorResult>(res);
+      expect(result).toEqual({ captured: true, kind: "message" });
+
+      expect(captureMessageSpy).toHaveBeenCalledTimes(1);
+      const [message, level] = captureMessageSpy.mock.calls[0] ?? [];
+      expect(message).toContain("admin/test-error");
+      expect(level).toBe("warning");
+    });
+
+    it("401s without a valid admin token, same as every other /api/admin/* route", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+
+      const res = await SELF.fetch("http://x/api/admin/test-error", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("400s an unrecognized kind", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+
+      const res = await SELF.fetch("http://x/api/admin/test-error", {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ kind: "not-a-real-kind" }),
       });
       expect(res.status).toBe(400);
     });

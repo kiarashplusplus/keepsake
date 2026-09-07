@@ -18,11 +18,6 @@ TURNSTILE_SECRET=
 # compare). Admin is Kiarash alone — there is no admin account system.
 ADMIN_TOKEN=
 
-# Sentry DSN for the Worker side (`@sentry/cloudflare`). Redacted via
-# @keepsake/observability/redact before anything is sent. M1: unused until
-# observability lands.
-SENTRY_DSN=
-
 # Resend API key: fallback email provider behind the same `sendMail()`
 # interface, used only if Cloudflare Email Service enablement or the
 # keepsake.ing sender domain onboarding (plan Risks #1) isn't ready.

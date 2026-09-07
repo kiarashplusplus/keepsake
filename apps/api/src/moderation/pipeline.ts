@@ -11,7 +11,7 @@
  * `moderation_events` rather than taking one as a parameter, so every
  * caller has the same simple contract.
  */
-import * as Sentry from "@sentry/cloudflare";
+import { captureMessage } from "@keepsake/observability/capture";
 import type { Env } from "../env.js";
 import { MODELS } from "../models.js";
 import { ulid } from "../lib/ids.js";
@@ -53,7 +53,7 @@ const RESERVED_FLOOR_RATIO = 0.1;
 const FRESH_CALLER_CEILING = 3;
 
 /**
- * Fires a Sentry warning the first time either global moderation budget is
+ * Fires a warning log the first time either global moderation budget is
  * exhausted on a given UTC day (issue #18) — before this, a queue quietly
  * filling up with `pending`/`reason=budget` listings had no corresponding
  * alert, so a launch-day traffic spike and a deliberate attack looked
@@ -63,16 +63,15 @@ const FRESH_CALLER_CEILING = 3;
  * both slip through and double-fire, which is a firm no-op compared to the
  * alternative of missing it, so it's accepted rather than built around.
  *
- * No-ops safely with `SENTRY_DSN` unset (`buildSentryOptions` returns
- * `undefined`, so `Sentry.captureMessage` has no client to send through) —
- * this depends on #14 to actually page anyone, exactly as the issue notes.
+ * Previously a no-op with `SENTRY_DSN` unset (issue #14) — `captureMessage`
+ * now writes straight to Workers Logs, no DSN or account to provision.
  */
 async function alertBudgetExhaustedOnce(env: Env, kind: "mod_text" | "mod_image"): Promise<void> {
   const key = `budget:alerted:${kind}:${todayISO()}`;
   const alreadyAlerted = await env.KV.get(key);
   if (alreadyAlerted) return;
   await env.KV.put(key, "1", { expirationTtl: 172_800 });
-  Sentry.captureMessage(`Moderation budget exhausted for ${kind} today`, "warning");
+  captureMessage(`Moderation budget exhausted for ${kind} today`, "warning");
 }
 
 interface ListingRow {

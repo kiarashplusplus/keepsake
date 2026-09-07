@@ -15,7 +15,6 @@ declare global {
     interface Env {
       TURNSTILE_SECRET?: string;
       ADMIN_TOKEN?: string;
-      SENTRY_DSN?: string;
       RESEND_API_KEY?: string;
     }
   }

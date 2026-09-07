@@ -4,7 +4,7 @@
 // `moderation_events` itself and escalates to `needs_review` after 3 — see
 // `src/moderation/pipeline.ts` and the cron table under "API (Hono,
 // apps/api)" in the plan.
-import * as Sentry from "@sentry/cloudflare";
+import { captureException } from "@keepsake/observability/capture";
 import type { Env } from "../env.js";
 import { moderateListing } from "../moderation/pipeline.js";
 
@@ -35,7 +35,7 @@ export async function moderationRetry(env: Env): Promise<void> {
   // whole batch, skipped the heartbeat write below, and then did exactly the
   // same thing again five minutes later, forever, with nothing reported
   // anywhere. Every other listing in that batch stayed `pending` because of one
-  // neighbour. Now a poisoned listing costs one Sentry event and its own
+  // neighbour. Now a poisoned listing costs one capture event and its own
   // retry, and the other 49 still get their turn.
   let failed = 0;
   for (const candidate of candidates) {
@@ -52,7 +52,7 @@ export async function moderationRetry(env: Env): Promise<void> {
         version: candidate.version,
         error: err instanceof Error ? err.message : String(err),
       });
-      Sentry.captureException(err, { tags: { cron: "moderationRetry" }, extra: { listingId: candidate.id } });
+      captureException(err, { tags: { cron: "moderationRetry" }, extra: { listingId: candidate.id } });
     }
   }
 
@@ -64,7 +64,7 @@ export async function moderationRetry(env: Env): Promise<void> {
   // trigger is visible from the admin page rather than inferred from a
   // growing pile of stuck `pending` listings. Written after a completed pass,
   // including one where individual listings failed: the heartbeat answers
-  // "did the sweep run", and per-listing failures are answered by the Sentry
+  // "did the sweep run", and per-listing failures are answered by the capture
   // events above. Conflating the two would mean one bad row could make the
   // whole cron look dead.
   await env.KV.put("cron:last:moderationRetry", String(Date.now()));

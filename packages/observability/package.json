@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Sentry redaction and init-options helpers shared by the Worker and web app. Dependency-free; subpath exports only.",
+  "description": "Redaction and Workers Logs capture helpers shared by the Worker and web app. Dependency-free; subpath exports only.",
   "exports": {
     "./redact": "./src/redact.ts",
-    "./init": "./src/init.ts"
+    "./capture": "./src/capture.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

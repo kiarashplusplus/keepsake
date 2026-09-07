@@ -19,6 +19,22 @@ run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/s
 [ai]
 binding = "AI"
 
+# Issue #14: `SENTRY_DSN` was never set (it needs a Sentry account only
+# Kiarash can create), so every `Sentry.captureException`/`captureMessage`
+# call in the Worker was a silent no-op. Workers Logs is a Cloudflare-native
+# replacement: no third-party account, no secret to provision, and it's on
+# the Free plan (200,000 logs/day, 3-day retention) — see
+# docs/design/ops.md#observability for what's kept (redaction) and what's
+# lost (retention, alerting, issue grouping) versus Sentry. `enabled = true`
+# turns the feature on for this Worker; `head_sampling_rate = 1` keeps every
+# log line rather than sampling, since this Worker's volume is nowhere near
+# the daily cap. Restated under `[env.preview]`/`[env.production]` below —
+# Wrangler does not inherit this block into a named environment either, same
+# as every other binding/var in this file.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 [[send_email]]
 name = "EMAIL"
 
@@ -231,6 +247,10 @@ run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/s
 [env.preview.ai]
 binding = "AI"
 
+[env.preview.observability]
+enabled = true
+head_sampling_rate = 1
+
 [[env.preview.send_email]]
 name = "EMAIL"
 
@@ -328,6 +348,10 @@ run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/s
 
 [env.production.ai]
 binding = "AI"
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
 
 [[env.production.send_email]]
 name = "EMAIL"

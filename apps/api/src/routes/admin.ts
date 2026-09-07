@@ -15,15 +15,18 @@ import {
   AdminQueueQuery,
   AdminRejectInput,
   AdminTestEmailInput,
+  AdminTestErrorInput,
   type AdminHealth,
   type AdminQueueItem,
   type AdminStats,
   type AdminTestEmailResult,
+  type AdminTestErrorResult,
 } from "@keepsake/contracts/admin";
 import { LISTING_STATUSES, type ListingStatus, type OwnerListing } from "@keepsake/contracts/listing";
 import type { FeedPage } from "@keepsake/contracts/feed";
 import { maskEmail } from "@keepsake/contracts/request";
 import type { ReportReason } from "@keepsake/contracts/report";
+import { captureException, captureMessage } from "@keepsake/observability/capture";
 import type { Env } from "../env.js";
 import { emailProviderName } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
@@ -470,5 +473,36 @@ adminRoutes.post("/test-email", validateBody(AdminTestEmailInput), async (c) => 
     reason: outcome.reason ?? null,
     provider: emailProviderName(c.env) ?? "unset",
   };
+  return ok(c, result);
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/test-error — DIAGNOSTIC ONLY, not part of the product API.
+// ---------------------------------------------------------------------------
+/**
+ * Issue #14 removed `@sentry/cloudflare` in favor of Workers Logs
+ * (`[observability]` in `wrangler.toml`) — a unit test asserting
+ * `captureException`/`captureMessage`'s return value only proves the pure
+ * function ran, not that an event reaches Cloudflare's log pipeline. This
+ * route deliberately captures a synthetic failure through the real
+ * `@keepsake/observability/capture` path so the whole thing can be exercised
+ * against a real deployed Worker — hit it, then check `wrangler tail` or the
+ * Workers Logs dashboard for the `event: "capture"` line. Same
+ * `burst("RL_ADMIN")` + `adminAuth()` guard as every other route on this
+ * router (see the `.use("*", ...)` above); never call this from product
+ * code, and never wire a client button to it.
+ */
+adminRoutes.post("/test-error", validateBody(AdminTestErrorInput), async (c) => {
+  const input = c.get("validatedBody") as AdminTestErrorInput;
+  if (input.kind === "message") {
+    captureMessage("Keepsake admin/test-error: synthetic warning message", "warning", {
+      tags: { source: "admin_test_error" },
+    });
+  } else {
+    captureException(new Error("Keepsake admin/test-error: synthetic exception"), {
+      tags: { source: "admin_test_error" },
+    });
+  }
+  const result: AdminTestErrorResult = { captured: true, kind: input.kind };
   return ok(c, result);
 });

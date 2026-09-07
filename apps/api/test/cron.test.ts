@@ -1,11 +1,13 @@
 /**
- * Launch audit finding 12: cron failures were invisible, including to Sentry.
+ * Launch audit finding 12: cron failures were invisible, including to
+ * Sentry (in place at the time; replaced by Workers Logs in issue #14).
  *
  * Both jobs were handed to `ctx.waitUntil(...)` and `scheduled` returned
  * immediately, so a rejection inside either became a detached unhandled
- * rejection — Sentry's scheduled instrumentation had already resolved and
- * disposed its client, and Cloudflare recorded the invocation as a success
- * because the handler it was watching resolved fine. On top of that,
+ * rejection — the instrumentation wrapping the handler at the time had
+ * already resolved and disposed its client, and Cloudflare recorded the
+ * invocation as a success because the handler it was watching resolved fine.
+ * On top of that,
  * `moderationRetry` looped `await moderateListing(...)` over 50 candidates
  * with no per-item guard: one poisoned listing aborted the batch, skipped the
  * heartbeat write, and repeated identically every five minutes forever.
@@ -60,8 +62,8 @@ describe("runCron", () => {
   // The control for the test above, and the actual finding: with
   // `ctx.waitUntil(job(env))` and no `await`, this call resolved cleanly
   // while the job's rejection escaped into nothing. Rethrowing is what makes
-  // the failure reach Sentry's `scheduled` instrumentation *and* the
-  // Cloudflare dashboard's invocation record.
+  // the failure reach Workers Logs' automatic capture of an uncaught
+  // exception *and* the Cloudflare dashboard's invocation record.
   it("rethrows a failing job rather than detaching it", async () => {
     const ctx = createExecutionContext();
     const boom = new Error("cron exploded");

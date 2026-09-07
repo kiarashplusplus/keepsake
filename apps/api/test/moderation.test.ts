@@ -1,6 +1,6 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as Sentry from "@sentry/cloudflare";
+import * as Capture from "@keepsake/observability/capture";
 import { decide, decideImage, decideText } from "../src/moderation/decide.js";
 import { moderateListing } from "../src/moderation/pipeline.js";
 import { todayISO } from "../src/moderation/budget.js";
@@ -337,7 +337,7 @@ describe("moderateListing: budget gate", () => {
     setTestEnvVar("MOD_IMAGE_DAILY_BUDGET", "3000");
   });
 
-  describe("Sentry alert on exhaustion", () => {
+  describe("capture alert on exhaustion", () => {
     afterEach(() => {
       vi.restoreAllMocks();
       setTestEnvVar("MOD_IMAGE_DAILY_BUDGET", "3000");
@@ -353,7 +353,7 @@ describe("moderateListing: budget gate", () => {
       // first so this test observes its own first-alert, not a flag one of
       // them already set today.
       await env.KV.delete(`budget:alerted:mod_image:${todayISO()}`);
-      const captureMessageSpy = vi.spyOn(Sentry, "captureMessage");
+      const captureMessageSpy = vi.spyOn(Capture, "captureMessage");
 
       const tokenA = freshOwnerToken();
       const listingA = await createListingWithOnePhoto(tokenA);

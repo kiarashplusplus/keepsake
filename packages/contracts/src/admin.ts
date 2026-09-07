@@ -179,6 +179,28 @@ export type AdminTestEmailResult = {
   provider: string;
 };
 
+/**
+ * `POST /api/admin/test-error` — issue #14's own "done" bar: a unit test
+ * asserting `captureException`/`captureMessage`'s return value can't prove
+ * an event actually reaches Workers Logs, only that the pure function ran.
+ * This is a deliberate, diagnostic-only route that calls the real capture
+ * path against a real deployed Worker so `wrangler tail` (or the Workers
+ * Logs dashboard) can confirm a line actually lands — mirrors
+ * `POST /api/admin/test-email` immediately above it in `apps/api/src/routes/
+ * admin.ts`. `kind` picks which of the two capture functions fires;
+ * `"exception"` (the default) throws-and-captures a synthetic `Error`,
+ * `"message"` calls `captureMessage` at `"warning"` level instead.
+ */
+export const AdminTestErrorInput = z.object({
+  kind: z.enum(["exception", "message"]).default("exception"),
+});
+export type AdminTestErrorInput = z.infer<typeof AdminTestErrorInput>;
+
+export type AdminTestErrorResult = {
+  captured: true;
+  kind: "exception" | "message";
+};
+
 /** `GET /api/admin/health` — same "plain data, not client input" rule as
  * `AdminStats` above. `cron_last_run` keys are cron job names
  * (`moderationRetry`, `orphanSweep`); a `null` value means that cron hasn't
