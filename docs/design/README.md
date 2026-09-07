@@ -45,7 +45,7 @@ condensed to what actually earns its keep on a solo-agent-driven repo:
 | M2 Browse + share | `[DONE]` | Feed (keyset/category/FTS/geo), item page, `/i/:id/:variant` edge cache, `/item/:id` OG injection, masonry feed, location bar, share, `+not-found`. |
 | M3 Requests, email, recovery | `[DONE]` | Turnstile, requests, giver email add/verify, `sendMail()` (cf + resend fallback), choose flow + contact reveal, given/withdraw/relist/edit/delete, recovery. |
 | M4 Trust and operations | `[DONE]`, version skew guard excepted (`[TODO]` on the client — issue #23) | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Workers Logs observability (issue #14, replaced a never-configured Sentry), Web Analytics, Playwright in CI, runbooks. Version skew: server half (`/version.json`, `no-store`) is done and tested; nothing in `apps/web` polls it yet — see `docs/design/ops.md#version-skew`. |
-| M5 Polish and launch | `[IN PROGRESS]` | About/Privacy/Terms, empty states, motion + reduce-motion pass, keyboard/focus audit, robots/sitemap, cache-header audit, production secrets, `keepsake.ing` cutover. |
+| M5 Polish and launch | `[IN PROGRESS]` | About/Privacy/Terms, empty states, motion + reduce-motion pass, keyboard/focus audit, robots/sitemap, cache-header audit. Production secrets and `keepsake.ing` cutover are `[DONE]` (2026-09-07). |
 
 Definition of done per milestone lives with the plan (`M0`–`M5` DoD bullets); the short version:
 
@@ -109,9 +109,9 @@ bans and the nightly sweep. Email sending is proven end to end (delivered, click
 token consumed once). Turnstile is enforcing. Deploys are continuous, and the browser suite
 runs on a GitHub runner (38 passing, nothing skipped).
 
-**M5 remaining**: a keyboard and focus pass, an LCP/font-weight look, and the production
-cutover (migrate + seed the production database, set its secrets, deploy, attach the apex
-domain — the last step needs Kiarash).
+**M5 remaining**: a keyboard and focus pass, an LCP/font-weight look. The production cutover is
+**done** (2026-09-07): `keepsake-production` migrated, seeded, secrets set, deployed, `keepsake.ing`
+attached and serving, `PRODUCTION_LIVE` set so the uptime monitor covers it.
 
 Five things looked green today while protecting nothing: the vision prompt was copying a
 pre-filled example instead of classifying, Llama Guard's self-harm category fell through

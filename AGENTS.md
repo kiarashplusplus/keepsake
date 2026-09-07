@@ -21,10 +21,11 @@ The product is the story. Anything that makes a listing feel like a classified a
   last — not necessarily yours, and not necessarily `main`. With several sessions working this
   repo at once (see below), that gap is routine, not an edge case: see #66 and
   "Verifying against preview" below.
-- **Production**: `keepsake-production` exists, migrated, seeded, secrets set — but **no domain
-  points at it** and that is deliberate. Attaching `keepsake.ing` is Kiarash's call, and
-  production deploys are manual (`workflow_dispatch`) because GitHub's required-reviewer gate is a
-  paid feature on private repos.
+- **Production**: `keepsake-production` is live — `keepsake.ing` is attached as its custom domain
+  and serving the real app (verified 2026-09-07), and the repo variable `PRODUCTION_LIVE` is set,
+  so the uptime monitor now checks it too. Production deploys are still manual
+  (`workflow_dispatch`) because GitHub's required-reviewer gate is a paid feature on private repos
+  — a merge to `main` does not ship to `keepsake.ing`.
 - **The UK is geo-blocked on purpose** (`docs/runbooks/uk-block.md`). Not a bug.
 - Work is tracked as GitHub issues across five milestones. Conventions in
   `docs/runbooks/issue-workflow.md`.

@@ -1,12 +1,13 @@
 # What's blocked on Kiarash
 
-Everything here is now done except the production cutover and one Turnstile hostname (#73). Kept as the record of what was set up and how it was verified. Everything else in M0–M4 is built, tested and
-running on preview. Do them in this order — each one unblocks the next round of verification.
+Everything here is now done except one Turnstile hostname (#73). Kept as the record of what was
+set up and how it was verified. The production cutover (section 6 below) is **done** as of
+2026-09-07: `keepsake.ing` is live, serving the real app, with `PRODUCTION_LIVE` set.
 
 Account: **Leapkg@gmail.com's Account**, id `dc6a87ed4a4269ed74c8f508b275b703`
 Zone: **keepsake.ing**, id `dcc1fb09eeeba27a343fc1d98aff9094`
 Preview Worker: **keepsake-preview** → <https://keepsake-preview.leapkg.workers.dev>
-Production Worker (not deployed yet): **keepsake-production**
+Production Worker: **keepsake-production** → <https://keepsake.ing> (custom domain attached)
 
 Paste anything you get back (site keys, tokens) into chat and I'll wire it up and verify.
 
@@ -64,27 +65,16 @@ verifying a write path.
 
 Nothing is waiting on this until the per-PR deploy job in #73 is actually built.
 
-## 6. Production cutover — only when you're ready to be public
+## 6. ~~Production cutover~~ ✅ DONE 2026-09-07
 
-**Do not do this until 1–4 are done and you've used preview yourself.** Nothing is on
-`keepsake.ing` today.
+`keepsake-production` migrated and seeded, secrets set, deployed, `keepsake.ing` attached as its
+custom domain and confirmed serving the real app in a browser. Repository variable
+`PRODUCTION_LIVE = true` is set, so the production half of the every-15-minutes `/health` check in
+`.github/workflows/uptime.yml` is now active.
 
-When you say go, I will:
-1. Apply the migrations and load the postal-code table into the production database.
-2. Set the production secrets (`TURNSTILE_SECRET`, `ADMIN_TOKEN`). Observability no longer needs
-   one: issue #14 replaced `@sentry/cloudflare` (blocked on a Sentry account only you could create)
-   with Workers Logs, which is a `wrangler.toml` config flag, not a secret — the auto-hide alert,
-   the cron-failure alert and every unhandled route error are captured as soon as the Worker
-   deploys, no setup step here required.
-3. Deploy `keepsake-production` and check `/health` reports the exact commit.
-4. Ask you to add the custom domain `keepsake.ing` (same clicks as step 3) — I can't create it.
-5. Set the repository variable **`PRODUCTION_LIVE = true`** (Settings → Secrets and variables →
-   Actions → Variables). That is what turns on the production half of the every-15-minutes
-   `/health` check in `.github/workflows/uptime.yml`. If it is forgotten, the workflow notices —
-   it fails with "production is live but unmonitored" as soon as `keepsake.ing/health` answers
-   while the variable is unset — but setting it here saves the false alarm.
-6. Post the first real keepsake from your phone and watch it through moderation.
-7. Confirm `robots.txt` differs between the two hosts: `curl https://keepsake.ing/robots.txt`
+Still to do, now that the domain is live:
+1. Post the first real keepsake from your phone and watch it through moderation.
+2. Confirm `robots.txt` differs between the two hosts: `curl https://keepsake.ing/robots.txt`
    must show `Allow: /` and a `Sitemap:` line, and `curl https://preview.keepsake.ing/robots.txt`
    must show `Disallow: /` with `https://preview.keepsake.ing/sitemap.xml` returning 404. Preview
    was fully indexable until 2026-09-06 (launch audit finding 2); this is the one-command check
