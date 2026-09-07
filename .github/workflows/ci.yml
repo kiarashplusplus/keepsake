@@ -102,7 +102,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: [preflight, changes]
     # Skip when the change is docs-only — nothing lint checks changed.
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.root == 'true'
+    #
+    # `site` is in this list for two reasons. `eslint .` does cover
+    # apps/site/public/consent.js, which is real JavaScript. But the
+    # load-bearing reason is the skip cascade: test-web `needs` lint and
+    # typecheck, and GitHub skips a job when any of its needs skipped. So
+    # naming `site` on test-web alone did nothing — lint skipping took
+    # test-web, build-web and e2e down with it, and a site-only pull
+    # request still ran no tests. ci-complete caught exactly that on #56.
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.root == 'true' || needs.changes.outputs.site == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -117,7 +125,7 @@ jobs:
     name: typecheck
     runs-on: ubuntu-latest
     needs: [preflight, changes]
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.root == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.root == 'true' || needs.changes.outputs.site == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
