@@ -21,6 +21,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import http from "node:http";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -52,16 +53,16 @@ process.exit(1);
  * The public port is 0 (the OS picks one): nothing here drives HTTP traffic,
  * and a fixed port would collide with a real e2e run on the same machine.
  */
-function runServe(env = {}) {
+function runServe(env = {}, { child = FAKE_CHILD, upstreamPort = 0, onListening } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "keepsake-serve-"));
   const childScript = path.join(dir, "fake-wrangler.mjs");
-  writeFileSync(childScript, FAKE_CHILD);
+  writeFileSync(childScript, child);
 
   const childEnv = { ...process.env };
   delete childEnv.GITHUB_ACTIONS;
   delete childEnv.E2E_MAX_WRANGLER_RESTARTS;
 
-  const proc = spawn(process.execPath, [SERVE_BIN, "0", "0", "--", "--local"], {
+  const proc = spawn(process.execPath, [SERVE_BIN, "0", String(upstreamPort), "--", "--local"], {
     env: {
       ...childEnv,
       E2E_SERVER_CHILD_COMMAND: JSON.stringify([process.execPath, childScript]),
@@ -71,7 +72,20 @@ function runServe(env = {}) {
   });
 
   let output = "";
-  proc.stdout.on("data", (chunk) => (output += chunk));
+  let announced = false;
+  const noticeListening = () => {
+    if (announced || !onListening) return;
+    // serve.mjs prints the port the OS actually gave it, which is the only
+    // way a test can aim traffic at a proxy it did not choose the port for.
+    const match = /proxying http:\/\/127\.0\.0\.1:(\d+)/.exec(output);
+    if (!match) return;
+    announced = true;
+    onListening(Number(match[1]));
+  };
+  proc.stdout.on("data", (chunk) => {
+    output += chunk;
+    noticeListening();
+  });
   proc.stderr.on("data", (chunk) => (output += chunk));
 
   return new Promise((resolve, reject) => {
@@ -87,6 +101,20 @@ function runServe(env = {}) {
     });
   });
 }
+
+/**
+ * A port with nothing behind it. Bound and released rather than hard-coded so
+ * this cannot collide with a real service; the window between release and use
+ * is the test's own, and nothing else in this file listens.
+ */
+async function findDeadPort() {
+  const probe = http.createServer(() => {});
+  await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const { port } = probe.address();
+  await new Promise((resolve) => probe.close(resolve));
+  return port;
+}
+const DEAD_UPSTREAM_PORT = await findDeadPort();
 
 function occurrences(haystack, needle) {
   return haystack.split(needle).length - 1;
@@ -111,12 +139,85 @@ test("a crashed child's stderr is reprinted, and still passed through live", asy
 
 test("the wrangler debug-log path is scraped out of the child's output and reported", async () => {
   const { output } = await runServe({ E2E_MAX_WRANGLER_RESTARTS: "0" });
-  assert.match(output, new RegExp(`wrangler debug log: ${FAKE_LOG_PATH}`));
+  assert.match(output, new RegExp(`wrangler debug log[^\\n]*: ${FAKE_LOG_PATH}`));
 });
 
 test("the child's stdout is retained too, not just stderr", async () => {
   const { output } = await runServe({ E2E_MAX_WRANGLER_RESTARTS: "0" });
   assert.match(output, /out\| fake wrangler ready/);
+});
+
+// ── this proxy's own view of the crash ─────────────────────────────────
+//
+// #104's whole difficulty is that wrangler cannot say why it died: its console
+// message is empty by construction (`castErrorCause` wraps a serialized,
+// non-`Error` cause in `new Error()`) and its debug log drops entries under
+// load. So the crash report has to carry what only this side of the socket
+// knows. These two go red if that record is removed.
+
+/** A child that stays up long enough for a request to be in flight, then dies. */
+const SLOW_DYING_CHILD = `
+process.stdout.write("fake wrangler ready\\n");
+setTimeout(() => {
+  process.stderr.write("${CRASH_MARKER}\\n");
+  process.exit(1);
+}, 700);
+`;
+
+test("a request in flight when wrangler dies is named in the crash report", async () => {
+  // A black-hole upstream: it accepts the connection and never answers, so
+  // the request is still open at the moment the child dies — which is the
+  // only kind of request a fatal ProxyWorker error is ever about.
+  const blackHole = http.createServer(() => {});
+  await new Promise((resolve) => blackHole.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const { output } = await runServe(
+      { E2E_MAX_WRANGLER_RESTARTS: "0" },
+      {
+        child: SLOW_DYING_CHILD,
+        upstreamPort: blackHole.address().port,
+        onListening: (port) => {
+          const req = http.request({
+            host: "127.0.0.1",
+            port,
+            path: "/still-open-when-it-died",
+          });
+          req.on("error", () => {});
+          req.end();
+        },
+      },
+    );
+
+    assert.match(output, /1 request\(s\) in flight to wrangler when it died/);
+    assert.match(output, /GET \/still-open-when-it-died \(\d+ms ago\)/);
+  } finally {
+    await new Promise((resolve) => blackHole.close(resolve));
+  }
+});
+
+test("this proxy losing its own upstream socket is recorded, not swallowed", async () => {
+  // Nothing is listening on the upstream port, so the forward fails the way
+  // it would if wrangler's socket went away mid-request: the browser is
+  // retried and never sees it, which is exactly why it has to be written down.
+  const { output } = await runServe(
+    { E2E_MAX_WRANGLER_RESTARTS: "0" },
+    {
+      child: SLOW_DYING_CHILD,
+      upstreamPort: DEAD_UPSTREAM_PORT,
+      onListening: (port) => {
+        const req = http.request({ host: "127.0.0.1", port, path: "/no-one-home" });
+        req.on("error", () => {});
+        req.end();
+      },
+    },
+  );
+
+  assert.match(output, /proxy-side events so far: [^\n]*upstream-request-error=\d/);
+  assert.match(
+    output,
+    /upstream-request-error GET \/no-one-home attempt=0 code=ECONNREFUSED reused=false/,
+  );
 });
 
 // ── the restart threshold ──────────────────────────────────────────────
