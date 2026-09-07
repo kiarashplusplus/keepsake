@@ -28,12 +28,16 @@ async function fillAndSubmit(
   note: string,
   email: string,
 ): Promise<void> {
-  // Note, email, phone (optional), date of birth — in that render order
-  // (see RequestSheet.tsx). Phone is skipped here (every test leaves it
-  // blank); the date of birth field is the fourth `TextInput` on the page.
-  const [noteField, emailField, , dobField] = instance.UNSAFE_getAllByType(TextInput);
-  if (noteField === undefined || emailField === undefined || dobField === undefined) {
-    throw new Error("Expected note, email, and date-of-birth fields");
+  // Note, email, phone (optional) — in that render order (see
+  // RequestSheet.tsx). Phone is skipped here; every test leaves it blank.
+  const [noteField, emailField] = instance.UNSAFE_getAllByType(TextInput);
+  // Date of birth is addressed by its label, not by position: since #133 it
+  // is a DOM `<input type="date">` (`ui/DateField.web.tsx`), not a
+  // `TextInput` at all, so an index into the TextInputs would silently pick
+  // up the phone field instead of failing.
+  const dobField = instance.getByLabelText("Date of birth");
+  if (noteField === undefined || emailField === undefined) {
+    throw new Error("Expected note and email fields");
   }
 
   await act(async () => {

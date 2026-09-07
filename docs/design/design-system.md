@@ -147,9 +147,11 @@ breaks. Inter is gone entirely (not even a fallback) — the one sanctioned exce
 **Surfaces.** `radii.*` all collapsed to `2` (a print's almost-square corner, not a SaaS radius);
 `shadow.*` moved from a symmetric drop to an offset-down-and-right cast plus a 1px inset edge
 (`inset 0 0 0 1px rgba(0,0,0,.08)`), so a `Print`/`Card` reads as paper resting proud of the table.
-`Button` is a stamped rectangle: 2px ink outline (secondary) or a filled stamp-red rectangle
-(primary), mono uppercase label, a small fixed rotation hashed from the label text so it's stable
-across renders. `Chip` is an ink-outlined mono label, no pill. `Input`/`TextArea` are lined index
+`Button` is a stamped rectangle: filled stamp-red (primary) or filled ink with a cream label
+(secondary), mono uppercase label, a small fixed rotation hashed from the label text so it's stable
+across renders. Secondary was an *unfilled* 2px ink outline until issue #134 — the `print` fill
+inside it measured 1.18:1 against the `surface` card it sits on, so it read as an empty field
+rather than a control. The ink fill is 14.25:1 both for its label and against that card. `Chip` is an ink-outlined mono label, no pill. `Input`/`TextArea` are lined index
 cards: `surface` fill, a 2px ink *baseline* instead of a boxed border (the baseline thickens and
 turns stamp-red on focus). `Sheet` is an index card (square corners, shadow, no hairline) that
 slides up from the bottom under the sheet breakpoint. `Stamp` (`src/ui/Stamp.tsx`, replacing
