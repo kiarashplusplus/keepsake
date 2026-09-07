@@ -169,7 +169,7 @@ SUGGEST_DAILY_BUDGET = "1000"
 # fallback rather than parking anything, so a single runaway-protection
 # ceiling is enough. Pure runaway protection like every other budget in this
 # block, not sized against real traffic yet. Only ever consulted when
-# SEMANTIC_SEARCH is on, which today it is not anywhere.
+# SEMANTIC_SEARCH is on, which since 2026-09-07 it is in every environment.
 EMBED_DAILY_BUDGET = "2000"
 # Issue #38's kill switch, now ON in every environment — the runbook errand
 # was completed 2026-09-07: the three indexes are confirmed to exist
@@ -185,13 +185,18 @@ EMBED_DAILY_BUDGET = "2000"
 # `src/env.ts`'s `semanticSearchEnabled` treats anything other than the
 # literal "1" as off, so it cannot be enabled by accident.
 #
-# Turning it on was timed deliberately. `reembedListing` only runs on listing
-# create and edit — there is no backfill for listings that already exist — so
-# any listing created while this is "0" has no vector and is invisible to
-# vector search until it is next edited. It was flipped while the production
-# catalogue was still empty, so every listing ever created gets embedded and
-# no backfill is needed. If this is ever switched off again while listings
-# are being created, switching it back on will require writing one.
+# Turning it on was timed deliberately, but the timing claim it shipped with
+# was already out of date. `reembedListing` runs on listing create, listing
+# edit, and the #37 aspects backfill — there is no standalone vector backfill
+# — so any listing created while this is "0" has no vector and is invisible
+# to vector search until it is next written. The flip was justified by the
+# production catalogue being empty; it was not. #135 measured a real
+# production listing (the KastKing spool) hours before this merged, and this
+# has never been deployed anywhere, so *every* listing that exists today
+# predates the feature. Running the aspects backfill after deploy embeds
+# them, which is why reembedListing is wired into it. If this is ever
+# switched off again while listings are being created, switching it back on
+# means running that backfill again — or writing a vector-only one.
 SEMANTIC_SEARCH = "1"
 # Per-IP daily ceilings for the write endpoints. An address is not a person —
 # a household or a mobile carrier's CGNAT range sits behind one IP — so these

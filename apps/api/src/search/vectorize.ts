@@ -49,10 +49,12 @@ export async function deleteListingVector(env: Env, listingId: string): Promise<
  * The branch that wrote this reported that the live API *rejects* the
  * literal `false` with `VECTOR_QUERY_ERROR (40026)` and that a mocked
  * `env.VECTORIZE` would never have caught it. That would be a good catch if
- * true, but it has not been reproduced — no session since has had a
- * Vectorize-scoped credential, and the fake in `test/helpers.ts` accepts
- * both values exactly as the report says a mock would. Treat it as an
- * unconfirmed lead: keep `"none"` (it costs nothing and is safe either
+ * true, and it is still **unreproduced**: the later session that did hold a
+ * Vectorize-scoped credential ran the round trip with `"none"` in place and
+ * never tried the literal `false`, so the rejection itself has never been
+ * observed by anyone who wrote it down. The fake in `test/helpers.ts`
+ * accepts both values exactly as the report says a mock would. Treat it as
+ * an unconfirmed lead: keep `"none"` (it costs nothing and is safe either
  * way), and do not cite it as evidence this code has met the real API.
  */
 export async function queryListingVectors(env: Env, vector: number[], topK: number): Promise<VectorMatch[] | null> {

@@ -149,19 +149,41 @@ to the justified band and fail if it moves out either side.
 The previous value, 0.3, was below every score this model produces for anything
 at all, which made the "nothing cleared the bar" fallback unreachable.
 
-### The backfill that does not exist — read before switching this off
+### Listings that predate the feature — do this after the first deploy
 
-`reembedListing` runs **only on listing create and edit** (`routes/listings.ts`).
-There is no backfill for listings that already exist, and no admin endpoint to
-drive one. A listing created while `SEMANTIC_SEARCH` is `"0"` therefore has no
-vector and is invisible to vector search until someone edits it.
+`reembedListing` runs on listing **create**, listing **edit**
+(`routes/listings.ts`), and each listing the **#37 aspects backfill** touches
+(`src/backfill/aspects.ts`). There is no vector-only backfill and no admin
+endpoint that drives one directly.
 
-The flag was flipped on while the production catalogue was still empty
-precisely so this never becomes a problem: every listing that has ever existed
-in production gets embedded on write. **If you switch it off while listings are
-being created, switching it back on will require writing that backfill first**
-(model it on `src/backfill/aspects.ts`, which solves the same shape of problem
-for #37 — batched, budget-respecting, resumable, idempotent).
+So a listing written while `SEMANTIC_SEARCH` was `"0"` has no vector and is
+invisible to vector search until something writes it again.
+
+**This applies to production right now.** The comment this section used to
+carry said the flag was flipped while the production catalogue was still empty,
+so no backfill would ever be needed. That was not true: #135 measured a real
+production listing (the KastKing fishing-line spool,
+`01M1XP7SYFDR05M1CPAH0020EE`) against production's own `GET /api/feed` hours
+before this merged, and the feature has never been deployed anywhere. Every
+listing that exists today therefore predates it.
+
+After the first deploy that carries this, run the aspects backfill — it now
+embeds each listing it processes:
+
+```sh
+curl -X POST https://<host>/api/admin/backfill-aspects -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+Note the one listing that needs a nudge first: the spool already has a
+`listing_aspects` row (`material: braided`), and the job skips any listing that
+already has rows (#139 flagged the same thing for its new prompt), so it will
+not be reached until that row is cleared. Everything else with no aspects is
+picked up on the first pass.
+
+**If you switch the flag off while listings are being created**, switching it
+back on means running that backfill again for the gap — or writing a
+vector-only one (model it on `src/backfill/aspects.ts`: batched,
+budget-respecting, resumable, idempotent).
 
 ### Rolling back
 

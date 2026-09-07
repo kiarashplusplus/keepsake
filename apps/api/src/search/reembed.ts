@@ -4,10 +4,13 @@
  * that can change what a listing's story or aspects say:
  * `POST /api/listings` (create) and `PATCH /api/listings/:id` (edit, when
  * the request body actually touched title/story/aspects) in
- * `routes/listings.ts`. The #37 backfill script (landing separately) should
- * call this directly, once per listing, after it writes that listing's
- * aspects — it is exported for exactly that reuse rather than duplicating
- * the embed-and-upsert steps.
+ * `routes/listings.ts`, and once per listing from the #37 aspects backfill
+ * (`backfill/aspects.ts`), which is what reaches listings created before
+ * this feature existed. That last caller is why this is exported rather
+ * than inlined: it is the same embed-and-upsert, not a second copy of it.
+ * (An earlier version of this comment described the backfill as "landing
+ * separately" and expected to call this. It landed first and did not, so
+ * for a while nothing did.)
  *
  * `DELETE /api/listings/:id` calls `deleteListingVector` directly instead;
  * nothing here handles removal.

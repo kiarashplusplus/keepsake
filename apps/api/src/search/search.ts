@@ -5,10 +5,11 @@
  * that fallback, all deliberately distinguishable in the return value so a
  * test can drive each one on purpose (see `test/search.test.ts`):
  *
- *  0. `SEMANTIC_SEARCH` is not `"1"` — the kill switch, checked first and
- *     currently the live answer in every environment. Nothing below it runs
- *     at all: no embedding call, no Vectorize call. See
- *     `semanticSearchEnabled` in `env.ts`.
+ *  0. `SEMANTIC_SEARCH` is not `"1"` — the kill switch, checked first. It is
+ *     `"1"` in every environment as of 2026-09-07, so this is not the live
+ *     answer anywhere; it is the rollback. With it off nothing below runs at
+ *     all: no embedding call, no Vectorize call. See `semanticSearchEnabled`
+ *     in `env.ts`.
  *  1. Vectorize is unavailable — no `env.VECTORIZE` binding, or the query
  *     call throws (`vectorize.ts` already turns both into `null`).
  *  2. Embedding the query failed — no `env.AI` result, a timeout, `MOCK_AI`

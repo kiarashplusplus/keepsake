@@ -19,13 +19,18 @@
  *
  * The one block that *would* be such evidence is "real Workers AI
  * embeddings" at the bottom, gated behind `REAL_AI=1`. It is skipped by
- * default and has never been observed to run: no session working on this
- * issue has had a Cloudflare credential. See its own comment.
+ * default, and it has now been run once with a real credential (recorded in
+ * `docs/runbooks/deploy.md` → "Vectorize / semantic search"). Skipped is
+ * still its normal state: CI sets no `CLOUDFLARE_API_TOKEN`, so the three
+ * skips in a green run are expected, not a warning sign. See its own
+ * comment.
  *
  * An earlier revision of this header claimed the real-service run was "done
- * separately (see the issue's closing comment)". There is no such comment on
- * issue #38, and no artifact of that run exists anywhere. The claim is
- * removed rather than left pointing at nothing.
+ * separately (see the issue's closing comment)". There was no such comment
+ * on issue #38 at the time and no artifact of that run existed anywhere, so
+ * the claim was removed rather than left pointing at nothing. The run that
+ * did eventually happen is cited above by its runbook section, which is what
+ * that claim should have pointed at.
  */
 import { env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -105,12 +110,14 @@ function fixtureEmbedding(text: string, vector: number[]): void {
 
 beforeEach(async () => {
   setTestEnvVar("MOCK_AI", "0");
-  // Every deployed environment has SEMANTIC_SEARCH off (see
-  // `semanticSearchEnabled` in src/env.ts), and vitest.config.ts pins the
-  // test default to "0" to match. The blocks below that exercise the vector
-  // path have to opt in explicitly, exactly like a human flipping the flag
-  // would — which is the point: nothing reaches Vectorize by default, in
-  // tests or anywhere else. The "flag off" block resets it to "0" itself.
+  // `vitest.config.ts` pins the test default to "0" even though every
+  // deployed environment now has SEMANTIC_SEARCH on (see
+  // `semanticSearchEnabled` in src/env.ts). That asymmetry is deliberate and
+  // worth keeping: the blocks below that exercise the vector path opt in
+  // explicitly, so nothing reaches Vectorize by accident from a test that
+  // never mentioned it, and the flag-off equivalence with FTS stays the
+  // default shape under test rather than a special case. The "flag off"
+  // block resets it to "0" itself.
   setTestEnvVar("SEMANTIC_SEARCH", "1");
   mockAi();
   installFakeVectorize();
