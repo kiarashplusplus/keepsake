@@ -19,6 +19,8 @@
  *    finding 11).
  *  - the R2 objects behind photos of listings that have been `rejected`,
  *    `withdrawn` or `hidden` for more than 30 days (launch audit finding 15).
+ *  - `requests` rows still unconfirmed once their "was this you?" link has
+ *    expired (issue #188) — deleted outright, not redacted.
  *  - `requests.ip_digest` / `reports.ip_digest` on rows older than 48 hours
  *    (issue #169), which is what makes the privacy page's twice-stated
  *    48-hour expiry true of the D1 copies and not only of the KV counters.
@@ -336,6 +338,39 @@ async function sweepExpiredIpDigests(env: Env, cutoff: number): Promise<{ reques
 }
 
 /**
+ * Issue #188: deletes requests nobody confirmed, once their confirm link has
+ * expired.
+ *
+ * A held request is an address, a note and a phone number submitted by
+ * someone who never proved they were the person they named. If the link
+ * lapses unclicked, the most likely readings are that the address does not
+ * belong to the submitter, or that the person it belongs to saw the message
+ * and declined to act — and under either reading this service is holding a
+ * third party's contact details with no basis at all. So this is a `DELETE`,
+ * not the `UPDATE … SET email = NULL` shape the withdrawal and redaction
+ * paths use: there is no record worth keeping about a request that never
+ * became one, and nothing anywhere references these rows (`meta.changes` on
+ * this statement is the only trace, in the run's log line).
+ *
+ * Deleting rather than redacting also frees the address from
+ * `UNIQUE (listing_id, email)`, so a real person whose confirmation went to
+ * spam is not locked out of ever asking for that keepsake again.
+ *
+ * `confirmed_at IS NULL` is the condition, never `status = 'unconfirmed'`:
+ * the timestamp is what every other reader keys off since #188, and a sweep
+ * that agreed with the status column while disagreeing with the dashboard
+ * would be the worst of both.
+ */
+async function sweepUnconfirmedRequests(env: Env, now: number): Promise<number> {
+  const result = await env.DB.prepare(
+    "DELETE FROM requests WHERE confirmed_at IS NULL AND confirm_expires_at IS NOT NULL AND confirm_expires_at < ?",
+  )
+    .bind(now)
+    .run();
+  return result.meta.changes ?? 0;
+}
+
+/**
  * Deletes `owners` rows that hold nothing and have done nothing for
  * `EMPTY_OWNER_AGE_MS`. "Holds nothing" is checked against every table that
  * references an owner — listings, photos, recovery tokens — plus the email
@@ -378,6 +413,10 @@ export async function orphanSweep(env: Env): Promise<void> {
     env,
     now - IP_DIGEST_RETENTION_MS,
   );
+  // Before the IP-digest sweep would also have been correct; after it is
+  // marginally better, since a row deleted here needs no digest cleared and
+  // the two counts in the log line stay meaning distinct things.
+  const unconfirmedRequestsDeleted = await sweepUnconfirmedRequests(env, now);
   // Last, and after `sweepOrphanPhotos` specifically: that sweep is what
   // removes the only thing an abandoned give-flow owner ever held, so running
   // it first means the same night collects the owner too instead of leaving
@@ -408,6 +447,11 @@ export async function orphanSweep(env: Env): Promise<void> {
     emailDeleted,
     requestDigestsCleared,
     reportDigestsCleared,
+    // #188: requests whose confirm link expired unclicked. A steady trickle
+    // is ordinary (people change their minds at the confirm step, which is
+    // the step working); a sudden spike is somebody aiming submissions at
+    // addresses that are not theirs, which is the thing worth noticing.
+    unconfirmedRequestsDeleted,
     ownersDeleted,
   });
 

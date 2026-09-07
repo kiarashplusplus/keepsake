@@ -526,17 +526,22 @@ adminRoutes.post("/requests/:id/remove", validateBody(AdminRemoveRequestInput), 
   const id = requireParam(c, "id");
   const input = c.get("validatedBody") as AdminRemoveRequestInput;
 
-  const row = await c.env.DB.prepare("SELECT id, listing_id, status FROM requests WHERE id = ?")
+  const row = await c.env.DB.prepare("SELECT id, listing_id, status, confirmed_at FROM requests WHERE id = ?")
     .bind(id)
-    .first<{ id: string; listing_id: string; status: string }>();
+    .first<{ id: string; listing_id: string; status: string; confirmed_at: number | null }>();
   if (!row) return fail(c, "not_found", "Request not found.", 404);
   if (ALREADY_REDACTED_STATUSES.has(row.status)) {
     return fail(c, "conflict", "This request's contact info has already been removed.", 409);
   }
 
   const now = Date.now();
+  // `confirm_token_hash = NULL` for the same reason `POST /api/requests/
+  // withdraw` nulls it (issue #188): a removal that left the confirm link
+  // live would let whoever holds that email undo a moderator's decision, and
+  // an admin removal is the one the minor-takedown rule depends on.
   await c.env.DB.prepare(
-    `UPDATE requests SET status = 'removed', removed_at = ?, removed_reason = ?, note = NULL, email = NULL, phone = NULL
+    `UPDATE requests SET status = 'removed', removed_at = ?, removed_reason = ?, note = NULL, email = NULL, phone = NULL,
+                         confirm_token_hash = NULL
      WHERE id = ?`,
   )
     .bind(now, input.reason ?? null, id)
@@ -544,9 +549,18 @@ adminRoutes.post("/requests/:id/remove", validateBody(AdminRemoveRequestInput), 
 
   // Same reasoning as `POST /api/requests/withdraw`: a removed request is no
   // longer a live ask, and the floor costs nothing.
-  await c.env.DB.prepare("UPDATE listings SET request_count = MAX(request_count - 1, 0) WHERE id = ?")
-    .bind(row.listing_id)
-    .run();
+  //
+  // Only for a request that was counted in the first place, though (#188): an
+  // unconfirmed request never incremented `request_count` — that happens at
+  // confirmation, not submission — so decrementing for one would take a
+  // number off the giver's listing on behalf of an ask they were never shown.
+  // The `MAX(…, 0)` floor would have hidden it at zero and quietly
+  // under-counted everywhere else.
+  if (row.confirmed_at !== null) {
+    await c.env.DB.prepare("UPDATE listings SET request_count = MAX(request_count - 1, 0) WHERE id = ?")
+      .bind(row.listing_id)
+      .run();
+  }
 
   const listing = await c.env.DB.prepare("SELECT version FROM listings WHERE id = ?")
     .bind(row.listing_id)

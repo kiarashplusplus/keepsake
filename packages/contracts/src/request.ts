@@ -39,6 +39,17 @@ export type CreateRequestResult = z.infer<typeof CreateRequestResult>;
 // (see docs/runbooks/admin.md's minor-takedown rule) — the owner dashboard
 // must not attribute an admin's removal to the requester, so the two need
 // separate statuses rather than collapsing into one.
+//
+// `unconfirmed` (issue #188) is deliberately *not* in this list. It is a real
+// `requests.status` value — the state a request sits in between being
+// submitted and the requester clicking the "was this you?" link — but this
+// enum types what a *giver* can be shown, and an unconfirmed request is
+// exactly the thing a giver must never see: an address nobody has proved they
+// control. Every owner-facing query filters on `confirmed_at IS NOT NULL`
+// (`routes/me.ts`), so leaving the value out here is a second, failing-loud
+// layer: if one of those filters is ever dropped, `OwnerViewRequest` throws on
+// parse rather than quietly serialising an unverified stranger into a
+// dashboard.
 export const REQUEST_STATUSES = ["open", "chosen", "not_chosen", "withdrawn", "removed"] as const;
 export const RequestStatusSchema = z.enum(REQUEST_STATUSES);
 export type RequestStatus = z.infer<typeof RequestStatusSchema>;
@@ -132,3 +143,35 @@ export const RequestWithdrawResult = z.object({
   withdrawn_at: TimestampMs,
 });
 export type RequestWithdrawResult = z.infer<typeof RequestWithdrawResult>;
+
+/**
+ * `POST /api/requests/confirm` — issue #188. `token` is the raw, single-use
+ * secret mailed as a link in `confirmRequest`
+ * (`src/email/templates/confirmRequest.ts`), the only message that goes to an
+ * address before anyone has proved they control it. Redeeming it is what
+ * turns a held request into a real one: it is forwarded to the giver, counted
+ * toward `request_count`, and given its withdraw token at that moment and not
+ * before.
+ */
+export const RequestConfirmInput = z.object({
+  token: z.string().trim().min(1),
+});
+export type RequestConfirmInput = z.infer<typeof RequestConfirmInput>;
+
+/**
+ * `listing_available` is false when the keepsake stopped being claimable
+ * between the ask and the confirmation — given to someone else, withdrawn by
+ * the giver, taken down. The request is still confirmed in that case (the
+ * person did ask, and their withdraw link has to work), but nothing was
+ * forwarded to the giver and the page says so rather than implying an ask is
+ * pending on a listing that is gone.
+ */
+export const RequestConfirmResult = z.object({
+  id: UlidSchema,
+  listing_id: UlidSchema,
+  /** Null when `listing_available` is false — nothing was confirmed, because
+   * there was nothing left to forward the request to. */
+  confirmed_at: TimestampMs.nullable(),
+  listing_available: z.boolean(),
+});
+export type RequestConfirmResult = z.infer<typeof RequestConfirmResult>;

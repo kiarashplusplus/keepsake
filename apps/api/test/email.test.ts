@@ -594,9 +594,12 @@ describe("email subjects strip CR/LF from the listing title (issue #20)", () => 
   async function insertOpenRequest(listingId: string, email: string): Promise<string> {
     const id = ulid();
     await env.DB.prepare(
-      `INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at) VALUES (?, ?, ?, ?, ?, 'open', ?)`,
+      // Confirmed (#188) — an `open` request is by definition one whose
+      // address has been proved.
+      `INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at, confirmed_at)
+       VALUES (?, ?, ?, ?, ?, 'open', ?, ?)`,
     )
-      .bind(id, listingId, "I would love this, thank you for considering me.", email, `test-digest-${freshClientIp()}`, Date.now())
+      .bind(id, listingId, "I would love this, thank you for considering me.", email, `test-digest-${freshClientIp()}`, Date.now(), Date.now())
       .run();
     return id;
   }
@@ -623,17 +626,34 @@ describe("email subjects strip CR/LF from the listing title (issue #20)", () => 
     });
     expect(res.status).toBe(201);
 
-    // Two sends: the giver's new-request notification (subject under test
-    // below), then the requester's own "we passed your note along"
-    // confirmation — see requests.test.ts's happy-path test for the full
-    // rationale.
-    expect(sent).toHaveLength(2);
-    const subject = sent[0]?.subject ?? "";
+    // Issue #188: the giver's notification is sent at confirmation, not at
+    // submission, so the subject under test only exists after the requester
+    // redeems the link mailed to them.
+    const confirmToken = /\/confirm\/([A-Za-z0-9_-]+)/.exec(sent[0]?.text ?? "")?.[1];
+    expect(confirmToken).toBeTruthy();
+    const confirmed = await SELF.fetch("http://x/api/requests/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "CF-Connecting-IP": freshClientIp() },
+      body: JSON.stringify({ token: confirmToken }),
+    });
+    expect(confirmed.status).toBe(200);
+
+    // Three sends now: the "was this you?" confirmation, the giver's
+    // new-request notification (subject under test below), and the
+    // requester's "we passed your note along".
+    expect(sent).toHaveLength(3);
+    const subject = sent[1]?.subject ?? "";
     expect(subject).not.toMatch(/[\r\n]/);
     expect(subject).toContain("Grandma's");
     expect(subject).toContain("letters");
     expect(subject).toContain("from");
     expect(subject).toContain("the war");
+
+    // The confirmation mail carries the same title to an address nobody has
+    // verified yet, so it gets the same guarantee (#188 + #20).
+    const confirmSubject = sent[0]?.subject ?? "";
+    expect(confirmSubject).not.toMatch(/[\r\n]/);
+    expect(confirmSubject).toContain("Grandma's");
   });
 
   it("POST /api/me/listings/:id/choose: the chosen subject has no raw CR/LF and keeps the readable title", async () => {

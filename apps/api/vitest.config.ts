@@ -123,6 +123,13 @@ export default defineConfig({
             UPLOAD_IP_DAILY_BUDGET: "60",
             REPORT_IP_DAILY_BUDGET: "10",
             EMAIL_IP_DAILY_BUDGET: "10",
+            // Issue #188. Pinned at the deployed value rather than raised: a
+            // test env with a generous ceiling would let the suite pass while
+            // the real one silently dropped a person's confirmation, which is
+            // the failure mode this number is here to make visible. Tests use
+            // `freshRequesterEmail()` so unrelated cases don't share a
+            // counter.
+            REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET: "3",
             SUGGEST_IP_DAILY_BUDGET: "30",
             REPORT_AUTOHIDE_THRESHOLD: "3",
             SHELF_MIN_ITEMS: "3",

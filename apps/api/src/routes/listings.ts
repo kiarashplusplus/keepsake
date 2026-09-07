@@ -16,12 +16,11 @@ import { validateBody } from "../middleware/validate.js";
 import { lookupPostalCode } from "../geo/lookup.js";
 import { sendMail } from "../email/sendMail.js";
 import { verifyEmail } from "../email/templates/verifyEmail.js";
-import { newRequest as newRequestTemplate } from "../email/templates/newRequest.js";
-import { requestReceived as requestReceivedTemplate } from "../email/templates/requestReceived.js";
+import { confirmRequest as confirmRequestTemplate } from "../email/templates/confirmRequest.js";
 import { dailyIpDigest, sha256Hex } from "../lib/digest.js";
 import { randomTokenRaw } from "../lib/tokens.js";
-import { clientIPFrom } from "../moderation/budget.js";
-import { reportAutohideThreshold } from "../env.js";
+import { clientIPFrom, checkAndBumpRecipient } from "../moderation/budget.js";
+import { parseIntVar, reportAutohideThreshold } from "../env.js";
 import { moderateListing } from "../moderation/pipeline.js";
 import { purgePhotoCache } from "../lib/photoCache.js";
 import { containsContactInfo } from "../moderation/contactInfo.js";
@@ -42,6 +41,35 @@ const DEFAULT_REQUEST_IP_DAILY_BUDGET = 20;
  * person — see `moderation/budget.ts`'s header on CGNAT), but unlike the
  * burst brake it is a real ceiling. */
 const DEFAULT_REPORT_IP_DAILY_BUDGET = 10;
+
+/**
+ * Issue #188. How many "did you ask for this?" confirmations this Worker will
+ * aim at one address in one day, counted per *recipient* — see
+ * `checkAndBumpRecipient`, and `lib/digest.ts`'s `dailyEmailDigest` for why
+ * the counter is keyed the way it is.
+ *
+ * Three, because the confirmation step alone does not make the flood harmless.
+ * Holding the request unconfirmed is what stops a stranger being enrolled as a
+ * requester and mailed the giver's address; it does not stop them being mailed
+ * *at all*, and one message per listing across a public feed is a mail-bomb
+ * with extra steps — the failure mode M3AAWG names in its web-form
+ * recommendation, where the confirmation mail is itself the payload.
+ *
+ * A real person asks for one keepsake at a time and confirms the message they
+ * are already waiting for. Three leaves room for the ordinary case that
+ * genuinely repeats — an ask, a second ask on another listing, and one resend
+ * because the first landed in spam — and turns "twenty unsolicited messages a
+ * day, per attacker address" into three, total, from everyone.
+ */
+const DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET = 3;
+
+/**
+ * How long a "was this you?" link stays redeemable. Long enough to survive a
+ * night, a working day, and a spam folder someone checks on a Monday; short
+ * enough that an address nobody confirmed is not sitting in D1 for a week.
+ * `cron/orphanSweep.ts` deletes the held row once this lapses.
+ */
+const REQUEST_CONFIRM_TTL_MS = 72 * 60 * 60 * 1000;
 
 /**
  * Issue #171. Aspects arrived as model output (#36) and were treated as
@@ -715,6 +743,47 @@ listingRoutes.post(
 // ---------------------------------------------------------------------------
 // POST /api/listings/:id/requests
 // ---------------------------------------------------------------------------
+// Issue #188: this used to accept any syntactically valid address, write it
+// into `requests` as the requester of record, mail it a "we passed your note
+// along" confirmation, and show the giver a genuine-looking ask — with
+// nothing anywhere in the path establishing that the submitter controlled the
+// address. `idempotency()`, `turnstile()`, `burst()` and the per-IP daily
+// budget below all limit *volume*; none of them is evidence of ownership.
+// `POST /api/recover` had already settled the principle for this codebase —
+// it refuses to act on an unproven address — and this route acted on one and
+// mailed it.
+//
+// What that cost the person whose address was used: mail they never asked
+// for, a plausible-looking ask in a stranger's dashboard under their name,
+// and — if the giver chose it — the giver's real address and reply-to
+// delivered to them, with a giver now waiting to meet someone who had never
+// asked for anything. Twenty times a day per attacker address, by walking the
+// public feed (`UNIQUE (listing_id, email)` only stops repeats on one
+// listing).
+//
+// So the route is confirm-then-forward now. It writes the ask down as
+// `status = 'unconfirmed'`, tells nobody, and mails the address one "was this
+// you?" link. `POST /api/requests/confirm` is what makes the request real.
+// Three things follow, and each is load-bearing:
+//
+//   - The giver's side is untouched until confirmation: no `new_request`
+//     mail, no `request_count`, no dashboard row.
+//   - The confirmation mail carries the listing title and nothing the
+//     submitter wrote, so it cannot be used to deliver text to an inbox.
+//   - Unconfirmed rows are deleted, not kept, when the link lapses
+//     (`cron/orphanSweep.ts`).
+//
+// And a fourth control that the issue did not ask for but that the flow needs
+// to be honest: a per-recipient daily ceiling on the confirmation itself. The
+// confirm step stops a victim being *enrolled*; on its own it does not stop
+// them being *mailed*, and one message per listing across a whole feed is a
+// mail-bomb whichever gate it passes through. See
+// `DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET`.
+//
+// The cost, stated because it is real and belongs on the record rather than
+// in a commit message: this adds a step to the one flow the product
+// deliberately kept frictionless, and some genuine requests will be abandoned
+// at it. That trade-off is recorded in docs/product-decisions.md.
 listingRoutes.post(
   "/:id/requests",
   idempotency(),
@@ -753,9 +822,13 @@ listingRoutes.post(
       );
     }
 
-    const owner = await c.env.DB.prepare("SELECT email, email_verified_at, banned_at FROM owners WHERE id = ?")
+    // `email_verified_at` is no longer read here: since #188 nothing on this
+    // path mails the giver at all. Whether their address is confirmed is the
+    // confirm route's question, asked at the moment there is something to
+    // tell them.
+    const owner = await c.env.DB.prepare("SELECT email, banned_at FROM owners WHERE id = ?")
       .bind(row.owner_id)
-      .first<{ email: string | null; email_verified_at: number | null; banned_at: number | null }>();
+      .first<{ email: string | null; banned_at: number | null }>();
 
     // A banned owner's listings are meant to already be hidden (the admin
     // ban action hides every non-given one), but this is the same
@@ -787,9 +860,12 @@ listingRoutes.post(
     // them." Same rule here. Both cases now return the same shape the success
     // path returns, having written nothing and sent nothing.
     //
-    // The confirmation mail is deliberately *not* re-sent on a duplicate:
-    // that would turn this endpoint into an unbounded mailer aimed at any
-    // address a stranger cares to name.
+    // A *confirmed* duplicate re-sends nothing, for the reason that rule was
+    // written: re-mailing on every repeat submission would turn this endpoint
+    // into an unbounded mailer aimed at any address a stranger cares to name.
+    // Issue #188's reissue path below is the bounded exception — it only ever
+    // reissues a link to a request that is still waiting on that same address,
+    // and the per-recipient ceiling caps the total either way.
     //
     // What this costs, said plainly: a giver who types their own address by
     // mistake now gets a cheerful "sent" and no request. That message was
@@ -799,82 +875,136 @@ listingRoutes.post(
     // else. `apps/web`'s `RequestSheet` still needs that follow-up.
     const isSelfRequest = Boolean(owner?.email && owner.email.toLowerCase() === input.email.toLowerCase());
 
-    const existingRequest = await c.env.DB.prepare("SELECT id FROM requests WHERE listing_id = ? AND email = ?")
+    // Issue #188: `confirmed_at` and the confirm-link expiry come back too,
+    // because "a row already exists for this address" now has two very
+    // different meanings. A confirmed row is a real ask and this is a
+    // duplicate; an *unconfirmed* row is a link sitting in an inbox that
+    // nobody has clicked, and refusing to reissue it would mean one lost
+    // email locks that address out of that listing until the row is swept.
+    const existingRequest = await c.env.DB.prepare(
+      "SELECT id, confirmed_at FROM requests WHERE listing_id = ? AND email = ?",
+    )
       .bind(id, input.email)
-      .first<{ id: string }>();
+      .first<{ id: string; confirmed_at: number | null }>();
 
-    if (isSelfRequest || existingRequest) {
-      // A fresh ULID and the current time, so the response is
-      // indistinguishable from a real one by shape, content or the absence
-      // of an id — the caller learns only that a well-formed ask was
-      // accepted, which is what every caller learns.
-      const result: CreateRequestResult = { id: ulid(), created_at: Date.now() };
-      return ok(c, result, 201);
+    // A fresh ULID and the current time — the response every path below
+    // returns, indistinguishable by shape, content, or the absence of an id.
+    // The id is deliberately *not* the existing row's on the reissue path:
+    // a ULID encodes its own mint time in its first ten characters, so
+    // echoing a stored one would date the request it belongs to and hand back
+    // exactly the "has this person asked for this?" oracle #189 closed.
+    const acceptedResponse = (): CreateRequestResult => ({ id: ulid(), created_at: Date.now() });
+
+    if (isSelfRequest || existingRequest?.confirmed_at != null) {
+      return ok(c, acceptedResponse(), 201);
     }
+
+    // Issue #188. Checked here — after the two silent-success branches, so a
+    // duplicate never spends a real person's allowance, and *before* the
+    // insert, so an address at its ceiling is never written down at all. A
+    // row we will not mail is a stranger's address held for three days for
+    // nothing, which is the collection this whole change exists to avoid.
+    //
+    // Refusing looks exactly like succeeding, for the same reason every other
+    // branch here does: a distinguishable "that address has had enough mail
+    // today" would answer, for any address a caller names, whether someone
+    // has been aiming requests at it — which is worse than the friction it
+    // would save. What the sender actually loses is small and recoverable:
+    // the ask isn't stored, and tomorrow the same submission works.
+    const confirmBudget = await checkAndBumpRecipient(c.env.KV, {
+      kind: "request_confirm",
+      address: input.email,
+      dailyLimit: parseIntVar(
+        "REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET",
+        c.env.REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET,
+        DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET,
+      ),
+    });
+    if (!confirmBudget.allowed) {
+      return ok(c, acceptedResponse(), 201);
+    }
+
+    const now = Date.now();
+    // A random, single-use secret mailed to the address itself and to nowhere
+    // else, so redeeming it is proof the submitter reads mail there. Only the
+    // hash is stored, same as every other bearer secret this Worker mints
+    // (src/lib/tokens.ts).
+    const rawConfirmToken = randomTokenRaw();
+    const confirmTokenHash = await sha256Hex(rawConfirmToken);
+    const confirmExpiresAt = now + REQUEST_CONFIRM_TTL_MS;
 
     const clientIp = clientIPFrom(c.req.raw);
     const ipDigest = await dailyIpDigest(clientIp);
-    const now = Date.now();
-    const requestId = ulid();
 
-    // A random, single-use secret this requester can later present, with no
-    // account, to withdraw this exact request and erase its own PII — see
-    // src/routes/requestWithdraw.ts. Only the hash is stored, same as every
-    // other bearer secret this Worker mints (src/lib/tokens.ts).
-    const rawWithdrawToken = randomTokenRaw();
-    const withdrawTokenHash = await sha256Hex(rawWithdrawToken);
-
-    await c.env.DB.prepare(
-      `INSERT INTO requests (id, listing_id, note, email, phone, ip_digest, status, created_at, age_attested_at, withdraw_token_hash)
-       VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
-    )
-      .bind(
-        requestId,
-        id,
-        input.note,
-        input.email,
-        input.phone ?? null,
-        ipDigest,
-        now,
-        // Same convention as the listing insert above: `input.date_of_birth`
-        // is only reachable here already validated against `MINIMUM_AGE`,
-        // and is never itself bound into this query.
-        input.date_of_birth ? now : null,
-        withdrawTokenHash,
+    let requestId: string;
+    if (existingRequest) {
+      // Reissue onto the held row: a fresh token and a fresh expiry, and the
+      // note/phone from this submission, since this is the ask the person is
+      // making now. The old token stops working the moment its hash is
+      // overwritten — one live link per held request, never a growing set.
+      //
+      // `ip_digest` is rewritten alongside `created_at` rather than left
+      // alone. The two are read together: `cron/orphanSweep.ts` clears a
+      // digest 48 hours after the row's `created_at`, which is the privacy
+      // page's promise. Moving the timestamp while keeping yesterday's digest
+      // would quietly hold that digest past its 48 hours — and this
+      // submission's address is the honest value anyway, since it is the one
+      // that made the request the row now describes.
+      requestId = existingRequest.id;
+      await c.env.DB.prepare(
+        `UPDATE requests SET note = ?, phone = ?, ip_digest = ?, confirm_token_hash = ?, confirm_expires_at = ?, created_at = ?
+         WHERE id = ? AND confirmed_at IS NULL`,
       )
-      .run();
-    await c.env.DB.prepare("UPDATE listings SET request_count = request_count + 1 WHERE id = ?").bind(id).run();
+        .bind(input.note, input.phone ?? null, ipDigest, confirmTokenHash, confirmExpiresAt, now, requestId)
+        .run();
+    } else {
+      requestId = ulid();
 
-    if (owner?.email && owner.email_verified_at !== null) {
-      const dashboardLink = `${c.env.SITE_URL}/mine/${id}`;
-      const template = newRequestTemplate({ listingTitle: row.title, note: input.note, dashboardLink });
-      const result = await sendMail(c.env, { kind: "new_request", to: owner.email, ...template });
-      if (result.sent) {
-        await c.env.DB.prepare("UPDATE requests SET notified_at = ? WHERE id = ?").bind(Date.now(), requestId).run();
-      } else {
-        // Issue #6: this used to be silently discarded — the giver's own
-        // email address rejected the notification and nothing said so
-        // anywhere they could see it. Recorded on the request itself (not
-        // just `email_events`) so the owner dashboard can surface it right
-        // next to the ask it belongs to.
-        await c.env.DB.prepare("UPDATE requests SET notify_failed_reason = ? WHERE id = ?")
-          .bind(result.reason ?? "send_failed", requestId)
-          .run();
-      }
+      // `status = 'unconfirmed'`: written down, and visible to nobody. The
+      // giver's dashboard, the choose path and `request_count` all key off
+      // `confirmed_at IS NOT NULL`, so until the link below is clicked this
+      // row is a held submission and not an ask — which is the whole of the
+      // fix for #188. `withdraw_token_hash` stays NULL and is minted at
+      // confirmation time: a withdraw link is only useful once there is
+      // something to withdraw, and mailing one now would mean mailing a
+      // second bearer token to an address nobody has verified.
+      await c.env.DB.prepare(
+        `INSERT INTO requests (id, listing_id, note, email, phone, ip_digest, status, created_at, age_attested_at,
+                               confirm_token_hash, confirm_expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'unconfirmed', ?, ?, ?, ?)`,
+      )
+        .bind(
+          requestId,
+          id,
+          input.note,
+          input.email,
+          input.phone ?? null,
+          ipDigest,
+          now,
+          // Same convention as the listing insert above: `input.date_of_birth`
+          // is only reachable here already validated against `MINIMUM_AGE`,
+          // and is never itself bound into this query.
+          input.date_of_birth ? now : null,
+          confirmTokenHash,
+          confirmExpiresAt,
+        )
+        .run();
     }
 
-    // Always sent — a requester never gets a dashboard or a device token, so
-    // this confirmation (and the withdraw link inside it) is the only record
-    // they get of having asked, and the only no-account way back in to
-    // remove their own note/email/phone. `/withdraw/<token>` is a web-app
-    // page the other client-side pass still needs to add; it should POST
-    // `{ token }` to `/api/requests/withdraw` the same way `/recover/:token`
-    // already POSTs to `/api/recover/:token`.
-    const withdrawLink = `${c.env.SITE_URL}/withdraw/${rawWithdrawToken}`;
+    // The only message that leaves this handler, and the only one that can be
+    // aimed at an address the sender may not own. Nothing has reached the
+    // giver: no `new_request` mail, no `request_count` increment, no row in
+    // their dashboard. `POST /api/requests/confirm` does all three, once
+    // someone proves they read mail at this address.
+    //
+    // Deliberately never carries the note (see the template's own comment):
+    // reflecting a stranger's free text into a stranger's inbox would rebuild
+    // the harassment channel this step exists to close.
+    const confirmLink = `${c.env.SITE_URL}/confirm/${rawConfirmToken}`;
     await sendMail(c.env, {
-      kind: "request_received",
+      kind: "confirm_request",
       to: input.email,
-      ...requestReceivedTemplate({ listingTitle: row.title, withdrawLink }),
+      ...confirmRequestTemplate({ listingTitle: row.title, confirmLink }),
     });
 
     const result: CreateRequestResult = { id: requestId, created_at: now };

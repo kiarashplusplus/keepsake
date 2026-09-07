@@ -227,6 +227,15 @@ UPLOAD_IP_DAILY_BUDGET = "60"
 # environment, since neither scales with traffic the way an AI budget does.
 REPORT_IP_DAILY_BUDGET = "10"
 EMAIL_IP_DAILY_BUDGET = "10"
+# Issue #188, and the odd one out on this page: every other ceiling here is
+# keyed by the *caller's* address and answers "how much may this client do?".
+# This one is keyed by the **recipient's** address and answers "how much mail
+# can arrive at one inbox today, from anyone?" — the only question a per-IP
+# number cannot answer, because the attacker and the person harmed are not the
+# same party and an attacker can always find more IPs. Three "did you ask for
+# this?" confirmations a day, per address, from everyone combined. See
+# `DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET` in src/routes/listings.ts.
+REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET = "3"
 # Loose for the same reason as the ceilings above — one giver calls this a
 # handful of times per give flow; this only stops a single retry loop from
 # working through SUGGEST_DAILY_BUDGET alone.
@@ -490,6 +499,15 @@ REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
 REPORT_IP_DAILY_BUDGET = "10"
 EMAIL_IP_DAILY_BUDGET = "10"
+# Issue #188, and the odd one out on this page: every other ceiling here is
+# keyed by the *caller's* address and answers "how much may this client do?".
+# This one is keyed by the **recipient's** address and answers "how much mail
+# can arrive at one inbox today, from anyone?" — the only question a per-IP
+# number cannot answer, because the attacker and the person harmed are not the
+# same party and an attacker can always find more IPs. Three "did you ask for
+# this?" confirmations a day, per address, from everyone combined. See
+# `DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET` in src/routes/listings.ts.
+REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET = "3"
 SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
 SHELF_MIN_ITEMS = "3"
@@ -665,6 +683,15 @@ REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
 REPORT_IP_DAILY_BUDGET = "10"
 EMAIL_IP_DAILY_BUDGET = "10"
+# Issue #188, and the odd one out on this page: every other ceiling here is
+# keyed by the *caller's* address and answers "how much may this client do?".
+# This one is keyed by the **recipient's** address and answers "how much mail
+# can arrive at one inbox today, from anyone?" — the only question a per-IP
+# number cannot answer, because the attacker and the person harmed are not the
+# same party and an attacker can always find more IPs. Three "did you ask for
+# this?" confirmations a day, per address, from everyone combined. See
+# `DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET` in src/routes/listings.ts.
+REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET = "3"
 SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
 SHELF_MIN_ITEMS = "3"

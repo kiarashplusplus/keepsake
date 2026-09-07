@@ -93,12 +93,13 @@ describe("issue #86: every email subject is constructed through sanitizeSubject"
     // nothing — a source scan over zero files passes every assertion below
     // while proving exactly nothing. Six templates exist today; this floor
     // only ever needs raising, never lowering.
-    expect(templateFiles.length).toBeGreaterThanOrEqual(7);
+    expect(templateFiles.length).toBeGreaterThanOrEqual(8);
     expect(Object.keys(modules).sort()).toEqual(Object.keys(sources).sort());
     expect(templateFiles).toEqual(
       expect.arrayContaining([
         "../src/email/templates/adminTest.ts",
         "../src/email/templates/chosen.ts",
+        "../src/email/templates/confirmRequest.ts",
         "../src/email/templates/dailyDigest.ts",
         "../src/email/templates/newRequest.ts",
         "../src/email/templates/recover.ts",
@@ -202,6 +203,15 @@ const HOSTILE_CASES: Record<string, () => EmailTemplate> = {
       link: DIRTY,
       ttlMs: 30 * 60 * 1000,
     }),
+  confirmRequest: () =>
+    (
+      modules["../src/email/templates/confirmRequest.ts"] as {
+        confirmRequest: (p: Record<string, string>) => EmailTemplate;
+      }
+    ).confirmRequest({
+      listingTitle: DIRTY,
+      confirmLink: DIRTY,
+    }),
   requestReceived: () =>
     (
       modules["../src/email/templates/requestReceived.ts"] as {
@@ -228,7 +238,7 @@ const exportedTemplateFns = templateFiles
 
 describe("issue #86: every exported template survives a hostile value", () => {
   it("has a hostile-input case for every exported template function", () => {
-    expect(exportedTemplateFns.length).toBeGreaterThanOrEqual(6);
+    expect(exportedTemplateFns.length).toBeGreaterThanOrEqual(7);
     // Exact equality, not a subset: an uncovered new template fails here,
     // and a case for a template that no longer exists fails here too.
     expect(exportedTemplateFns).toEqual(Object.keys(HOSTILE_CASES).sort());
