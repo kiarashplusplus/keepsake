@@ -146,6 +146,20 @@ EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 EMAIL_MODE = "off"
 EMAIL_ALLOWLIST = ""
 SITE_URL = "http://localhost:8787"
+# Issue #94: the keepsake.ing zone that `src/lib/photoCache.ts` purges a
+# deleted photo's two variant URLs from, so the purge reaches every colo
+# instead of only the one that executed the delete request
+# (`caches.default` is per-colo). A zone id is a public identifier, not a
+# credential — it's written down in `docs/runbooks/kiarash-checklist.md` —
+# so it lives here as a var; the API token it pairs with
+# (`CF_CACHE_PURGE_TOKEN`, `Zone.Cache Purge`) is a Worker secret, set with
+# `wrangler secret put`. Empty here because local dev serves photos from
+# `http://localhost:8787`, which is not in any zone and has nothing to
+# purge; with either half missing the zone call is skipped silently and the
+# per-colo delete is still done. That's a bounded state, not a hole:
+# `images.ts` serves `max-age=3600`, so an unreached copy expires within the
+# hour regardless.
+CF_ZONE_ID = ""
 # M1: flips the moderation pipeline to canned responses for local dev and
 # Playwright, so `give` works without live Workers AI calls.
 MOCK_AI = "0"
@@ -312,6 +326,12 @@ EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 EMAIL_MODE = "allowlist"
 EMAIL_ALLOWLIST = "kiarasha@alum.mit.edu,leapkg@gmail.com"
 SITE_URL = "https://preview.keepsake.ing"
+# Same keepsake.ing zone as production (issue #94): `preview.keepsake.ing`
+# is a record inside it, so a purge-by-URL for
+# `https://preview.keepsake.ing/i/...` is in-zone and valid. Still inert
+# until `CF_CACHE_PURGE_TOKEN` is set on this Worker — see the top-level
+# `[vars]` comment.
+CF_ZONE_ID = "dcc1fb09eeeba27a343fc1d98aff9094"
 MOCK_AI = "0"
 
 [[env.preview.d1_databases]]
@@ -444,6 +464,12 @@ EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 EMAIL_MODE = "live"
 EMAIL_ALLOWLIST = ""
 SITE_URL = "https://keepsake.ing"
+# The keepsake.ing zone (issue #94), attached to this account 2026-09-07 and
+# recorded in `docs/runbooks/kiarash-checklist.md`. Inert until
+# `CF_CACHE_PURGE_TOKEN` is set on the production Worker — see the top-level
+# `[vars]` comment for the full rationale and for why an unset token is a
+# silent no-op rather than an error.
+CF_ZONE_ID = "dcc1fb09eeeba27a343fc1d98aff9094"
 MOCK_AI = "0"
 
 [[env.production.d1_databases]]

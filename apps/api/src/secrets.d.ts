@@ -16,6 +16,14 @@ declare global {
       TURNSTILE_SECRET?: string;
       ADMIN_TOKEN?: string;
       RESEND_API_KEY?: string;
+      // Issue #94: Cloudflare API token scoped to `Zone.Cache Purge` on the
+      // keepsake.ing zone, read by `src/lib/photoCache.ts` to purge a
+      // deleted photo from every colo rather than only the one that
+      // executed the delete. Its partner `CF_ZONE_ID` is an ordinary
+      // `[vars]` entry, not a secret — a zone id is a public identifier and
+      // is written down in `docs/runbooks/kiarash-checklist.md`; the token
+      // is the credential.
+      CF_CACHE_PURGE_TOKEN?: string;
     }
   }
 }
