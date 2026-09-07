@@ -170,8 +170,14 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
   of `@keepsake/*`** — it will fail with "Could not resolve".
 - **`expo export` needs `--clear`.** Public config is inlined at transform time and cached; the
   export script does this and then verifies the values actually reached the bundle.
-- **Turnstile now enforces on preview**, so you cannot exercise a write path with curl. Use the
-  admin endpoints, `MOCK_AI`, or a real browser.
+- **Turnstile enforces on preview, but not on every write path.** `turnstile()` is mounted on
+  listing create/edit/relist (`src/routes/listings.ts`), `src/routes/me.ts` and
+  `src/routes/recover.ts` — those you cannot drive with curl, so use the admin endpoints,
+  `MOCK_AI`, or a real browser. **The photo routes mount none of it**: `PUT /api/photos`,
+  `DELETE /api/photos/:id` and `POST /api/photos/:id/suggest` carry `ownerAuth()` and the rate
+  limiters only, so an upload is still curl-reachable with an owner token (#183, open). This
+  bullet claimed the blanket version until 2026-09-07; do not rely on Turnstile as the reason a
+  write path is unreachable without checking that the route actually mounts it.
 - **Email**: preview is `allowlist` (Kiarash and `leapkg@gmail.com` only), production is `live`.
   Reserved domains (`example.com`, `.test`, `.invalid`) are refused everywhere, which is why the
   repo's fixtures cannot bounce the sending domain. `EMAIL_MODE=test` bypasses the guard and a
