@@ -14,13 +14,17 @@ whenever what they depend on skipped. See `.github/workflows/ci.yml`. `e2e` is w
 
 ## Deploy
 
-`.github/workflows/deploy.yml` runs on every PR (→ `preview` environment) and every push to
-`main` (→ `production`), gated on `vars.DEPLOY_ENABLED == 'true'` so it's inert until the
+`.github/workflows/deploy.yml` runs on every PR and every push to `main` (→ `preview` in both
+cases) and, separately, on a manual `workflow_dispatch` where a human picks `production` — merging
+to `main` never ships production by itself (fixed 2026-09-07, issue #13; this previously said
+"push to main → production", which matched neither `deploy.yml`'s actual trigger logic nor
+`docs/runbooks/deploy.md`). Gated on `vars.DEPLOY_ENABLED == 'true'` so it's inert until the
 Cloudflare resources exist. Steps: export the web bundle with that environment's
 `EXPO_PUBLIC_*` vars baked in → apply D1 migrations `--remote` → `wrangler deploy` with
 `--var COMMIT_SHA:<sha>` → `curl /health` and assert `.commit == github.sha` → comment the
 preview URL on PRs. See [`docs/runbooks/deploy.md`](../runbooks/deploy.md) for the manual setup
-steps (secrets, D1/R2/KV creation, Turnstile, Email Service onboarding).
+steps (secrets, D1/R2/KV creation, Turnstile, Email Service onboarding), the real
+`wrangler rollback` invocation, and the `COMMIT_SHA` fallback's contract.
 
 ## Preflight
 
@@ -46,10 +50,26 @@ says so explicitly rather than leaving it implied.
 
 ## Version skew
 
-Ported from Finderly's `useVersionSkewGuard`: the exported `index.html` and `/version.json` are
-served `no-store`; hashed assets are immutable. A stale client polling `/version.json` detects a
-new deploy and prompts a reload rather than silently running against an API contract the server
-has moved past.
+**`[PARTIAL]`, corrected 2026-09-06 (issue #23)** — this section used to describe the guard as
+shipped ("ported from Finderly's `useVersionSkewGuard`"). It wasn't: nothing in `apps/web`
+referenced `/version.json` at all, so a tab left open across a deploy ran its stale bundle
+indefinitely with nothing telling it otherwise.
+
+What's actually true today:
+
+- **Server (`apps/api`, done):** `GET /version.json` returns `{ commit: "<full SHA>" }`, always
+  `Cache-Control: no-store`, and is in `wrangler.toml`'s `run_worker_first` list so a cached
+  static asset at that path can never shadow the live one. `commit` is `COMMIT_SHA`, stamped by
+  `deploy.yml` with the full `github.sha` at deploy time — see `apps/api/test/health.test.ts`.
+- **Build-time plumbing (`apps/web`, done but unused):** `app.config.js` bakes a commit hash into
+  `expo.extra.buildInfo.commitHash` via `scripts/resolveBuildInfo.mjs`, and
+  `scripts/write-version-json.mjs` writes a static `dist/version.json` next to the export.
+  Neither is read by anything at runtime yet — they're the ingredients for a guard, not the guard.
+- **The guard itself (`apps/web`, not done):** no polling, no comparison, no reload prompt exists
+  anywhere in the client. This is the actual client-side port of Finderly's
+  `useVersionSkewGuard`, and it's still unbuilt. See issue #23's closing comment for the exact
+  contract (including a real gotcha: the baked-in `commitHash` is a **7-character prefix** of the
+  full SHA `/version.json` returns, so the comparison needs `startsWith`, not `===`).
 
 ## M4 status (API side, 2026-09-06)
 

@@ -1,12 +1,15 @@
-# Runbook: restoring the database
+# Runbook: restoring the database and photo bytes
 
-Status: current (written 2026-09-06, launch audit finding 5). Before this file existed, a
-repo-wide search for `backup|time.?travel|restore|d1 export|point.in.time` returned zero
-operational hits: **D1 Time Travel, the actual recovery mechanism, was mentioned nowhere**, and
-Kiarash would have had to discover it mid-incident from Cloudflare's docs, under pressure.
+Status: current (D1 sections written 2026-09-06, launch audit finding 5; R2 section added
+2026-09-07, issue #17). Before this file existed, a repo-wide search for
+`backup|time.?travel|restore|d1 export|point.in.time` returned zero operational hits: **D1 Time
+Travel, the actual recovery mechanism, was mentioned nowhere**, and Kiarash would have had to
+discover it mid-incident from Cloudflare's docs, under pressure. R2 had nothing at all to find —
+see [R2 photo backup](#r2-photo-backup) below.
 
 Read [Scope](#scope-what-this-does-and-does-not-recover) first. Then, if data is already gone,
-skip to [If you need it right now](#if-you-need-it-right-now).
+skip to [If you need it right now](#if-you-need-it-right-now) for D1, or
+[R2 photo backup](#r2-photo-backup) for a deleted photo.
 
 ## What was actually executed, and what is written from the docs
 
@@ -23,7 +26,10 @@ against production.
 | `wrangler d1 create` + apply migrations + `d1 execute --file <export>` — restore into a *new* database | **executed** (drill database; row counts matched preview exactly) |
 | FTS survives that path | **executed** — `listings_fts` repopulated via its triggers, `MATCH 'compass'` returned the expected row |
 | Re-pointing `wrangler.toml` at the new `database_id` and deploying | **not executed** — written from the deploy runbook; it is an ordinary deploy |
-| R2 photo recovery | **there is none.** See [Scope](#scope-what-this-does-and-does-not-recover) |
+| `wrangler r2 bucket create <name>-backup` — second bucket per environment | **executed** (preview only; production blocked, see [R2 photo backup](#r2-photo-backup)) |
+| `wrangler r2 bucket lifecycle add <backup-bucket> --expire-days 400` | **executed** (preview only) |
+| `node tools/backup-photos.mjs --env preview` — copy every referenced photo into the backup bucket | **executed** (preview, twice: 7 copied + 1 skipped, then 8/8 skipped on rerun) |
+| Delete-then-restore drill: put an object, back it up, delete it from primary, confirm 404, restore from backup, confirm byte-identical | **executed** (preview, synthetic key, cleaned up after) |
 
 Two things worth knowing before you need them, both discovered by running the commands:
 
@@ -41,12 +47,19 @@ Two things worth knowing before you need them, both discovered by running the co
 **D1 (all listings, owners, requests, reports, moderation history, email ledger): recoverable.**
 Time Travel is on by default with 30 days of retention and needs no setup, no cron and no bucket.
 
-**R2 (every photo byte): not recoverable.** `wrangler.toml` declares the bucket with nothing but
-`binding` and `bucket_name` — no versioning, no lifecycle rule — and `orphanSweep`
-(`src/cron/orphanSweep.ts`) calls `BUCKET.delete()` unconditionally. Time Travel restores the
-`photos` rows; the bytes those rows point at stay gone, and `/i/:id/:variant` 404s for every one.
-**A restore that brings back listings whose photos are deleted is a half-restore, and there is
-currently no second half.** If you do nothing else with this document, know that.
+**R2 (every photo byte): partially recoverable, as of 2026-09-07.** `wrangler.toml`'s primary
+bucket still declares nothing but `binding` and `bucket_name` — no native versioning exists to
+turn on (see [R2 photo backup](#r2-photo-backup) for what was actually checked) — and
+`orphanSweep` (`src/cron/orphanSweep.ts`) still calls `BUCKET.delete()` unconditionally. What
+changed: a second bucket per environment (`<name>-backup`) now holds a copy of every currently
+referenced photo, populated by `tools/backup-photos.mjs`, and a photo deleted from the primary
+bucket by a buggy predicate can be copied back from there. Time Travel restores the `photos` rows
+in D1 regardless; whether `/i/:id/:variant` 404s afterward now depends on whether that photo had
+already been copied to the backup bucket — see below for exactly what that does and does not
+cover. **This is still not equivalent to D1's coverage**: D1 protects every row for 30 days
+automatically with nothing to run; R2's protection here only covers a key once something has run
+`tools/backup-photos.mjs` against it, and the backup lives in the same Cloudflare account it
+insures against (more on both below).
 
 **Worker code: not this document.** See `docs/runbooks/deploy.md`.
 
@@ -58,7 +71,10 @@ bad statement*, not to the last nightly dump. `d1 time-travel info --timestamp` 
 one-hour-old RFC3339 timestamp to a bookmark on preview on the first try. Past 30 days there is
 nothing at all.
 
-**RPO for R2 is total.** Deleted photo bytes are unrecoverable at any age.
+**RPO for R2 depends on when `tools/backup-photos.mjs` last ran against the key in question** — see
+[R2 photo backup](#r2-photo-backup). Nothing is instant and nothing is guaranteed the way D1's
+write-ahead log is; a photo uploaded and deleted between two runs of the script is still
+unrecoverable at any age, same as before.
 
 **RTO ≈ 2 minutes** for an in-place Time Travel restore (the drill's restore returned in seconds;
 budget for finding the right bookmark). **RTO ≈ 20-40 minutes** for the restore-into-a-new-database
@@ -230,6 +246,161 @@ Full details, including regenerating from GeoNames, in [geodata.md](geodata.md).
 - Search still works: `GET /api/feed?q=<a word you know is in a listing>` returns it. This is the
   one thing a restore can break silently, because an empty FTS index looks exactly like "no
   results".
-- Spot-check a photo: open a listing's `/i/:id/thumb`. A 404 here is the R2 half of
-  [Scope](#scope-what-this-does-and-does-not-recover) — the rows are back and the bytes are not.
+- Spot-check a photo: open a listing's `/i/:id/thumb`. A 404 here means the bytes are gone and
+  weren't in the backup bucket either — see [R2 photo backup](#r2-photo-backup) to check and
+  restore from there before concluding the photo is unrecoverable.
 - Write down which bookmark you restored to, and the undo bookmark, in the incident notes.
+
+## R2 photo backup
+
+Issue #17. Before this section existed, `wrangler.toml` declared the photo bucket with nothing
+but `binding` and `bucket_name`, and a bug in any of `orphanSweep`'s three delete predicates
+(`apps/api/src/cron/orphanSweep.ts`) destroyed a photo with no way back — D1 Time Travel restores
+the `photos` row, but the bytes it points at stay gone forever.
+
+### What was checked, not assumed
+
+R2 bucket versioning does not exist to enable. Checked directly, `wrangler` 4.129.0 against this
+account, 2026-09-07:
+
+```
+$ wrangler r2 bucket --help
+COMMANDS
+  wrangler r2 bucket create <name>
+  wrangler r2 bucket update
+  wrangler r2 bucket list
+  wrangler r2 bucket info <bucket>
+  wrangler r2 bucket delete <bucket>
+  wrangler r2 bucket sippy       # incremental migration *into* R2 from AWS/GCS — wrong direction
+  wrangler r2 bucket catalog     # Iceberg REST interface — unrelated
+  wrangler r2 bucket notification
+  wrangler r2 bucket domain
+  wrangler r2 bucket dev-url
+  wrangler r2 bucket local-uploads
+  wrangler r2 bucket lifecycle   # expire / transition storage class / abort multipart — no undelete
+  wrangler r2 bucket cors
+  wrangler r2 bucket lock        # WORM retention — prevents deletion, doesn't recover one
+```
+
+No `versioning` subcommand, and `wrangler r2 bucket info <bucket> --json` returns
+`name`/`created`/`location`/`default_storage_class`/`object_count`/`bucket_size` — no
+versioning-related field. `lifecycle` only expires objects, transitions storage class, or aborts
+incomplete multipart uploads — every one of those *removes* data on a schedule, none of them
+brings a deleted object back. `lock` (Object Lock/WORM retention) prevents deletion for a
+retention window, which is real protection against an accidental delete but would also block
+`orphanSweep`'s legitimate deletes on the *primary* bucket, so it isn't usable there. **Conclusion:
+there is nothing to turn on.** The honest alternative the issue asks for is what follows.
+
+### What was built: a second bucket, populated by a script that was actually run
+
+`tools/backup-photos.mjs` — reads `apps/api/wrangler.toml` for each environment's D1 database and
+primary bucket name (so it can't drift from what actually deploys), queries D1 for every
+`r2_key_full`/`r2_key_thumb` currently referenced by a `photos` row, and copies any key not
+already present in `<bucket>-backup` from the primary bucket into it. It never deletes anything
+from the backup bucket — that is deliberate: it's what makes the backup resistant to the exact bug
+class this issue is about (a buggy `orphanSweep` predicate deletes a live photo from the primary
+bucket and its D1 row); a copy made before that run is untouched by it.
+
+Executed against preview, 2026-09-07 (`keepsake-photos-preview-backup`, created the same day):
+
+```
+$ node tools/backup-photos.mjs --env preview
+backup-photos: env=preview db=keepsake-db-preview primary=keepsake-photos-preview backup=keepsake-photos-preview-backup
+backup-photos: 8 referenced key(s) in D1
+  + copied photos/01M1TEVQ36RCJXNTTEHCTNT1SY/thumb.png
+  + copied photos/01M1VS7RCTD6S2KBWE6DA7JTS0/full.jpg
+  + copied photos/01M1VS7RCTD6S2KBWE6DA7JTS0/thumb.jpg
+  + copied photos/01M1VY4D2D7170XPMDJYYHXVSD/full.jpg
+  + copied photos/01M1VY4D2D7170XPMDJYYHXVSD/thumb.jpg
+  + copied photos/01M1WKNDSSC5Z2EQM40Q0WK5AF/full.jpg
+  + copied photos/01M1WKNDSSC5Z2EQM40Q0WK5AF/thumb.jpg
+backup-photos: done — copied=7 skipped=1 (already backed up) failed=0
+
+$ node tools/backup-photos.mjs --env preview   # rerun, proving idempotency
+backup-photos: 8 referenced key(s) in D1
+backup-photos: done — copied=0 skipped=8 (already backed up) failed=0
+```
+
+(The one pre-existing "skipped" on the first run was a manual test copy made while verifying the
+`get`/`put` commands before writing the script; the second run's 8/8 skip is the real idempotency
+proof.) A `shasum -a 256` of a primary object and its backup copy matched exactly.
+
+`wrangler r2 bucket info <bucket>` reports `object_count`/`bucket_size` from a lagging aggregate —
+it read `0` immediately after the first run populated the bucket. Don't use it to check whether a
+specific object exists; `wrangler r2 object get <bucket>/<key>` (exit 0/1) is the reliable check,
+and it's what the script itself uses.
+
+### Restoring a deleted photo
+
+```sh
+cd apps/api
+KEY="photos/<id>/full.jpg"          # or thumb.jpg — from the photos row, or from the 404'ing URL
+BUCKET=keepsake-photos-preview      # or -production
+pnpm exec wrangler r2 object get "$BUCKET-backup/$KEY" --remote -f /tmp/restore.bin
+pnpm exec wrangler r2 object put "$BUCKET/$KEY" --remote -f /tmp/restore.bin
+```
+
+**Proven end to end on preview, 2026-09-07, with a synthetic key** (not a real listing's photo —
+this drill intentionally never touched user-visible data): uploaded a test object to the primary
+bucket, copied it to the backup bucket, deleted it from primary (simulating a buggy `orphanSweep`
+predicate), confirmed `wrangler r2 object get` on primary exits `1` ("The specified key does not
+exist"), restored it with the two commands above, confirmed primary answers again with exit `0`,
+and confirmed the restored bytes are byte-identical to the original before cleaning up both
+copies. The exit codes above were checked directly (`echo $?` immediately after the wrangler
+command, not after a pipe to `tail` — piping through `tail` reports `tail`'s exit status, not
+wrangler's, and would have silently hidden a real failure here).
+
+If the key was never backed up (created and deleted between two runs of the script, or the script
+has never been run for that environment), this fails at the first `get` and the photo is gone —
+same as the "no recovery path" state before this issue, just narrower.
+
+### Bounding growth
+
+The script never deletes from the backup bucket, so left alone it would grow forever, including
+photos of listings `orphanSweep` has since correctly removed. `keepsake-photos-preview-backup` has
+its own lifecycle rule, set once by hand (not by the script):
+
+```sh
+pnpm exec wrangler r2 bucket lifecycle add keepsake-photos-preview-backup \
+  expire-after-400d --expire-days 400 -y
+```
+
+400 days is comfortably longer than D1's 30-day Time Travel window and `orphanSweep`'s 30-day
+terminal-photo grace period, so the backup outlives every other recovery mechanism in this
+document rather than expiring a photo those mechanisms would still consider live.
+
+### What this does not fix
+
+**The backup bucket is in the same Cloudflare account as the bucket it insures against.** This is
+the exact weakness this document already names for the D1 export path (see
+[Taking a backup you can hold in your hand](#taking-a-backup-you-can-hold-in-your-hand)): an
+account-level failure — suspension, compromise, a Cloudflare-side R2 incident — takes both buckets
+out together, and this script does nothing about that. It protects against the risk that is
+actually live right now (an application bug deleting a photo it shouldn't have) and not against
+the account-level risk restore.md already flags as the harder problem. Getting a copy of photo
+bytes to a genuinely separate provider (a second Cloudflare account, or an S3/GCS bucket via
+Sippy's *other* direction or a direct upload) needs credentials that don't exist in this
+environment and is Kiarash's call to provision — not something to fake by writing a script that
+would work if the credentials existed.
+
+**Production has no backup bucket yet.** `wrangler r2 bucket create keepsake-photos-production-backup`
+was attempted and blocked by this environment's own safety controls (a production-write action
+requires explicit approval this session didn't have). The one-time setup, for whoever has that
+approval:
+
+```sh
+cd apps/api
+wrangler r2 bucket create keepsake-photos-production-backup
+wrangler r2 bucket lifecycle add keepsake-photos-production-backup expire-after-400d --expire-days 400 -y
+node tools/backup-photos.mjs --env production
+```
+
+**No cron runs this automatically yet.** `.github/workflows/backup-photos.yml` (added alongside
+this document) runs `tools/backup-photos.mjs` for both environments on a schedule, but GitHub does
+not evaluate `schedule:` triggers (or allow `workflow_dispatch`) for a workflow file that has never
+been merged to the default branch — confirmed directly: `gh workflow run backup-photos.yml --ref
+give-flow-fixes` returns `HTTP 404: workflow backup-photos.yml not found on the default branch`,
+the same wall `.github/workflows/uptime.yml` hit before it was merged. That is why this section's
+proof is a direct, by-hand run of the script rather than a green Actions run — there is no green
+Actions run possible yet. Confirm the schedule actually fires at least once after this branch
+merges (`gh run list --workflow=backup-photos.yml`) before trusting it unattended.

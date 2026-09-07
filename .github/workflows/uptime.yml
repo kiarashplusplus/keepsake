@@ -79,6 +79,21 @@ jobs:
               ok="$(printf '%s' "$body" | jq -r '.ok // empty' 2>/dev/null || true)"
               if [ "$ok" = "true" ]; then
                 commit="$(printf '%s' "$body" | jq -r '.commit // "?"')"
+                # Issue #24: "dev" is the checked-in wrangler.toml fallback,
+                # never a real commit. CI's own deploys always pass a real
+                # `--var COMMIT_SHA:<sha>` (deploy.yml), so seeing "dev" here
+                # means the running Worker was shipped by a hand-run
+                # `wrangler deploy` that forgot it — a state deploy.md now
+                # warns about but nothing else can catch, since it happens
+                # outside any workflow this repo controls. Treat it as a
+                # failure rather than a note: it is the loud signal the issue
+                # asked for, implemented here because failing inside the
+                # Worker itself would need apps/api/src, which is out of
+                # scope for this pass.
+                if [ "$commit" = "dev" ]; then
+                  echo "::error title=$tier is running an unstamped deploy::GET $url/health reports commit \"dev\" — a hand-run 'wrangler deploy' shipped without --var COMMIT_SHA:\$(git rev-parse HEAD). See docs/runbooks/deploy.md#manual-deploys."
+                  return 1
+                fi
                 echo "$tier: ok (commit $commit)"
                 return 0
               fi
