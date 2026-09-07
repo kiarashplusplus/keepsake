@@ -104,7 +104,7 @@ export function guardRecipient(env: Env, to: string): GuardDecision {
   return { allowed: false, reason: "blocked_email_mode_off" };
 }
 
-export type EmailKind = "verify_email" | "new_request" | "request_received" | "chosen" | "recover" | "admin_test";
+export type EmailKind = "verify_email" | "new_request" | "request_received" | "chosen" | "recover" | "admin_test" | "admin_digest";
 
 export interface MailMessage {
   kind: EmailKind;

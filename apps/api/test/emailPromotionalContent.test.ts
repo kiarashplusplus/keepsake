@@ -34,6 +34,7 @@ import { describe, expect, it } from "vitest";
 import { chosen } from "../src/email/templates/chosen.js";
 import { newRequest } from "../src/email/templates/newRequest.js";
 import { recover } from "../src/email/templates/recover.js";
+import { RECOVER_TTL_MS } from "../src/routes/recover.js";
 import { requestReceived } from "../src/email/templates/requestReceived.js";
 import { verifyEmail } from "../src/email/templates/verifyEmail.js";
 import { adminTest } from "../src/email/templates/adminTest.js";
@@ -86,7 +87,7 @@ const CASES: Case[] = [
   },
   {
     name: "recover",
-    template: recover({ link: RECOVER_LINK }),
+    template: recover({ link: RECOVER_LINK, ttlMs: RECOVER_TTL_MS }),
     allowedUrls: [RECOVER_LINK],
   },
   {

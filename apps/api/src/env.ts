@@ -8,7 +8,29 @@
  * ambient global for every reference in the file, hoisting included.
  * `Cloudflare.Env` names the same generated shape without that trap.
  */
-export type Env = Cloudflare.Env;
+/**
+ * `VECTORIZE` (issue #38) is declared here by hand, as **optional**, and
+ * deliberately stays that way now that the `[[vectorize]]` blocks in
+ * `wrangler.toml` are uncommented and `wrangler types` emits the binding
+ * itself.
+ *
+ * It was originally hand-declared out of necessity: with the blocks
+ * commented out, `wrangler types` emitted no `VECTORIZE` at all and every
+ * `env.VECTORIZE` reference in `search/vectorize.ts` stopped compiling. That
+ * necessity is gone. The declaration is kept because optional is the
+ * truthful shape, and a more useful one than the generated type gives.
+ *
+ * `search/vectorize.ts` has always branched on `if (!env.VECTORIZE)` to fall
+ * back to FTS. That branch is the feature's safety net and it is exercised
+ * by tests that stub the binding away entirely. Against a generated
+ * non-optional binding it would be unreachable-by-type — the compiler would
+ * let it rot, or flag it as dead. Declaring it optional keeps the fallback a
+ * live, type-checked path.
+ *
+ * The intersection is correct either way: where `wrangler types` emits a
+ * non-optional `VECTORIZE`, the generated property narrows this one.
+ */
+export type Env = Cloudflare.Env & { VECTORIZE?: VectorizeIndex };
 
 /** One of the five bindings `/health` and `assertBindings` care about. */
 type CheckedBinding = "DB" | "BUCKET" | "KV" | "AI" | "ASSETS" | "EMAIL";
@@ -86,6 +108,39 @@ export function emailProviderName(env: Env): EmailProviderName | undefined {
  */
 export function isProduction(env: Env): boolean {
   return (env.ENVIRONMENT as string) === "production";
+}
+
+/**
+ * Issue #38's kill switch: is semantic search (Vectorize + Workers AI
+ * embeddings) allowed to run at all?
+ *
+ * **On in every environment** as of 2026-09-07, after the two things this
+ * comment used to say it must wait for were actually done with a real
+ * credential (recorded in `docs/runbooks/deploy.md` → "Vectorize / semantic
+ * search"): the three indexes were confirmed to exist at `768 / cosine`, and
+ * `MIN_SCORE` was re-derived against the real embedding model
+ * (`docs/design/min-score-calibration.md`).
+ *
+ * It stays a kill switch. Setting it back to `"0"` is the first thing to try
+ * if search misbehaves: with it off, `GET /api/feed?q=` behaves exactly as it
+ * does without any of this — FTS5 via `db/fts.ts`, the fallback path the
+ * issue asked to keep rather than replace — and no embedding call, Vectorize
+ * call or AI budget spend happens on either the read or the write path.
+ * `test/search.test.ts` asserts that equivalence against a no-binding control
+ * rather than assuming it.
+ *
+ * One thing to know before switching it off: `reembedListing` runs only on
+ * listing create/edit and on the #37 aspects backfill, so any listing created
+ * while this is `"0"` has no vector and is invisible to vector search until
+ * it is next written. See the runbook section above for the backfill that
+ * does not exist.
+ *
+ * Opt-in on `"1"` only — an unset, empty, malformed or absent var reads as
+ * off, so no environment can enable this by accident or by omission. Same
+ * string-literal widening as `isMockAi` above.
+ */
+export function semanticSearchEnabled(env: Env): boolean {
+  return (env.SEMANTIC_SEARCH as string | undefined) === "1";
 }
 
 /**

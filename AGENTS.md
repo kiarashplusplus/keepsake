@@ -133,7 +133,14 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
   Now that pull requests no longer deploy anywhere, this is *the* way to verify a branch.
   - If Playwright reports `Executable doesn't exist at .../chromium_headless_shell-<n>/...`, the
     container's browser build predates the pinned `@playwright/test`. Do not run
-    `playwright install` blindly; point the expected path at the build that is present.
+    `playwright install` blindly; point the expected path at the build that is present. Concretely,
+    with `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers` holding a `-1194` build and Playwright asking
+    for `-1243`, symlinking the present build under the expected name and filling in the two
+    marker files (`INSTALLATION_COMPLETE`, `DEPENDENCIES_VALIDATED`) is enough — note the
+    directory *and binary* also get renamed between builds
+    (`chrome-linux/headless_shell` → `chrome-headless-shell-linux64/chrome-headless-shell`), so
+    linking the folder alone still fails. All 82 specs pass on the older build; nothing about the
+    suite needs the newer one.
   - `test/adminAuth.test.ts`'s brute-force case can time out at 30 s when the root runner fans API
     and web out concurrently on a loaded machine. Measured on both `main` and a feature branch with
     no difference, so it is load, not a regression — the flake its own comment and #65 describe.
@@ -171,6 +178,8 @@ The accessibility specs carry **no exclusions**. If your change fails them, it i
 - `docs/design/moderation.md` — how moderation works and two measured model weaknesses.
 - `docs/runbooks/launch-audit.md` — 18 findings, several still open.
 - `docs/legal-considerations.md` — compliance research, with eight questions marked for a lawyer.
+- `docs/legal-entity-and-insurance.md` — why Keepsake is a sole proprietorship and not an LLC
+  (#108), what has to be bought and filed because of that, and what would reverse it.
 - `docs/runbooks/` — deploy, restore, migrations, admin, geodata, uk-block, issue-workflow.
 
 ## Writing for Kiarash

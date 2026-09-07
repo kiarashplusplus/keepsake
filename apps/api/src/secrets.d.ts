@@ -24,6 +24,21 @@ declare global {
       // is written down in `docs/runbooks/kiarash-checklist.md`; the token
       // is the credential.
       CF_CACHE_PURGE_TOKEN?: string;
+      // Read-only Cloudflare API token for the Observatory
+      // (`GET /api/admin/observatory`): exactly `Account Analytics Read` +
+      // `Workers Observability Read`, scoped to the Leapkg account. Its
+      // partners `CF_ACCOUNT_ID`/`CF_SCRIPT_NAME` are ordinary `[vars]` —
+      // neither is a credential — and with any of the three unset the
+      // Cloudflare panels report themselves `unconfigured` rather than
+      // rendering zero. Deliberately not `CF_CACHE_PURGE_TOKEN` and
+      // deliberately not the deploy token: this one can read request counts
+      // and log lines and can change nothing.
+      CF_OBSERVATORY_TOKEN?: string;
+      // Where the daily digest is mailed (`cron/dailyDigest.ts`). A secret
+      // rather than a var because it is a real person's address, and
+      // `wrangler.toml` is committed. Unset means the digest is built and
+      // logged but not sent — a supported state, not an error.
+      ADMIN_DIGEST_TO?: string;
     }
   }
 }

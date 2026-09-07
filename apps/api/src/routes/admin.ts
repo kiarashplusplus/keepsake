@@ -29,6 +29,11 @@ import {
   type AdminTestErrorResult,
 } from "@keepsake/contracts/admin";
 import { LISTING_STATUSES, type Category, type ListingStatus, type OwnerListing } from "@keepsake/contracts/listing";
+import { readCronHeartbeats } from "../cron/registry.js";
+import { ObservatoryQuery, type Observatory } from "@keepsake/contracts/observatory";
+import { buildAppMetrics } from "../observatory/appMetrics.js";
+import { fetchEdgeTelemetry, fetchLogTelemetry } from "../observatory/cloudflare.js";
+import { buildDailyReport } from "../report/daily.js";
 import type { FeedPage } from "@keepsake/contracts/feed";
 import { maskEmail, type RequestStatus } from "@keepsake/contracts/request";
 import type { ReportReason } from "@keepsake/contracts/report";
@@ -56,6 +61,7 @@ import { recipientDomain, sendMail } from "../email/sendMail.js";
 import { adminTest as adminTestTemplate } from "../email/templates/adminTest.js";
 import { runAspectsBackfillBatch } from "../backfill/aspects.js";
 import { suggestFromPhoto } from "../suggest/suggest.js";
+import { reembedListing } from "../search/reembed.js";
 import { checkAndBump } from "../moderation/budget.js";
 
 type Vars = { validatedBody: unknown; validatedQuery: unknown };
@@ -732,12 +738,10 @@ adminRoutes.get("/stats", async (c) => {
  * The value was present and the verdict ignored it, which is the same class
  * of bug as a limiter that never fires.
  */
-const CRON_STALE_AFTER_MS: Record<string, number> = {
-  moderationRetry: 30 * 60 * 1000,
-  orphanSweep: 26 * 60 * 60 * 1000,
-};
-
-const CRON_JOB_NAMES = ["moderationRetry", "orphanSweep"] as const;
+// The thresholds this docblock describes now live in `src/cron/registry.ts`,
+// beside the schedule each one is a multiple of. They were duplicated here
+// and in `index.ts`'s dispatch switch, so adding a third job meant editing
+// three files and hoping; `readCronHeartbeats` below is the shared read.
 
 /**
  * Issue #89: three independent reporters can hide a live listing on their
@@ -835,21 +839,17 @@ adminRoutes.get("/health", async (c) => {
   }
 
   const now = Date.now();
-  const cronLastRun: Record<string, number | null> = {};
-  const staleCrons: string[] = [];
-  for (const name of CRON_JOB_NAMES) {
-    const value = await c.env.KV.get(`cron:last:${name}`);
-    const lastRun = value ? Number.parseInt(value, 10) : null;
-    cronLastRun[name] = Number.isFinite(lastRun) ? lastRun : null;
-    // `null` counts as stale too. A cron that has never once written its
-    // heartbeat is not a neutral state — it is the same observable situation
-    // as a cron that stopped, and on a fresh environment it clears itself
-    // within one tick.
-    const staleAfter = CRON_STALE_AFTER_MS[name] ?? 26 * 60 * 60 * 1000;
-    if (cronLastRun[name] === null || now - (cronLastRun[name] ?? 0) > staleAfter) {
-      staleCrons.push(name);
-    }
-  }
+  // `null` counts as stale too. A cron that has never once written its
+  // heartbeat is not a neutral state — it is the same observable situation
+  // as a cron that stopped, and on a fresh environment it clears itself
+  // within one tick. That rule lives in `readCronHeartbeats` so this
+  // endpoint and the daily digest cannot come to different conclusions
+  // about the same KV keys.
+  const heartbeats = await readCronHeartbeats(c.env.KV, now);
+  const cronLastRun: Record<string, number | null> = Object.fromEntries(
+    heartbeats.map((beat) => [beat.name, beat.last_run_at]),
+  );
+  const staleCrons = heartbeats.filter((beat) => beat.stale).map((beat) => beat.name);
 
   if (staleCrons.length > 0) {
     console.warn("admin/health: cron heartbeat stale", { crons: staleCrons, cronLastRun });
@@ -975,6 +975,63 @@ adminRoutes.post("/backfill-aspects", validateBody(AdminBackfillAspectsInput), a
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/admin/observatory
+// ---------------------------------------------------------------------------
+/**
+ * The system-level view: traffic, throughput, the give→get funnel, the
+ * moderation queue's age, recent errors, and today's digest — one payload,
+ * one round trip, one auth gate.
+ *
+ * Deliberately separate from `/stats` and `/health` rather than folded into
+ * them, because the three answer different questions and are read at
+ * different moments. `/health` is a liveness verdict a monitor polls;
+ * `/stats` is the strip above the moderation queue; this is the thing you
+ * open when you want to know how the site is *doing*. Merging them would
+ * have meant either making the cheap endpoints expensive or making this one
+ * shallow.
+ *
+ * ## Failure isolation
+ *
+ * The three sections fail independently and on purpose. `app` comes from D1
+ * and is awaited normally — if that throws, the request 500s, because a
+ * Worker that cannot read its own database has nothing useful to render.
+ * `edge` and `logs` call out to Cloudflare's API and can be unconfigured,
+ * slow, or rejected; both are wrapped in `ObservatorySource` by the client
+ * module and neither can throw, so a revoked telemetry token degrades two
+ * panels instead of taking down the page. `Promise.all` is still correct
+ * here — the two telemetry calls resolve to error *values*, never rejections.
+ *
+ * The window is clamped by `ObservatoryQuery` to 1, 7 or 30 days; see the
+ * schema for why it is a closed set. Note the logs half silently clamps
+ * further to Workers Logs' 3-day Free-plan retention and reports the window
+ * it actually used, rather than labelling three days of data as thirty.
+ */
+adminRoutes.get("/observatory", validateQuery(ObservatoryQuery), async (c) => {
+  const query = c.get("validatedQuery") as ObservatoryQuery;
+  const windowDays = query.window_days;
+  const now = Date.now();
+
+  const [app, edge, logs, report] = await Promise.all([
+    buildAppMetrics(c.env, windowDays, now),
+    fetchEdgeTelemetry(c.env, windowDays, now),
+    fetchLogTelemetry(c.env, windowDays, now),
+    buildDailyReport(c.env, now),
+  ]);
+
+  const observatory: Observatory = {
+    generated_at: now,
+    environment: c.env.ENVIRONMENT as string,
+    commit: c.env.COMMIT_SHA as string,
+    window_days: windowDays,
+    app,
+    edge,
+    logs,
+    report,
+  };
+  return ok(c, observatory);
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/admin/listings/:id/resuggest
 // ---------------------------------------------------------------------------
 /**
@@ -1038,6 +1095,15 @@ adminRoutes.post("/listings/:id/resuggest", async (c) => {
   // backfill's candidate set, which would otherwise be a second, dumber pass
   // over a listing that has just had the best look available.
   await replaceListingAspects(c.env, id, result.suggestion.aspects);
+  // Issue #38 × #141, and the same trap #37 fell into: every other path that
+  // can change a listing's aspects re-embeds it — create and edit in
+  // `routes/listings.ts`, and the aspects backfill. This route rewrites them
+  // wholesale, so without this the vector index keeps the *old* aspects and
+  // semantic search goes on matching the stale word while never matching the
+  // new ones. `waitUntil`, fire-and-forget, exactly as the two listing routes
+  // do it: `reembedListing` never throws, and a listing whose vector is
+  // momentarily stale is still findable through FTS.
+  c.executionCtx.waitUntil(reembedListing(c.env, id));
 
   const applied: AdminResuggestResult = {
     listing_id: id,

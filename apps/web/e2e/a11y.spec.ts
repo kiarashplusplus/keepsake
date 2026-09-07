@@ -101,9 +101,9 @@ test("the admin queue — including a checked row and the bulk toolbar it opens 
   await page.goto("/admin");
   await page.getByLabel("Admin token").fill(ADMIN_TOKEN);
   await page.getByLabel("Enter").click();
-  await expect(page.getByRole("tablist")).toBeVisible();
+  await expect(page.getByRole("tablist", { name: "Queue status" })).toBeVisible();
 
-  await page.getByRole("tablist").getByLabel("Hidden", { exact: true }).click();
+  await page.getByRole("tablist", { name: "Queue status" }).getByLabel("Hidden", { exact: true }).click();
   await expect(page.getByText(listing.title, { exact: true })).toBeVisible();
 
   // Scans the queue at rest first — the common case — then again with a row
@@ -114,6 +114,34 @@ test("the admin queue — including a checked row and the bulk toolbar it opens 
 
   await page.getByLabel(`Select ${listing.title}`).click();
   await expect(page.getByText("1 selected")).toBeVisible();
+
+  expect(await blockingViolations(page)).toEqual([]);
+});
+
+test("the Observatory panel has no serious or critical accessibility violations", async ({ page }) => {
+  await page.goto("/admin");
+  await page.getByLabel("Admin token").fill(ADMIN_TOKEN);
+  await page.getByLabel("Enter").click();
+  await expect(page.getByRole("tablist", { name: "Admin sections" })).toBeVisible();
+
+  await page.getByRole("tablist", { name: "Admin sections" }).getByLabel("Observatory", { exact: true }).click();
+
+  // The panel renders a good deal of markup axe has opinions about and the
+  // queue does not exercise: a second tablist (the window selector), the
+  // severity chips in `needs_attention`, the bar chart's labelled columns,
+  // and the three-state source boxes. Waiting on the window selector rather
+  // than on a data-dependent string keeps this from turning into a test
+  // about how much traffic the fixture database happens to have.
+  await expect(page.getByRole("tablist", { name: "Observatory window" })).toBeVisible();
+
+  expect(await blockingViolations(page)).toEqual([]);
+
+  // Again on a different window, because switching re-renders every section
+  // from a fresh payload — including the empty-series path a 1-day window
+  // hits on a database this quiet, which is exactly where a missing label
+  // or an unlabelled empty state would hide.
+  await page.getByRole("tablist", { name: "Observatory window" }).getByLabel("1 day", { exact: true }).click();
+  await expect(page.getByRole("tablist", { name: "Observatory window" })).toBeVisible();
 
   expect(await blockingViolations(page)).toEqual([]);
 });

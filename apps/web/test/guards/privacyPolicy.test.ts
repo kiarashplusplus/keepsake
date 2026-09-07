@@ -71,6 +71,7 @@ const EXPECTED_SECTIONS = [
   "Location",
   "Screening",
   "Autofill from your photo",
+  "Search by meaning",
   "Rate limiting",
   "Your choice, before anything loads",
   "Changing your mind",
@@ -136,6 +137,23 @@ const LOCKED_PASSAGES: { name: string; phrases: string[] }[] = [
       "banning the device key that posted it",
     ],
   },
+  {
+    // #108: the entity question behind this section was decided, and decided
+    // as "no entity" — a sole proprietorship, so every disclaimer on this
+    // site protects a person rather than a company. The accountability point
+    // that PIPEDA Sched. 1 cl. 4.8 and RIDTPPA §6-48.1-3(a) both want is
+    // served by naming that person in full, and the decision to keep his home
+    // address off a public page (docs/legal-entity-and-insurance.md, "Where
+    // the address goes") is only defensible while the page still says how to
+    // get one for a legal notice. Dropping either half is a substantive
+    // change to a compliance posture, not a copy edit.
+    name: "the named individual controller and the address on request (#108)",
+    phrases: [
+      "Kiarash Adl, operating as an individual",
+      "not through a company or any other entity",
+      "If you need a postal address for a legal notice",
+    ],
+  },
 ];
 
 /** `<h2>` text in source order, whitespace-collapsed the same way
@@ -198,6 +216,29 @@ const AI_CALL_SITES: AiCallSite[] = [
       // calls with two purposes, and one paragraph covering both would be
       // the same omission in a different shape.
       "a separate call from the safety screening",
+    ],
+  },
+  {
+    file: "search/embedding.ts",
+    purpose: "semantic search: embedding a listing's words, and a search query",
+    discloses: [
+      "into a list of numbers that",
+      // The policy must say what is sent, not just that a model is called —
+      // "only the words already public on the listing" is the whole claim.
+      "Only your listing's own public words are",
+      // SEMANTIC_SEARCH was flipped to "1" in every deployed environment on
+      // 2026-09-07, so the policy's previous "switched off today and is not
+      // running" sentence became false and was replaced. The policy had
+      // promised in its own words to come back and change that paragraph
+      // rather than leave it stale, which is what this pair of assertions
+      // now holds it to.
+      "This is running",
+      // Switching it on created something the earlier version had nothing to
+      // disclose: a stored derivative of the listing that outlives the
+      // request. The policy has to say it is stored, what it is stored
+      // beside, and that deleting the listing deletes it.
+      "stored with Cloudflare",
+      "Delete your listing and it is deleted too",
     ],
   },
 ];

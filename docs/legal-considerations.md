@@ -142,11 +142,14 @@ stays an honest record of what was found and when:**
     Montana) resolves to "comply cheaply rather than buy an answer," done in #60/#61/#62, with #31
     left open and advisory for the applicability question underneath; Q5 (COPPA) resolves on a
     definition; Q7 (CPSA) resolves on the facts, favourably but untested.
-  - **Q8 is the one that was never answered**, and it is now tracked on its own at **#108**. The
-    clause half is finished — #63 chose the one-directional shape and ea2329e shipped it, closing
-    #32 — but the substantive question underneath is LLC vs. sole proprietor plus the cost of
-    general-liability insurance, which matters precisely because `privacy.html` and `terms.html`
-    now say in public that Keepsake is operated by an individual and not a company.
+  - **Q8 is the one that was never answered by research**, and it is now **decided** — see
+    [`legal-entity-and-insurance.md`](legal-entity-and-insurance.md) and #108, closed 2026-09-07.
+    The clause half was already finished — #63 chose the one-directional shape and ea2329e shipped
+    it, closing #32. The substantive half, LLC vs. sole proprietor, resolved to **sole
+    proprietorship, with insurance rather than an entity as the protection**, on the finding that a
+    Texas LLC would not shield a solo operator from a claim that he was personally negligent —
+    which is the claim this fact pattern actually produces. Still no lawyer: that decision is
+    Kiarash's, taken on research, and the document says so in its first line.
   - **The hedge travels with the conclusions.** All of the above rests on that document's
     search-summary sourcing rather than primary text read end to end, and three of its findings were
     marked `[unverified text]` there. **One of the three has since come off:** MCA §30-14-2811's
@@ -516,9 +519,12 @@ the one worth paying for. That document does not replace a lawyer's answer on an
 **Status, 2026-09-07:** the tracking issue for these eight (#34) is **closed, with all eight
 checkboxes still unticked and no lawyer engaged** — see the 2026-09-07 entry in the status update
 near the top of this file for how that happened and what it does and does not mean. Question 8 —
-the only one the research could not dispose of — now has its own issue, **#108** (LLC vs. sole
-proprietor, and the cost of general-liability insurance). The list below is left exactly as written
-so it stays a record of what was asked.
+the only one the research could not dispose of — was carved out as **#108** (LLC vs. sole
+proprietor, and the cost of general-liability insurance) and **closed on 2026-09-07 with a
+decision**: sole proprietorship, no LLC, insurance as the compensating control, with the reasoning,
+the prices, the assumed-name filing it implies and the triggers that would reverse it in
+[`legal-entity-and-insurance.md`](legal-entity-and-insurance.md). Still no lawyer engaged on any of
+the eight. The list below is left exactly as written so it stays a record of what was asked.
 
 1. Is a UK GDPR Article 27 representative actually required here, given ongoing (not occasional)
    UK-facing processing at negligible volume and no special-category data by design? What does a
@@ -542,3 +548,13 @@ so it stays a record of what was asked.
 8. Should the terms carry a mutual indemnification clause (modeled on Olio's) given the in-person,
    stranger-meeting mechanic, and does Texas law (as the stated governing law) treat such a clause
    any differently for an individual operator than it would for an LLC?
+
+**Q8's answer, such as it is (2026-09-07, #108):** both halves are now disposed of without counsel.
+The clause is one-directional rather than mutual (#63, shipped in ea2329e), and Texas treats it the
+same either way because fair notice is entity-neutral. The entity question underneath was decided
+rather than researched away: **sole proprietorship**, on the ground that an LLC's shield does not
+reach a claim that the one person who does everything did it negligently, paired with buying
+general-liability cover, filing the Harris County assumed-name certificate, and naming the actual
+legal person in `terms.html` so the disclaimers run to somebody who exists. Full reasoning, costs,
+and the triggers that reverse it: [`legal-entity-and-insurance.md`](legal-entity-and-insurance.md).
+That document is not a lawyer's answer to question 8 and does not claim to be one.

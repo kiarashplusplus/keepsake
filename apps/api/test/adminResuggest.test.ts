@@ -17,7 +17,7 @@ import { env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { MODELS } from "../src/models.js";
 import { todayISO } from "../src/moderation/budget.js";
-import { insertOwner, seedStandardPostalCodes, setTestEnvVar } from "./helpers.js";
+import { insertOwner, installFakeVectorize, seedStandardPostalCodes, setTestEnvVar, waitFor } from "./helpers.js";
 import { ulid } from "../src/lib/ids.js";
 
 const ADMIN_TOKEN = "test-admin-token-abcdef0123456789";
@@ -26,9 +26,22 @@ function adminHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" };
 }
 
+/** Counts calls reaching the embedding model, so a test can assert "no
+ * embedding call was spent" rather than only "no vector was written" — the
+ * distinction `backfillAspects.test.ts` and `search.test.ts` both draw. */
+let embeddingCallCount = 0;
+
 function mockSuggestAi(handler: (callIndex: number) => unknown): void {
   let callIndex = 0;
+  embeddingCallCount = 0;
   const run = async (model: string) => {
+    // Re-suggesting re-embeds (issue #38), so the embedding model reaches
+    // this stub too whenever SEMANTIC_SEARCH is on. A fixed vector is
+    // enough — nothing here asserts anything about vector space.
+    if (model === MODELS.embedding) {
+      embeddingCallCount += 1;
+      return { shape: [1, 3], data: [[0.1, 0.2, 0.3]] };
+    }
     if (model !== MODELS.imageVision) throw new Error(`mockSuggestAi: unexpected model ${model}`);
     const result = handler(callIndex);
     callIndex += 1;
@@ -224,5 +237,62 @@ describe("POST /api/admin/listings/:id/resuggest", () => {
     expect(res.status).toBe(429);
     // And still wrote nothing.
     expect(await aspectsOf(listingId)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #38 × #141. Every other path that can change a listing's aspects
+// re-embeds it: create and edit (`routes/listings.ts`) and the #37 backfill.
+// This route rewrites them wholesale. Without the same wiring the vector
+// index would keep the OLD aspects — semantic search would go on matching
+// "braided" and never match "KastKing", which is precisely the failure #37
+// shipped once already and #38's test suite was written to stop recurring.
+//
+// `vitest.config.ts` pins SEMANTIC_SEARCH to "0" for the whole suite, so the
+// blocks above exercise the flag-off shape and these opt in explicitly.
+// ---------------------------------------------------------------------------
+describe("re-suggesting re-embeds the listing (#38)", () => {
+  it("writes a fresh vector for the aspects it just replaced", async () => {
+    setTestEnvVar("SEMANTIC_SEARCH", "1");
+    const vectorize = installFakeVectorize();
+    mockSuggestAi(() => SPOOL_SUGGESTION_JSON);
+    const listingId = await insertListing({ ownerId: await insertOwner() });
+    await seedStaleAspect(listingId);
+
+    expect((await resuggest(listingId)).status).toBe(200);
+
+    // The re-embed rides on `waitUntil`, so it outlives the response — same
+    // reason `helpers.ts`'s `waitFor` exists for the moderation pipeline.
+    // `SELF` is a plain Fetcher with no ExecutionContext handle to await.
+    await waitFor(async () => (vectorize.has(listingId) ? true : undefined));
+    expect(embeddingCallCount).toBe(1);
+  });
+
+  it("spends no embedding call and writes no vector with SEMANTIC_SEARCH off", async () => {
+    setTestEnvVar("SEMANTIC_SEARCH", "0");
+    const vectorize = installFakeVectorize();
+    mockSuggestAi(() => SPOOL_SUGGESTION_JSON);
+    const listingId = await insertListing({ ownerId: await insertOwner() });
+
+    expect((await resuggest(listingId)).status).toBe(200);
+    // Nothing to wait for here — the assertion is that no deferred work was
+    // scheduled at all — but give any that *was* scheduled a chance to land,
+    // or this passes for the wrong reason (the race, not the kill switch).
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(embeddingCallCount).toBe(0);
+    expect(vectorize.has(listingId)).toBe(false);
+
+    // ...and prove "no vector" is the flag's doing, not the wiring simply
+    // being absent. Without this half, deleting the `reembedListing` call
+    // from the route would leave the test above green — the exact shape of
+    // unfailable guard `backfillAspects.test.ts` calls out. Same listing,
+    // same fixture, flag on:
+    setTestEnvVar("SEMANTIC_SEARCH", "1");
+    await env.KV.delete(`budget:suggest:${todayISO()}`);
+
+    expect((await resuggest(listingId)).status).toBe(200);
+
+    await waitFor(async () => (vectorize.has(listingId) ? true : undefined));
+    expect(embeddingCallCount).toBe(1);
   });
 });

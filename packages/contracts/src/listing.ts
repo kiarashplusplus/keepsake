@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { DateOfBirthSchema, MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
 import { CountrySchema } from "./geo";
-import { AspectSchema, MAX_ASPECTS, PublicPhoto } from "./photo";
+import { AspectSchema, MAX_ASPECTS, MAX_PHOTOS, PublicPhoto } from "./photo";
 // Re-exported below so nothing outside the package needs to know these live
 // in their own leaf module — see category.ts for why they aren't declared
 // here directly (a circular import with photo.ts).
@@ -52,7 +52,13 @@ export const CreateListingInput = z.object({
   category: CategorySchema,
   country: CountrySchema,
   postal_code: PostalCodeSchema,
-  photo_ids: z.array(UlidSchema).min(1).max(5),
+  // `MAX_PHOTOS`, not a literal `5`: `apps/web/app/give/index.tsx` sizes the
+  // photo picker from that constant, so a literal here is a cap the client
+  // can be raised past. Change the constant to 6 and the give flow offers
+  // six slots, uploads six photos, and only then does this schema 400 the
+  // create — after the work, with a validation error and no way back to the
+  // photos step. One number, both sides.
+  photo_ids: z.array(UlidSchema).min(1).max(MAX_PHOTOS),
   email: MailableEmailSchema.optional(),
   // Minimum age (docs/legal-considerations.md, issue #64): a neutral
   // "what is your date of birth?" prompt rather than an "I'm 18+" checkbox
