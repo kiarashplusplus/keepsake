@@ -179,6 +179,19 @@ export function parseIntVar(name: string, value: string | undefined, fallback: n
 }
 
 /**
+ * Fallback for `SUGGEST_DAILY_BUDGET` when the var is unset or malformed.
+ *
+ * Lives here, rather than route-local, because three call sites now need the
+ * same number: `routes/photos.ts` (the give flow's live autofill),
+ * `backfill/aspects.ts` (#37's batch job) and
+ * `routes/admin.ts`'s re-suggest (#141). The second of those already carried
+ * a hand-copied duplicate with a comment explaining that it "mirrors
+ * routes/photos.ts exactly" — a comment is not a mechanism, and a third copy
+ * would have been the point where they quietly diverged.
+ */
+export const DEFAULT_SUGGEST_DAILY_BUDGET = 1000;
+
+/**
  * Issue #39's floor: an aspect value needs at least this many approved
  * listings before `GET /api/feed/shelves` renders it as a shelf. Same
  * value in every environment (unlike the moderation budgets above, which

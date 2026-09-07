@@ -46,18 +46,14 @@
  */
 import type { Aspect } from "@keepsake/contracts/listing";
 import type { Env } from "../env.js";
-import { parseIntVar } from "../env.js";
+import { DEFAULT_SUGGEST_DAILY_BUDGET, parseIntVar } from "../env.js";
 import { checkAndBump } from "../moderation/budget.js";
 import { suggestFromPhoto } from "../suggest/suggest.js";
 import { replaceListingAspects } from "../lib/listingsDb.js";
 import { reembedListing } from "../search/reembed.js";
 
-// Mirrors routes/photos.ts's own DEFAULT_SUGGEST_DAILY_BUDGET exactly — kept
-// as a second literal rather than an import because that constant isn't
-// exported (routes/photos.ts has no reason to export route-local defaults),
-// and this is the same "parseIntVar with a fallback" pattern used
-// everywhere else in this codebase a wrangler.toml var might be unset.
-const DEFAULT_SUGGEST_DAILY_BUDGET = 1000;
+// `DEFAULT_SUGGEST_DAILY_BUDGET` is imported from `../env.js` — it was a
+// hand-copied duplicate of routes/photos.ts's until #141 needed a third.
 
 /** SQL condition shared by the candidate-selection query and the
  * `remaining` count below, so the two can never quietly drift apart (e.g.
