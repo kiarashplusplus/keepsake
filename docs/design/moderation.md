@@ -30,6 +30,12 @@ else is enforced by `tools/preflight`'s `models` check.
    anything `pending` for 2 minutes, three denials inside ~15 minutes escalated the listing to
    `needs_review` — a status the cron never selects again — so an exhausted budget turned every
    listing posted for the rest of the day into permanent manual review.
+
+   That trap got *faster* the same week it was removed: step 4 now spends two vision calls per
+   photo instead of one (#161), so `mod_image` is consumed twice as quickly and the day's ceiling
+   is reached twice as early. The two changes are complementary — charging the true cost is what
+   makes the ceiling mean what it says, and not counting the denial is what keeps hitting the
+   ceiling survivable.
 3. **Text**: Llama Guard 3 (`@cf/meta/llama-guard-3-8b`) on `title\n\nstory`, 20s timeout.
 4. **Images**: **every stored variant of every photo** — `r2_key_thumb` *and* `r2_key_full`,
    listed in `moderation/image.ts`'s `MODERATED_PHOTO_VARIANTS`. Each is sent to Llama 3.2

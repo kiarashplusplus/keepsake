@@ -48,12 +48,15 @@ import { containsContactInfo } from "./contactInfo.js";
 const MAX_ATTEMPTS = 3;
 
 const DEFAULT_TEXT_DAILY_BUDGET = 1000;
-// Charged once per photo (`cost: photos.length` below), not once per
-// listing — see the `checkAndBump` `cost` doc comment and issue #18. Before
-// this fix the configured number was charged once per listing while the
-// pipeline made up to five vision calls per listing, so the true ceiling
-// was five times the configured one and nobody could tell from reading
-// `wrangler.toml`.
+// Charged once per vision call — `cost: photos.length *
+// MODERATED_PHOTO_VARIANTS.length` below, two variants per photo since #161
+// — not once per listing; see the `checkAndBump` `cost` doc comment and
+// issue #18. Before that fix the configured number was charged once per
+// listing while the pipeline made up to five vision calls per listing, so
+// the true ceiling was five times the configured one and nobody could tell
+// from reading `wrangler.toml`. (This comment still said "once per photo"
+// after #161 doubled the call count; the code was right and the comment was
+// not.)
 const DEFAULT_IMAGE_DAILY_BUDGET = 3000;
 
 // Issue #18: slice of each global moderation budget held back from the
