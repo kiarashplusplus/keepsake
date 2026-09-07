@@ -35,6 +35,16 @@
  * anyway — it's still done because "unreachable today" is not a proof that
  * stays true across every future change to `images.ts`).
  *
+ * One more scope note (issue #94): `cache.delete()` here only reaches the
+ * colo that happens to execute *this* request — `caches.default` is local to
+ * each Cloudflare data center, not one cache shared across the network. A
+ * copy served from a different colo (a browser on another continent, say) is
+ * untouched by this call and only expires on its own via the TTL above. A
+ * true every-colo purge needs Cloudflare's zone-level Purge Cache API, which
+ * needs a zone attached to a domain and an API token scoped to it — neither
+ * exists yet (`keepsake.ing` isn't attached to a zone; see #46), so that half
+ * is `blocked-on-kiarash` on #94, not implemented here.
+ *
  * Not called from `orphanSweep.ts`'s `sweepOrphanPhotos`: those rows never
  * had a `listing_id`, so `isPublic` was false for every request that ever
  * saw them and `images.ts` never put them in the cache in the first place.
