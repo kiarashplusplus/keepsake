@@ -144,20 +144,33 @@ is the lock.
   `withdraw`+`relist` undoes an admin rejection, a hide, a ban sweep or a three-report auto-hide.
   **#165** — `dailyDigest` never writes its heartbeat, so `/api/admin/health` is permanently
   `ok: false` and the crons alarm is stuck on.
-- **Personal data and email:** #167, #169, #170, #182, #188, #189, #190. Between them: a redactor
-  with no rule for the only PII Keepsake holds, IP hashes kept forever against a privacy page that
-  promises 48-hour expiry twice, a recovery token logged verbatim because it travels as a path
-  segment, and a request endpoint that is an oracle for the giver's address.
-- **More checks that could not fail:** #173 (the consent banner is never scanned by axe), #181,
-  #191 — plus **#166, #175 and #176, fixed** (PR #198): preflight's `shell-syntax` now parses the
-  workflow `run:` blocks that hold all this repo's shell and fails rather than skips when it finds
-  none; `cron-triggers` reads `cron/registry.ts` and asserts the three-way agreement two documents
-  already claimed; and `verify-public-env` derives its expectations from `.env.example` instead of
-  from the environment that forgot the variable. Six instances of `AGENTS.md`'s table found in a
-  single pass — the table is now at eleven rows and should be read as a pattern, not a closed
-  list.
-- **Moderation and abuse surface:** #168, #171, #179, #183.
-- **Correctness:** #163, #172, #174, #180, #184, #185, #186, #187.
+- **Personal data and email:** #169, #188, #189. **#167 and #182 are fixed** (2026-09-07): a
+  `verify_email` token is now bound to the address it was mailed to rather than to the owner row,
+  and the recovery token travels in a POST body instead of a URL path segment — see
+  `docs/design/identity.md`. **#170 and #190 are fixed** too: the redactor has email, phone and
+  path-segment rules, and the recipient is scrubbed out of `email_events.error_detail`.
+- **More checks that could not fail:** #191 — plus **#166, #175 and #176, fixed** (PR #198):
+  preflight's `shell-syntax` now parses the workflow `run:` blocks that hold all this repo's shell
+  and fails rather than skips when it finds none; `cron-triggers` reads `cron/registry.ts` and
+  asserts the three-way agreement two documents already claimed; and `verify-public-env` derives
+  its expectations from `.env.example` instead of from the environment that forgot the variable.
+  **#173 and #181 are fixed** as well — the consent banner now has an unseeded axe scan and a
+  dark-mode pass, and `uploadIdempotencyKey` was deleted rather than left guarding nothing. Six
+  instances of `AGENTS.md`'s table found in a single pass — the table is now at eleven rows and
+  should be read as a pattern, not a closed list.
+- **Moderation and abuse surface:** #168, #171, #183. **#179 is fixed** (2026-09-07): a budget
+  denial no longer consumes one of the three retry attempts, so an exhausted budget delays a
+  listing until the counter resets instead of stranding it in `needs_review`.
+- **Correctness:** #184. **#163, #180 and #186 are fixed** (2026-09-07): an apostrophe no longer
+  reaches FTS5 as a syntax error, a listing whose embedding failed is still returned by its own
+  search, and the candidate query is chunked below D1's 100-parameter ceiling. **#172, #174 and
+  #187 are fixed**: a failed Delete on `/mine/[id]` no longer navigates as though it succeeded; a
+  Turnstile challenge failure reports `unconfigured` and lets the server's `siteverify` decide;
+  and `useFeed`'s `loadMore` drops a page belonging to a query the visitor has already left.
+  **#185 is fixed**: choosing a recipient is one `env.DB.batch()` with a conditional claim on the
+  listing, checked before any mail goes out — see `docs/design/email.md`'s "Contact reveal rule".
+  It is also the Worker's first use of `batch()`; the other multi-write sequences that issue named
+  (create-listing + photos + aspects, `replaceListingAspects`) are still unbatched.
 - **Ops and backup:** #178 — plus **#164, fixed** (PR #198): the documented D1 backup omitted
   `listing_aspects`, and because `aspects_backfilled_at` *is* in the export the loss was
   unrecoverable. `restore.md`'s `--table` list now includes it, and preflight's new

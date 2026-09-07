@@ -199,7 +199,8 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
 - **The e2e suite runs entirely locally — use it, it is the best verification available.**
   `pnpm --filter @keepsake/web export` then `pnpm --filter @keepsake/web e2e` stands up real
   `workerd` with local D1/R2/KV via `wrangler dev` (see `apps/web/playwright.config.ts`), which is
-  closer to production than preview ever was and needs no credentials. Baseline is 84 passing.
+  closer to production than preview ever was and needs no credentials. Baseline was 84 passing;
+  #173 added six a11y specs, which is twelve more runs across the two projects.
   Now that pull requests no longer deploy anywhere, this is *the* way to verify a branch.
   - If Playwright reports `Executable doesn't exist at .../chromium_headless_shell-<n>/...`, the
     container's browser build predates the pinned `@playwright/test`. Do not run
@@ -272,14 +273,21 @@ pnpm --filter @keepsake/web e2e    # 84 specs, mobile and desktop
 node tools/preflight/preflight.mjs
 ```
 
-The accessibility specs carry **no per-rule or per-selector exclusions** — but two things still
-narrow what they can catch, so "green" is not "everything was scanned". `a11y.spec.ts` fails only
-on `serious` and `critical` impacts, so `moderate`/`minor` violations are reported and never fail
-the run; and the shared fixture (`e2e/support/fixtures.ts`) seeds a consent decision into every
-context, so the consent banner is never rendered during a scan and has therefore never been
-scanned at all (#173 — `fixtures.ts`'s own comment claims a banner a11y scan builds its own
-context, and no such scan exists). Within that scope: if your change fails them, it is your
-change.
+The accessibility specs carry **no per-rule or per-selector exclusions**. One thing still narrows
+what they can catch, so "green" is not quite "everything was scanned": `a11y.spec.ts` fails only
+on `serious` and `critical` impacts, so `moderate`/`minor` violations are reported by the run and
+never fail it. Within that scope: if your change fails them, it is your change.
+
+Two gaps that were in this paragraph until #173 are now covered, and the way they were covered is
+worth copying. The shared fixture (`e2e/support/fixtures.ts`) seeds a consent decision into every
+context, so the consent banner was never in the DOM during a scan — the first interactive element
+a new visitor meets was the one component the suite structurally could not see, while two comments
+in the tree said otherwise. `a11y.spec.ts`'s "consent banner" block now builds its own **unseeded**
+contexts (it asks Playwright only for `browser`, so the seeding fixture never runs) and scans the
+banner closed and with its preferences panel open. And no scan had ever run in dark mode, though
+`[data-theme="dark"]` is an entire second colour system; the "dark mode" block now re-runs the page
+scans under `colorScheme: "dark"` and asserts `data-theme` really is `dark` before scanning, so it
+cannot pass by having scanned the light palette twice.
 
 ## Where the thinking is written down
 

@@ -3,7 +3,11 @@
 Status: `[DONE]` — M2's DoD was walked against the live preview stack on 2026-09-06 (feed,
 FTS search, postcode radius, item unfurl). Since then the endpoint also grew semantic search
 behind `SEMANTIC_SEARCH` (#38, `docs/design/min-score-calibration.md`) and aspect shelves (#39),
-with FTS5 kept as the fallback.
+with FTS5 kept as the fallback — and, since #180, as a *supplement* rather than only a fallback:
+when the vector path leads, the FTS matches are merged in behind it (deduplicated by id) instead
+of being skipped, so a listing whose embedding call failed loses ranking rather than disappearing
+from search entirely. `listings.vector_indexed_at` is NULL for exactly those listings, which is
+the queryable form of "has no current vector".
 
 `GET /api/feed?cursor&category&q&country&postal&lat&lng&radius&limit` serves three modes off one
 endpoint: plain keyset (newest-first) when no location or query is given, FTS5 `q=` search, or
@@ -20,7 +24,10 @@ uses live, so a giver sees the same place name a browser would.
 
 FTS5 `MATCH` against `listings_fts` (title, story), sanitized terms (implicit AND, trailing `*`
 for prefix matching so "grandmother" finds "grandmother's"), `bm25` ordering, bounded offset
-pagination. `apps/api/src/db/fts.ts` is the single swap point to a plain `LIKE` fallback if D1's
+pagination. Sanitization splits the raw query on **every** non-alphanumeric character — exactly
+what the `unicode61` tokenizer does to the stored text at index time — and wraps each token as a
+quoted FTS5 string, so neither an apostrophe nor a bareword `OR`/`NEAR` can reach the query
+grammar (#163). `apps/api/src/db/fts.ts` is the single swap point to a plain `LIKE` fallback if D1's
 FTS5-with-triggers setup misbehaves in practice (plan Risk #2) — nothing else in the codebase
 should call FTS5 directly.
 
@@ -50,9 +57,11 @@ should call FTS5 directly.
 `GET /api/feed` (`apps/api/src/routes/feed.ts`) implements all three modes described above:
 default keyset (`src/lib/cursor.ts`'s `encodeKeysetCursor`/`decodeKeysetCursor`,
 `base64url("<published_at>:<id>")`), FTS5 search (`src/db/fts.ts`'s `sanitizeFtsQuery` — implicit
-AND, trailing `*` on the last token only; tokens keep letters, digits **and apostrophes**, which
-is a live bug: an apostrophe reaches `listings_fts MATCH` unescaped, where it is an FTS5 syntax
-error, so `?q=grandmother's ring` 500s the feed (#163)), and geo radius
+AND, trailing `*` on the last token only, every token a quoted FTS5 string built from
+letters/digits alone; `?q=grandmother's ring` used to 500 the feed, because the sanitizer kept the
+apostrophe and `'` is not a bareword character in FTS5's grammar, and every `MATCH` in
+`routes/feed.ts` now also runs inside a `try`/`catch` that degrades to empty results rather than a
+500 carrying the D1 driver message), and geo radius
 (bounding box from `@keepsake/contracts/geo`'s `boundingBox` on the `listings_geo` index, then
 `haversineMiles` in the Worker to cut the box down to the true circle). `category` filters all
 three; `q` + geo together fetch FTS-ranked candidates within the bounding box and filter them to
