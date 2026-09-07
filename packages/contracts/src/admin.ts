@@ -145,6 +145,23 @@ export const AdminRejectInput = z.object({
 });
 export type AdminRejectInput = z.infer<typeof AdminRejectInput>;
 
+/**
+ * `email_events` grouped by outcome over a rolling window — the only bounce
+ * signal that exists otherwise, since there is no bounce webhook or
+ * complaint feedback loop (issue #6). `by_error` covers only the `ok = 0`
+ * rows, one entry per distinct `sendMail()` reason (`blocked_reserved_domain`,
+ * `send_failed: ...`, …), sorted most-frequent first, so a single
+ * misconfigured allowlist entry or a real bounce pattern reads as a spike
+ * rather than getting buried in one opaque "failures" count.
+ */
+export type AdminEmailEventStats = {
+  window_days: number;
+  total: number;
+  ok: number;
+  failed: number;
+  by_error: { error: string; count: number }[];
+};
+
 /** `GET /api/admin/stats` — plain data, not a client-submitted shape, so
  * (like `@keepsake/contracts/feed`'s `FeedPage<T>`) this is a TS type rather
  * than a schema the client would ever need to validate against. */
@@ -156,6 +173,7 @@ export type AdminStats = {
     mod_text: number;
     mod_image: number;
   };
+  email_events_7d: AdminEmailEventStats;
 };
 
 /**

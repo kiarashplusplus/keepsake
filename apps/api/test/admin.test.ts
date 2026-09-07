@@ -330,6 +330,44 @@ describe("admin routes", () => {
       expect(stats.ai_budget_used_today.mod_text).toBe(42);
       expect(stats.ai_budget_used_today.mod_image).toBe(7);
     });
+
+    // Issue #6: there's no bounce webhook and nothing else reads
+    // `email_events` on a schedule, so this rolling breakdown is the only
+    // place a real delivery problem would ever surface. Proves the window
+    // actually excludes old rows (not just that the query runs) and that
+    // failures group by their own reason rather than collapsing into one
+    // opaque count.
+    it("groups email_events by ok/error over the rolling window, excluding rows older than it", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      const now = Date.now();
+      const eightDaysAgo = now - 8 * 24 * 60 * 60 * 1000;
+
+      async function insertEmailEvent(fields: { ok: 0 | 1; error: string | null; createdAt: number }): Promise<void> {
+        await env.DB.prepare(
+          "INSERT INTO email_events (id, kind, to_hash, provider, ok, error, created_at) VALUES (?, 'new_request', ?, 'cf', ?, ?, ?)",
+        )
+          .bind(ulid(), `hash-${ulid()}`, fields.ok, fields.error, fields.createdAt)
+          .run();
+      }
+
+      await insertEmailEvent({ ok: 1, error: null, createdAt: now });
+      await insertEmailEvent({ ok: 0, error: "blocked_not_allowlisted", createdAt: now });
+      await insertEmailEvent({ ok: 0, error: "blocked_not_allowlisted", createdAt: now });
+      await insertEmailEvent({ ok: 0, error: "send_failed: 550 mailbox unavailable", createdAt: now });
+      // Outside the 7-day window — must not be counted.
+      await insertEmailEvent({ ok: 0, error: "blocked_not_allowlisted", createdAt: eightDaysAgo });
+
+      const res = await SELF.fetch("http://x/api/admin/stats", { headers: adminHeaders() });
+      const stats = await readOk<AdminStats>(res);
+
+      expect(stats.email_events_7d.window_days).toBe(7);
+      expect(stats.email_events_7d.ok).toBeGreaterThanOrEqual(1);
+      expect(stats.email_events_7d.failed).toBeGreaterThanOrEqual(3);
+      const notAllowlisted = stats.email_events_7d.by_error.find((e) => e.error === "blocked_not_allowlisted");
+      expect(notAllowlisted?.count).toBeGreaterThanOrEqual(2);
+      const bounced = stats.email_events_7d.by_error.find((e) => e.error === "send_failed: 550 mailbox unavailable");
+      expect(bounced?.count).toBeGreaterThanOrEqual(1);
+    });
   });
 
   describe("GET /api/admin/health", () => {

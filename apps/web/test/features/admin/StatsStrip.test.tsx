@@ -10,6 +10,7 @@ const STATS: AdminStats = {
   requests_today: 0,
   email_failures_today: 0,
   ai_budget_used_today: { mod_text: 0, mod_image: 0 },
+  email_events_7d: { window_days: 7, total: 0, ok: 0, failed: 0, by_error: [] },
 };
 
 const NOW = Date.parse("2026-09-07T12:00:00.000Z");
@@ -103,5 +104,34 @@ describe("StatsStrip", () => {
     // No cron badge accessibility labels should be present before `health`
     // arrives — nothing to falsely reassure or alarm Kiarash with.
     expect(JSON.stringify(toJSON())).not.toContain("last run");
+  });
+
+  // Issue #6: there is no bounce webhook, so this rolling read of
+  // `email_events` is the only place a real delivery problem would ever
+  // surface. Proves the breakdown actually reaches the page, not just the
+  // API response shape.
+  it("shows the 7-day email breakdown, including a per-reason count for failures", () => {
+    const statsWithFailures: AdminStats = {
+      ...STATS,
+      email_events_7d: {
+        window_days: 7,
+        total: 12,
+        ok: 9,
+        failed: 3,
+        by_error: [
+          { error: "blocked_not_allowlisted", count: 2 },
+          { error: "send_failed: 550 mailbox unavailable", count: 1 },
+        ],
+      },
+    };
+    const { toJSON } = render(
+      <ThemeProvider mode="light">
+        <StatsStrip stats={statsWithFailures} health={null} healthAsOf={null} />
+      </ThemeProvider>,
+    );
+    const text = JSON.stringify(toJSON());
+    expect(text).toContain("Email, last 7 days");
+    expect(text).toContain("blocked_not_allowlisted");
+    expect(text).toContain("send_failed: 550 mailbox unavailable");
   });
 });
