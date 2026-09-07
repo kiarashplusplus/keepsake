@@ -3,9 +3,29 @@ name: CI
 # Bayan/Finderly lesson carried in: gate expensive jobs behind cheap ones.
 # `preflight` always runs (it costs seconds and catches whole classes of
 # mistake — see tools/preflight/preflight.mjs); `changes` decides what else
-# is worth running; everything downstream is scoped to what actually moved,
-# and GitHub's default "a skipped need skips its dependents" cascades that
-# scoping all the way to build-web and e2e without repeating conditions.
+# is worth running; everything downstream is scoped to what actually moved.
+#
+# **The shape is a fan, not a chain.** Every job below hangs off `changes`
+# alone, and the two genuine dependencies — e2e needs the bundle build-web
+# uploads, and no job is worth paying for once the unit tests are red — are
+# expressed on `e2e` as an explicit `if:`. It used to be a six-deep chain
+# (changes -> preflight -> lint/typecheck -> test-* -> build-web -> e2e), and
+# measuring it on 2026-09-07 showed what that cost: of 488s on the critical
+# path of run 34132108162, only 307s was work. The other 181s — 37% — was the
+# same runner boot, checkout, setup-node and `pnpm install` paid six times in
+# series, because each stage waited for a stage it did not actually need.
+#
+# The chain also cost a whole extra round trip on any pull request with a
+# lint error: test-*, build-web and e2e all skipped, so you fixed the lint,
+# pushed, and waited another eight minutes to find out whether the tests
+# passed. Now one run tells you everything that is wrong at once, which is
+# the thing that actually shortens a development cycle.
+#
+# What that buys, and what it costs: on a green run the critical path is
+# `changes -> build-web -> e2e` instead of all six stages. The cost is
+# speculative work — build-web and the test jobs run even when lint has
+# already gone red. That is the deliberate trade, and it is affordable here:
+# these runs queue for ~0s, so the spend is minutes, not waiting.
 on:
   pull_request:
   push:
@@ -142,16 +162,24 @@ jobs:
   lint:
     name: lint
     runs-on: ubuntu-latest
-    needs: [preflight, changes]
+    # Not `needs: preflight`. preflight is a one-second script wrapped in
+    # ~23s of checkout and install, and nothing lint does depends on it —
+    # so gating on it only ever moved the whole workflow 23s to the right.
+    # Both run from t=0 now, and a preflight failure still fails the run.
+    needs: [changes]
     # Skip when the change is docs-only — nothing lint checks changed.
     #
-    # `site` is in this list for two reasons. `eslint .` does cover
-    # apps/site/public/consent.js, which is real JavaScript. But the
-    # load-bearing reason is the skip cascade: test-web `needs` lint and
-    # typecheck, and GitHub skips a job when any of its needs skipped. So
-    # naming `site` on test-web alone did nothing — lint skipping took
-    # test-web, build-web and e2e down with it, and a site-only pull
-    # request still ran no tests. ci-complete caught exactly that on #56.
+    # `site` is in this list because `eslint .` genuinely covers
+    # apps/site/public/consent.js, which is real JavaScript.
+    #
+    # It used to be here for a second, load-bearing reason: test-web `needs`
+    # lint, GitHub skips a job when any of its needs skipped, so omitting
+    # `site` here took test-web, build-web and e2e down with it and a
+    # site-only pull request ran no tests at all (#56, caught by
+    # ci-complete). That cascade is gone — every job carries its own
+    # condition now — so this list is only about what eslint reads. The
+    # invariant #56 broke is still enforced, by ci-complete rather than by
+    # the shape of the graph.
     if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.root == 'true' || needs.changes.outputs.site == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -166,7 +194,8 @@ jobs:
   typecheck:
     name: typecheck
     runs-on: ubuntu-latest
-    needs: [preflight, changes]
+    # Same as lint: preflight is not a prerequisite, only a delay.
+    needs: [changes]
     if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.root == 'true' || needs.changes.outputs.site == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -181,7 +210,10 @@ jobs:
   test-packages:
     name: test-packages
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, changes]
+    # Not `needs: [lint, typecheck]`. A lint error does not make a test
+    # result untrue, and waiting for one costs both wall-clock time and —
+    # worse — a whole extra CI round to learn whether the tests pass.
+    needs: [changes]
     if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.root == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -201,7 +233,7 @@ jobs:
   test-tools:
     name: test-tools
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, changes]
+    needs: [changes]
     if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.root == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -216,7 +248,7 @@ jobs:
   test-api:
     name: test-api
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, changes]
+    needs: [changes]
     # A change to a shared package (contracts/observability) can break the
     # API even though apps/api itself didn't change.
     if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.root == 'true'
@@ -233,7 +265,7 @@ jobs:
   test-web:
     name: test-web
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, changes]
+    needs: [changes]
     if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.site == 'true' || needs.changes.outputs.root == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -248,11 +280,23 @@ jobs:
   build-web:
     name: build-web
     runs-on: ubuntu-latest
-    # No extra `if`: GitHub skips this automatically whenever test-web is
-    # skipped, so build-web and e2e inherit test-web's scoping — which now
-    # includes changes under tools/ and .github/workflows/, so editing the
-    # pipeline actually runs the pipeline.
-    needs: [test-web]
+    # This is the one edge whose removal actually shortens the workflow.
+    # `expo export` is 87s and it is the second half of the critical path;
+    # it used to wait for test-web (47s) which waited for lint and typecheck
+    # (52s) which waited for preflight (24s) — ~120s of queueing in front of
+    # a build that depends on none of it. Hanging it off `changes` instead
+    # starts it at t≈9s, and e2e — the expensive job — begins ~2 minutes
+    # earlier.
+    #
+    # The condition is test-web's, copied rather than inherited. That is what
+    # the old `needs: [test-web]` was really buying: the scoping, via the skip
+    # cascade. `tools` is in it, so editing this file still runs the pipeline
+    # this file describes; `site` is in it, so a change to privacy.html still
+    # reaches the specs that drive it (#56). Widen one of these and you must
+    # widen the other — and if you forget, ci-complete says so rather than
+    # reporting green.
+    needs: [changes]
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.site == 'true' || needs.changes.outputs.root == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -273,16 +317,27 @@ jobs:
     runs-on: ubuntu-latest
     # Needs the bundle `build-web` uploads (the Worker serves it through its
     # [assets] binding), and there is no point paying for a browser run when
-    # the API's own unit tests are red.
+    # the unit tests are already red.
     #
     # The explicit `if` is load-bearing: GitHub skips a job when *any* of its
     # `needs` is skipped, and `test-api` only runs when `apps/api/**` changed.
     # Without this, every web-only change skipped the end-to-end suite —
     # precisely the change it exists to check. It ran on nothing for its first
-    # several commits. So: require `build-web` to have passed, and allow
-    # `test-api` to be either passed or skipped, but never failed.
-    needs: [build-web, test-api]
-    if: ${{ !cancelled() && needs.build-web.result == 'success' && needs.test-api.result != 'failure' }}
+    # several commits. So: require `build-web` to have passed, and allow the
+    # unit-test jobs to be either passed or skipped, but never failed.
+    #
+    # `test-web` is named here explicitly now. It used to reach e2e for free,
+    # because build-web `needs: [test-web]` and a failed need skips the job.
+    # build-web hangs off `changes` instead (see there for why), so that free
+    # ride is gone and the guard has to be written down. It costs nothing on
+    # the clock: test-web finishes around t≈56s and build-web around t≈159s,
+    # so e2e was never going to start any earlier.
+    #
+    # Deliberately *not* guarded on lint or typecheck. A lint error does not
+    # make an end-to-end result untrue, and the whole point of the fan shape
+    # above is that one run tells you everything that is wrong at once.
+    needs: [build-web, test-api, test-web]
+    if: ${{ !cancelled() && needs.build-web.result == 'success' && needs.test-api.result != 'failure' && needs.test-web.result != 'failure' }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
