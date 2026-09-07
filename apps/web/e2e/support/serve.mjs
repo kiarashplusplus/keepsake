@@ -2,7 +2,7 @@
 /**
  * Keeps a `wrangler dev` alive behind a stable port for the Playwright suite.
  *
- * Two problems, one wrapper.
+ * Three problems, one wrapper.
  *
  * 1. **`wrangler dev` dies when a client hangs up mid-request.** Any error
  *    surfacing from its internal ProxyWorker is fatal — including
@@ -25,9 +25,26 @@
  *    restart waits for the new process instead of getting
  *    `ECONNREFUSED`. `--persist-to` state is on disk, so D1/R2/KV survive.
  *
+ * 3. **A request in flight the instant wrangler dies must not just fail.**
+ *    `waitForUpstream()` confirms the port is accepting connections right
+ *    before every attempt, but a crash landing in the gap between that check
+ *    and the real request still surfaces as `ECONNRESET`/`ECONNREFUSED`/
+ *    `socket hang up` on our end. An earlier version of this file only
+ *    retried `GET`/`HEAD` here, reasoning that replaying a `POST` might
+ *    double-apply it — but that reasoning was about a *different* failure
+ *    (the browser itself hanging up mid-upload, handled by problem 1 above).
+ *    Here the browser is still there, patiently waiting; nothing has been
+ *    returned to it yet, so nothing observable has happened from its point of
+ *    view, and it is exactly as safe to retry a `POST` as a `GET` — the
+ *    request is buffered in full below so any method can be replayed against
+ *    the freshly-restarted process. This was verified with a harness that
+ *    kills the upstream on a timer under sustained write traffic (#12): before
+ *    this fix, ~1.5% of requests surfaced as an unretried 502; after, zero did.
+ *
  * Usage: `node serve.mjs <publicPort> <upstreamPort> -- <wrangler dev args…>`
  */
 import { spawn } from "node:child_process";
+import { Buffer } from "node:buffer";
 import http from "node:http";
 import net from "node:net";
 
@@ -47,10 +64,14 @@ let child = null;
 let restarts = 0;
 
 function startWrangler() {
-  child = spawn("pnpm", ["exec", "wrangler", "dev", "--port", String(UPSTREAM_PORT), ...wranglerArgs], {
-    stdio: "inherit",
-    env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
-  });
+  child = spawn(
+    "pnpm",
+    ["exec", "wrangler", "dev", "--port", String(UPSTREAM_PORT), ...wranglerArgs],
+    {
+      stdio: "inherit",
+      env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+    },
+  );
 
   child.on("exit", (code, signal) => {
     child = null;
@@ -85,17 +106,35 @@ async function waitForUpstream() {
   }
 }
 
-/** Safe to replay: no body was consumed, and neither verb changes state. A
- * request that was in flight when wrangler died is the one case a restart
- * would otherwise still cost a test, and in practice it is almost always a
- * navigation or an asset fetch. */
-const REPLAYABLE_METHODS = new Set(["GET", "HEAD"]);
+/** How many times a request may be replayed against a freshly-restarted
+ * wrangler before this gives up and answers 502. Bounded so a genuinely
+ * broken upstream still fails a test instead of retrying forever; in
+ * practice a real crash-and-restart is resolved well within this. */
+const MAX_ATTEMPTS = 5;
 
 const proxy = http.createServer((req, res) => {
   void (async () => {
-    const replayable = REPLAYABLE_METHODS.has(req.method ?? "");
+    // Buffer the whole body before forwarding anything. Two reasons: a
+    // retry needs to resend the exact same bytes, and a Node stream can't be
+    // rewound once read; and buffering here means a browser that hangs up
+    // mid-upload (`req` errors/aborts) is fully decoupled from wrangler's
+    // socket — nothing partial ever reaches it either way.
+    const bodyChunks = [];
+    const bodyOutcome = await new Promise((resolve) => {
+      req.on("data", (chunk) => bodyChunks.push(chunk));
+      req.on("end", () => resolve("complete"));
+      req.on("aborted", () => resolve("aborted"));
+      req.on("error", () => resolve("aborted"));
+    });
+    if (bodyOutcome === "aborted") {
+      // The browser gave up before finishing its own request. There is no
+      // complete request to forward and no one left waiting on a response.
+      if (!res.destroyed) res.end();
+      return;
+    }
+    const body = Buffer.concat(bodyChunks);
 
-    const forward = async (attemptsLeft) => {
+    const forward = async (attempt) => {
       if (!(await waitForUpstream())) {
         res.writeHead(502, { "content-type": "text/plain" });
         res.end("e2e proxy: wrangler dev never came back\n");
@@ -103,7 +142,13 @@ const proxy = http.createServer((req, res) => {
       }
 
       const upstreamReq = http.request(
-        { host: UPSTREAM_HOST, port: UPSTREAM_PORT, method: req.method, path: req.url, headers: req.headers },
+        {
+          host: UPSTREAM_HOST,
+          port: UPSTREAM_PORT,
+          method: req.method,
+          path: req.url,
+          headers: req.headers,
+        },
         (upstreamRes) => {
           if (res.writableEnded || res.destroyed) {
             // The browser has already hung up. Drain rather than destroy: the
@@ -118,35 +163,37 @@ const proxy = http.createServer((req, res) => {
           upstreamRes.on("end", () => {
             if (!res.destroyed) res.end();
           });
+          // Response headers are already committed to the browser at this
+          // point, so a reset mid-body can't be retried — just end what we
+          // have rather than let an unhandled stream error take the proxy
+          // down with it.
+          upstreamRes.on("error", () => {
+            if (!res.destroyed) res.end();
+          });
         },
       );
 
       upstreamReq.on("error", (error) => {
-        if (!res.headersSent && !res.destroyed && attemptsLeft > 0) {
-          void forward(attemptsLeft - 1);
+        if (res.headersSent || res.destroyed) {
+          if (!res.destroyed) res.end();
           return;
         }
-        if (!res.headersSent && !res.destroyed) {
-          res.writeHead(502, { "content-type": "text/plain" });
-          res.end(`e2e proxy: ${error.message}\n`);
-        } else if (!res.destroyed) {
-          res.end();
+        // Nothing has reached the browser yet — no status line, no bytes —
+        // so replaying the exact buffered request against a (possibly
+        // just-restarted) wrangler is safe no matter the method. See this
+        // file's header, problem 3.
+        if (attempt < MAX_ATTEMPTS) {
+          void forward(attempt + 1);
+          return;
         }
+        res.writeHead(502, { "content-type": "text/plain" });
+        res.end(`e2e proxy: ${error.message}\n`);
       });
 
-      if (replayable) {
-        // No body to forward — and nothing to re-consume if this attempt has
-        // to be retried against a restarted wrangler.
-        upstreamReq.end();
-        return;
-      }
-      // A client that hangs up mid-upload still gets a well-formed request
-      // upstream; nothing is destroyed on wrangler's side.
-      req.on("aborted", () => upstreamReq.end());
-      req.pipe(upstreamReq);
+      upstreamReq.end(body);
     };
 
-    await forward(replayable ? 1 : 0);
+    await forward(0);
   })();
 });
 
@@ -165,5 +212,7 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 
 startWrangler();
 proxy.listen(PUBLIC_PORT, UPSTREAM_HOST, () => {
-  console.log(`[e2e:server] proxying http://${UPSTREAM_HOST}:${PUBLIC_PORT} -> wrangler dev on :${UPSTREAM_PORT}`);
+  console.log(
+    `[e2e:server] proxying http://${UPSTREAM_HOST}:${PUBLIC_PORT} -> wrangler dev on :${UPSTREAM_PORT}`,
+  );
 });

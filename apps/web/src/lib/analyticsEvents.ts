@@ -13,6 +13,7 @@ export const AnalyticsEvents = {
   Chosen: "chosen",
   RecoverRequested: "recover_requested",
   Recovered: "recovered",
+  RequestWithdrawn: "request_withdrawn",
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvents)[keyof typeof AnalyticsEvents];

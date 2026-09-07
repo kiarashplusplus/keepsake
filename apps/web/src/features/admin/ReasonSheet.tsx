@@ -4,6 +4,11 @@
  * subset of `MODERATION_REASON_CODES`) for Reject. A single component
  * rather than three near-identical ones, discriminated on `mode` so each
  * caller's prop shape only ever has to supply what that mode actually needs.
+ *
+ * `mode: "confirm"` is the fourth shape, added for bulk actions
+ * (`app/admin.tsx`'s `handleBulkConfirm`): no input, just a yes/no on a
+ * message that names exactly how many rows are about to move — the count a
+ * destructive bulk action has to state before it fires (issue #11).
  */
 import * as React from "react";
 import { View } from "react-native";
@@ -25,7 +30,12 @@ type BaseProps = {
 
 export type ReasonSheetProps =
   | (BaseProps & { mode: "text"; onConfirm: (reason: string | undefined) => void })
-  | (BaseProps & { mode: "enum"; options: readonly { value: string; label: string }[]; onConfirm: (reason: string) => void });
+  | (BaseProps & {
+      mode: "enum";
+      options: readonly { value: string; label: string }[];
+      onConfirm: (reason: string) => void;
+    })
+  | (BaseProps & { mode: "confirm"; message: string; onConfirm: () => void });
 
 export function ReasonSheet(props: ReasonSheetProps): React.ReactElement {
   const [text, setText] = React.useState("");
@@ -52,20 +62,42 @@ export function ReasonSheet(props: ReasonSheetProps): React.ReactElement {
       props.onConfirm(text.trim() === "" ? undefined : text.trim());
       return;
     }
+    if (props.mode === "confirm") {
+      props.onConfirm();
+      return;
+    }
     if (selected !== null) props.onConfirm(selected);
   }
 
-  const canConfirm = props.mode === "text" || selected !== null;
+  const canConfirm = props.mode === "text" || props.mode === "confirm" || selected !== null;
 
   return (
     <Sheet visible={props.visible} onClose={props.onClose} title={props.title}>
       <View style={{ gap: space.lg }}>
         {props.mode === "text" ? (
-          <TextArea label="Reason (optional)" value={text} onChangeText={setText} maxLength={500} minHeight={80} />
+          <TextArea
+            label="Reason (optional)"
+            value={text}
+            onChangeText={setText}
+            maxLength={500}
+            minHeight={80}
+          />
+        ) : props.mode === "confirm" ? (
+          <Text variant="body" color="inkSoft">
+            {props.message}
+          </Text>
         ) : (
-          <View accessibilityRole="radiogroup" style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+          <View
+            accessibilityRole="radiogroup"
+            style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}
+          >
             {props.options.map((option) => (
-              <Chip key={option.value} label={option.label} selected={selected === option.value} onPress={() => setSelected(option.value)} />
+              <Chip
+                key={option.value}
+                label={option.label}
+                selected={selected === option.value}
+                onPress={() => setSelected(option.value)}
+              />
             ))}
           </View>
         )}
@@ -75,7 +107,12 @@ export function ReasonSheet(props: ReasonSheetProps): React.ReactElement {
           </Text>
         ) : null}
         <View style={{ flexDirection: "row", gap: space.md }}>
-          <Button label={props.confirmLabel} loading={props.busy} disabled={props.busy || !canConfirm} onPress={handleConfirm} />
+          <Button
+            label={props.confirmLabel}
+            loading={props.busy}
+            disabled={props.busy || !canConfirm}
+            onPress={handleConfirm}
+          />
           <Button label="Cancel" variant="link" arrow={false} onPress={props.onClose} />
         </View>
       </View>

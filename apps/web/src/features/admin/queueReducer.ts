@@ -6,7 +6,11 @@
  * `src/lib/masonry.ts`'s column assignment is — same input always produces
  * the same output.
  */
-import { ADMIN_QUEUE_STATUSES, type AdminQueueItem, type AdminQueueStatus } from "@keepsake/contracts/admin";
+import {
+  ADMIN_QUEUE_STATUSES,
+  type AdminQueueItem,
+  type AdminQueueStatus,
+} from "@keepsake/contracts/admin";
 import type { FeedPage } from "@keepsake/contracts/feed";
 
 export type QueueTabState = {
@@ -26,20 +30,37 @@ export function initialTabState(): QueueTabState {
 }
 
 export function initialQueueState(): QueueState {
-  return Object.fromEntries(ADMIN_QUEUE_STATUSES.map((status) => [status, initialTabState()])) as QueueState;
+  return Object.fromEntries(
+    ADMIN_QUEUE_STATUSES.map((status) => [status, initialTabState()]),
+  ) as QueueState;
 }
 
 export type QueueAction =
   | { type: "load_start"; status: AdminQueueStatus }
-  | { type: "load_success"; status: AdminQueueStatus; page: FeedPage<AdminQueueItem>; append: boolean }
+  | {
+      type: "load_success";
+      status: AdminQueueStatus;
+      page: FeedPage<AdminQueueItem>;
+      append: boolean;
+    }
   | { type: "load_error"; status: AdminQueueStatus; error: string }
   /** Optimistic removal, e.g. right after Approve/Hide/Reject is sent —
    * called before the request resolves so the queue feels instant. */
   | { type: "remove"; status: AdminQueueStatus; id: string }
+  /** The bulk-action equivalent of `remove`: one state update instead of one
+   * per selected item, and — unlike single-item actions — a bulk action
+   * already waited for every call to settle before this fires, so there is
+   * no optimistic-then-reinsert dance to support (see `app/admin.tsx`'s
+   * bulk handlers). */
+  | { type: "remove_many"; status: AdminQueueStatus; ids: string[] }
   /** Puts an item back at a specific index — the undo half of `remove`. */
   | { type: "reinsert"; status: AdminQueueStatus; item: AdminQueueItem; index: number };
 
-function updateTab(state: QueueState, status: AdminQueueStatus, patch: Partial<QueueTabState>): QueueState {
+function updateTab(
+  state: QueueState,
+  status: AdminQueueStatus,
+  patch: Partial<QueueTabState>,
+): QueueState {
   return { ...state, [status]: { ...state[status], ...patch } };
 }
 
@@ -60,12 +81,23 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
     }
 
     case "load_error":
-      return updateTab(state, action.status, { loading: false, error: action.error, loadedOnce: true });
+      return updateTab(state, action.status, {
+        loading: false,
+        error: action.error,
+        loadedOnce: true,
+      });
 
     case "remove":
       return updateTab(state, action.status, {
         items: state[action.status].items.filter((item) => item.id !== action.id),
       });
+
+    case "remove_many": {
+      const ids = new Set(action.ids);
+      return updateTab(state, action.status, {
+        items: state[action.status].items.filter((item) => !ids.has(item.id)),
+      });
+    }
 
     case "reinsert": {
       const items = state[action.status].items.slice();
