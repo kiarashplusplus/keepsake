@@ -36,7 +36,7 @@ import { ADMIN_TOKEN, freshClientIp, ownerHeaders, OWNER_TOKEN_STORAGE_KEY } fro
 import { BASE_URL } from "./support/constants";
 import { seedConsent } from "./support/consent";
 import { seedVisited } from "./support/visited";
-import { makePng } from "./support/png";
+import { DEMO_PHOTOS, readDemoPhoto } from "./support/demoPhotos";
 import {
   DEMO_HIDDEN_LISTING,
   DEMO_LISTINGS,
@@ -194,10 +194,15 @@ test.describe("ux baseline", () => {
     const fileChooserPromise = page.waitForEvent("filechooser");
     await onScreen(page, "Add photos").click();
     const fileChooser = await fileChooserPromise;
+    // A real photograph, handed to the real picker: the browser decodes it,
+    // checks the edge against `MIN_SOURCE_EDGE_PX` and resizes it exactly as
+    // it would a giver's, so `give-1-photos-filled` and the review card show
+    // what a giver actually sees rather than a gradient. No dimensions or
+    // blurhash here — unlike `api.ts`, this path computes its own.
     await fileChooser.setFiles({
-      name: "keepsake.png",
-      mimeType: "image/png",
-      buffer: makePng(640, 800),
+      name: "keepsake.jpg",
+      mimeType: "image/jpeg",
+      buffer: readDemoPhoto(DEMO_PHOTOS.butterdish),
     });
     await expect(page.getByText("Cover", { exact: true })).toBeVisible({ timeout: 30_000 });
     await shot(page, testInfo, "give-1-photos-filled");

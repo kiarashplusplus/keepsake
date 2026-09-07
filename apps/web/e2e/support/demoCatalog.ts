@@ -25,6 +25,7 @@
  */
 import type { APIRequestContext } from "@playwright/test";
 import { createApprovedListing, hideListingAsAdmin, ownerHeaders, sendRequest } from "./api";
+import { DEMO_PHOTOS, type DemoPhoto } from "./demoPhotos";
 
 /** `OwnerTokenSchema` wants `ks_` + exactly 43 base64url characters; the
  * padding keeps that true without anyone having to count by hand. */
@@ -33,6 +34,10 @@ export const DEMO_OWNER_TOKEN = `ks_${DEMO_OWNER_SUFFIX}`;
 
 export interface DemoListing {
   key: string;
+  /** The photograph this keepsake is seeded with. Fixed like everything else
+   * here: a card whose image changed between runs would make the same feed
+   * unrecognisable from one capture to the next. */
+  photo: DemoPhoto;
   title: string;
   story: string;
   category: string;
@@ -52,6 +57,7 @@ export interface DemoListing {
 export const DEMO_LISTINGS: DemoListing[] = [
   {
     key: "kettle",
+    photo: DEMO_PHOTOS.kettle,
     title: "Copper kettle, 1954",
     story:
       "My grandmother boiled water in this every morning for fifty-one years, first in Somerville and then in the little kitchen she moved to after my grandfather died. The whistle is still loud enough to hear from the porch. It has a dent in one side from the day my brother knocked it off the stove, and she never once considered replacing it.",
@@ -60,6 +66,7 @@ export const DEMO_LISTINGS: DemoListing[] = [
   },
   {
     key: "brooch",
+    photo: DEMO_PHOTOS.brooch,
     title: "Enamel swallow brooch",
     story:
       "My mother wore this on the lapel of a grey winter coat every day of the sixteen years I lived at home. I have no coat it suits, and it should be on someone's shoulder rather than in a drawer of mine.",
@@ -68,6 +75,7 @@ export const DEMO_LISTINGS: DemoListing[] = [
   },
   {
     key: "letters",
+    photo: DEMO_PHOTOS.letters,
     title: "A shoebox of postcards from the 1970s",
     story:
       "Two hundred or so, most of them to the same address in Worcester, most of them from people telling my aunt the weather was better where they were. The handwriting alone is worth an afternoon. I kept four and would like the rest to go to someone who reads them.",
@@ -76,6 +84,7 @@ export const DEMO_LISTINGS: DemoListing[] = [
   },
   {
     key: "plane",
+    photo: DEMO_PHOTOS.plane,
     title: "Stanley block plane",
     story:
       "Sharpened so many times the blade is half the length it started at. My father used it to hang every door in the house I grew up in. It wants a workbench, not a shelf.",
@@ -84,6 +93,7 @@ export const DEMO_LISTINGS: DemoListing[] = [
   },
   {
     key: "records",
+    photo: DEMO_PHOTOS.records,
     title: "Twelve jazz records",
     story:
       "Bought one at a time between 1961 and 1968, played until three of the sleeves gave out. I have nothing left to play them on and they deserve better than being sold by weight.",
@@ -92,6 +102,7 @@ export const DEMO_LISTINGS: DemoListing[] = [
   },
   {
     key: "quilt",
+    photo: DEMO_PHOTOS.quilt,
     title: "Hand-stitched quilt",
     story:
       "Made from my grandfather's shirts the winter after he retired, which is to say it is made mostly of plaid. Big enough for a double bed. Warm in a way nothing bought is.",
@@ -106,6 +117,10 @@ export const DEMO_LISTINGS: DemoListing[] = [
  * `DEMO_LISTINGS` and seeded separately. */
 export const DEMO_HIDDEN_LISTING: DemoListing = {
   key: "hidden",
+  // Reuses the give walkthrough's photograph. The two never share a screen —
+  // this one is admin-only and that one is deleted by the test that posts it —
+  // and a dinner service is near enough a covered glass dish to read right.
+  photo: DEMO_PHOTOS.butterdish,
   title: "Boxed dinner service (reported)",
   story:
     "Seeded by the UX baseline capture so the admin queue's Hidden tab has something in it. Hidden through the admin API, not by three reporters.",
@@ -186,6 +201,7 @@ export async function ensureDemoCatalog(request: APIRequestContext): Promise<Dem
         story: listing.story,
         category: listing.category,
         postalCode: listing.postalCode,
+        photo: listing.photo,
         ownerToken: DEMO_OWNER_TOKEN,
       });
       ids[listing.key] = created.id;
