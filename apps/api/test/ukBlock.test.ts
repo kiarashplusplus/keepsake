@@ -1,5 +1,6 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { UK_BLOCKED_COUNTRIES } from "../src/middleware/ukBlock";
 
 /**
  * `src/middleware/ukBlock.ts` / docs/runbooks/uk-block.md.
@@ -60,5 +61,53 @@ describe("UK geo-block", () => {
   it("does not block /health, so an uptime monitor never trips on its own location", async () => {
     const res = await fetchAs("/health", "GB");
     expect(res.status).not.toBe(451);
+  });
+});
+
+describe("OSA re-entry gate (issue #30)", () => {
+  // Pins the actual behaviour, not just the constant: a test that only
+  // asserts UK_BLOCKED_COUNTRIES' contents can go green while the
+  // enforcement logic quietly stops using it. This one drives a real
+  // request through the middleware for every required code and fails with
+  // an actionable message if any of them stops being refused — whether
+  // because the code was removed from the list or because the list stopped
+  // being enforced.
+  const REQUIRED = ["GB", "JE", "GG", "IM"] as const;
+
+  it("lists everything it must block", () => {
+    const missing = REQUIRED.filter(
+      (code) => !(UK_BLOCKED_COUNTRIES as readonly string[]).includes(code),
+    );
+
+    if (missing.length > 0) {
+      throw new Error(
+        `${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} missing from ` +
+          `UK_BLOCKED_COUNTRIES in apps/api/src/middleware/ukBlock.ts. Removing a code from ` +
+          `this list re-opens Keepsake to that jurisdiction's visitors, which the UK Online ` +
+          `Safety Act treats as offering a regulated service there — the illegal-content risk ` +
+          `assessment, children's access assessment (already overdue), complaints procedure, ` +
+          `record-keeping, and Article 27 representative question all need to actually be ` +
+          `resolved first. Work through docs/runbooks/uk-reentry-checklist.md, then update this ` +
+          `test (and the matching gate in packages/contracts/test/geo.test.ts) together with the ` +
+          `code change. See issue #30 and issue #34 (Q1, Q6) on kiarashplusplus/keepsake.`,
+      );
+    }
+  });
+
+  it("actually refuses a request from every required jurisdiction, not just lists it", async () => {
+    for (const country of REQUIRED) {
+      const res = await fetchAs("/api/feed", country);
+      if (res.status !== 451) {
+        throw new Error(
+          `A request with cf.country="${country}" got HTTP ${res.status}, not 451 — the UK ` +
+            `geo-block no longer actually refuses this jurisdiction, even though ` +
+            `docs/runbooks/uk-block.md and issue #30 require it to until the Online Safety Act ` +
+            `obligations (risk assessment, children's access assessment, complaints procedure, ` +
+            `record-keeping, Article 27 representative) are actually done. Work through ` +
+            `docs/runbooks/uk-reentry-checklist.md before weakening this behaviour, then update ` +
+            `this test together with the code change.`,
+        );
+      }
+    }
   });
 });

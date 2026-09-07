@@ -34,6 +34,37 @@ describe("COUNTRIES (UK geo-block, docs/runbooks/uk-block.md)", () => {
   });
 });
 
+describe("OSA re-entry gate (issue #30)", () => {
+  // This is deliberately not folded into the block above: that block checks
+  // today's contents of COUNTRIES for whoever's reading the test file. This
+  // one exists to fail LOUDLY, with an actionable message, the moment
+  // someone re-adds any of these codes — not just report a diff. If this
+  // test is red, that is the system working as designed; read the message,
+  // don't delete the test.
+  const UK_AND_CROWN_DEPENDENCIES = ["GB", "JE", "GG", "IM"] as const;
+
+  it("does not let GB/JE/GG/IM back into COUNTRIES without the OSA re-entry work", () => {
+    const reintroduced = UK_AND_CROWN_DEPENDENCIES.filter((code) =>
+      (COUNTRIES as readonly string[]).includes(code),
+    );
+
+    if (reintroduced.length > 0) {
+      throw new Error(
+        `${reintroduced.join(", ")} ${reintroduced.length === 1 ? "was" : "were"} added to ` +
+          `COUNTRIES, which re-opens Keepsake to UK/Crown Dependency users. Before shipping ` +
+          `that, the UK Online Safety Act's illegal-content risk assessment, children's access ` +
+          `assessment (already overdue, not schedulable), documented complaints procedure, ` +
+          `written record-keeping, and the UK GDPR Article 27 representative question all need ` +
+          `to actually be resolved — none of them are optional at any service size. Work ` +
+          `through docs/runbooks/uk-reentry-checklist.md before re-adding any of these codes, ` +
+          `then update this test (and the matching gate in apps/api/test/ukBlock.test.ts) ` +
+          `together with the code change. See also issue #30 and issue #34 (Q1, Q6) on ` +
+          `kiarashplusplus/keepsake.`,
+      );
+    }
+  });
+});
+
 describe("haversineMiles", () => {
   it("Boston to Cambridge is about 3 miles", () => {
     const boston = { lat: 42.3601, lng: -71.0589 };
