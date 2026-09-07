@@ -108,6 +108,11 @@ SUGGEST_IP_DAILY_BUDGET = "30"
 # Three independent reporters is enough signal to pull a listing from public
 # view pending Kiarash's review; it is not a ban, just a hide.
 REPORT_AUTOHIDE_THRESHOLD = "3"
+# Issue #39: the minimum number of approved listings an aspect value needs
+# before `GET /api/feed/shelves` renders it as a shelf — see
+# `shelfMinItems()` in `src/env.ts` for why `3` and why it's the same in
+# every environment below, unlike the traffic-scaled budgets above.
+SHELF_MIN_ITEMS = "3"
 # 5 MiB matches the client-side resize ceiling in apps/web; this is the
 # server-side backstop in case a client is old, broken, or hostile. Read by
 # `src/routes/photos.ts` via `parseIntVar` — unlike the two vars removed
@@ -285,6 +290,7 @@ REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
 SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
+SHELF_MIN_ITEMS = "3"
 MAX_PHOTO_BYTES = "5242880"
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
@@ -415,6 +421,7 @@ REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
 SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
+SHELF_MIN_ITEMS = "3"
 MAX_PHOTO_BYTES = "5242880"
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"

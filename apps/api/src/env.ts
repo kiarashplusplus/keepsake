@@ -103,3 +103,20 @@ export function parseIntVar(name: string, value: string | undefined, fallback: n
   }
   return parsed;
 }
+
+/**
+ * Issue #39's floor: an aspect value needs at least this many approved
+ * listings before `GET /api/feed/shelves` renders it as a shelf. Same
+ * value in every environment (unlike the moderation budgets above, which
+ * scale with real traffic) — a shelf's usefulness threshold is about how
+ * many items make a group read as a deliberate collection rather than a
+ * coincidence, and that doesn't change with deploy target. Default `3`:
+ * `2` reads as an accident ("two things happen to share a word"), and the
+ * plan's own worry is a shelf that looks broken holding one item — three is
+ * the smallest count that reliably reads as "a shelf" rather than "a
+ * coincidence" once there's a real catalogue, while still being reachable
+ * at today's tiny one.
+ */
+export function shelfMinItems(env: Env): number {
+  return parseIntVar("SHELF_MIN_ITEMS", env.SHELF_MIN_ITEMS as string | undefined, 3);
+}
