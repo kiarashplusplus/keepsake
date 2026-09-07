@@ -375,6 +375,11 @@ Checked against `apps/site/public/privacy.html` as it reads today (last updated 
 
 ## Open questions for a lawyer
 
+A second research pass over these eight — what search can settle without counsel, and what it
+cannot — is in [`legal-open-questions-research.md`](legal-open-questions-research.md). Short
+version: three are moot under the UK block, four resolve well enough to act on, and question 8 is
+the one worth paying for. That document does not replace a lawyer's answer on any of them.
+
 1. Is a UK GDPR Article 27 representative actually required here, given ongoing (not occasional)
    UK-facing processing at negligible volume and no special-category data by design? What does a
    representative cost at this scale, and is there a cheaper compliant alternative?
