@@ -62,7 +62,7 @@ runs on a pull request, so an unmerged branch is also an untested one.
 
 **A passing test is not evidence. Verify the artifact.**
 
-This project has shipped six separate checks that could not fail:
+This project has shipped seven separate checks that could not fail:
 
 | What looked fine | What was actually true |
 |---|---|
@@ -72,6 +72,7 @@ This project has shipped six separate checks that could not fail:
 | End-to-end suite green | The job was gated behind a job that only ran on API changes, so it had never once executed. |
 | A rate limiter declared in every environment | It was called from nowhere. 320 parallel requests, 320 successes. |
 | `tools/preflight/preflight.test.mjs` — 55 tests whose whole job is proving each preflight check can still fail | Nothing ever ran them. `tools/*` are workspace packages, but `pnpm test`'s runner only invoked the preflight *binary* and CI's `test-packages` filtered on `./packages/*`. The tests that guard the guards had never executed once. Found while adding the 56th (#99). |
+| Three commits merged to `main`, nothing red in the Actions tab | Not a check that could not fail — a check that silently *did not run*. CI's concurrency group was one bucket for `main`, so each merge cancelled the previous merge's run; `cancelled` is neither red nor green, nothing reads it, and `deploy.yml` shipped each of those commits to preview anyway. The merged *combination* — the one thing a PR run never tests — went out untested three times (#103). |
 
 So: when you add a guard, **break the code and watch the guard fail**, then restore. Say in the
 issue comment which one you broke. When you fix something user-visible, look at it — curl the

@@ -14,9 +14,31 @@ on:
   # still works after editing these files.
   workflow_dispatch:
 
+# Cancel superseded runs for a pull request; never cancel — or queue — a run
+# for a commit that has already landed.
+#
+# The old group was `ci-${{ github.ref }}`. On a pull request that ref is
+# unique (`refs/pull/N/merge`), so it did what it was meant to. On `main`
+# every push shares `refs/heads/main`, so the group was a single bucket and
+# each merge cancelled the previous merge's run. Three consecutive `main`
+# pushes ended `cancelled` on 2026-09-07 (#103), and `deploy.yml` has no
+# `needs:` on CI and does not share this group, so every one of those commits
+# shipped to preview with no completed run against its merged state.
+#
+# `cancel-in-progress: false` alone would not have fixed it: GitHub holds at
+# most **one pending run** per group, so with three merges in a row the third
+# cancels the second while it is still queued — the same bug, one step later.
+# The only shape that always completes is a bucket of one, hence `run_id` for
+# every event that is not a pull request. `workflow_dispatch` lands there too:
+# a manual "prove the pipeline still works" run should neither cancel nor wait
+# behind a merge.
+#
+# The `cond && a || b` idiom is unsafe when the true-branch is falsy (see
+# ci-complete's CHANGED below); `github.ref` is never empty on a pull request,
+# so it is safe here.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   NODE_VERSION: 22
@@ -291,6 +313,15 @@ jobs:
   # happened three times here (see tools/ci/assert-coverage.mjs). This asserts
   # the invariant rather than trusting the gating: if a filter says an area
   # changed, the jobs covering that area must actually have run.
+  #
+  # `always()` includes cancellation, and assert-coverage.mjs already treats a
+  # cancelled need as a problem ("was cancelled, so it proved nothing"). That
+  # pairing worked: in the cancelled `main` run 34087808060 this job ran and
+  # went red (job 101635416402). What nobody saw is that the *run*'s conclusion
+  # is `cancelled`, not `failure` — GitHub reports the run by its cancelled
+  # jobs, so the one job shouting about it was invisible to anything reading
+  # conclusions. Fixed at the source above: `main` runs are no longer cancelled,
+  # so a bad one now ends `failure` where a human or a branch rule can see it.
   ci-complete:
     name: ci-complete
     runs-on: ubuntu-latest
