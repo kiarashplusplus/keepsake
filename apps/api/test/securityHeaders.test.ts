@@ -26,9 +26,11 @@ function expectSecurityHeaders(res: Response): void {
   expect(csp).not.toBeNull();
   expect(csp).toContain("default-src 'self'");
   expect(csp).toContain("frame-ancestors 'none'");
-  // The two hashes every exported page carries: the no-flash theme script
-  // (apps/web/app/+html.tsx) and Expo Router's own hydration-flag script.
-  expect(csp).toContain("'sha256-AkwQgpToGV6ZVFH02Kxg9hDSbEU98DbN9h+GJM0BMPk='");
+  // The two hashes every exported page carries: the combined pre-hydration
+  // script (apps/web/app/+html.tsx's PREHYDRATION_SCRIPT — the no-flash
+  // theme read, plus, since issue #44, the new-visitor root redirect) and
+  // Expo Router's own hydration-flag script.
+  expect(csp).toContain("'sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g='");
   expect(csp).toContain("'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8='");
   expect(csp).toContain("https://challenges.cloudflare.com");
 }
