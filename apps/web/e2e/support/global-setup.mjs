@@ -33,14 +33,17 @@
  * over one shared fixture row.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveCommitHash } from "../../scripts/resolveBuildInfo.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.resolve(HERE, "../..");
 const API_DIR = path.resolve(WEB_DIR, "../api");
+const REPO_DIR = path.resolve(WEB_DIR, "../..");
 const DIST_INDEX = path.join(WEB_DIR, "dist", "index.html");
+const DIST_VERSION = path.join(WEB_DIR, "dist", "version.json");
 
 /** Kept under `.wrangler/` so the repo's existing ignore rule already covers
  * the SQLite files, the R2 blobs, and the secrets file written below. */
@@ -68,6 +71,80 @@ function wrangler(args) {
   });
 }
 
+/** Web sources whose edits change what a screenshot looks like. `dist/` is
+ * built from these, so any one of them being newer than the export means the
+ * export no longer shows them. */
+const UX_SOURCE_DIRS = [
+  path.join(WEB_DIR, "app"),
+  path.join(WEB_DIR, "src"),
+  path.join(REPO_DIR, "packages"),
+];
+
+/** Newest mtime under `dir`, skipping the directories an export never reads.
+ * Returns 0 for a path that does not exist. */
+function newestMtime(dir) {
+  if (!existsSync(dir)) return 0;
+  let newest = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) continue;
+    const full = path.join(dir, entry.name);
+    const at = entry.isDirectory() ? newestMtime(full) : statSync(full).mtimeMs;
+    if (at > newest) newest = at;
+  }
+  return newest;
+}
+
+/**
+ * A UX capture photographs `apps/web/dist`, and nothing in this harness ever
+ * built it — `main()` below only checks that *an* export exists. So a capture
+ * would happily rewrite all 74 committed frames from whatever bundle happened
+ * to be sitting there: another branch's, or one built before the change under
+ * review. That failure is silent and it inverts the point of the baseline —
+ * you change a screen, run the capture, and the frames come back identical.
+ *
+ * (Not hypothetical. Taking this branch over, a capture run against a `dist`
+ * built eleven hours earlier on a different branch photographed an `/admin`
+ * predating `aria-label="Queue status"`, and the spec failed on a screen that
+ * is correct in the source it was supposedly testing.)
+ *
+ * `pnpm e2e:ux` now exports first, so the ordinary path cannot go stale. This
+ * is the backstop for a direct `UX_SHOTS=1 playwright test`, and it checks the
+ * two ways an export drifts: built from another commit, or built before an
+ * edit that is still only in the working tree. The commit comparison reuses
+ * `resolveCommitHash()` — the same function that wrote the value — which is
+ * the skew guard `scripts/write-version-json.mjs`'s header anticipated.
+ */
+function assertExportIsCurrent() {
+  const rebuild = 'run "pnpm --filter @keepsake/web e2e:ux", which exports first';
+  if (!existsSync(DIST_VERSION)) {
+    console.error(`[e2e:setup] ${DIST_VERSION} is missing, so the export's commit can't be checked — ${rebuild}.`);
+    process.exit(1);
+  }
+
+  const built = JSON.parse(readFileSync(DIST_VERSION, "utf8"));
+  const head = resolveCommitHash();
+  if (built.commit !== head) {
+    console.error(
+      `[e2e:setup] refusing to capture: apps/web/dist was built from ${built.commit}, HEAD is ${head}.\n` +
+        `            The frames would show that commit's screens, not this one's — ${rebuild}.`,
+    );
+    process.exit(1);
+  }
+
+  const builtAt = Date.parse(built.builtAt);
+  const edited = Math.max(...UX_SOURCE_DIRS.map(newestMtime));
+  if (edited > builtAt) {
+    console.error(
+      `[e2e:setup] refusing to capture: a web source has changed since apps/web/dist was built ` +
+        `(${new Date(edited).toISOString()} > ${built.builtAt}).\n` +
+        `            The frames would not show that edit — ${rebuild}.`,
+    );
+    process.exit(1);
+  }
+
+  console.log(`[e2e:setup] export is current: ${built.commit}, built ${built.builtAt}`);
+}
+
 function main() {
   if (!existsSync(DIST_INDEX)) {
     console.error(
@@ -77,6 +154,11 @@ function main() {
     );
     process.exit(1);
   }
+
+  // Only for a capture. An ordinary `pnpm e2e` asserts behaviour, which a
+  // slightly-behind bundle still exercises honestly; only the frames commit a
+  // stale bundle to the repo as if it were the current design.
+  if (process.env.UX_SHOTS) assertExportIsCurrent();
 
   rmSync(STATE_DIR, { recursive: true, force: true });
   mkdirSync(STATE_DIR, { recursive: true });

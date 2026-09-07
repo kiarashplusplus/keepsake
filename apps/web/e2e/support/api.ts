@@ -12,6 +12,7 @@
  */
 import { expect, type APIRequestContext } from "@playwright/test";
 import { makePng } from "./png";
+import { readDemoPhoto, readDemoThumb, type DemoPhoto } from "./demoPhotos";
 
 /** Matches `OwnerTokenSchema`: `ks_` + 43 unpadded base64url characters. */
 const OWNER_TOKEN_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -88,6 +89,11 @@ export interface CreateListingOptions {
    * way, but omitting it here is what a give flow with a suggestion the
    * giver never applied actually sends. */
   aspects?: Array<{ name: string; value: string }>;
+  /** A real photograph from `e2e/fixtures/photos`, for the UX baseline. Left
+   * unset everywhere else on purpose: the functional specs want `png.ts`'s
+   * generated gradient, which asserts the same pipeline without reading a
+   * megabyte off disk per listing. */
+  photo?: DemoPhoto;
 }
 
 /**
@@ -108,15 +114,29 @@ export async function createApprovedListing(
     options.story ??
     "A small thing that sat on my grandmother's shelf for thirty years, and I would like it to sit on someone else's now.";
 
+  // A real JPEG when the caller supplied one (`imageSniff.ts` allows jpeg,
+  // png and webp, so both paths sniff clean), otherwise the generated PNG.
+  // The dimensions and blurhash have to describe whichever image is actually
+  // sent: the API stores them rather than decoding, `clampCardAspectRatio()`
+  // lays the card out from the ratio, and the blurhash is what shows while
+  // the photo decodes.
   const uploadResponse = await request.put("/api/photos", {
     headers,
-    multipart: {
-      full: { name: "full.png", mimeType: "image/png", buffer: makePng(400, 500, 1) },
-      thumb: { name: "thumb.png", mimeType: "image/png", buffer: makePng(160, 200, 2) },
-      width: "400",
-      height: "500",
-      blurhash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj",
-    },
+    multipart: options.photo
+      ? {
+          full: { name: `${options.photo.key}.jpg`, mimeType: "image/jpeg", buffer: readDemoPhoto(options.photo) },
+          thumb: { name: `${options.photo.key}.thumb.jpg`, mimeType: "image/jpeg", buffer: readDemoThumb(options.photo) },
+          width: String(options.photo.width),
+          height: String(options.photo.height),
+          blurhash: options.photo.blurhash,
+        }
+      : {
+          full: { name: "full.png", mimeType: "image/png", buffer: makePng(400, 500, 1) },
+          thumb: { name: "thumb.png", mimeType: "image/png", buffer: makePng(160, 200, 2) },
+          width: "400",
+          height: "500",
+          blurhash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj",
+        },
   });
   const photo = await readData<{ id: string }>(uploadResponse);
 

@@ -4,12 +4,21 @@
  *
  * Three problems, one wrapper.
  *
- * 1. **`wrangler dev` dies when a client hangs up mid-request.** Any error
- *    surfacing from its internal ProxyWorker is fatal — including
- *    `Error inside ProxyWorker: Network connection lost` (seen as a bare
- *    `✘ [ERROR]` with an empty message; `castErrorCause` ->
- *    `ProxyController.emitErrorEvent` in the wrangler debug log). The app
- *    aborts in-flight fetches on purpose in several places
+ * 1. **A connection that dies while `wrangler dev` is reading a request body
+ *    kills `wrangler dev`.** Not the request — the whole process, exit code 1.
+ *    `ProxyWorker.js` posts its fetch failure to the ProxyController as a
+ *    *serialized* `{name, message, stack}` object; `castErrorCause` sees a
+ *    non-`Error` and wraps it in `new Error()` — no message — and wrangler's
+ *    top-level `handleError` prints `cause.message` and drops `reason`. So the
+ *    entire user-visible diagnostic is a bare `✘ [ERROR]` with nothing after
+ *    it. That emptiness is not a mystery; it is the signature of this path.
+ *    Reproduced against wrangler 4.129 by sending one `PUT /photos` with
+ *    `Content-Length: 5000000`, writing 64 KB and resetting the socket: dead
+ *    first try, and the debug log of an *idle* instance names it in full —
+ *    `Error in ProxyController: Error inside ProxyWorker … at castErrorCause …
+ *    cause: { message: 'Network connection lost.' }`.
+ *
+ *    The app aborts in-flight fetches on purpose in several places
  *    (`app/give/details.tsx`'s postcode lookup on every keystroke,
  *    `useFeed` when the query changes, `app/item/[id].tsx` on unmount), and a
  *    browser closing a socket that way took the whole dev server down about
@@ -18,19 +27,47 @@
  *    So this process owns the public port and forwards to wrangler on an
  *    internal one. When the browser hangs up, only *this* proxy sees it: the
  *    upstream request is left to finish and its body drained, so wrangler
- *    never observes a dropped connection at all.
+ *    never observes a dropped connection at all. Measured: 20 truncated
+ *    uploads and 1,200 reset-mid-response requests through this proxy killed
+ *    wrangler zero times; the same 20 uploads sent straight at it killed it on
+ *    the first one.
  *
- * 2. **If wrangler exits anyway, restart it without failing the run.** The
+ * 2. **If wrangler exits anyway, restart it — but never silently.** The
  *    public port stays bound the whole time, and a request that arrives mid
  *    restart waits for the new process instead of getting
  *    `ECONNREFUSED`. `--persist-to` state is on disk, so D1/R2/KV survive.
  *
+ *    What is *not* known is which connection breaks. #104 recorded three
+ *    fatal exits in one 2.5-minute suite run and inferred a second, unrelated
+ *    fault, because grepping all three wrangler debug logs for the problem-1
+ *    signature found **zero** matches for `Network connection lost`,
+ *    `emitErrorEvent` or `castErrorCause`. That inference does not hold:
+ *    wrangler's `appendToDebugLogFile` is fire-and-forget behind a mutex, and
+ *    under suite-level load it silently stops keeping up. Measured both ways
+ *    against the same crash — idle instance: the full record is in the file;
+ *    under load: the file froze mid-`Runtime.consoleAPICalled` and the error
+ *    record never landed, reproducing #104's zero matches exactly. **The
+ *    wrangler debug log cannot be trusted to hold the reason for a crash that
+ *    happened under load**, so do not conclude anything from its absence.
+ *
+ *    Because of that, restarting is not enough on its own: an invisible crash
+ *    plus Playwright's `retries` is a run that reports green whether wrangler
+ *    died three times or none. So this keeps the last `RETAINED_LINES` lines
+ *    of wrangler's own output, prints them (with the debug-log path wrangler
+ *    just wrote) on every unexpected exit, and gives up rather than restarting
+ *    forever once the restart count passes `E2E_MAX_WRANGLER_RESTARTS`.
+ *
+ *    Wrangler's own two channels are therefore both dead ends — the console
+ *    message is empty by construction, the debug log is lossy under load — so
+ *    the crash report below also carries *this proxy's* view of the same
+ *    moment: every upstream socket failure, every client hang-up, and the
+ *    requests still in flight when wrangler died. That is the only record of
+ *    the crash that is not written by the process that just died.
+ *
  * 3. **A request in flight the instant wrangler dies must not just fail.**
- *    `waitForUpstream()` confirms the port is accepting connections right
- *    before every attempt, but a crash landing in the gap between that check
- *    and the real request still surfaces as `ECONNRESET`/`ECONNREFUSED`/
- *    `socket hang up` on our end. An earlier version of this file only
- *    retried `GET`/`HEAD` here, reasoning that replaying a `POST` might
+ *    A crash landing between two requests surfaces as `ECONNRESET`/
+ *    `ECONNREFUSED`/`socket hang up` on our end. An earlier version of this
+ *    file only retried `GET`/`HEAD` here, reasoning that replaying a `POST` might
  *    double-apply it — but that reasoning was about a *different* failure
  *    (the browser itself hanging up mid-upload, handled by problem 1 above).
  *    Here the browser is still there, patiently waiting; nothing has been
@@ -63,25 +100,225 @@ let stopping = false;
 let child = null;
 let restarts = 0;
 
-function startWrangler() {
-  child = spawn(
-    "pnpm",
-    ["exec", "wrangler", "dev", "--port", String(UPSTREAM_PORT), ...wranglerArgs],
-    {
-      stdio: "inherit",
-      env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
-    },
+/** How many of wrangler's own output lines to keep for the post-mortem. Big
+ * enough to cover a request or two of context before a crash, small enough
+ * that a suite-long run costs nothing to hold. */
+const RETAINED_LINES = 200;
+/** A single pathological line (a base64 body, a stack with no newlines) must
+ * not be able to grow this buffer without bound either. */
+const MAX_RETAINED_LINE_CHARS = 2_000;
+
+/**
+ * How many unexpected exits to absorb before failing the run outright.
+ *
+ * One is deliberate rather than arbitrary: #104 saw runs with one restart and
+ * runs with three, so tolerating a single blip keeps the suite usable while
+ * still refusing to let a three-crash run look like a clean one. Set
+ * `E2E_MAX_WRANGLER_RESTARTS` to raise it, or to a negative value / the word
+ * `unlimited` for the old restart-forever behaviour when you are deliberately
+ * working through a flaky local environment.
+ */
+const RESTART_LIMIT_ENV = "E2E_MAX_WRANGLER_RESTARTS";
+const DEFAULT_RESTART_LIMIT = 1;
+
+function readRestartLimit() {
+  // Statically named rather than `process.env[RESTART_LIMIT_ENV]`: eslint's
+  // expo/no-dynamic-env-var bans the computed form (bundlers inline env reads).
+  const raw = process.env.E2E_MAX_WRANGLER_RESTARTS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_RESTART_LIMIT;
+  if (raw.trim().toLowerCase() === "unlimited") return Infinity;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    console.error(
+      `[e2e:server] ignoring ${RESTART_LIMIT_ENV}=${raw} — not a number; using the default of ${DEFAULT_RESTART_LIMIT}.`,
+    );
+    return DEFAULT_RESTART_LIMIT;
+  }
+  return parsed < 0 ? Infinity : parsed;
+}
+
+const RESTART_LIMIT = readRestartLimit();
+
+/**
+ * The child command. `wrangler dev` in every real run; overridable only so the
+ * supervisor's crash handling can be tested against a process that exits on
+ * demand (`serve.test.mjs`) — there is no way to exercise "wrangler died"
+ * with real wrangler that is either fast or deterministic. A JSON array of
+ * argv, e.g. `["node", "crash.mjs"]`.
+ */
+const CHILD_COMMAND_ENV = "E2E_SERVER_CHILD_COMMAND";
+
+function childCommand() {
+  const override = process.env.E2E_SERVER_CHILD_COMMAND;
+  if (!override) {
+    return ["pnpm", ["exec", "wrangler", "dev", "--port", String(UPSTREAM_PORT), ...wranglerArgs]];
+  }
+  const argv = JSON.parse(override);
+  if (!Array.isArray(argv) || argv.length === 0 || argv.some((a) => typeof a !== "string")) {
+    throw new TypeError(`${CHILD_COMMAND_ENV} must be a JSON array of strings`);
+  }
+  return [argv[0], argv.slice(1)];
+}
+
+/**
+ * This proxy's own view of what was happening when wrangler died. Wrangler
+ * cannot supply it: its console message is empty by construction and its
+ * debug log is lossy under load (see problem 2 above). Every entry here is
+ * something only this side of the socket can see.
+ */
+const PROXY_EVENTS = 100;
+const proxyEvents = [];
+const proxyEventCounts = new Map();
+function noteProxyEvent(kind, detail) {
+  proxyEventCounts.set(kind, (proxyEventCounts.get(kind) ?? 0) + 1);
+  proxyEvents.push(`${new Date().toISOString()} ${kind} ${detail}`);
+  if (proxyEvents.length > PROXY_EVENTS) proxyEvents.shift();
+}
+
+/**
+ * Upstream requests written but not yet fully read back, by a per-request id.
+ * A fatal ProxyWorker error is always *about* a request in flight, so this is
+ * the shortlist of what triggered any given crash.
+ */
+const inFlight = new Map();
+let nextRequestId = 1;
+
+/** Last `RETAINED_LINES` lines of the child's output, as `"out"`/`"err"` tags. */
+const retained = [];
+/** The debug log wrangler announces with `🪵  Logs were written to "…"`. */
+let wranglerLogPath = null;
+const WRANGLER_LOG_RE = /Logs were written to\s+"([^"]+)"/;
+
+function retainLine(streamName, line) {
+  const trimmed = line.replace(/\r$/, "").slice(0, MAX_RETAINED_LINE_CHARS);
+  retained.push(`${streamName}| ${trimmed}`);
+  if (retained.length > RETAINED_LINES) retained.shift();
+  const match = WRANGLER_LOG_RE.exec(trimmed);
+  if (match) wranglerLogPath = match[1];
+}
+
+/**
+ * Tee one of the child's streams: every byte still goes straight through to
+ * our own stdio (live output is byte-for-byte what `stdio: "inherit"` gave),
+ * and a copy is split into lines for the ring buffer.
+ */
+function tee(source, sink, streamName) {
+  let pending = "";
+  const flush = () => {
+    if (pending === "") return;
+    retainLine(streamName, pending);
+    pending = "";
+  };
+  source.on("data", (chunk) => {
+    sink.write(chunk);
+    pending += chunk.toString("utf8");
+    let index;
+    while ((index = pending.indexOf("\n")) !== -1) {
+      retainLine(streamName, pending.slice(0, index));
+      pending = pending.slice(index + 1);
+    }
+    if (pending.length > MAX_RETAINED_LINE_CHARS) flush();
+  });
+  source.on("end", flush);
+  return flush;
+}
+
+function reportCrash(code, signal) {
+  const lines = [
+    `[e2e:server] ---- wrangler dev exited unexpectedly (code=${code} signal=${signal}) ----`,
+    `[e2e:server] last ${retained.length} line(s) of its output; "out|"/"err|" marks the stream:`,
+  ];
+  lines.push(
+    ...(retained.length > 0
+      ? retained.map((line) => `[e2e:server]   ${line}`)
+      : ["[e2e:server]   (nothing captured)"]),
   );
+  lines.push(
+    wranglerLogPath
+      ? `[e2e:server] wrangler debug log (often missing the error itself — see this file's header): ${wranglerLogPath}`
+      : "[e2e:server] wrangler printed no debug-log path before dying.",
+  );
+
+  const now = Date.now();
+  const stillOpen = [...inFlight.values()].map(
+    ({ method, url, startedAt }) => `${method} ${url} (${now - startedAt}ms ago)`,
+  );
+  lines.push(
+    `[e2e:server] ${stillOpen.length} request(s) in flight to wrangler when it died:`,
+    ...(stillOpen.length > 0
+      ? stillOpen.map((entry) => `[e2e:server]   ${entry}`)
+      : ["[e2e:server]   (none)"]),
+  );
+
+  const tally = [...proxyEventCounts.entries()].map(([kind, count]) => `${kind}=${count}`);
+  lines.push(
+    `[e2e:server] proxy-side events so far: ${tally.length > 0 ? tally.join(" ") : "(none)"}`,
+  );
+  if (proxyEvents.length > 0) {
+    lines.push(
+      `[e2e:server] last ${proxyEvents.length} proxy-side event(s):`,
+      ...proxyEvents.map((entry) => `[e2e:server]   ${entry}`),
+    );
+  }
+  console.error(lines.join("\n"));
+}
+
+/** GitHub renders `::error::` as an annotation on the run itself, so a suite
+ * that survived on retries still carries a visible mark. */
+function annotate(level, message) {
+  if (process.env.GITHUB_ACTIONS) console.error(`::${level}::${message}`);
+}
+
+function giveUp() {
+  stopping = true;
+  const message =
+    `wrangler dev died ${restarts} time(s) during the e2e run (limit ${RESTART_LIMIT}, ` +
+    `override with ${RESTART_LIMIT_ENV}). Which connection broke is in the captured ` +
+    `output above, not in wrangler's own — see issue #104 and this file's header.`;
+  console.error(`[e2e:server] FATAL: ${message}`);
+  annotate("error", `e2e: ${message}`);
+  child?.kill("SIGTERM");
+  proxy.close();
+  process.exit(1);
+}
+
+function startWrangler() {
+  const [command, args] = childCommand();
+  child = spawn(command, args, {
+    // Not `"inherit"`: the whole point is to retain what wrangler said on its
+    // way out. Both streams are teed back to ours, so live output is unchanged.
+    stdio: ["inherit", "pipe", "pipe"],
+    env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+  });
+
+  const flushOut = tee(child.stdout, process.stdout, "out");
+  const flushErr = tee(child.stderr, process.stderr, "err");
 
   child.on("exit", (code, signal) => {
     child = null;
     if (stopping) return;
     restarts += 1;
-    console.error(
-      `[e2e:server] wrangler dev exited unexpectedly (code=${code} signal=${signal}) — restart #${restarts}. ` +
-        "Requests arriving meanwhile will wait for the new process rather than fail.",
-    );
-    startWrangler();
+    // `exit` can fire while the last bytes of a crash message are still in the
+    // pipe, and those are precisely the lines this exists to keep. Give the
+    // reader a beat to drain before reporting; a restart takes seconds anyway.
+    setTimeout(() => {
+      flushOut();
+      flushErr();
+      reportCrash(code, signal);
+      if (restarts > RESTART_LIMIT) {
+        giveUp();
+        return;
+      }
+      console.error(
+        `[e2e:server] wrangler dev exited unexpectedly (code=${code} signal=${signal}) — restart #${restarts}. ` +
+          "Requests arriving meanwhile will wait for the new process rather than fail.",
+      );
+      annotate(
+        "warning",
+        `e2e: wrangler dev died and was restarted (restart #${restarts} of at most ${RESTART_LIMIT}). See issue #104.`,
+      );
+      startWrangler();
+    }, 100);
   });
 }
 
@@ -129,17 +366,35 @@ const proxy = http.createServer((req, res) => {
     if (bodyOutcome === "aborted") {
       // The browser gave up before finishing its own request. There is no
       // complete request to forward and no one left waiting on a response.
+      // Recorded because this is exactly the hang-up that is fatal one hop
+      // upstream: it must never be seen to reach wrangler.
+      noteProxyEvent("client-abort-mid-body", `${req.method} ${req.url}`);
       if (!res.destroyed) res.end();
       return;
     }
     const body = Buffer.concat(bodyChunks);
 
     const forward = async (attempt) => {
-      if (!(await waitForUpstream())) {
+      // Only the retries wait for the port. The first attempt is the happy
+      // path 99.9% of the time, and probing it cost a second TCP connect to
+      // wrangler for *every* request — pure churn against the one process
+      // this file exists to keep alive. If the upstream really is down, the
+      // first attempt fails immediately with `ECONNREFUSED` and attempt 1
+      // does the waiting, which is the same outcome one error line later.
+      if (attempt > 0 && !(await waitForUpstream())) {
+        noteProxyEvent("upstream-never-returned", `${req.method} ${req.url}`);
         res.writeHead(502, { "content-type": "text/plain" });
         res.end("e2e proxy: wrangler dev never came back\n");
         return;
       }
+
+      const requestId = nextRequestId++;
+      inFlight.set(requestId, {
+        method: req.method,
+        url: req.url,
+        startedAt: Date.now(),
+      });
+      const settle = () => inFlight.delete(requestId);
 
       const upstreamReq = http.request(
         {
@@ -153,27 +408,56 @@ const proxy = http.createServer((req, res) => {
           if (res.writableEnded || res.destroyed) {
             // The browser has already hung up. Drain rather than destroy: the
             // whole point of this proxy is that wrangler never sees the abort.
+            noteProxyEvent("client-gone-before-response", `${req.method} ${req.url}`);
+            upstreamRes.on("end", settle);
+            upstreamRes.on("error", settle);
             upstreamRes.resume();
             return;
           }
           res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+          let clientLeftMidBody = false;
           upstreamRes.on("data", (chunk) => {
-            if (!res.destroyed) res.write(chunk);
+            if (res.destroyed) {
+              if (!clientLeftMidBody) {
+                clientLeftMidBody = true;
+                noteProxyEvent("client-gone-mid-response", `${req.method} ${req.url}`);
+              }
+              return;
+            }
+            res.write(chunk);
           });
           upstreamRes.on("end", () => {
+            settle();
             if (!res.destroyed) res.end();
           });
           // Response headers are already committed to the browser at this
           // point, so a reset mid-body can't be retried — just end what we
           // have rather than let an unhandled stream error take the proxy
           // down with it.
-          upstreamRes.on("error", () => {
+          upstreamRes.on("error", (error) => {
+            settle();
+            noteProxyEvent(
+              "upstream-response-error",
+              `${req.method} ${req.url} ${error.code ?? ""} ${error.message}`,
+            );
             if (!res.destroyed) res.end();
           });
         },
       );
 
       upstreamReq.on("error", (error) => {
+        settle();
+        // The load-bearing record. This proxy losing its own socket to
+        // wrangler mid-request is indistinguishable, from wrangler's side,
+        // from the browser hang-up in problem 1 — and just as fatal. If a
+        // crash report shows one of these immediately before the exit, the
+        // leak is on this leg, and `reused` says whether a pooled keep-alive
+        // socket went stale under us.
+        noteProxyEvent(
+          "upstream-request-error",
+          `${req.method} ${req.url} attempt=${attempt} code=${error.code ?? "?"} ` +
+            `reused=${upstreamReq.reusedSocket === true} ${error.message}`,
+        );
         if (res.headersSent || res.destroyed) {
           if (!res.destroyed) res.end();
           return;
@@ -199,7 +483,10 @@ const proxy = http.createServer((req, res) => {
 
 // Nothing in this app upgrades to a WebSocket, and forwarding one would
 // reintroduce exactly the socket-teardown path this proxy exists to hide.
-proxy.on("clientError", (_error, socket) => socket.destroy());
+proxy.on("clientError", (error, socket) => {
+  noteProxyEvent("client-protocol-error", `${error.code ?? "?"} ${error.message}`);
+  socket.destroy();
+});
 
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.on(signal, () => {
@@ -212,7 +499,11 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 
 startWrangler();
 proxy.listen(PUBLIC_PORT, UPSTREAM_HOST, () => {
+  // The *bound* port, not the requested one: passing 0 asks the OS to pick,
+  // which is how serve.test.mjs drives real traffic through this proxy
+  // without racing a hard-coded port against a real e2e run.
+  const boundPort = proxy.address().port;
   console.log(
-    `[e2e:server] proxying http://${UPSTREAM_HOST}:${PUBLIC_PORT} -> wrangler dev on :${UPSTREAM_PORT}`,
+    `[e2e:server] proxying http://${UPSTREAM_HOST}:${boundPort} -> wrangler dev on :${UPSTREAM_PORT}`,
   );
 });
