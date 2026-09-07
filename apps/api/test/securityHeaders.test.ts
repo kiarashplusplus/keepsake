@@ -33,6 +33,12 @@ function expectSecurityHeaders(res: Response): void {
   expect(csp).toContain("'sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g='");
   expect(csp).toContain("'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8='");
   expect(csp).toContain("https://challenges.cloudflare.com");
+  // Issue #132: `connect-src` was absent entirely, so it fell back to
+  // `default-src 'self'` and the browser dropped the give flow's
+  // reverse-geocode calls. Asserted on the header this Worker really emits,
+  // not just on the source string — `apps/web/test/guards/reverseGeocodeCsp.test.ts`
+  // is the half that keeps this list in step with the code that needs it.
+  expect(csp).toContain("connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org");
 }
 
 describe("security headers", () => {

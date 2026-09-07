@@ -59,9 +59,14 @@ export function LocationBar({ value, onChange }: LocationBarProps): React.ReactE
         setLocating(false);
         commit({ ...value, mode: "coords", postal: "", lat: coords.lat, lng: coords.lng });
       },
-      () => {
+      // Same reasoning as `app/give/details.tsx` (#132): `geoLocate.ts`
+      // already distinguishes a denied permission from an unavailable
+      // position from a timeout, and each has a different fix. Every one of
+      // its messages ends in "Enter it manually", which is what the postcode
+      // field directly above this button is for.
+      (message) => {
         setLocating(false);
-        setGeoError("Couldn't get your location. Try a postcode instead.");
+        setGeoError(message);
       },
     );
   }

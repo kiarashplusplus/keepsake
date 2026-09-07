@@ -21,6 +21,23 @@
 const BIGDATACLOUD_HOST = "api.bigdatacloud.net";
 const NOMINATIM_HOST = "nominatim.openstreetmap.org";
 
+/**
+ * The only two origins this module ever calls, exported so the Content
+ * Security Policy that has to permit them can be checked against this list
+ * rather than against a second, hand-maintained copy of it.
+ *
+ * Issue #132 is why that guard exists: both CSP copies declared
+ * `default-src 'self'` and no `connect-src` at all. `connect-src` falls back
+ * to `default-src`, so the browser dropped both `fetch` calls below before
+ * they reached the network, every provider "failed", and every giver who
+ * tapped "Use my location" on the real site got
+ * `MANUAL_ENTRY_MESSAGE` — while this file's own unit tests, which mock
+ * `fetch` (and a mocked fetch is never subject to CSP), stayed green.
+ * `apps/web/test/guards/reverseGeocodeCsp.test.ts` reads both policies off
+ * disk and fails if either stops covering an origin named here.
+ */
+export const REVERSE_GEOCODE_ORIGINS = [`https://${BIGDATACLOUD_HOST}`, `https://${NOMINATIM_HOST}`] as const;
+
 // Exported so a caller can show this exact, designed-for-users copy while
 // replacing every other (raw) error with its own friendly fallback.
 export const MANUAL_ENTRY_MESSAGE = "Couldn't work out your postcode — type it in.";
