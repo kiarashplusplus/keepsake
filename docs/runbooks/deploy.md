@@ -207,14 +207,26 @@ flag, and `/health` will report it as fact.
 wrangler deploy --env production --var COMMIT_SHA:$(git rev-parse HEAD)
 ```
 
-This was not made impossible to forget at the `wrangler.toml`/code level — doing that (failing
-`/health` or refusing to boot when `COMMIT_SHA === "dev"` in production) means changing
-`apps/api/src`, out of scope for this pass (owned by a concurrent agent). Instead,
-`.github/workflows/uptime.yml`'s `/health` probe now treats `commit: "dev"` on either tier as a
-failure in its own right, distinct from "down" — same mechanism launch audit finding 4 added for
-outages, extended to catch this. Verified by extracting the probe's shell and running it three
-ways: a real preview response (passes), a stubbed `{"ok":true,"commit":"dev"}` response (fails
-with `title=<tier> is running an unstamped deploy`), and a stubbed down response (fails after 3
+**Update:** this is now also enforced at the code level, not just documented and monitored.
+`apps/api/src/index.ts`'s very first middleware refuses every request — not just `/health` — with
+a `503` and an explicit message when `ENVIRONMENT === "production"` and `COMMIT_SHA` is still
+`"dev"`. That is deliberately the entire site, not only `/health`: the point is that a forgotten
+flag is caught the instant anything hits production, by whoever just ran the manual deploy, rather
+than only in a rolled-up health check nobody happens to be looking at. `preview` and local
+`wrangler dev` are unaffected — `isProduction()` (`apps/api/src/env.ts`) is `false` for both, and
+`"dev"` remains the correct, expected value there.
+
+This is a guard, not a substitute for the flag above — fix the deploy (redeploy with
+`--var COMMIT_SHA:$(git rev-parse HEAD)`), don't work around the guard.
+
+`.github/workflows/uptime.yml`'s `/health` probe *also* independently treats `commit: "dev"` on
+either tier as a failure in its own right, distinct from "down" — same mechanism launch audit
+finding 4 added for outages, extended to catch this. This is deliberate belt-and-braces, not
+redundant: the Worker-level guard above fires the instant a request arrives but only if a request
+arrives, while the CI probe fires on its own schedule (~15-20 min) even if nothing else hits
+production in the interim. Verified by extracting the probe's shell and running it three ways: a
+real preview response (passes), a stubbed `{"ok":true,"commit":"dev"}` response (fails with
+`title=<tier> is running an unstamped deploy`), and a stubbed down response (fails after 3
 attempts, unchanged from before) — per `AGENTS.md`'s rule to extract a workflow's shell and run it
 rather than trust the YAML by eye.
 
