@@ -148,8 +148,21 @@ stays an honest record of what was found and when:**
     general-liability insurance, which matters precisely because `privacy.html` and `terms.html`
     now say in public that Keepsake is operated by an individual and not a company.
   - **The hedge travels with the conclusions.** All of the above rests on that document's
-    search-summary sourcing rather than primary text read end to end, and three of its findings are
-    marked `[unverified text]` there. Dispositioned is not the same as answered.
+    search-summary sourcing rather than primary text read end to end, and three of its findings were
+    marked `[unverified text]` there. **One of the three has since come off:** MCA §30-14-2811's
+    "rebuttable presumption," read directly at `mca.legmt.gov` during #61, is a procedural defense in
+    an AG enforcement action under §30-14-2817 — not an age-determination safe harbour — so it
+    neither softens nor changes the minor-takedown rule (write-up in
+    [`runbooks/admin.md`](runbooks/admin.md)). The other two stand. Dispositioned is not the same as
+    answered.
+  - **Two facts in the #61 and #31 entries above are now out of date, corrected here rather than
+    edited into them.** The requester-side takedown gap those entries describe — no admin visibility
+    into a request, no way to remove one — was filed as #70 and closed by PR #81:
+    `POST /api/admin/requests/:id/remove` exists today and redacts `note`/`email`/`phone`. And the
+    18+ gate they cite as `AgeAttestationSchema` is gone; #64 replaced it with
+    `DateOfBirthSchema`/`MINIMUM_AGE`, still recording only `age_attested_at`, as the Minimum age
+    entry near the top of this list already says. The Montana fact pattern is unchanged in substance
+    — a self-declared gate plus a working takedown path on both sides now, rather than one.
 
 ---
 

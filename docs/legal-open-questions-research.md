@@ -431,3 +431,13 @@ which is the fact pattern §Q8(c) above identifies as making the entity decision
 for the Montana/Rhode Island applicability question Q3 could not settle, and the three UK questions
 (Q1, Q4, Q6) are carried on `runbooks/uk-reentry-checklist.md` §§4–6 rather than here, so that
 lifting the block cannot quietly skip them.
+
+**One of the three `[unverified text]` marks can now come off.** The Montana §30-14-2811 rebuttable
+presumption — flagged in Q3 above as possibly an age-determination safe harbour — was checked
+directly against the statute text at `mca.legmt.gov` while #61 was being worked, and it is **not**
+one. The presumption is procedural and available only in an attorney-general enforcement action
+under §30-14-2817: it presumes *reasonable care* where the controller complied with the section's
+other substantive requirements, and says nothing about how to determine that someone is a minor.
+Write-up in `runbooks/admin.md`, "What 'the rebuttable presumption' in the statute's section heading
+actually is." **The other two marks stand** — PIPEDA breach mechanics, and the absence of an Ofcom
+exemption, which remains a negative established from summaries and the weakest claim here.
