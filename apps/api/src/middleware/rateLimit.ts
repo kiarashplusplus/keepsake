@@ -21,12 +21,12 @@
  *   unrelated reason this was never going to be the precise layer.
  * - `dailyBudget(...)` wraps the KV calendar-day counters in `budget.ts` for
  *   the five non-AI kinds this Worker rations: `listing`, `request`,
- *   `upload`, `report`, `email`. (`mod_text`/`mod_image` are checked inside the moderation
- *   pipeline itself, not as HTTP middleware, since that check happens in a
- *   background `waitUntil`, not on the request/response path.) Unlike
- *   `burst(...)`, this one *is* exact — a real KV read-then-write, per
- *   caller, per calendar day — so it's the layer anything security-critical
- *   should actually rely on.
+ *   `upload`, `report`, `email`. (`mod_text`/`mod_image` are checked inside
+ *   the moderation pipeline itself, not as HTTP middleware, since that check
+ *   happens in a background `waitUntil`, not on the request/response path.)
+ *   Unlike `burst(...)`, this one *is* exact — a real KV read-then-write,
+ *   per caller, per calendar day — so it's the layer anything
+ *   security-critical should actually rely on.
  */
 import type { Context, Next } from "hono";
 import type { Env } from "../env.js";
