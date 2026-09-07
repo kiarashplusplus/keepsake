@@ -156,11 +156,18 @@ is the lock.
   both `ip_digest` columns at 48 hours, withdrawal nulls its own immediately, and the number is
   locked against the page and all three mechanisms in `privacyPolicy.test.ts`.
 - **More checks that could not fail:** #166 (preflight's shell-syntax check has never examined a
-  byte of shell), #173 (the consent banner is never scanned by axe), #175, #176, #181, #191. Six
-  more instances of `AGENTS.md`'s table, found in a single pass — the table is at seven rows and
-  should be read as a pattern, not a closed list.
+  byte of shell), #175, #176, #181, #191. Six more instances of `AGENTS.md`'s table, found in a
+  single pass — the table is at seven rows and should be read as a pattern, not a closed list.
+  **#173 is fixed** (2026-09-07): the consent banner was never scanned by axe, because every a11y
+  context seeded a consent decision, and two comments in the tree claimed a scan that did not
+  exist. `e2e/a11y.spec.ts` now builds its own unseeded contexts for the banner and runs a
+  dark-mode pass over the pages; both comments say what is true.
 - **Moderation and abuse surface:** #168, #171, #179, #183.
-- **Correctness:** #163, #172, #174, #180, #184, #186, #187. **#185 is fixed** (2026-09-07):
+- **Correctness:** #163, #180, #184, #186. **#172, #174 and #187 are fixed** (2026-09-07): a
+  failed Delete on `/mine/[id]` no longer navigates as though it succeeded; a Turnstile challenge
+  failure reports `unconfigured` and lets the server's `siteverify` decide, instead of disabling
+  every submit button in the app with no message and no retry; and `useFeed`'s `loadMore` drops a
+  page belonging to a query the visitor has already left. **#185 is fixed** (2026-09-07):
   choosing a recipient is one `env.DB.batch()` with a conditional claim on the listing, checked
   before any mail goes out — see `docs/design/email.md`'s "Contact reveal rule". It is also the
   Worker's first use of `batch()`; the other multi-write sequences that issue named

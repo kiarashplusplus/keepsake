@@ -8,8 +8,18 @@
  *
  * `status` is an explicit union rather than a token-or-`""` sentinel so a
  * caller can tell "not configured" (submit allowed) apart from "still
- * loading" or "genuinely broken" (submit must wait) — see the give-flow
- * plan's Turnstile section for why the old `""` sentinel couldn't do that.
+ * loading" (submit must wait) — see the give-flow plan's Turnstile section
+ * for why the old `""` sentinel couldn't do that.
+ *
+ * There is deliberately no "genuinely broken" arm. Every way this widget can
+ * fail — the script blocked by an ad blocker, `turnstile.render()` finding no
+ * container, or Cloudflare firing `error-callback` (110200 "unknown domain"
+ * on a hostname outside the widget's allowlist, or an ordinary 600xxx blip) —
+ * reports `unconfigured`, which means "submit is allowed; the server decides".
+ * The API's own `siteverify` call is the real gate and it fails closed there,
+ * where it belongs. A client that blocks on a challenge it has no way to retry
+ * buys no security and costs a completed listing: it left every submit button
+ * in the app permanently disabled, with no message and no retry (issue #174).
  */
 import * as React from "react";
 import { View } from "react-native";
@@ -20,8 +30,7 @@ export type TurnstileStatus =
   | { status: "unconfigured" }
   | { status: "pending" }
   | { status: "ready"; token: string }
-  | { status: "expired" }
-  | { status: "error"; reason: "script" | "widget" };
+  | { status: "expired" };
 
 export type TurnstileHandle = {
   /** Forces the widget to fetch a fresh token — used after a `turnstile_failed`
@@ -148,6 +157,11 @@ export const Turnstile = React.forwardRef<TurnstileHandle, TurnstileProps>(funct
     }
 
     let cancelled = false;
+    // Whether the widget has handed us a token that has not expired. A late
+    // `error-callback` — a failed *refresh* after a good challenge — must not
+    // throw away a token the giver can still spend; `expired-callback` is the
+    // one thing that retires one.
+    let hasLiveToken = false;
     onStatusRef.current({ status: "pending" });
 
     loadTurnstileScript()
@@ -155,21 +169,41 @@ export const Turnstile = React.forwardRef<TurnstileHandle, TurnstileProps>(funct
         if (cancelled) return;
         const node = containerRef.current as unknown as HTMLElement | null;
         if (!node || !window.turnstile) {
-          onStatusRef.current({ status: "error", reason: "widget" });
+          // The script loaded but there is nothing to render into. Same
+          // answer as a blocked script: let the server decide (see the file
+          // header) rather than disabling submit with nothing to say.
+          onStatusRef.current({ status: "unconfigured" });
           return;
         }
         widgetIdRef.current = window.turnstile.render(node, {
           sitekey: config.turnstileSiteKey,
           theme: initialModeRef.current,
-          callback: (token: string) => onStatusRef.current({ status: "ready", token }),
+          callback: (token: string) => {
+            hasLiveToken = true;
+            onStatusRef.current({ status: "ready", token });
+          },
           "expired-callback": () => {
             // Turnstile tokens expire after 300s; reset re-issues a fresh
             // one, but the *current* token is no longer good — callers must
             // not go on treating `ready` as still true.
+            hasLiveToken = false;
             onStatusRef.current({ status: "expired" });
             if (widgetIdRef.current && window.turnstile) window.turnstile.reset(widgetIdRef.current);
           },
-          "error-callback": () => onStatusRef.current({ status: "error", reason: "widget" }),
+          "error-callback": () => {
+            // The challenge itself failed after the script loaded fine —
+            // 110200 on a hostname outside the widget's allowlist (the
+            // preview Worker's `workers.dev` names, #105), or a transient
+            // 600xxx. Reporting `error` here is what left the giver looking
+            // at a greyed-out "Give it" with a filled-in form, no copy and no
+            // retry (#174). No `reset()` from here: on a permanent failure
+            // like 110200 the reset re-errors immediately, which is an
+            // unbounded retry loop against Cloudflare. A retry still happens
+            // where it can succeed — each consumer resets the widget when the
+            // API answers `turnstile_failed`.
+            if (hasLiveToken) return;
+            onStatusRef.current({ status: "unconfigured" });
+          },
         });
       })
       .catch(() => {

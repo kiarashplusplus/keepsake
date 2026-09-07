@@ -431,7 +431,12 @@
   //   stampText #8A2113 on #F1E6CC     7.3:1
   //   onAccent #FBF9F4 on #C4341C      5.2:1  (the stamp button)
   //   focus #7A2515 on #F1E6CC         8.1:1
-  // `e2e/a11y.spec.ts` re-checks them with axe on a real page, in both themes.
+  // `e2e/a11y.spec.ts`'s "consent banner" block re-checks them with axe on a
+  // real page, in light and dark, closed and with the panel open. That block
+  // was added by #173; before it, this comment named a scan that did not
+  // exist — every a11y context seeded a consent decision, so the banner was
+  // never in the DOM during a scan. The numbers were right the whole time;
+  // nothing was checking they stayed right.
 
   const STYLE = [
     '.ks-consent{position:fixed;left:0;right:0;bottom:0;z-index:9999;display:flex;justify-content:center;',
