@@ -89,7 +89,7 @@ const STATS: AdminStats = {
   requests_today: 0,
   email_failures_today: 0,
   ai_budget_used_today: { mod_text: 0, mod_image: 0 },
-  email_events_7d: { window_days: 7, total: 0, ok: 0, failed: 0, by_error: [] },
+  email_events_7d: { window_days: 7, total: 0, ok: 0, failed: 0, by_error: [], failures_by_domain: [] },
 };
 
 const HEALTH: AdminHealth = {

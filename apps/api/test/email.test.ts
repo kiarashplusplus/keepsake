@@ -1,5 +1,6 @@
 import { OwnerMe } from "@keepsake/contracts/owner";
-import { guardRecipient } from "../src/email/sendMail.js";
+import { guardRecipient, recipientDomain, sendMail } from "../src/email/sendMail.js";
+import type { Env } from "../src/env.js";
 import { sanitizeSubject } from "../src/email/templates/shared.js";
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
@@ -373,5 +374,111 @@ describe("re-submitting an already verified address", () => {
     } finally {
       removeFakeEmail();
     }
+  });
+});
+
+/**
+ * Issue #6. The failure this issue is about is invisible from the inside: a
+ * Cloudflare Email binding that refuses every non-verified destination
+ * produces exactly the same `{sent: false}` as a typo'd address, and the
+ * give/request/choose flow reports success either way. What separates them
+ * is the provider's own sentence — which `sendViaCloudflare` used to fold
+ * into the reason code and truncate at 160 chars.
+ *
+ * These call `sendMail` directly rather than through a route: the property
+ * under test is the split itself (a stable code out to the product, the raw
+ * text out to the diagnostic surfaces), and every route is a consumer of it.
+ */
+describe("sendMail failure reporting", () => {
+  afterEach(() => removeFakeEmail());
+
+  function installThrowingEmail(errorMessage: string): void {
+    (env as unknown as Record<string, unknown>).EMAIL = {
+      send: async (): Promise<never> => {
+        throw new Error(errorMessage);
+      },
+    };
+  }
+
+  const REFUSAL =
+    "destination address not verified: recipient@gmail.com is not a verified destination address for this Email Routing zone";
+
+  function testMessage(to: string): Parameters<typeof sendMail>[1] {
+    return { kind: "new_request", to, subject: "s", html: "<p>h</p>", text: "t" };
+  }
+
+  it("returns the provider's raw text as `detail` and keeps `reason` a stable code", async () => {
+    installThrowingEmail(REFUSAL);
+    const result = await sendMail(env as unknown as Env, testMessage("recipient@gmail.com"));
+
+    expect(result.sent).toBe(false);
+    expect(result.reason).toBe("send_failed");
+    expect(result.detail).toBe(REFUSAL);
+  });
+
+  /**
+   * The reason code is what `requests.notify_failed_reason` stores and what
+   * the 7-day rollup groups on. If the provider's sentence leaks into it, two
+   * things break at once: a column one boolean away from the giver's screen
+   * starts carrying raw provider output, and — because that sentence names
+   * the recipient — every failure lands in its own group, so a blanket
+   * refusal fragments into single-count rows and stops reading as a pattern.
+   */
+  it("never lets the provider's sentence into the reason code", async () => {
+    installThrowingEmail(REFUSAL);
+    const result = await sendMail(env as unknown as Env, testMessage("recipient@gmail.com"));
+
+    expect(result.reason).not.toContain("not a verified destination");
+    expect(result.reason).not.toContain("recipient@gmail.com");
+
+    // Stable enough to group on: a second failure worded completely
+    // differently must still produce the same code, and still keep its own
+    // detail.
+    installThrowingEmail("552 5.2.2 mailbox full");
+    const second = await sendMail(env as unknown as Env, testMessage("other@gmail.com"));
+    expect(second.reason).toBe(result.reason);
+    expect(second.detail).not.toBe(result.detail);
+  });
+
+  it("writes the code, the raw detail and the recipient's domain to email_events", async () => {
+    installThrowingEmail(REFUSAL);
+    const result = await sendMail(env as unknown as Env, testMessage("Recipient@GMAIL.com"));
+
+    expect(result.eventId).toBeTruthy();
+    const row = await env.DB.prepare("SELECT error, error_detail, to_domain, to_hash, ok FROM email_events WHERE id = ?")
+      .bind(result.eventId as string)
+      .first<{ error: string | null; error_detail: string | null; to_domain: string | null; to_hash: string; ok: number }>();
+
+    expect(row?.ok).toBe(0);
+    expect(row?.error).toBe("send_failed");
+    expect(row?.error_detail).toBe(REFUSAL);
+    // Lowercased, and the domain only — `to_hash` stays the one column that
+    // identifies *who* was mailed.
+    expect(row?.to_domain).toBe("gmail.com");
+    expect(row?.to_hash).not.toContain("@");
+  });
+
+  it("records the domain on a successful send too, so a failure ratio has a denominator", async () => {
+    installFakeEmail();
+    const result = await sendMail(env as unknown as Env, testMessage("someone@fastmail.com"));
+
+    expect(result.sent).toBe(true);
+    const row = await env.DB.prepare("SELECT ok, to_domain, error_detail FROM email_events WHERE id = ?")
+      .bind(result.eventId as string)
+      .first<{ ok: number; to_domain: string | null; error_detail: string | null }>();
+    expect(row?.ok).toBe(1);
+    expect(row?.to_domain).toBe("fastmail.com");
+    expect(row?.error_detail).toBeNull();
+  });
+});
+
+describe("recipientDomain", () => {
+  it("lowercases and takes the last @-segment", () => {
+    expect(recipientDomain("Someone+Tag@Example.COM")).toBe("example.com");
+  });
+
+  it("returns null for an address with no domain to speak of", () => {
+    expect(recipientDomain("not-an-email")).toBeNull();
+    expect(recipientDomain("trailing@")).toBeNull();
   });
 });

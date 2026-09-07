@@ -3,14 +3,14 @@ import { render } from "@testing-library/react-native";
 import { LISTING_STATUSES } from "@keepsake/contracts/listing";
 import type { AdminHealth, AdminStats } from "@keepsake/contracts/admin";
 import { ThemeProvider } from "@/ui/theme";
-import { StatsStrip, formatAgo, formatCronLastRun, isCronStale } from "@/features/admin/StatsStrip";
+import { StatsStrip, formatAgo, formatCronLastRun, isCronStale, isSystematicDomainFailure } from "@/features/admin/StatsStrip";
 
 const STATS: AdminStats = {
   listings_by_status: Object.fromEntries(LISTING_STATUSES.map((status) => [status, 0])) as AdminStats["listings_by_status"],
   requests_today: 0,
   email_failures_today: 0,
   ai_budget_used_today: { mod_text: 0, mod_image: 0 },
-  email_events_7d: { window_days: 7, total: 0, ok: 0, failed: 0, by_error: [] },
+  email_events_7d: { window_days: 7, total: 0, ok: 0, failed: 0, by_error: [], failures_by_domain: [] },
 };
 
 const NOW = Date.parse("2026-09-07T12:00:00.000Z");
@@ -204,6 +204,7 @@ describe("StatsStrip", () => {
           { error: "blocked_not_allowlisted", count: 2 },
           { error: "send_failed: 550 mailbox unavailable", count: 1 },
         ],
+        failures_by_domain: [],
       },
     };
     const { toJSON } = render(
@@ -215,5 +216,75 @@ describe("StatsStrip", () => {
     expect(text).toContain("Email, last 7 days");
     expect(text).toContain("blocked_not_allowlisted");
     expect(text).toContain("send_failed: 550 mailbox unavailable");
+  });
+
+  // Issue #6's worst case, on the page: one bounce and "every send to this
+  // provider is refused" share a reason code, so the per-reason list above
+  // renders them as the same line. The domain axis with its denominator is
+  // the only thing that tells them apart, and it has to actually reach the
+  // screen — a correct API response nobody can read is the same invisible
+  // failure one layer up.
+  it("shows failing domains with their attempt count, and flags a total refusal for attention", () => {
+    const statsWithRefusal: AdminStats = {
+      ...STATS,
+      email_events_7d: {
+        window_days: 7,
+        total: 48,
+        ok: 39,
+        failed: 9,
+        by_error: [{ error: "send_failed", count: 9 }],
+        failures_by_domain: [
+          { domain: "gmail.com", attempted: 8, failed: 8, top_reason: "send_failed" },
+          { domain: "fastmail.com", attempted: 40, failed: 1, top_reason: "send_failed" },
+        ],
+      },
+    };
+    const { UNSAFE_getByProps, toJSON } = render(
+      <ThemeProvider mode="light">
+        <StatsStrip stats={statsWithRefusal} health={null} healthAsOf={null} />
+      </ThemeProvider>,
+    );
+    const text = JSON.stringify(toJSON());
+    expect(text).toContain("Failing recipients, by domain");
+    // The ratios, not just the failure counts — 8/8 and 1/40 are the whole
+    // difference between a policy and a typo.
+    expect(text).toContain("8/8");
+    expect(text).toContain("1/40");
+    expect(text).toContain("gmail.com");
+
+    // Every send to this provider refused: same ", needs attention" language
+    // a stale cron and an unreviewed auto-hide already use.
+    expect(
+      UNSAFE_getByProps({
+        accessibilityLabel: "gmail.com: 8 of 8 failed, send_failed, every send refused, needs attention",
+      }),
+    ).toBeTruthy();
+    // One bounce out of forty is not an incident and must not borrow the red.
+    expect(UNSAFE_getByProps({ accessibilityLabel: "fastmail.com: 1 of 40 failed, send_failed" })).toBeTruthy();
+  });
+
+  it("renders no domain breakdown at all when nothing is failing", () => {
+    const { toJSON } = render(
+      <ThemeProvider mode="light">
+        <StatsStrip stats={STATS} health={null} healthAsOf={null} />
+      </ThemeProvider>,
+    );
+    expect(JSON.stringify(toJSON())).not.toContain("Failing recipients");
+  });
+});
+
+describe("isSystematicDomainFailure", () => {
+  it("flags a domain where every attempt failed", () => {
+    expect(isSystematicDomainFailure({ attempted: 8, failed: 8 })).toBe(true);
+  });
+
+  it("does not flag a domain that mostly works", () => {
+    expect(isSystematicDomainFailure({ attempted: 40, failed: 1 })).toBe(false);
+  });
+
+  // 1-of-1 is technically "all of them" and is not evidence of anything; the
+  // per-reason list already counts it.
+  it("does not flag a single isolated failure", () => {
+    expect(isSystematicDomainFailure({ attempted: 1, failed: 1 })).toBe(false);
   });
 });
