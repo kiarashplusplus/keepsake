@@ -53,8 +53,16 @@ requestWithdrawRoutes.post("/withdraw", validateBody(RequestWithdrawInput), asyn
   }
 
   const now = Date.now();
+  // `ip_digest = NULL` alongside the three obvious columns, issue #169. It
+  // was absent from this list, so the one control a requester has over their
+  // own data left behind the hashed IP of the day they used the site —
+  // permanently, since nothing else ever removed a `requests` row except the
+  // giver deleting the whole listing. `orphanSweep` now clears it at 48 hours
+  // for every row regardless; erasing it here as well is the honest reading
+  // of a button labelled "remove my information", which should not leave
+  // something behind for two days because a nightly job has not run yet.
   await c.env.DB.prepare(
-    `UPDATE requests SET status = 'withdrawn', withdrawn_at = ?, note = NULL, email = NULL, phone = NULL WHERE id = ?`,
+    `UPDATE requests SET status = 'withdrawn', withdrawn_at = ?, note = NULL, email = NULL, phone = NULL, ip_digest = NULL WHERE id = ?`,
   )
     .bind(now, row.id)
     .run();

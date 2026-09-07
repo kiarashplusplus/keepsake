@@ -19,6 +19,9 @@
  *    finding 11).
  *  - the R2 objects behind photos of listings that have been `rejected`,
  *    `withdrawn` or `hidden` for more than 30 days (launch audit finding 15).
+ *  - `requests.ip_digest` / `reports.ip_digest` on rows older than 48 hours
+ *    (issue #169), which is what makes the privacy page's twice-stated
+ *    48-hour expiry true of the D1 copies and not only of the KV counters.
  *
  * Every condition is purely time-based, so re-running this twice in a row
  * (a retried cron invocation, a manual trigger) is a no-op the second time:
@@ -30,6 +33,35 @@ import { purgePhotoCache } from "../lib/photoCache.js";
 const ORPHAN_PHOTO_AGE_MS = 24 * 60 * 60 * 1000;
 const RECOVERY_TOKEN_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 const EVENT_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+/**
+ * Issue #169. `apps/site/public/privacy.html` promises, in two places, that
+ * a hashed IP expires after 48 hours. That was true of the KV budget
+ * counters (`moderation/budget.ts`'s `expirationTtl`) and false of the two
+ * D1 columns holding the *same* `dailyIpDigest` value: `requests.ip_digest`
+ * and `reports.ip_digest` had no TTL, no sweep and no delete path, and the
+ * requester's own withdraw link deliberately left the hash behind. Three
+ * years after someone asked for a keepsake and then withdrew the ask, the
+ * hash of their address on the day they used the site was still in D1.
+ *
+ * The promise is load-bearing rather than decorative. The paragraph that
+ * makes it concedes, correctly, that an IPv4 preimage is brute-forceable by
+ * anyone who knows the day — and `created_at` sits in the same row. "It is
+ * gone within 48 hours" is the sentence that makes that concession
+ * acceptable.
+ *
+ * Nulling costs no enforcement: both columns back day-scoped uniqueness
+ * checks ("has this address already reported this listing today", read at
+ * `routes/listings.ts`), and `lib/digest.ts` hashes `<day>:<ip>`, so a digest
+ * from any earlier day can never match today's and is never consulted.
+ *
+ * The number is asserted from the other side by
+ * `apps/web/test/guards/privacyPolicy.test.ts`, which reads this constant out
+ * of this file and the sentence out of the page, so the two cannot drift
+ * apart again. This is the fourth false claim that page has shipped; a
+ * retention promise with no test behind it is how it recurred.
+ */
+const IP_DIGEST_RETENTION_MS = 48 * 60 * 60 * 1000;
 
 /**
  * Launch audit finding 11. An `owners` row is minted for any well-formed
@@ -179,6 +211,31 @@ async function sweepTerminalListingPhotos(env: Env, cutoff: number): Promise<num
 }
 
 /**
+ * Nulls `ip_digest` on `requests` and `reports` rows older than the 48 hours
+ * the privacy page promises. See `IP_DIGEST_RETENTION_MS` above for why this
+ * is a retention promise rather than a tidy-up, and why nothing is lost by
+ * doing it.
+ *
+ * `ip_digest IS NOT NULL` in both `WHERE` clauses is what keeps this
+ * idempotent in the same way every other sweep here is: a second run the same
+ * night matches nothing rather than rewriting rows it already cleared, and
+ * `meta.changes` stays an honest count of what this run actually erased.
+ */
+async function sweepExpiredIpDigests(env: Env, cutoff: number): Promise<{ requests: number; reports: number }> {
+  const requestsResult = await env.DB.prepare(
+    "UPDATE requests SET ip_digest = NULL WHERE ip_digest IS NOT NULL AND created_at < ?",
+  )
+    .bind(cutoff)
+    .run();
+  const reportsResult = await env.DB.prepare(
+    "UPDATE reports SET ip_digest = NULL WHERE ip_digest IS NOT NULL AND created_at < ?",
+  )
+    .bind(cutoff)
+    .run();
+  return { requests: requestsResult.meta.changes ?? 0, reports: reportsResult.meta.changes ?? 0 };
+}
+
+/**
  * Deletes `owners` rows that hold nothing and have done nothing for
  * `EMPTY_OWNER_AGE_MS`. "Holds nothing" is checked against every table that
  * references an owner — listings, photos, recovery tokens — plus the email
@@ -212,6 +269,10 @@ export async function orphanSweep(env: Env): Promise<void> {
   const terminalPhotosDeleted = await sweepTerminalListingPhotos(env, now - TERMINAL_PHOTO_RETENTION_MS);
   const tokensDeleted = await sweepExpiredRecoveryTokens(env, now);
   const { moderation: moderationDeleted, email: emailDeleted } = await sweepOldEvents(env, now);
+  const { requests: requestDigestsCleared, reports: reportDigestsCleared } = await sweepExpiredIpDigests(
+    env,
+    now - IP_DIGEST_RETENTION_MS,
+  );
   // Last, and after `sweepOrphanPhotos` specifically: that sweep is what
   // removes the only thing an abandoned give-flow owner ever held, so running
   // it first means the same night collects the owner too instead of leaving
@@ -227,6 +288,8 @@ export async function orphanSweep(env: Env): Promise<void> {
     tokensDeleted,
     moderationDeleted,
     emailDeleted,
+    requestDigestsCleared,
+    reportDigestsCleared,
     ownersDeleted,
   });
 

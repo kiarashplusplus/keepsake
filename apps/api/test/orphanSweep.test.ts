@@ -117,6 +117,96 @@ describe("orphanSweep: orphan photos", () => {
   });
 });
 
+/**
+ * Issue #169. The 48-hour expiry the privacy page promises twice was real
+ * only for the KV budget counters; the same `dailyIpDigest` value written
+ * into `requests.ip_digest` and `reports.ip_digest` had no TTL, no sweep and
+ * no delete path at all.
+ */
+describe("orphanSweep: hashed IPs expire at 48 hours (#169)", () => {
+  const HOUR_MS = 60 * 60 * 1000;
+
+  async function insertRequest(createdAt: number): Promise<string> {
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId });
+    const id = ulid();
+    await env.DB.prepare(
+      `INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at)
+       VALUES (?, ?, 'A note', ?, ?, 'open', ?)`,
+    )
+      .bind(id, listingId, `requester-${id}@keepsake.ing`, `digest-${id}`, createdAt)
+      .run();
+    return id;
+  }
+
+  async function insertReport(createdAt: number): Promise<string> {
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId });
+    const id = ulid();
+    await env.DB.prepare(
+      `INSERT INTO reports (id, listing_id, reason, ip_digest, created_at) VALUES (?, ?, 'spam', ?, ?)`,
+    )
+      .bind(id, listingId, `digest-${id}`, createdAt)
+      .run();
+    return id;
+  }
+
+  async function digestOf(table: "requests" | "reports", id: string): Promise<string | null> {
+    const row = await env.DB.prepare(`SELECT ip_digest FROM ${table} WHERE id = ?`)
+      .bind(id)
+      .first<{ ip_digest: string | null }>();
+    return row?.ip_digest ?? null;
+  }
+
+  it("nulls ip_digest on requests and reports older than 48 hours, and leaves the rest of the row alone", async () => {
+    const now = Date.now();
+    const oldRequest = await insertRequest(now - 49 * HOUR_MS);
+    const oldReport = await insertReport(now - 49 * HOUR_MS);
+
+    await orphanSweep(env);
+
+    expect(await digestOf("requests", oldRequest)).toBeNull();
+    expect(await digestOf("reports", oldReport)).toBeNull();
+
+    // The row itself survives — this is a retention rule about one column,
+    // not a deletion. A requester's note and a reporter's reason are what the
+    // moderation queue and the owner dashboard are made of.
+    const request = await env.DB.prepare("SELECT note, status FROM requests WHERE id = ?")
+      .bind(oldRequest)
+      .first<{ note: string | null; status: string }>();
+    expect(request?.note).toBe("A note");
+    expect(request?.status).toBe("open");
+  });
+
+  it("keeps a hash that is still inside the window, because the day-scoped uniqueness check reads it", async () => {
+    // The control. Without this, "nulls everything unconditionally" would
+    // pass the test above, and the same-day duplicate-report check that
+    // `ip_digest` exists for would silently stop working.
+    const now = Date.now();
+    const freshRequest = await insertRequest(now - 2 * HOUR_MS);
+    const freshReport = await insertReport(now - 2 * HOUR_MS);
+
+    await orphanSweep(env);
+
+    expect(await digestOf("requests", freshRequest)).not.toBeNull();
+    expect(await digestOf("reports", freshReport)).not.toBeNull();
+  });
+
+  it("is idempotent: a second run the same night clears nothing further", async () => {
+    const now = Date.now();
+    const oldRequest = await insertRequest(now - 72 * HOUR_MS);
+
+    await orphanSweep(env);
+    expect(await digestOf("requests", oldRequest)).toBeNull();
+
+    // `ip_digest IS NOT NULL` in the WHERE clause is what makes this true —
+    // and what keeps the logged count an honest measure of what each run
+    // actually erased rather than of how many old rows exist.
+    await expect(orphanSweep(env)).resolves.toBeUndefined();
+    expect(await digestOf("requests", oldRequest)).toBeNull();
+  });
+});
+
 describe("orphanSweep: retention", () => {
   it("deletes recovery_tokens more than 7 days past their own expiry, keeps the rest", async () => {
     const ownerId = await insertOwner();

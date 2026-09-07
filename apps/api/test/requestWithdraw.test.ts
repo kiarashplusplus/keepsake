@@ -63,13 +63,26 @@ describe("POST /api/requests/withdraw", () => {
     expect(body.listing_id).toBe(listingId);
     expect(body.withdrawn_at).toBeGreaterThan(0);
 
-    const row = await env.DB.prepare("SELECT status, note, email, phone, withdrawn_at FROM requests WHERE id = ?")
+    const row = await env.DB.prepare("SELECT status, note, email, phone, ip_digest, withdrawn_at FROM requests WHERE id = ?")
       .bind(requestId)
-      .first<{ status: string; note: string | null; email: string | null; phone: string | null; withdrawn_at: number | null }>();
+      .first<{
+        status: string;
+        note: string | null;
+        email: string | null;
+        phone: string | null;
+        ip_digest: string | null;
+        withdrawn_at: number | null;
+      }>();
     expect(row?.status).toBe("withdrawn");
     expect(row?.note).toBeNull();
     expect(row?.email).toBeNull();
     expect(row?.phone).toBeNull();
+    // Issue #169: `ip_digest` was absent from the UPDATE, so the one control a
+    // requester has over their own data left behind a hash of their IP address
+    // on the day they used the site — permanently, because nothing else ever
+    // removed a `requests` row except the giver deleting the whole listing.
+    // The privacy page said it expired within 48 hours.
+    expect(row?.ip_digest).toBeNull();
     expect(row?.withdrawn_at).not.toBeNull();
 
     const after = await env.DB.prepare("SELECT request_count FROM listings WHERE id = ?").bind(listingId).first<{ request_count: number }>();

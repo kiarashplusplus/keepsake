@@ -147,7 +147,9 @@ is the lock.
   every registered job on success, so a new cron cannot be added without one.
 - **Personal data and email:** #167, #169, #170, #182, #188, #189, #190. Between them: a redactor
   with no rule for the only PII Keepsake holds, IP hashes kept forever against a privacy page that
-  promises 48-hour expiry twice, a recovery token logged verbatim because it travels as a path
+  promises 48-hour expiry twice (#169, **fixed** — `orphanSweep` nulls both `ip_digest` columns at
+  48 hours, withdrawal nulls its own immediately, and the number is locked in
+  `privacyPolicy.test.ts`), a recovery token logged verbatim because it travels as a path
   segment, and a request endpoint that is an oracle for the giver's address.
 - **More checks that could not fail:** #166 (preflight's shell-syntax check has never examined a
   byte of shell), #173 (the consent banner is never scanned by axe), #175, #176, #181, #191. Six
