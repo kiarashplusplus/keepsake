@@ -1,46 +1,33 @@
-# apps/site
+# The static marketing pages
 
-Static marketing pages for Keepsake: `/about`, `/privacy`, `/terms`. Plain
-HTML + CSS, no build step, no framework, no JavaScript beyond the six-line
-inline theme-sync script in each `<head>`.
+`public/` holds the pages that are not part of the Expo app: `/about`, `/privacy`, `/terms`,
+`site.css`, `og-default.png`, and `consent.js`.
 
-## Scope
+**These are not a separate deployable.** `apps/web/scripts/copy-site.mjs` copies `public/*` into
+`apps/web/dist` after `expo export`, and the Worker serves the result through its `[assets]`
+binding. The app owns `/`, `/give`, `/item/*` and its own hashed assets; the site owns the paths
+above. A collision between the two is a bug and `copy-site.mjs` fails loudly on it.
 
-This package owns **only** `/about`, `/privacy`, `/terms`, and the shared
-`site.css` / `og-default.png`. It does **not** own `/`, `/give`, `/mine`, or
-`/item/*` — those routes belong to the Expo app in `apps/web`. Do not add
-pages here that shadow an app route.
+Two consequences worth knowing before you edit anything here.
 
-## Preview locally
+**`consent.js` is shared, not duplicated.** It is the single implementation of the consent store,
+the banner, and every third-party loader — the same file `apps/web/app/+html.tsx` loads, so one
+decision covers these pages and the app. Editing it changes both. The two analytics ids are
+substituted at build time from `EXPO_PUBLIC_*`; an unsubstituted `%NAME%` placeholder means "not
+configured" and nothing third-party loads.
 
-```
-node apps/site/serve.mjs         # http://localhost:4321
-node apps/site/serve.mjs 5000    # custom port
-```
+**Anything third-party you add here needs a CSP entry too.** The policy lives in
+`apps/api/src/middleware/securityHeaders.ts` and `apps/web/public/_headers`, and both must agree.
+This has already bitten once: the policy shipped without `www.googletagmanager.com` or
+`static.cloudflareinsights.com`, so a visitor who *granted* consent had the script refused by the
+browser. The tests passed; the browser console was where it showed up.
 
-The server maps `/fonts/*` to `apps/site/.preview-fonts/` (gitignored local
-copies of the six fonts the app serves in production) and everything else
-to `apps/site/public/`. In production, fonts are served by `apps/web` at
-`/fonts/Fraunces-VF.ttf`, `/fonts/Fraunces-Italic-VF.ttf`,
-`/fonts/CourierPrime-Regular.ttf`, `/fonts/CourierPrime-Bold.ttf`,
-`/fonts/CourierPrime-Italic.ttf`, `/fonts/CourierPrime-BoldItalic.ttf` —
-`site.css` references those paths directly and never bundles its own font
-files.
+## These pages are tested
 
-`.preview-fonts/` holds symlinks straight into `apps/web/public/fonts/`
-(the same files, one copy on disk) — see that directory if the symlinks
-ever go stale.
+`e2e/consent.spec.ts` and `e2e/a11y.spec.ts` drive these exact pages through the built bundle, so
+a change here can break the end-to-end suite even though no TypeScript changed.
 
-## How this ships
-
-`apps/site/public/**` is copied verbatim into the Expo web export directory
-by `apps/web`'s `scripts/copy-site.mjs` (added by that app), so the same
-Cloudflare Worker serves both the app and this static site from one origin.
-Because of that, all links here are root-relative (`/`, `/give`, `/privacy`,
-etc.) rather than pointing at a separate host.
-
-## OG image
-
-`public/og-default.png` is generated from `og/og-default.svg`. Regenerate
-with whatever SVG-to-PNG tool is available (see the source SVG's header
-comment for the exact command used).
+CI knows that now, but did not always. `apps/site/**` matched no paths filter, so a pull request
+editing `privacy.html` skipped every job and still reported green — GitHub shows a skipped job as
+a green check. The `site` filter in `.github/workflows/ci.yml` fixes that, and
+`tools/ci/assert-coverage.mjs` asserts it stays fixed rather than trusting it.
