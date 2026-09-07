@@ -50,6 +50,7 @@ import { parseIntVar } from "../env.js";
 import { checkAndBump } from "../moderation/budget.js";
 import { suggestFromPhoto } from "../suggest/suggest.js";
 import { replaceListingAspects } from "../lib/listingsDb.js";
+import { reembedListing } from "../search/reembed.js";
 
 // Mirrors routes/photos.ts's own DEFAULT_SUGGEST_DAILY_BUDGET exactly — kept
 // as a second literal rather than an import because that constant isn't
@@ -149,6 +150,34 @@ export async function runAspectsBackfillBatch(env: Env, limit: number): Promise<
       // would wedge every future run behind it.
       failed += 1;
       console.error("aspectsBackfill: unexpected error", {
+        listingId: row.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // Re-embed for semantic search (#38) — the write this listing would
+    // otherwise never get. `reembedListing`'s own doc comment always said
+    // this job should call it; #37 landed first, so nothing ever did, and
+    // an aspect the backfill wrote stayed invisible to vector search until
+    // someone edited the listing by hand. It is the only path that reaches
+    // listings created before the feature existed, which today is every
+    // listing in production.
+    //
+    // Run for *every* attempted row, not only the ones that gained an
+    // aspect: the vector is built from title + story + aspects, so a
+    // legitimately aspect-less listing is exactly the #40 case that most
+    // needs to be findable some other way. `reembedListing` is itself
+    // gated on `SEMANTIC_SEARCH` and on `EMBED_DAILY_BUDGET`, so with the
+    // flag off this costs nothing and spends nothing.
+    //
+    // Its own contract is "never throws", but this loop cannot lean on that
+    // promise holding forever any more than it leans on `suggestFromPhoto`'s
+    // — and an embedding failure must not be counted as an aspects failure,
+    // since the aspects were already persisted above.
+    try {
+      await reembedListing(env, row.id);
+    } catch (err) {
+      console.error("aspectsBackfill: re-embed failed", {
         listingId: row.id,
         error: err instanceof Error ? err.message : String(err),
       });

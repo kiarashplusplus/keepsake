@@ -27,6 +27,8 @@ import { purgePhotoCache } from "../lib/photoCache.js";
 import { containsContactInfo } from "../moderation/contactInfo.js";
 import { serializeOwnerListing, serializePublicListing } from "../lib/serialize.js";
 import { fetchAspectRows, fetchListingRow, fetchPhotoRows, replaceListingAspects } from "../lib/listingsDb.js";
+import { reembedListing } from "../search/reembed.js";
+import { deleteListingVector } from "../search/vectorize.js";
 
 type Vars = { owner: OwnerRow; validatedBody: unknown };
 export const listingRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -146,6 +148,11 @@ listingRoutes.post(
     }
 
     c.executionCtx.waitUntil(moderateListing(c.env, id, 1, clientIPFrom(c.req.raw)));
+    // Issue #38: indexed for semantic search regardless of moderation
+    // outcome, the same way `listings_fts`'s insert trigger indexes every
+    // new row regardless of status — a listing not yet approved still
+    // needs to be ready to search the moment it is.
+    c.executionCtx.waitUntil(reembedListing(c.env, id));
 
     const row = await fetchListingRow(c.env, id);
     if (!row) return fail(c, "internal", "Listing failed to save.", 500);
@@ -243,6 +250,18 @@ listingRoutes.patch("/:id", ownerAuth(), validateBody(UpdateListingInput), async
   }
 
   c.executionCtx.waitUntil(moderateListing(c.env, id, nextVersion, clientIPFrom(c.req.raw)));
+  // Issue #38: re-embed whenever the request could have changed what's
+  // actually searchable — title, story, or aspects. `input.title`/
+  // `input.story` are `UpdateListingInput`'s normal `.partial()` optionals
+  // (absent means "unchanged", same convention `place`/`photo_ids` above
+  // already follow); `input.aspects` uses the non-defaulting override
+  // `replaceListingAspects`'s own doc comment explains. Skipping this for a
+  // photo-only or location-only edit isn't just an optimization — it also
+  // means a listing that's exhausted EMBED_DAILY_BUDGET for the day doesn't
+  // get charged again for an edit that couldn't have changed its vector.
+  if (input.title !== undefined || input.story !== undefined || input.aspects !== undefined) {
+    c.executionCtx.waitUntil(reembedListing(c.env, id));
+  }
 
   const updatedRow = await fetchListingRow(c.env, id);
   if (!updatedRow) return fail(c, "internal", "Listing failed to save.", 500);
@@ -293,7 +312,15 @@ listingRoutes.delete("/:id", ownerAuth(), async (c) => {
   // the schema's foreign keys so a child table added later without a
   // cascade fails rather than quietly orphaning a requester's note, email
   // and phone with no listing left to reach them through.
+  //
+  // The Vectorize row has no such mechanism — D1 cascades don't reach an
+  // external index — so it's deleted explicitly below. Today that is
+  // belt-and-braces rather than load-bearing (`fetchCandidateRows` joins
+  // back to `listings` on `status = 'approved'`, and a deleted row simply
+  // isn't there to match), but there's no reason to leave a dead vector in
+  // the index once the listing it represents is gone.
   await c.env.DB.prepare("DELETE FROM listings WHERE id = ?").bind(id).run();
+  c.executionCtx.waitUntil(deleteListingVector(c.env, id));
 
   return ok(c, { id });
 });
