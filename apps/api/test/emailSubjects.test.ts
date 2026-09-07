@@ -93,12 +93,13 @@ describe("issue #86: every email subject is constructed through sanitizeSubject"
     // nothing — a source scan over zero files passes every assertion below
     // while proving exactly nothing. Six templates exist today; this floor
     // only ever needs raising, never lowering.
-    expect(templateFiles.length).toBeGreaterThanOrEqual(6);
+    expect(templateFiles.length).toBeGreaterThanOrEqual(7);
     expect(Object.keys(modules).sort()).toEqual(Object.keys(sources).sort());
     expect(templateFiles).toEqual(
       expect.arrayContaining([
         "../src/email/templates/adminTest.ts",
         "../src/email/templates/chosen.ts",
+        "../src/email/templates/dailyDigest.ts",
         "../src/email/templates/newRequest.ts",
         "../src/email/templates/recover.ts",
         "../src/email/templates/requestReceived.ts",
@@ -153,6 +154,32 @@ const HOSTILE_CASES: Record<string, () => EmailTemplate> = {
       // hostile value has to arrive through `toISOString()`.
       { toISOString: () => DIRTY } as unknown as Date,
     ),
+  dailyDigest: () =>
+    (
+      modules["../src/email/templates/dailyDigest.ts"] as {
+        dailyDigest: (report: unknown) => EmailTemplate;
+      }
+    ).dailyDigest({
+      // The subject is built from `date` (via `dailyReportSubject`), so that
+      // is the field the hostile value has to arrive through. The rest is a
+      // minimal well-formed report — this case is about the subject, and the
+      // body escaping is covered by the shared HTML assertions below.
+      date: DIRTY,
+      generated_at: 0,
+      environment: DIRTY,
+      commit: DIRTY,
+      needs_attention: [{ severity: "critical", code: "cron_stale", detail: DIRTY }],
+      listings: { created: 0, approved: 0, rejected: 0, pending_now: 0, needs_review_now: 0, oldest_pending_age_ms: null },
+      requests: { created: 0, chosen: 0 },
+      email: { attempted: 0, failed: 0, top_error: DIRTY },
+      reports: { autohidden_awaiting_review: 0, near_threshold: 0 },
+      budgets: {
+        mod_text: { used: 0, limit: 1 },
+        mod_image: { used: 0, limit: 1 },
+        suggest: { used: 0, limit: 1 },
+      },
+      crons: [{ name: DIRTY, last_run_at: null, stale: true }],
+    }),
   chosen: () =>
     (modules["../src/email/templates/chosen.ts"] as { chosen: (p: Record<string, string>) => EmailTemplate }).chosen({
       listingTitle: DIRTY,

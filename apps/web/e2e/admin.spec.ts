@@ -10,7 +10,7 @@ async function signIn(page: import("@playwright/test").Page): Promise<void> {
   await page.goto("/admin");
   await page.getByLabel("Admin token").fill(ADMIN_TOKEN);
   await page.getByLabel("Enter").click();
-  await expect(page.getByRole("tablist")).toBeVisible();
+  await expect(page.getByRole("tablist", { name: "Queue status" })).toBeVisible();
 }
 
 test("the token gate refuses a wrong token and accepts the real one", async ({ page }) => {
@@ -23,7 +23,7 @@ test("the token gate refuses a wrong token and accepts the real one", async ({ p
 
   await page.getByLabel("Admin token").fill(ADMIN_TOKEN);
   await page.getByLabel("Enter").click();
-  await expect(page.getByRole("tablist").getByLabel("Needs review", { exact: true })).toBeVisible();
+  await expect(page.getByRole("tablist", { name: "Queue status" }).getByLabel("Needs review", { exact: true })).toBeVisible();
 });
 
 test("a hidden listing sits in the Hidden tab and Restore puts it back on the feed", async ({ page, request }) => {
@@ -33,7 +33,7 @@ test("a hidden listing sits in the Hidden tab and Restore puts it back on the fe
   await hideListingAsAdmin(request, listing.id, "e2e fixture");
 
   await signIn(page);
-  await page.getByRole("tablist").getByLabel("Hidden", { exact: true }).click();
+  await page.getByRole("tablist", { name: "Queue status" }).getByLabel("Hidden", { exact: true }).click();
 
   const card = page.getByText(listing.title, { exact: true });
   await expect(card).toBeVisible();

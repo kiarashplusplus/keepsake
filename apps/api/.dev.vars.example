@@ -33,3 +33,21 @@ RESEND_API_KEY=
 # bounds how long any unreached copy can survive. Local dev has no zone to
 # purge against anyway.
 CF_CACHE_PURGE_TOKEN=
+
+# Read-only Cloudflare API token for the Observatory (GET
+# /api/admin/observatory), scoped to exactly two account permission groups:
+# `Account Analytics Read` and `Workers Observability Read`. Pairs with the
+# `CF_ACCOUNT_ID`/`CF_SCRIPT_NAME` vars in wrangler.toml. Left blank here on
+# purpose: local `wrangler dev` has no deployed script whose analytics or
+# logs there would be anything to read, and the Observatory's D1-derived half
+# — the funnel, the queue ages, the daily digest — works with no credential
+# at all. With this unset the two Cloudflare panels render an explicit
+# "not configured" rather than an empty chart.
+CF_OBSERVATORY_TOKEN=
+
+# Address the daily digest is mailed to (apps/api/src/cron/dailyDigest.ts).
+# A secret rather than a wrangler.toml var only because it is a real
+# person's address and that file is committed. Unset means the digest is
+# still built every night — proving the queries work — and logged instead of
+# sent, which is why the cron does not fail when this is blank.
+ADMIN_DIGEST_TO=

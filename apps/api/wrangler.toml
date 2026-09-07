@@ -126,7 +126,7 @@ name = "EMAIL"
 # through to `default:`: a `console.warn` and no work, on an invocation the
 # platform records as successful.
 [triggers]
-crons = ["*/5 * * * *", "17 3 * * *"]
+crons = ["*/5 * * * *", "17 3 * * *", "7 0 * * *"]
 
 [vars]
 # Local/dev defaults. Every one of these is repeated verbatim under
@@ -291,6 +291,18 @@ SITE_URL = "http://localhost:8787"
 # `images.ts` serves `max-age=3600`, so an unreached copy expires within the
 # hour regardless.
 CF_ZONE_ID = ""
+# --- Observatory (GET /api/admin/observatory) ---
+# The account the Worker's own analytics and logs are read from, and the
+# script name to filter them by. Both are public identifiers — an account id
+# is not a credential and a script name is visible in every deploy log — so
+# they are vars, exactly like `CF_ZONE_ID` above, while the token they pair
+# with (`CF_OBSERVATORY_TOKEN`, `Account Analytics Read` + `Workers
+# Observability Read`) is a Worker secret. Empty here: local `wrangler dev`
+# has no deployed script to read telemetry for, and with any half missing the
+# Observatory's Cloudflare panels report themselves `unconfigured` rather
+# than rendering an empty chart that looks like zero traffic.
+CF_ACCOUNT_ID = ""
+CF_SCRIPT_NAME = ""
 # M1: flips the moderation pipeline to canned responses for local dev and
 # Playwright, so `give` works without live Workers AI calls.
 MOCK_AI = "0"
@@ -472,6 +484,8 @@ SITE_URL = "https://preview.keepsake.ing"
 # until `CF_CACHE_PURGE_TOKEN` is set on this Worker — see the top-level
 # `[vars]` comment.
 CF_ZONE_ID = "dcc1fb09eeeba27a343fc1d98aff9094"
+CF_ACCOUNT_ID = "dc6a87ed4a4269ed74c8f508b275b703"
+CF_SCRIPT_NAME = "keepsake-preview"
 MOCK_AI = "0"
 
 [[env.preview.d1_databases]]
@@ -636,6 +650,8 @@ SITE_URL = "https://keepsake.ing"
 # `[vars]` comment for the full rationale and for why an unset token is a
 # silent no-op rather than an error.
 CF_ZONE_ID = "dcc1fb09eeeba27a343fc1d98aff9094"
+CF_ACCOUNT_ID = "dc6a87ed4a4269ed74c8f508b275b703"
+CF_SCRIPT_NAME = "keepsake-production"
 MOCK_AI = "0"
 
 [[env.production.d1_databases]]

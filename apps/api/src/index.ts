@@ -4,6 +4,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { captureException, configureCapture } from "@keepsake/observability/capture";
 import { apiErr } from "@keepsake/contracts/common";
 import { assertBindings, isProduction, type Env } from "./env.js";
+import { dailyDigest } from "./cron/dailyDigest.js";
 import { moderationRetry } from "./cron/moderationRetry.js";
 import { orphanSweep } from "./cron/orphanSweep.js";
 import { ukBlock } from "./middleware/ukBlock.js";
@@ -320,6 +321,9 @@ async function scheduled(controller: ScheduledController, env: Env, ctx: Executi
       break;
     case "17 3 * * *":
       await runCron("orphanSweep", orphanSweep, env, ctx);
+      break;
+    case "7 0 * * *":
+      await runCron("dailyDigest", dailyDigest, env, ctx);
       break;
     default:
       console.warn("scheduled: unrecognized cron pattern", { cron: controller.cron });

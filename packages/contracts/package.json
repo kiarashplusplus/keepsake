@@ -12,6 +12,7 @@
     "./report": "./src/report.ts",
     "./owner": "./src/owner.ts",
     "./admin": "./src/admin.ts",
+    "./observatory": "./src/observatory.ts",
     "./feed": "./src/feed.ts",
     "./geo": "./src/geo.ts",
     "./shelves": "./src/shelves.ts"
