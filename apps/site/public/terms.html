@@ -27,6 +27,18 @@
       .prohibited-items tr:last-child td {
         border-bottom: none;
       }
+      /* Conspicuousness for the indemnification clause below: Texas's fair-notice doctrine
+         (see docs/legal-considerations.md, #63) requires a clause like this stand out from
+         surrounding body text — capitalization, bold, a heading, or larger type — or it's
+         unenforceable absent the other party's actual knowledge. The border is decorative only
+         (not relied on for contrast); the clause's own text stays the page's normal `--ink` on
+         `--surface`, already verified against both themes by the Playwright axe check, and gets
+         its conspicuousness from the bold weight and the box instead. */
+      .indemnity {
+        border: 2px solid var(--accent-text);
+        padding: 1em 1.25em;
+        margin: 1.25em 0;
+      }
     </style>
     <!-- Consent. `/consent.js` is the single shared implementation of the
          store, the banner and every third-party loader — the same file the
@@ -255,6 +267,39 @@
           This is guidance, not a guarantee, and it isn't a substitute for your own judgment about
           a specific person or place — see "No warranty" below for what Keepsake is and isn't
           responsible for once you're arranging a handoff.
+        </p>
+
+        <h2>If you're giving something away: you cover us for what happens between you two</h2>
+        <!-- One-way, not mutual: decision recorded in issue #63 (2026-09-07), which exists
+             precisely because the earlier plan called this "mutual" when the platform it was
+             modeled on (Olio) runs a one-directional clause instead. Drafted against Texas's
+             two-part fair-notice doctrine (docs/legal-considerations.md, #63/#34 Q8): the
+             conspicuousness half is the boxed, bold treatment below (see the `.indemnity` style
+             in <head>); the express-negligence half is the sentence naming a claim that Keepsake
+             was itself negligent, specifically, rather than relying on a generic "all claims"
+             which Texas courts read as not reaching Keepsake's own negligence at all. Whether
+             Texas law treats this differently for an individual operator versus an LLC is
+             unresolved and stays on the lawyer-questions list (#34 Q8) — it doesn't block
+             drafting the clause itself, only how confidently to rely on it. -->
+        <div class="indemnity">
+          <p>
+            <strong>
+              This part is about givers, not requesters, and it only runs one way. If you give
+              something away and it leads to a claim, a dispute, or an expense involving Keepsake
+              — arising out of your meeting, your handoff, or anything else between you and the
+              person you gave it to — you agree to cover Keepsake for it, including the reasonable
+              cost of defending it. That covers a claim over something the other person did, and
+              it also covers a claim that Keepsake was itself negligent in bringing the two of you
+              together: screening a listing or hosting a request isn't a guarantee of how a
+              meetup goes, and we'd rather this clause say that plainly than leave it implied.
+            </strong>
+          </p>
+        </div>
+        <p>
+          We're borrowing this arrangement from Olio, a comparable giving platform that runs the
+          same one-directional structure: the giver carries this risk, and Keepsake doesn't extend
+          the same promise back to a requester, or to itself. This sits alongside, not instead of,
+          the guidance above on meeting safely and the "No warranty" disclaimer below.
         </p>
 
         <h2>No warranty</h2>

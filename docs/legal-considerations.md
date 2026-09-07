@@ -116,10 +116,11 @@ stays an honest record of what was found and when:**
     than the original research's more abstract framing. #31 stays open, advisory, labeled
     `blocked-on-kiarash` — closing it for real needs an actual lawyer's answer on applicability, not
     further inference.
-- Everything else below — in-person safety copy (issue #32's safety-guidance half is now done; see
-  `terms.html`'s "Meeting up safely" section and `RequestSheet.tsx`; the indemnification clause
-  itself waits on #63), the Article 27 representative question, and the eight lawyer questions — is
-  **still open**, unchanged from the original research except where noted above.
+- **In-person safety (issue #32): done, both halves.** `terms.html`'s "Meeting up safely" section
+  and `RequestSheet.tsx` cover the safety-guidance half; the one-way indemnification clause (#63's
+  decision) is in `terms.html` too — see the "In-person safety" section below for detail. Everything
+  else — the Article 27 representative question and the remaining lawyer questions — is **still
+  open**, unchanged from the original research except where noted above.
 
 ---
 
@@ -423,16 +424,23 @@ maintain:
 - **Buy Nothing Project**: same public-place/bring-a-friend guidance, community-guideline based
   rather than contractual.
 
-**Concrete gap for Keepsake — safety-guidance half closed (issue #32), indemnification half still
-open (issue #63):** the terms now carry a "Meeting up safely" section (public/well-lit location,
-bring a friend or tell someone the plan, keep contact inside Keepsake's request messages, a
-no-contact/doorstep option, and permission to back out), and `RequestSheet.tsx` shows the same
-guidance in the request form and again in the post-send confirmation — not just buried in a legal
-document nobody reads before meeting a stranger. The mutual indemnification clause deliberately
-was **not** drafted here: #63 established that "mutual" isn't actually the Olio model (Olio's is
-one-directional, users→Olio) and that choosing among the three possible shapes (Keepsake-only,
-genuinely mutual, or user-to-user) is a product-posture call for Kiarash, not something to
-pre-empt by drafting text against the wrong shape.
+**Gap closed — issue #32 done in full, #63 decided.** The terms carry a "Meeting up safely"
+section (public/well-lit location, bring a friend or tell someone the plan, keep contact inside
+Keepsake's request messages, a no-contact/doorstep option, and permission to back out), and
+`RequestSheet.tsx` shows the same guidance in the request form and again in the post-send
+confirmation — not just buried in a legal document nobody reads before meeting a stranger.
+
+The indemnification clause was drafted only after #63 resolved which of the three shapes to use.
+**Decision (Kiarash, 2026-09-07): one-way, matching what Olio actually runs** — the giver
+indemnifies Keepsake for claims arising from their dealings with the other party; it does not run
+the other way, and "mutual" (the framing this section used until now) was explicitly rejected as
+not the model being cited. `terms.html`'s "If you're giving something away: you cover us for what
+happens between you two" section implements this, boxed and bolded for Texas's fair-notice
+conspicuousness requirement, and naming a claim of Keepsake's own negligence specifically (not a
+generic "all claims") for the doctrine's separate express-negligence requirement. Whether Texas
+law treats this differently for an individual operator versus an LLC is unresolved and stays on
+the lawyer-questions list (#34 Q8) — noted in a dev comment beside the clause; it didn't block
+drafting, only how confidently to rely on the result.
 
 ## Privacy notice checklist
 
