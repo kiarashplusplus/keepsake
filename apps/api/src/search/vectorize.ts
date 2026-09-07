@@ -16,12 +16,22 @@ export interface VectorMatch {
   score: number;
 }
 
-export async function upsertListingVector(env: Env, listingId: string, vector: number[]): Promise<void> {
-  if (!env.VECTORIZE) return;
+/**
+ * `true` only when the vector actually landed in the index; `false` for a
+ * missing binding or a thrown call. Still never throws — the caller's job is
+ * to record the outcome (`listings.vector_indexed_at`, issue #180), not to
+ * turn it into a 500 on a listing write. Before #180 this returned `void`,
+ * which made "upserted" and "silently failed" indistinguishable to every
+ * caller and was half of why a missing vector left no trace anywhere.
+ */
+export async function upsertListingVector(env: Env, listingId: string, vector: number[]): Promise<boolean> {
+  if (!env.VECTORIZE) return false;
   try {
     await env.VECTORIZE.upsert([{ id: listingId, values: vector }]);
+    return true;
   } catch (err) {
     console.error("upsertListingVector: Vectorize call failed", { error: err instanceof Error ? err.message : String(err) });
+    return false;
   }
 }
 

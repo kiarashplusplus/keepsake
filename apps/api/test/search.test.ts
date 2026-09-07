@@ -301,6 +301,126 @@ describe("GET /api/feed?q= — fallback to FTS", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Issue #180: a listing whose embedding call failed.
+//
+// Two defects, both exercised here:
+//
+//  1. `routes/feed.ts` chose the vector path or the FTS path for the *whole*
+//     query (`useVector = vectorMatches.length > 0`), so a listing with no
+//     vector could not be returned by any query that some *other* listing
+//     answered semantically — including its own exact-title search.
+//     `reembed.ts`'s comment claimed such a listing was "still findable by
+//     title/story through FTS in the meantime"; that only held for queries
+//     returning zero vector matches.
+//  2. Nothing recorded that the vector was missing. Every failure path in
+//     `reembedListing` returned void — no event, no counter, no column —
+//     so "this listing was never indexed" was not a fact anything could
+//     query, and no retry had anything to select on.
+//
+// The load-bearing case for (1) is the one the old code got wrong: another
+// listing clears MIN_SCORE. A test where nothing clears it passes on the
+// broken code too, because then FTS was the whole answer anyway.
+// ---------------------------------------------------------------------------
+describe("a listing with no vector is still findable (issue #180)", () => {
+  async function seedIndexedAndUnindexed(): Promise<{ indexed: string; unindexed: string; query: string }> {
+    const ownerId = await insertOwner();
+
+    // A: embeds fine, and scores above MIN_SCORE for the query below.
+    const indexedTitle = "A copper teapot";
+    const indexedStory = "It sat on my aunt's stove for thirty years and still pours straight.";
+    const indexed = await insertApprovedListing({ ownerId, title: indexedTitle, story: indexedStory });
+    fixtureEmbedding(embeddingText(indexedTitle, indexedStory, []), [1, 0]);
+    await reembedListing(env, indexed);
+
+    // B: the exact-title match, whose embedding call fails — no fixture is
+    // registered for its text, so `mockAi`'s run() throws and `embed`
+    // returns null, exactly like a Workers AI hiccup during the create.
+    const unindexedTitle = "Brass reading lamp";
+    const unindexedStory = "The lamp from the corner of my father's study, rewired last spring.";
+    const unindexed = await insertApprovedListing({ ownerId, title: unindexedTitle, story: unindexedStory });
+    await reembedListing(env, unindexed);
+
+    // cos(query, A) = 1/sqrt(1.81) ≈ 0.743 — comfortably above MIN_SCORE,
+    // so the vector path leads and, before this fix, FTS never ran.
+    const query = "brass reading lamp";
+    fixtureEmbedding(query, [1, 0.9]);
+    return { indexed, unindexed, query };
+  }
+
+  it("is returned when ANOTHER listing clears MIN_SCORE — the case the old path selection got wrong", async () => {
+    const { indexed, unindexed, query } = await seedIndexedAndUnindexed();
+
+    // The premise, asserted rather than assumed: the vector path really is
+    // in charge for this query.
+    const matches = await vectorSearchCandidates(env, query);
+    expect(matches?.map((match) => match.id), "the indexed listing must clear MIN_SCORE").toContain(indexed);
+    expect(matches?.map((match) => match.id), "the un-indexed listing has no vector to match").not.toContain(unindexed);
+
+    const page = await readOk<FeedPage<PublicListing>>(await fetchFeed("?q=" + encodeURIComponent(query)));
+    const ids = page.items.map((item) => item.id);
+    expect(ids, "the un-embedded listing must not vanish from its own exact-title search").toContain(unindexed);
+    expect(ids, "the vector match is still there — this is a merge, not a swap").toContain(indexed);
+    // Vector rank leads; FTS-only rows are appended behind it.
+    expect(ids.indexOf(indexed)).toBeLessThan(ids.indexOf(unindexed));
+  });
+
+  it("is returned on the geo+search path too, where the same choice was made", async () => {
+    const { indexed, unindexed, query } = await seedIndexedAndUnindexed();
+
+    const page = await readOk<FeedPage<PublicListing>>(
+      await fetchFeed(`?q=${encodeURIComponent(query)}&country=US&postal=02144`),
+    );
+    const ids = page.items.map((item) => item.id);
+    expect(ids).toContain(unindexed);
+    expect(ids).toContain(indexed);
+  });
+
+  it("records the missing vector: vector_indexed_at is NULL for it and set for the indexed one", async () => {
+    const { indexed, unindexed } = await seedIndexedAndUnindexed();
+
+    const row = async (id: string) =>
+      env.DB.prepare("SELECT vector_indexed_at FROM listings WHERE id = ?").bind(id).first<{ vector_indexed_at: number | null }>();
+
+    expect((await row(indexed))?.vector_indexed_at, "a successful upsert must be recorded").toEqual(expect.any(Number));
+    expect((await row(unindexed))?.vector_indexed_at, "a failed embed must leave the listing marked un-indexed").toBeNull();
+
+    // The whole point of the column: "which listings are missing from the
+    // semantic index" is a query, not a guess.
+    const missing = await env.DB.prepare(
+      "SELECT id FROM listings WHERE vector_indexed_at IS NULL AND id IN (?, ?)",
+    )
+      .bind(indexed, unindexed)
+      .all<{ id: string }>();
+    expect(missing.results.map((r) => r.id)).toEqual([unindexed]);
+  });
+
+  it("clears vector_indexed_at when a later re-embed fails, so a stale vector is not mistaken for a current one", async () => {
+    const ownerId = await insertOwner();
+    const title = "A walnut stool";
+    const story = "Three legs, one wobble, and forty years of being sat on.";
+    const listingId = await insertApprovedListing({ ownerId, title, story });
+
+    fixtureEmbedding(embeddingText(title, story, []), [1, 0]);
+    await reembedListing(env, listingId);
+    const afterSuccess = await env.DB.prepare("SELECT vector_indexed_at FROM listings WHERE id = ?")
+      .bind(listingId)
+      .first<{ vector_indexed_at: number | null }>();
+    expect(afterSuccess?.vector_indexed_at).toEqual(expect.any(Number));
+
+    // The story changes and the re-embed fails: whatever is in the index now
+    // describes text this listing no longer has.
+    const newStory = "Repainted last month, and now it lives by the back door.";
+    await env.DB.prepare("UPDATE listings SET story = ? WHERE id = ?").bind(newStory, listingId).run();
+    await reembedListing(env, listingId); // no fixture for the new text -> embed returns null
+
+    const afterFailure = await env.DB.prepare("SELECT vector_indexed_at FROM listings WHERE id = ?")
+      .bind(listingId)
+      .first<{ vector_indexed_at: number | null }>();
+    expect(afterFailure?.vector_indexed_at).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Re-embed on write: create, edit, and delete.
 // ---------------------------------------------------------------------------
 
