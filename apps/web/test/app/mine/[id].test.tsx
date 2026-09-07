@@ -61,6 +61,7 @@ function detailWithOpenRequest(): OwnerListingDetail {
         created_at: Date.now() - 60_000,
         status: "open",
         email_masked: "p•••@keepsake.ing",
+        notify_failed: false,
       },
     ],
     moderation: { status: "approved", held: false },
@@ -81,6 +82,7 @@ function detailWithChosenRequest(): OwnerListingDetail {
         email_masked: "p•••@keepsake.ing",
         email: "person@keepsake.ing",
         phone: "+1 555 0100",
+        notify_failed: false,
       },
     ],
   };
@@ -129,6 +131,7 @@ describe("mine/[id] choose flow", () => {
       email_masked: "p•••@keepsake.ing",
       email: "person@keepsake.ing",
       phone: "+1 555 0100",
+      notify_failed: false,
     });
     jest.mocked(getMyListing).mockResolvedValueOnce(detailWithChosenRequest());
 
@@ -140,5 +143,49 @@ describe("mine/[id] choose flow", () => {
 
     expect(jest.mocked(chooseRequest)).toHaveBeenCalledWith("listing-1", { request_id: "req-1", handoff_note: "" });
     expect(JSON.stringify(instance.toJSON())).toContain("person@keepsake.ing");
+  });
+
+  // Issue #6: a rejected notification used to be indistinguishable from a
+  // delivered one anywhere the giver could see — this is the dashboard half
+  // of closing that gap. Two cases, since the failure means something
+  // different depending on whose address bounced: the giver's own (they
+  // never heard about the ask) or the chosen requester's (that person never
+  // heard they were picked).
+  it("shows a warm notice when the owner-notify failed on an open request", async () => {
+    const detail = detailWithOpenRequest();
+    const failedRequest = detail.requests[0];
+    if (failedRequest === undefined) throw new Error("fixture missing its request");
+    detail.requests = [{ ...failedRequest, notify_failed: true }];
+    jest.mocked(getMyListing).mockResolvedValueOnce(detail);
+
+    const instance = render(
+      <ToastProvider>
+        <MineDetail />
+      </ToastProvider>,
+    );
+    await act(async () => {
+      await flush();
+    });
+
+    expect(JSON.stringify(instance.toJSON())).toContain("We couldn't reach you about this one");
+  });
+
+  it("shows a warm notice when the chosen-notify failed", async () => {
+    const detail = detailWithChosenRequest();
+    const failedRequest = detail.requests[0];
+    if (failedRequest === undefined) throw new Error("fixture missing its request");
+    detail.requests = [{ ...failedRequest, notify_failed: true }];
+    jest.mocked(getMyListing).mockResolvedValueOnce(detail);
+
+    const instance = render(
+      <ToastProvider>
+        <MineDetail />
+      </ToastProvider>,
+    );
+    await act(async () => {
+      await flush();
+    });
+
+    expect(JSON.stringify(instance.toJSON())).toContain("We couldn't reach them to say you chose them");
   });
 });

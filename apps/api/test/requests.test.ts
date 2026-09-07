@@ -1,8 +1,11 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CreateRequestResult } from "@keepsake/contracts/request";
+import type { OwnerViewRequest } from "@keepsake/contracts/request";
 import {
+  authHeaders,
   freshClientIp,
+  freshOwnerToken,
   insertApprovedListing,
   insertOwner,
   installFakeEmail,
@@ -10,6 +13,7 @@ import {
   readOk,
   removeFakeEmail,
 } from "./helpers.js";
+import { sha256Hex } from "../src/lib/digest.js";
 
 async function requestListing(listingId: string, body: Record<string, unknown>, clientIp = freshClientIp()): Promise<Response> {
   return SELF.fetch(`http://x/api/listings/${listingId}/requests`, {
@@ -96,6 +100,47 @@ describe("POST /api/listings/:id/requests", () => {
     const emailEvent = await env.DB.prepare("SELECT kind, ok, provider FROM email_events WHERE kind = 'new_request' ORDER BY created_at DESC LIMIT 1")
       .first<{ kind: string; ok: number; provider: string }>();
     expect(emailEvent?.ok).toBe(1);
+  });
+
+  // Issue #6: this used to be discarded — the giver's own address rejected
+  // the notification and their dashboard never said so. Breaks the send by
+  // removing the fake `EMAIL` binding, so `sendMail` falls through to its
+  // real "binding missing" stub path (`sent: false`) rather than the
+  // reserved-domain guard, which `EMAIL_MODE: "test"` bypasses everywhere
+  // else in this suite. Checks all three places the failure must now land:
+  // the `requests` row, `email_events`, and the owner's own dashboard read.
+  it("records a failed owner-notify and surfaces it on the giver's own dashboard, instead of discarding it", async () => {
+    const token = freshOwnerToken();
+    const tokenHash = await sha256Hex(token);
+    const ownerId = crypto.randomUUID();
+    const now = Date.now();
+    await env.DB.prepare(
+      "INSERT INTO owners (id, token_hash, email, email_verified_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+      .bind(ownerId, tokenHash, "unreachable-giver@keepsake.ing", now, now, now)
+      .run();
+    const listingId = await insertApprovedListing({ ownerId, title: "A dented compass" });
+
+    // No fake EMAIL binding installed — the owner-notify hits the real
+    // "binding missing" stub path and genuinely returns `{ sent: false }`.
+    const res = await requestListing(listingId, VALID_REQUEST_BODY);
+    expect(res.status).toBe(201);
+    const body = await readOk<CreateRequestResult>(res);
+
+    const requestRow = await env.DB.prepare("SELECT notify_failed_reason FROM requests WHERE id = ?").bind(body.id).first<{
+      notify_failed_reason: string | null;
+    }>();
+    expect(requestRow?.notify_failed_reason).toBeTruthy();
+
+    const emailEvent = await env.DB.prepare(
+      "SELECT ok FROM email_events WHERE kind = 'new_request' ORDER BY created_at DESC LIMIT 1",
+    ).first<{ ok: number }>();
+    expect(emailEvent?.ok).toBe(0);
+
+    const dashboard = await SELF.fetch(`http://x/api/me/listings/${listingId}`, { headers: authHeaders(token) });
+    expect(dashboard.status).toBe(200);
+    const detail = await readOk<{ requests: OwnerViewRequest[] }>(dashboard);
+    expect(detail.requests.find((r) => r.id === body.id)?.notify_failed).toBe(true);
   });
 
   it("sends only the requester confirmation when the owner has no verified email", async () => {

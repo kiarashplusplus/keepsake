@@ -56,6 +56,52 @@ describe("POST /api/me/listings/:id/choose", () => {
     expect(sent[0]?.replyTo).toBe("giver@keepsake.ing");
   });
 
+  // Issue #6: choosing used to fire the "chosen" email and report success
+  // to the giver regardless of whether it actually reached anyone —
+  // `sendMail()`'s own `{ sent: false, reason }` was discarded. This breaks
+  // the send by removing the fake `EMAIL` binding (so `sendMail` falls
+  // through to its "binding missing" stub path rather than the reserved-
+  // domain guard, which `EMAIL_MODE: "test"` already bypasses everywhere in
+  // this suite) and checks all three places the failure must now show up:
+  // the choose response itself, the `requests` row, and the owner's own
+  // dashboard read.
+  it("surfaces a failed chosen-notify on the response, the request row, and the owner's dashboard — instead of reporting success anyway", async () => {
+    const token = freshOwnerToken();
+    const tokenHash = await sha256HexForTest(token);
+    const ownerId = crypto.randomUUID();
+    const now = Date.now();
+    await env.DB.prepare("INSERT INTO owners (id, token_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?)").bind(ownerId, tokenHash, now, now).run();
+    const listingId = await insertApprovedListing({ ownerId, title: "A tin lunchbox" });
+    const requestId = await insertRequest(listingId, "unreachable@keepsake.ing");
+
+    // No fake EMAIL binding installed — `sendMail` hits the "binding
+    // missing" stub path and returns `{ sent: false }` for real, the same
+    // as it would if Cloudflare's Email Service were unconfigured.
+    const res = await SELF.fetch(`http://x/api/me/listings/${listingId}/choose`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: requestId, handoff_note: "On the porch, any time after six." }),
+    });
+    expect(res.status).toBe(200);
+    const revealed = await readOk<OwnerViewRequest>(res);
+    expect(revealed.notify_failed).toBe(true);
+
+    const requestRow = await env.DB.prepare("SELECT notify_failed_reason FROM requests WHERE id = ?").bind(requestId).first<{
+      notify_failed_reason: string | null;
+    }>();
+    expect(requestRow?.notify_failed_reason).toBeTruthy();
+
+    const emailEvent = await env.DB.prepare("SELECT ok FROM email_events WHERE kind = 'chosen' ORDER BY created_at DESC LIMIT 1").first<{
+      ok: number;
+    }>();
+    expect(emailEvent?.ok).toBe(0);
+
+    const dashboard = await SELF.fetch(`http://x/api/me/listings/${listingId}`, { headers: authHeaders(token) });
+    expect(dashboard.status).toBe(200);
+    const detail = await readOk<{ requests: OwnerViewRequest[] }>(dashboard);
+    expect(detail.requests.find((r) => r.id === requestId)?.notify_failed).toBe(true);
+  });
+
   it("409s choosing a request that's already been decided", async () => {
     const token = freshOwnerToken();
     const tokenHash = await sha256HexForTest(token);

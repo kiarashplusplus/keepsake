@@ -39,6 +39,12 @@ interface RequestRow {
   phone: string | null;
   status: string;
   created_at: number;
+  // NULL means the notification email relevant to this request's current
+  // status was delivered (or none has been attempted yet); non-NULL is
+  // `sendMail()`'s own reason — see migration 0008_notify_failed.sql and
+  // `OwnerViewRequest.notify_failed`'s doc comment in
+  // `@keepsake/contracts/request`.
+  notify_failed_reason: string | null;
 }
 
 function serializeOwnerViewRequest(row: RequestRow): OwnerViewRequest {
@@ -57,6 +63,7 @@ function serializeOwnerViewRequest(row: RequestRow): OwnerViewRequest {
       created_at: row.created_at,
       status: isAdminRemoved ? "removed" : "withdrawn",
       email_masked: isAdminRemoved ? ADMIN_REMOVED_REQUEST_PLACEHOLDER : WITHDRAWN_REQUEST_PLACEHOLDER,
+      notify_failed: false,
     };
   }
 
@@ -70,6 +77,7 @@ function serializeOwnerViewRequest(row: RequestRow): OwnerViewRequest {
     ...(row.phone !== null ? { phone_masked: maskPhone(row.phone) } : {}),
     ...(revealed ? { email: row.email } : {}),
     ...(revealed && row.phone !== null ? { phone: row.phone } : {}),
+    notify_failed: row.notify_failed_reason !== null,
   };
 }
 
@@ -133,7 +141,7 @@ meRoutes.get("/listings/:id", ownerAuth(), async (c) => {
   const ownerListing = serializeOwnerListing(row, photos, aspects);
 
   const { results: requestRows } = await c.env.DB.prepare(
-    "SELECT id, note, email, phone, status, created_at FROM requests WHERE listing_id = ? ORDER BY created_at",
+    "SELECT id, note, email, phone, status, created_at, notify_failed_reason FROM requests WHERE listing_id = ? ORDER BY created_at",
   )
     .bind(id)
     .all<RequestRow>();
@@ -162,7 +170,9 @@ meRoutes.post("/listings/:id/choose", ownerAuth(), validateBody(ChooseRequestInp
     return fail(c, "not_found", "Listing not found.", 404);
   }
 
-  const request = await c.env.DB.prepare("SELECT id, listing_id, note, email, phone, status, created_at FROM requests WHERE id = ?")
+  const request = await c.env.DB.prepare(
+    "SELECT id, listing_id, note, email, phone, status, created_at, notify_failed_reason FROM requests WHERE id = ?",
+  )
     .bind(input.request_id)
     .first<RequestRow & { listing_id: string }>();
 
@@ -196,12 +206,24 @@ meRoutes.post("/listings/:id/choose", ownerAuth(), validateBody(ChooseRequestInp
     handoffNote: input.handoff_note,
     itemLink,
   });
-  await sendMail(c.env, {
+  const sendResult = await sendMail(c.env, {
     kind: "chosen",
     to: requestEmail,
     ...(giverVerified ? { replyTo: owner.email as string } : {}),
     ...template,
   });
+
+  // Issue #6: this used to be fire-and-forget, same as the owner-notify on
+  // creation — a rejected recipient here means the person the giver just
+  // picked never hears about it, while the giver's own screen says it
+  // worked. Whatever `notify_failed_reason` this request carried from its
+  // creation-time owner-notify no longer means anything once chosen — the
+  // giver clearly already knows about the request, since they're the one
+  // choosing it — so this overwrites it with the outcome of the send that
+  // now actually matters.
+  await c.env.DB.prepare("UPDATE requests SET notify_failed_reason = ? WHERE id = ?")
+    .bind(sendResult.sent ? null : sendResult.reason ?? "send_failed", request.id)
+    .run();
 
   const revealed: OwnerViewRequest = {
     id: request.id,
@@ -212,6 +234,7 @@ meRoutes.post("/listings/:id/choose", ownerAuth(), validateBody(ChooseRequestInp
     ...(request.phone !== null ? { phone_masked: maskPhone(request.phone) } : {}),
     email: requestEmail,
     ...(request.phone !== null ? { phone: request.phone } : {}),
+    notify_failed: !sendResult.sent,
   };
   return ok(c, revealed);
 });
