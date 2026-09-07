@@ -24,6 +24,9 @@
  *  - `requests.ip_digest` / `reports.ip_digest` on rows older than 48 hours
  *    (issue #169), which is what makes the privacy page's twice-stated
  *    48-hour expiry true of the D1 copies and not only of the KV counters.
+ *  - plaintext addresses left in `email_events.error_detail` by rows written
+ *    before #190 scrubbed provider text at the point of capture (issue #200)
+ *    — rewritten in place, keeping the provider's sentence.
  *
  * Since #178 the two photo sweeps also consult the backup bucket
  * (`PHOTO_BACKUP_BUCKET`) and refuse to delete a photo whose keys are not
@@ -36,6 +39,8 @@
  * (a retried cron invocation, a manual trigger) is a no-op the second time:
  * nothing already deleted can match the same `WHERE` clause again.
  */
+import { captureMessage } from "@keepsake/observability/capture";
+import { redactString } from "@keepsake/observability/redact";
 import type { Env } from "../env.js";
 import { isDeployed, photoBackupBucket } from "../env.js";
 import { purgePhotoCache } from "../lib/photoCache.js";
@@ -338,6 +343,82 @@ async function sweepExpiredIpDigests(env: Env, cutoff: number): Promise<{ reques
 }
 
 /**
+ * Issue #200. #190 scrubs the recipient's address out of provider error text
+ * at the point it is captured, so every `email_events` row written since is
+ * clean. It did nothing for the rows already written, and those are exactly
+ * the rows #190 identified as outliving everything else: `error_detail` is
+ * retained here for 90 days, survives the requester's withdraw link (which
+ * nulls `note`, `email` and `phone`), and survives `DELETE /api/me/email`.
+ * For up to 90 days the one copy of an address that persists after someone
+ * asks to be forgotten was the copy nobody knew was there.
+ *
+ * Only `redactString` — the second of `scrubProviderDetail`'s two passes —
+ * can run here. The first pass replaces the *known* recipient with
+ * `<recipient>`, and a stored row has only `to_hash`, so the address it was
+ * sent to is unrecoverable by design. `redactString` needs no such knowledge:
+ * it replaces any address-shaped local part with `[REDACTED]` and keeps the
+ * domain, which is the same trade `to_domain` already makes and leaves the
+ * provider's diagnosis ("… is not a verified destination address for this
+ * Email Routing zone") readable — the half that would answer #6.
+ *
+ * **The `GLOB` is the idempotence.** A redacted row still contains an `@`
+ * (`[REDACTED]@example.org`), so a `LIKE '%@%'` filter would re-select every
+ * row it had already cleaned, forever. The character immediately before the
+ * `@` is what tells them apart: a local-part character means unscrubbed,
+ * `]` means already done. So this run writes only rows that actually change,
+ * and a second run the same night matches nothing — the same property every
+ * other sweep in this file has.
+ *
+ * Kept as a nightly pass rather than a one-off migration for two reasons: a
+ * migration cannot run the regex (it is JavaScript, and the pattern lives in
+ * `@keepsake/observability/patterns` precisely so there is one definition of
+ * "what an address looks like"), and a standing pass also catches a future
+ * capture site that forgets to scrub. It is a backstop, not a replacement
+ * for scrubbing at capture — a row written unscrubbed is still exposed until
+ * the next 03:17 UTC run.
+ *
+ * Bounded twice: a keyset cursor over `id` so a row the regex cannot improve
+ * (an address whose domain does not match the pattern) can never starve the
+ * rows behind it, and a per-run ceiling so one night's work is predictable.
+ * At the observed volumes both are far above the real count; they exist so
+ * the shape of a bad day is known in advance.
+ */
+const EMAIL_DETAIL_SCRUB_BATCH = 200;
+const EMAIL_DETAIL_SCRUB_MAX_PER_RUN = 2000;
+/** A local-part character immediately before an `@` — i.e. not yet redacted. */
+const UNSCRUBBED_ADDRESS_GLOB = "*[A-Za-z0-9._%+-]@*";
+
+async function scrubEmailErrorDetails(env: Env): Promise<{ examined: number; scrubbed: number }> {
+  let cursor = "";
+  let examined = 0;
+  let scrubbed = 0;
+
+  while (examined < EMAIL_DETAIL_SCRUB_MAX_PER_RUN) {
+    const { results } = await env.DB.prepare(
+      `SELECT id, error_detail FROM email_events
+       WHERE error_detail IS NOT NULL AND error_detail GLOB ? AND id > ?
+       ORDER BY id LIMIT ?`,
+    )
+      .bind(UNSCRUBBED_ADDRESS_GLOB, cursor, EMAIL_DETAIL_SCRUB_BATCH)
+      .all<{ id: string; error_detail: string }>();
+    if (results.length === 0) break;
+
+    for (const row of results) {
+      examined += 1;
+      const cleaned = redactString(row.error_detail);
+      if (cleaned === row.error_detail) continue;
+      await env.DB.prepare("UPDATE email_events SET error_detail = ? WHERE id = ?").bind(cleaned, row.id).run();
+      scrubbed += 1;
+    }
+
+    cursor = results[results.length - 1]?.id ?? cursor;
+    if (results.length < EMAIL_DETAIL_SCRUB_BATCH) break;
+  }
+
+  return { examined, scrubbed };
+}
+
+/**
  * Issue #188: deletes requests nobody confirmed, once their confirm link has
  * expired.
  *
@@ -417,6 +498,10 @@ export async function orphanSweep(env: Env): Promise<void> {
   // marginally better, since a row deleted here needs no digest cleared and
   // the two counts in the log line stay meaning distinct things.
   const unconfirmedRequestsDeleted = await sweepUnconfirmedRequests(env, now);
+  // After `sweepOldEvents`, deliberately: a row past the 90-day retention is
+  // deleted rather than rewritten, so the scrub never spends a write on a row
+  // this run has already removed.
+  const emailDetails = await scrubEmailErrorDetails(env);
   // Last, and after `sweepOrphanPhotos` specifically: that sweep is what
   // removes the only thing an abandoned give-flow owner ever held, so running
   // it first means the same night collects the owner too instead of leaving
@@ -424,6 +509,17 @@ export async function orphanSweep(env: Env): Promise<void> {
   // — the listing row survives (finding 15 keeps it deliberately), and
   // `NOT EXISTS (… FROM listings …)` sees it.
   const ownersDeleted = await sweepEmptyOwners(env, now - EMPTY_OWNER_AGE_MS);
+
+  // Issue #200 asked for the count of affected rows first, and no session can
+  // read production's D1 directly — so the sweep answers it on the way past.
+  // `warning` rather than a log line for the same reason #89's auto-hide
+  // alert is: nothing reads Workers Logs on a schedule, and "we were storing
+  // plaintext addresses and here is how many" is a sentence a person should
+  // meet rather than discover. Silent once the backlog is gone, which is
+  // itself the answer when the count was zero all along.
+  if (emailDetails.scrubbed > 0) {
+    captureMessage(`orphanSweep: scrubbed ${emailDetails.scrubbed} legacy email_events error_detail row(s) (#200)`, "warning");
+  }
 
   if (photosDeferred > 0) {
     console.warn("orphanSweep: photo deletions deferred, waiting on the backup bucket", {
@@ -452,6 +548,12 @@ export async function orphanSweep(env: Env): Promise<void> {
     // the step working); a sudden spike is somebody aiming submissions at
     // addresses that are not theirs, which is the thing worth noticing.
     unconfirmedRequestsDeleted,
+    // #200: `examined` is how many rows still looked unscrubbed to the GLOB,
+    // `scrubbed` how many the regex actually changed. They differ only for a
+    // row carrying something address-shaped the pattern declines to touch, so
+    // a persistent gap between them is a pattern question, not a backlog.
+    emailDetailsExamined: emailDetails.examined,
+    emailDetailsScrubbed: emailDetails.scrubbed,
     ownersDeleted,
   });
 
