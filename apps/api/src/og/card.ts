@@ -68,9 +68,6 @@ export const CARD_HEIGHT = 630;
  * skipped the fetch cannot reach a real host — the image is simply absent.
  */
 export const COVER_HREF = "https://cover.invalid/photo.jpg";
-export const SECOND_HREF = "https://second.invalid/photo.jpg";
-
-export type CardVariant = "a" | "b" | "c";
 
 export interface CardInput {
   id: string;
@@ -81,8 +78,6 @@ export interface CardInput {
   place: string;
   /** `approved` renders the FREE stamp, `given` renders GIVEN. */
   status: "approved" | "given";
-  /** True when a second photo exists — only composition C uses it. */
-  hasSecondPhoto: boolean;
 }
 
 const c = colorsLight;
@@ -192,7 +187,7 @@ function excerptLines(story: string, maxWidth: number, size: number, maxLines: n
 }
 
 /* ------------------------------------------------------------------ *
- * Composition A — "The print and the index card"
+ * The composition — "The print and the index card"
  * ------------------------------------------------------------------ */
 
 /**
@@ -201,8 +196,18 @@ function excerptLines(story: string, maxWidth: number, size: number, maxLines: n
  * story on a kraft index card on the right — the same index-card surface an
  * input is cut from in the app (`colors.surface`), so the card looks like the
  * product rather than like a generic OG template.
+ *
+ * Chosen from three (a caption-on-the-frame variant closest to
+ * `og-default.svg`, and a photo-dominant contact sheet) by rendering all
+ * three and looking at them; see the PR 0 commit. The losers were deleted
+ * rather than left behind a `variant` argument nobody passes.
+ *
+ * Geometry note: the print is 500x562 with a 444x444 window inset 28px on
+ * three sides, which leaves a 90px chin. That asymmetry is the whole reason
+ * it reads as an instant print rather than as a bordered image, and the
+ * category label lives in it.
  */
-function compositionA(input: CardInput): string {
+function composition(input: CardInput): string {
   const tilt = tiltDegForId(input.id, motion.tiltRangeDeg);
   const title = titleLines(input.title, 480, 44, 3);
   const story = excerptLines(input.story, 480, 22, title.length >= 3 ? 2 : 3, 160);
@@ -233,105 +238,11 @@ function compositionA(input: CardInput): string {
 }
 
 /* ------------------------------------------------------------------ *
- * Composition B — "One print, caption on the frame"
- * ------------------------------------------------------------------ */
-
-/**
- * Literally `og-default.svg`'s composition — one big taped print, a second
- * peeking out behind — with the empty left half filled by the photo and the
- * type set on the same white frame. Maximum brand continuity: a card in this
- * shape is instantly the same object as the default one. The trade is that
- * everything shares one column of white, so a long title pushes on the story.
- */
-function compositionB(input: CardInput): string {
-  const tilt = tiltDegForId(input.id, motion.tiltRangeDeg);
-  const title = titleLines(input.title, 470, 42, 3);
-  const story = excerptLines(input.story, 470, 21, title.length >= 3 ? 2 : 3, 150);
-  const titleTop = -140;
-  const storyTop = titleTop + title.length * 48 + 30;
-
-  return `
-  <g transform="translate(838,150) rotate(6)">
-    <rect x="-190" y="-140" width="380" height="330" fill="${c.print}"/>
-    <rect x="-175" y="-125" width="350" height="255" fill="${c.tableEdge}"/>
-  </g>
-
-  <g transform="translate(600,315) rotate(${tilt.toFixed(2)})">
-    <rect x="-490" y="-255" width="980" height="510" fill="${c.print}" stroke="rgba(0,0,0,0.08)" stroke-width="2"/>
-    ${photoWindow(COVER_HREF, -460, -210, 380, 420, "winB")}
-    <clipPath id="cardB"><rect x="-50" y="-235" width="500" height="400"/></clipPath>
-    <g clip-path="url(#cardB)">
-      <text x="-50" y="-185" font-family="Courier Prime" font-weight="700" font-size="16" letter-spacing="3" fill="${c.foilText}">${escapeXml(input.categoryLabel.toUpperCase())}</text>
-      ${lines(title, { x: -52, y: titleTop, leading: 48, family: "Fraunces", size: 42, fill: c.ink, weight: 600, tracking: -1, variation: DISPLAY_VARIATION })}
-      ${lines(story, { x: -50, y: storyTop, leading: 29, family: "Fraunces", size: 21, fill: c.pencil, style: "italic" })}
-    </g>
-    <text x="-50" y="185" font-family="Courier Prime" font-size="18" fill="${c.ink}">${escapeXml(input.place)}</text>
-    <g transform="translate(340,175)">${stamp(stampLabel(input.status), -7)}</g>
-    ${footer(-460, 240)}
-    ${tape(490, 255)}
-  </g>`;
-}
-
-/* ------------------------------------------------------------------ *
- * Composition C — "Contact sheet"
- * ------------------------------------------------------------------ */
-
-/**
- * Photo-dominant and text-minimal, designed for how small an iMessage
- * thumbnail actually is: at that size a story excerpt is unreadable noise, so
- * this one spends the space on the object instead. All type lives on the
- * front print's chin. Uses the listing's second photo on the back print when
- * there is one — the contact-sheet read — and a blank kraft print when there
- * isn't, exactly as `og-default.svg` does.
- */
-function compositionC(input: CardInput): string {
-  const tilt = tiltDegForId(input.id, motion.tiltRangeDeg);
-  // The title column stops short of the stamp's left edge rather than running
-  // the full width of the chin — the stamp is pressed ON the print, so type
-  // sliding under it reads as a bug, not as layering.
-  const title = titleLines(input.title, 450, 32, 2);
-
-  // With no second photo there is no back print at all. `og-default.svg` fills
-  // its back print with flat kraft, which works there because the front print
-  // covers all but a sliver; here the back print is largely exposed, and a
-  // bare kraft rectangle reads as a missing image rather than as a second
-  // photograph face-down on the table.
-  const back = input.hasSecondPhoto
-    ? `
-  <g transform="translate(905,175) rotate(6)">
-    <rect x="-170" y="-150" width="340" height="300" fill="${c.print}" stroke="rgba(0,0,0,0.06)" stroke-width="2"/>
-    ${photoWindow(SECOND_HREF, -142, -122, 284, 244, "winC2")}
-  </g>`
-    : "";
-
-  return `${back}
-
-  <g transform="translate(505,308) rotate(${tilt.toFixed(2)})">
-    <rect x="-340" y="-250" width="680" height="500" fill="${c.print}" stroke="rgba(0,0,0,0.08)" stroke-width="2"/>
-    ${photoWindow(COVER_HREF, -310, -222, 620, 340, "winC")}
-    <clipPath id="chinC"><rect x="-310" y="128" width="620" height="122"/></clipPath>
-    <g clip-path="url(#chinC)">
-      ${lines(title, { x: -310, y: title.length > 1 ? 166 : 184, leading: 36, family: "Fraunces", size: 32, fill: c.ink, weight: 600, tracking: -0.6, variation: DISPLAY_VARIATION })}
-    </g>
-    <text x="-310" y="228" font-family="Courier Prime" font-size="16" fill="${c.pencil}">${escapeXml(input.place)}</text>
-    ${footer(-100, 228)}
-    <g transform="translate(250,178)">${stamp(stampLabel(input.status), -6)}</g>
-    ${tape(340, 250)}
-  </g>`;
-}
-
-/* ------------------------------------------------------------------ *
  * Entry point
  * ------------------------------------------------------------------ */
 
-const COMPOSITIONS: Record<CardVariant, (input: CardInput) => string> = {
-  a: compositionA,
-  b: compositionB,
-  c: compositionC,
-};
-
-export function buildItemCardSvg(input: CardInput, variant: CardVariant = "a"): string {
-  const body = (COMPOSITIONS[variant] ?? compositionA)(input);
+export function buildItemCardSvg(input: CardInput): string {
+  const body = composition(input);
   return `<svg width="${CARD_WIDTH}" height="${CARD_HEIGHT}" viewBox="0 0 ${CARD_WIDTH} ${CARD_HEIGHT}" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <filter id="fibre" x="-20%" y="-20%" width="140%" height="140%">

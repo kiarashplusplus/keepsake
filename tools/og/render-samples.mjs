@@ -2,9 +2,10 @@
 /**
  * Offline preview harness for the share card (PR 0, the design spike).
  *
- * Renders every composition in `apps/api/src/og/card.ts` across a fixture
- * matrix and prints a byte table, so a composition can be chosen by looking
- * at real cards rather than at a description of them.
+ * Renders `apps/api/src/og/card.ts` across a fixture matrix and prints a byte
+ * table, so layout and size are judged by looking at real cards rather than at
+ * a description of them. It chose the shipped composition from three; it is
+ * kept because every later change to the card needs the same check.
  *
  * ## Why this bundles instead of importing
  *
@@ -235,19 +236,16 @@ async function loadCardModule() {
 }
 
 function loadFonts() {
-  // PR 0 renders with the fonts as they ship to the browser. resvg 2.6.2 has
-  // no `font-variation-settings` support, so Fraunces comes out at its fvar
-  // defaults (opsz 9 / SOFT 0) — the text cut, not the display cut. PR 1
-  // replaces these with instanced cuts; until then this is exactly what the
-  // Worker would render, which is the property that matters here.
-  const dir = join(REPO, "apps/web/public/fonts");
+  // The fonts `apps/api/src/og/fonts.ts` bundles into the Worker, NOT the
+  // ones in `apps/web/public/fonts` the browser downloads. They are different
+  // files on purpose (opsz-instanced display cuts), and rendering with the
+  // browser's copies here would preview a typeface production never emits.
   return [
-    "Fraunces-VF.ttf",
-    "Fraunces-Italic-VF.ttf",
-    "CourierPrime-Regular.ttf",
-    "CourierPrime-Bold.ttf",
-    "CourierPrime-Italic.ttf",
-  ].map((f) => new Uint8Array(readFileSync(join(dir, f))));
+    "apps/api/src/og/fonts/Fraunces-Display-VF.ttf",
+    "apps/api/src/og/fonts/Fraunces-Display-Italic-VF.ttf",
+    "apps/api/src/og/fonts/CourierPrime-Regular.ttf",
+    "apps/api/src/og/fonts/CourierPrime-Bold.ttf",
+  ].map((f) => new Uint8Array(readFileSync(join(REPO, f))));
 }
 
 /**
@@ -262,7 +260,7 @@ const CARD_JPEG_QUALITY = 82;
 
 async function main() {
   mkdirSync(OUT, { recursive: true });
-  const { buildItemCardSvg, COVER_HREF, SECOND_HREF } = await loadCardModule();
+  const { buildItemCardSvg, COVER_HREF } = await loadCardModule();
   await initWasm(readFileSync(join(REPO, "node_modules/@resvg/resvg-wasm/index_bg.wasm")));
   const fontBuffers = loadFonts();
 
@@ -270,26 +268,21 @@ async function main() {
   for (const fixture of FIXTURES) {
     const [pw, ph] = fixture.photo;
     const cover = toJpeg(photoLikePng(pw, ph, 3), join(OUT, `.cover-${fixture.key}`));
-    const second = toJpeg(photoLikePng(640, 480, 9), join(OUT, `.second-${fixture.key}`));
 
-    for (const variant of ["a", "b", "c"]) {
-      const svg = buildItemCardSvg(fixture.input, variant);
-      const resvg = new Resvg(svg, {
-        font: { fontBuffers, defaultFontFamily: "Fraunces", loadSystemFonts: false },
-      });
-      for (const href of resvg.imagesToResolve()) {
-        if (href === COVER_HREF) resvg.resolveImage(href, cover);
-        else if (href === SECOND_HREF) resvg.resolveImage(href, second);
-      }
-      const rendered = resvg.render();
-      const { data } = jpeg.encode(
-        { data: rendered.pixels, width: rendered.width, height: rendered.height },
-        CARD_JPEG_QUALITY,
-      );
-      const name = `${variant}-${fixture.key}.jpg`;
-      writeFileSync(join(OUT, name), data);
-      rows.push({ name, variant, fixture: fixture.key, bytes: data.length, dims: `${rendered.width}x${rendered.height}` });
+    const resvg = new Resvg(buildItemCardSvg(fixture.input), {
+      font: { fontBuffers, defaultFontFamily: "Fraunces", loadSystemFonts: false },
+    });
+    for (const href of resvg.imagesToResolve()) {
+      if (href === COVER_HREF) resvg.resolveImage(href, cover);
     }
+    const rendered = resvg.render();
+    const { data } = jpeg.encode(
+      { data: rendered.pixels, width: rendered.width, height: rendered.height },
+      CARD_JPEG_QUALITY,
+    );
+    const name = `${fixture.key}.jpg`;
+    writeFileSync(join(OUT, name), data);
+    rows.push({ name, fixture: fixture.key, bytes: data.length, dims: `${rendered.width}x${rendered.height}` });
   }
 
   rmSync(join(OUT, ".card.bundle.mjs"), { force: true });
@@ -306,11 +299,6 @@ async function main() {
   const worst = rows.reduce((a, b) => (a.bytes > b.bytes ? a : b));
   console.log("  ────────────────────────────────────────────────────");
   console.log(`  worst: ${worst.name} at ${(worst.bytes / 1024).toFixed(0)} KB (budget 293 KB)\n`);
-  for (const variant of ["a", "b", "c"]) {
-    const of = rows.filter((r) => r.variant === variant);
-    const avg = of.reduce((s, r) => s + r.bytes, 0) / of.length;
-    console.log(`  composition ${variant.toUpperCase()}: avg ${(avg / 1024).toFixed(0)} KB, worst ${(Math.max(...of.map((r) => r.bytes)) / 1024).toFixed(0)} KB`);
-  }
   console.log("");
 }
 

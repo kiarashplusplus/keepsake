@@ -2,6 +2,7 @@
  * minimal-but-valid image bytes, and small request-building helpers. Kept
  * out of any one test file since photos/listings/moderation tests all need
  * the same building blocks. */
+import { encode as encodeJpeg } from "jpeg-js";
 import { env, SELF } from "cloudflare:test";
 import { ulid } from "../src/lib/ids.js";
 import type { RateLimitBindingName } from "../src/middleware/rateLimit.js";
@@ -119,6 +120,34 @@ export function fakePngBytes(width: number, height: number, sizeBytes = 64): Uin
   bytes.set([(width >>> 24) & 0xff, (width >>> 16) & 0xff, (width >>> 8) & 0xff, width & 0xff], 16);
   bytes.set([(height >>> 24) & 0xff, (height >>> 16) & 0xff, (height >>> 8) & 0xff, height & 0xff], 20);
   return bytes;
+}
+
+/**
+ * A real, decodable baseline JPEG of `width`x`height`.
+ *
+ * `fakeJpegBytes` and `fakeJpegWithSof` are headers followed by zeros — which
+ * is all `sniffImageDimensions` and the upload path ever look at, and is
+ * exactly why they exist. The share card is different: resvg genuinely
+ * decodes the cover photo, and correctly refuses a fixture that only *looks*
+ * like a JPEG. Encoding one here (with the same `jpeg-js` the card's renderer
+ * uses) keeps the repo free of a base64 blob and lets a test pick whatever
+ * dimensions it needs to exercise `pickVariant`'s thumb-vs-full rule.
+ *
+ * The pixels are a gradient rather than one flat colour so a card rendered
+ * from this is visibly a photo in any screenshot a failing run leaves behind.
+ */
+export function realJpegBytes(width = 16, height = 16): Uint8Array {
+  const data = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const at = (y * width + x) * 4;
+      data[at] = (x * 16) & 0xff;
+      data[at + 1] = (y * 16) & 0xff;
+      data[at + 2] = ((x + y) * 8) & 0xff;
+      data[at + 3] = 255;
+    }
+  }
+  return new Uint8Array(encodeJpeg({ data, width, height }, 80).data);
 }
 
 export function fakeFile(bytes: Uint8Array, name: string, type: string): File {

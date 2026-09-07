@@ -39,9 +39,16 @@ const REPEATS = 9;
 
 await initWasm(readFileSync(join(REPO, "node_modules/@resvg/resvg-wasm/index_bg.wasm")));
 
-const fontBuffers = ["Fraunces-VF.ttf", "Fraunces-Italic-VF.ttf", "CourierPrime-Regular.ttf", "CourierPrime-Bold.ttf"].map(
-  (f) => new Uint8Array(readFileSync(join(REPO, "apps/web/public/fonts", f))),
-);
+// The fonts the WORKER loads, not the ones the browser loads. Measuring
+// against `apps/web/public/fonts/Fraunces-VF.ttf` would produce a table for
+// the opsz-9 text cut, while the card renders in the opsz-144 display cut —
+// different advances, silently wrong wrapping. See `apps/api/src/og/fonts.ts`.
+const fontBuffers = [
+  join(REPO, "apps/api/src/og/fonts/Fraunces-Display-VF.ttf"),
+  join(REPO, "apps/api/src/og/fonts/Fraunces-Display-Italic-VF.ttf"),
+  join(REPO, "apps/web/public/fonts/CourierPrime-Regular.ttf"),
+  join(REPO, "apps/web/public/fonts/CourierPrime-Bold.ttf"),
+].map((f) => new Uint8Array(readFileSync(f)));
 
 function inkWidth(text) {
   const W = 8000;
