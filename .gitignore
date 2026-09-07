@@ -16,3 +16,8 @@ apps/web/web-build/
 apps/web/ios/
 apps/web/android/
 *.tsbuildinfo
+# Scratch git worktrees created when several agent sessions work this repo at
+# once (AGENTS.md, "More than one session works this repo at once"). Each is a
+# checkout of another branch plus its own node_modules — never repo content.
+# Deliberately narrow: .claude/ itself stays trackable for settings and skills.
+.claude/worktrees/
