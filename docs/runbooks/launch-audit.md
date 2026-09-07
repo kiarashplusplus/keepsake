@@ -8,7 +8,86 @@ findings marked **[code]** were read but not executed.
 
 ---
 
+## Status as of 2026-09-07 — read this before the findings below
+
+**`keepsake.ing` is live** (#46, closed): the apex is attached to `keepsake-production` and both of
+that Worker's `workers.dev` hostnames are disabled. The audit's own verdict — "go with conditions,
+do not attach the apex domain yet" — is therefore **superseded**, and every "must fix before the
+domain is attached" item below has been resolved except finding 3.
+
+Nothing in this document has been deleted or rewritten. The findings are the record of what was
+true on 2026-09-06, including the sentences that are no longer true; this header is the map from
+each of them to what closed it. Where a finding already carries its own inline **Superseded** note,
+that note came first and this table agrees with it.
+
+**Source, and what "closed" means here.** The mapping is taken from
+[#49's full reconciliation comment of 2026-09-07](https://github.com/kiarashplusplus/keepsake/issues/49#issuecomment-5565544019),
+which re-checked all 18 findings by reading the cited files on `main` rather than trusting closing
+comments — and found three closed issues (#7, #20, #28) each hiding an unfinished half, which is
+why several rows below say "fixed, with a remainder". Issue states in the last column were
+re-checked against GitHub on 2026-09-07. Note that #107's squash commit (`6412c7f`) says
+`Closes #86, #87, #88, #89, #90, #91, #92, #99, #106`, but those issues were **still open** when
+this header was written; their fixes are on `main` either way, so they are listed as "fix merged,
+issue open".
+
+### Must fix before the domain is attached
+
+| # | Finding | Status | Closed by |
+|---|---|---|---|
+| 1 | No page scrolls | **Fixed** | `apps/web/src/ui/Page.tsx`, commit `e5f96f7` ("Every page scrolls"). No issue number — it was fixed before #49 was filed. **Still owed:** the audit's own re-check (a real wheel event against the deployed build, `/privacy` as the control) has never been re-run; see [verify-production.md](verify-production.md). |
+| 2 | Preview fully indexable, publishes its own sitemap | **Fixed** | First pass `af6f0c6`, completed by **#84** (closed) — `run_worker_first = true` so `/` itself reaches the Worker. |
+| 3 | `EMAIL_MODE=live` never exercised, failures silent | **OPEN** | **#6** — open, and the only issue still carrying `launch-blocker`. Delivery to any address other than Kiarash's has still never been observed arriving. |
+| 4 | Nothing tells anyone the Worker is broken | **Fixed** | **#14** (Sentry → Workers Logs) and **#15** (`/health` does real D1/R2/KV reads), both closed; `.github/workflows/uptime.yml` polls both tiers. **Remainder:** the alerting step had never once delivered — **#106**, fix merged in `6412c7f`, issue open. |
+| 5 | No restore path for the production database | **Fixed** | **#17** (closed) — `docs/runbooks/restore.md` (D1 Time Travel + `d1 export`), `tools/backup-photos.mjs` + `backup-photos.yml`. |
+| 6 | Admin token brute-forceable | **Fixed** | `af6f0c6` — `burst("RL_ADMIN")` now runs before `adminAuth()`, both 401 bodies identical. Flaky guard for it fixed under **#65** (closed). |
+| 7 | Privacy policy: two false statements, no age, no controller | **Fixed, two remainders** | **#7**, **#25**, **#26**, **#27**, **#28**, **#60**, **#62** — all closed. **Remainders:** **#87** (the rate-limit IP hash still never day-salted) and **#88** (AI title/category generation undisclosed) — both fixes merged in `6412c7f`, both issues open. |
+
+### Fix in the first week
+
+| # | Finding | Status | Closed by |
+|---|---|---|---|
+| 8 | Global moderation budgets exhaustible by ~50 addresses | **Fixed** | **#18** (closed) — reserved floor in `pipeline.ts`, `alertBudgetExhaustedOnce` to Workers Logs. |
+| 9 | `RL_READ` declared everywhere, called from nowhere | **Fixed** | `af6f0c6` — `burst("RL_READ")` wired onto `item`, `feed`, `geo`, `images` and listing GETs. |
+| 10 | Burst limiter far leakier than its configured number | **Superseded** | **#8** (closed) — `burst()` is now documented as best-effort and `dailyBudget()` as the hard cap. **Remainder:** two routes had no hard cap at all — **#92**, fix merged in `6412c7f`, issue open. |
+| 11 | `owners` rows minted before any limiter, never swept | **Fixed** | Fixed before #49 was filed — `burst()` ahead of `ownerAuth({createIfMissing:true})`, and `orphanSweep` sweeps empty `owners` rows after 30 days. |
+| 12 | Cron failures invisible, including to Sentry | **Fixed** | **#16** (closed) — `scheduled()` genuinely awaits each job and rethrows, `moderationRetry` wraps each item, the heartbeat renders on the admin page with a stale-red badge. |
+| 13 | Admin queue at 200 items is a lost evening | **Fixed** | **#11** (closed) — keyboard nav, bulk actions, debounced stats. **Remainder:** the N+1 the audit said "can wait" is now tracked as **#91**, fix merged in `6412c7f`, issue open. |
+| 14 | Turnstile dead-ends when the widget fails | **Fixed** | **#3** (closed) — the error callback no longer enables submit with an empty token. |
+| 15 | Photos of rejected/withdrawn/hidden listings kept forever | **Fixed** | Fixed before #49 was filed — `orphanSweep`'s `TERMINAL_STATUSES` sweep after a 30-day grace period. |
+| 16 | A requester has no way to remove their data | **Fixed** | **#9** (closed) — `requestWithdraw.ts`, a real signed-token self-service path. **Remainder:** the `ON DELETE CASCADE` positive control the audit explicitly asked for — **#90**, fix merged in `6412c7f`, issue open. |
+| 17 | No security headers at all | **Fixed** | **#10** (closed) — `apps/web/public/_headers` plus `middleware/securityHeaders.ts` for every Worker response. |
+| 18 | Migrations apply before the Worker deploys; docs wrong | **Fixed (docs)** | **#13** and **#24**, both closed. The ordering itself is unchanged and deliberate — `deploy.md` now explains why, and documents `wrangler rollback`. |
+
+### Worth knowing
+
+| Item | Status | Closed by |
+|---|---|---|
+| Version-skew guard doesn't exist on the client | **Fixed** | **#23** (closed) — `useVersionSkewGuard.ts` polls `/version.json`; prefix compare, not `===`. |
+| `MAX_PHOTOS` / `IMAGE_TRANSFORMS_ENABLED` read by nothing | **Fixed** | Removed from `wrangler.toml` outright, with the reasoning left in place as a comment. |
+| `COMMIT_SHA = "dev"` in the production var block | **Fixed** | **#24** (closed) — the Worker now refuses *every* production request in that state, and `uptime.yml` treats it as its own failure. |
+| The takedown path at 3am is nobody | **Remainder open** | **#89** — auto-hide reaches a log line, but nothing pages anyone; fix merged in `6412c7f`, issue open. |
+| Request note not moderated | **Fixed** | **#19** (closed). |
+| Email subject interpolates the title unescaped | **Fixed** | **#20** (closed). **Remainder:** one missed call site — **#86**, fix merged in `6412c7f`, issue open. |
+| Requesting a just-given keepsake says "not found" | **Fixed** | **#21** (closed) — now `410`. |
+| Edge cache may outlive deletion | **Fixed** | **#22** (closed) — `purgePhotoCache()` on both the owner-delete and cron-sweep paths. Its one real limit (a purge reaches only the requesting colo) is **#94**, open, `blocked-on-kiarash`. |
+| `Disallow: /admin` advertises the admin path | **Fixed** | **#84** (closed) — line removed; `/admin` kept out of search by an unconditional `X-Robots-Tag: noindex`. |
+| Llama Guard lenient on text about objects | **Accepted** | Documented risk in `docs/design/moderation.md`; no issue filed, mitigated by the vision pass and the report button. |
+
+### What is still owed
+
+- **#6** — the one real launch blocker: production email proven to reach a stranger.
+- Finding 1's live re-measurement, and the rest of the post-cutover checks that need a real
+  network: [verify-production.md](verify-production.md), tracked by **#47**.
+- The open remainders above (#86-#92, #106) whose fixes are merged but whose issues have not been
+  closed out.
+
+---
+
 ## Verdict: **go with conditions** — do not attach the apex domain yet
+
+> **Superseded 2026-09-07** — the domain is attached (#46) and every condition below except
+> finding 3 (#6) is met. See "Status as of 2026-09-07" above. The verdict is kept verbatim as the
+> record of the call made on 2026-09-06.
 
 The product is real and the engineering underneath it is better than most things at this stage:
 the moderation pipeline fails closed, the contact-reveal masking is correct, the admin compare is

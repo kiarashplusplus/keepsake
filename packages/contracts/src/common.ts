@@ -179,8 +179,17 @@ function isRealCalendarDate(dateOfBirth: string): boolean {
 
 /** Implausibly old rather than tied to any real-world record, purely so a
  * fat-fingered year (`1900` meant as `1990`) fails with "enter a real date"
- * instead of silently passing the minimum-age check by a wide margin. */
-const MAX_PLAUSIBLE_AGE = 130;
+ * instead of silently passing the minimum-age check by a wide margin.
+ *
+ * Exported since #133 so the web date picker can set the same floor on the
+ * control itself (`<input type="date" min=...>`) rather than hardcoding a
+ * second, driftable copy of this number. Note what the picker deliberately
+ * does NOT constrain: its `max` is today, not `MINIMUM_AGE` years ago. A
+ * control that refuses to let you pick an under-18 date is the same thing
+ * #64 replaced the "I confirm I'm 18 or older" checkbox to get away from —
+ * an input that hands you its own passing answer. The minimum-age check
+ * stays a validation result, here and on the server. */
+export const MAX_PLAUSIBLE_AGE = 130;
 
 export const DateOfBirthSchema = z
   .string()

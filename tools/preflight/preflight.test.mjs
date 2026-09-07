@@ -15,7 +15,20 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { runChecks, parseEnvExample, parseToml, migrationApplyOrder } from "./preflight.mjs";
+import {
+  runChecks,
+  createContext,
+  parseEnvExample,
+  parseToml,
+  migrationApplyOrder,
+  parseCronTriggers,
+  cronExpressionProblem,
+  scheduledCronCases,
+  checkLfsPointers,
+  lfsPointerDetail,
+  resolveNumericExpr,
+  callArguments,
+} from "./preflight.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PREFLIGHT_BIN = path.join(HERE, "preflight.mjs");
@@ -488,6 +501,369 @@ test("parseToml reads [vars] and [env.x.vars] but not [[array]] tables", () => {
   assert.equal(toml["env.preview.vars"].SITE_URL, "http://preview.example.com");
 });
 
+// ── var-usage ──────────────────────────────────────────────────────────
+//
+// The check exists because `env-parity` above passes on a tree where the
+// code and the config disagree — every fixture here starts from a good pair
+// and breaks one thing, and the first test asserts the *other* check still
+// passes on the broken tree, since "nothing else would have caught this" is
+// the whole claim (#128).
+
+const VAR_USAGE_ENV_EXAMPLE = `
+REPORT_IP_DAILY_BUDGET=10
+SHELF_MIN_ITEMS=3
+SITE_URL=http://localhost:8787
+
+# secrets:
+ADMIN_TOKEN=
+`;
+
+// All three var blocks, like the real file — `env-parity` needs the named
+// environments to have something to compare, and the point of the
+// declared-nowhere fixture is that dropping a name from *every* copy leaves
+// that check with nothing to notice.
+function varUsageToml({ dropReport = false, extraVar = "" } = {}) {
+  const vars = (site) => `
+${dropReport ? "" : 'REPORT_IP_DAILY_BUDGET = "10"'}
+SHELF_MIN_ITEMS = "3"
+SITE_URL = "${site}"
+${extraVar}`;
+  return `
+[vars]${vars("http://localhost:8787")}
+
+[[kv_namespaces]]
+binding = "KV"
+id = "local"
+
+[[ratelimits]]
+name = "RL_REPORT"
+namespace_id = "1006"
+
+[env.preview.vars]${vars("https://preview.keepsake.ing")}
+
+[env.production.vars]${vars("https://keepsake.ing")}
+`;
+}
+
+// Mirrors the real shapes: a direct `env.X`, a `parseIntVar("X", …)` with a
+// named fallback, a secret read the same way a var is, and — the one that
+// makes this check necessary — a name that only ever reaches `env[…]`
+// through a `…Var` union and its call site.
+function varUsageSource({ fallback = "10", computedKey = "options.ipDailyLimitVar" } = {}) {
+  return `
+import { parseIntVar } from "./env.js";
+
+export type IpDailyLimitVar = "REPORT_IP_DAILY_BUDGET";
+
+const DEFAULT_REPORT_IP_DAILY_BUDGET = ${fallback};
+
+export function siteUrl(env) {
+  return env.SITE_URL;
+}
+
+export function admin(env) {
+  return env.ADMIN_TOKEN;
+}
+
+export function shelfMinItems(env) {
+  return parseIntVar("SHELF_MIN_ITEMS", env.SHELF_MIN_ITEMS, 3);
+}
+
+export function dailyBudget(options) {
+  return (c) => parseIntVar(options.ipDailyLimitVar, c.env[${computedKey}], options.fallbackIpDailyLimit);
+}
+
+export const reportBudget = dailyBudget({
+  ipDailyLimitVar: "REPORT_IP_DAILY_BUDGET",
+  fallbackIpDailyLimit: DEFAULT_REPORT_IP_DAILY_BUDGET,
+});
+`;
+}
+
+function varUsageTree(overrides = {}) {
+  return {
+    ".env.example": VAR_USAGE_ENV_EXAMPLE,
+    "apps/api/wrangler.toml": varUsageToml(),
+    "apps/api/src/budgets.ts": varUsageSource(),
+    ...overrides,
+  };
+}
+
+test("var-usage: passes when every var is declared, read and matched by its fallback", () => {
+  const result = runOne("var-usage", varUsageTree());
+  assert.equal(result.status, "pass");
+  // The indirect name is the point: REPORT_IP_DAILY_BUDGET appears as
+  // `env.X` nowhere in the fixture, only in the union and the call site.
+  assert.match(result.details.join("\n"), /3 var\(s\)/);
+});
+
+test("var-usage: fails when a var the code reads is declared in no [vars] block", () => {
+  const files = varUsageTree({ "apps/api/wrangler.toml": varUsageToml({ dropReport: true }) });
+  files[".env.example"] = VAR_USAGE_ENV_EXAMPLE.replace("REPORT_IP_DAILY_BUDGET=10\n", "");
+  const result = runOne("var-usage", files);
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /REPORT_IP_DAILY_BUDGET: read at/);
+
+  // The reason this check has to exist: with the name gone from all four
+  // copies of the list, env-parity is perfectly happy.
+  assert.equal(runOne("env-parity", files).status, "pass");
+});
+
+test("var-usage: fails when a declared var is read nowhere (the MAX_PHOTOS shape)", () => {
+  const result = runOne("var-usage", {
+    ...varUsageTree({ "apps/api/wrangler.toml": varUsageToml({ extraVar: 'IMAGE_TRANSFORMS_ENABLED = "1"' }) }),
+    ".env.example": `${VAR_USAGE_ENV_EXAMPLE}\nIMAGE_TRANSFORMS_ENABLED=1\n`,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /IMAGE_TRANSFORMS_ENABLED: declared in .* but read nowhere/);
+});
+
+test("var-usage: a var named only in a comment is not a read", () => {
+  const result = runOne("var-usage", {
+    ...varUsageTree({ "apps/api/wrangler.toml": varUsageToml({ extraVar: 'IMAGE_TRANSFORMS_ENABLED = "1"' }) }),
+    ".env.example": `${VAR_USAGE_ENV_EXAMPLE}\nIMAGE_TRANSFORMS_ENABLED=1\n`,
+    "apps/api/src/notes.ts": "// env.IMAGE_TRANSFORMS_ENABLED is described here and read by nothing.\nexport const x = 1;\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /IMAGE_TRANSFORMS_ENABLED: declared in .* but read nowhere/);
+});
+
+test("var-usage: fails when a code fallback disagrees with the declared value", () => {
+  const result = runOne("var-usage", varUsageTree({ "apps/api/src/budgets.ts": varUsageSource({ fallback: "5" }) }));
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /REPORT_IP_DAILY_BUDGET: .*declares 10 but .* falls back to 5/);
+});
+
+test("var-usage: fails on a computed env[...] whose key it cannot resolve", () => {
+  const result = runOne("var-usage", varUsageTree({ "apps/api/src/budgets.ts": varUsageSource({ computedKey: "key" }) }));
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /computed env\[key\]/);
+});
+
+test("var-usage: a computed env[...] naming a binding is not a var read", () => {
+  const result = runOne("var-usage", {
+    ...varUsageTree(),
+    "apps/api/src/burst.ts": "export function burst(c, bindingName) {\n  return c.env[bindingName];\n}\n",
+  });
+  assert.equal(result.status, "pass");
+});
+
+test("var-usage: skips when wrangler.toml is not present", () => {
+  const result = runOne("var-usage", { "apps/api/src/budgets.ts": varUsageSource() });
+  assert.equal(result.status, "skip");
+});
+
+test("resolveNumericExpr reads literals, products and identifier chains", () => {
+  const globals = new Map([["DEFAULT_MAX", "OTHER"], ["OTHER", "5 * 1024 * 1024"], ["LOOP", "LOOP"]]);
+  assert.equal(resolveNumericExpr("10", null, globals), 10);
+  assert.equal(resolveNumericExpr("5 * 1024 * 1024", null, globals), 5242880);
+  assert.equal(resolveNumericExpr("DEFAULT_MAX", null, globals), 5242880);
+  assert.equal(resolveNumericExpr("options.fallbackIpDailyLimit", null, globals), undefined);
+  assert.equal(resolveNumericExpr("LOOP", null, globals), undefined);
+});
+
+test("callArguments splits a call written across lines", () => {
+  const text = 'parseIntVar(\n  "SHELF_MIN_ITEMS",\n  env.SHELF_MIN_ITEMS as string | undefined,\n  DEFAULT_SHELF,\n)';
+  const args = callArguments(text, text.indexOf("("));
+  assert.deepEqual(args, ['"SHELF_MIN_ITEMS"', "env.SHELF_MIN_ITEMS as string | undefined", "DEFAULT_SHELF", ""]);
+});
+
+// ── cron-triggers ──────────────────────────────────────────────────────
+//
+// `scheduled()` dispatches on the literal cron string, so the two halves —
+// `wrangler.toml`'s list and the switch in `apps/api/src/index.ts` — have to
+// agree exactly. Every fixture below starts from a good pair and breaks one
+// thing, because a check that has only ever seen a matching pair cannot tell
+// you it would notice a mismatched one.
+
+const SCHEDULED_GOOD = `
+async function scheduled(controller, env, ctx) {
+  switch (controller.cron) {
+    case "*/5 * * * *":
+      await runCron("moderationRetry", moderationRetry, env, ctx);
+      break;
+    case "17 3 * * *":
+      await runCron("orphanSweep", orphanSweep, env, ctx);
+      break;
+    default:
+      console.warn("scheduled: unrecognized cron pattern", { cron: controller.cron });
+  }
+}
+export default { fetch: app.fetch, scheduled };
+`;
+
+function cronToml({ topCrons = '["*/5 * * * *", "17 3 * * *"]', productionTriggers = "" } = {}) {
+  return `
+main = "src/index.ts"
+
+# a comment mentioning crons = ["never parsed"] must not count
+[triggers]
+crons = ${topCrons}
+
+[vars]
+ENVIRONMENT = "development"
+
+[[send_email]]
+name = "EMAIL"
+
+[env.preview.vars]
+ENVIRONMENT = "preview"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+${productionTriggers}
+`;
+}
+
+function cronTree(overrides = {}) {
+  return {
+    "apps/api/wrangler.toml": cronToml(),
+    "apps/api/src/index.ts": SCHEDULED_GOOD,
+    ...overrides,
+  };
+}
+
+test("cron-triggers: passes when every tier inherits a valid, handled cron list", () => {
+  const result = runOne("cron-triggers", cronTree());
+  assert.equal(result.status, "pass");
+  // The inheritance this repo relies on, stated in the passing output so the
+  // next reader does not have to re-derive it from wrangler's source.
+  assert.match(result.details.join("\n"), /inherited by preview, production/);
+});
+
+test("cron-triggers: passes when a tier restates its own non-empty list", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      "apps/api/wrangler.toml": cronToml({
+        productionTriggers: '\n[env.production.triggers]\ncrons = ["*/5 * * * *", "17 3 * * *"]\n',
+      }),
+    }),
+  );
+  assert.equal(result.status, "pass");
+});
+
+// The failure mode that made this check worth writing: an env block that
+// restates `[triggers]` as an empty list silently switches that tier's crons
+// off, and no other check in this repo would notice.
+test("cron-triggers: fails when an env block overrides the inherited list with []", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      "apps/api/wrangler.toml": cronToml({
+        productionTriggers: "\n[env.production.triggers]\ncrons = []\n",
+      }),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /env\.production: crons = \[\]/);
+  assert.match(result.details.join("\n"), /no scheduled jobs at all/);
+});
+
+test("cron-triggers: fails when no tier resolves any cron at all", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      "apps/api/wrangler.toml": cronToml({ topCrons: "[]" }),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /no scheduled jobs are registered anywhere/);
+});
+
+test("cron-triggers: fails on a schedule that is not a valid cron expression", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      "apps/api/wrangler.toml": cronToml({ topCrons: '["*/5 * * * *", "17 25 * * *"]' }),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /hour "25" is outside 0-23/);
+});
+
+// Editing the schedule in one place and not the other leaves the job
+// registered with Cloudflare, firing on time, and doing nothing.
+test("cron-triggers: fails when a declared cron has no case in scheduled()", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      "apps/api/wrangler.toml": cronToml({ topCrons: '["*/5 * * * *", "17 4 * * *"]' }),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  const text = result.details.join("\n");
+  assert.match(text, /cron "17 4 \* \* \*" is declared in apps\/api\/wrangler\.toml but no case/);
+  assert.match(text, /fall through to default:/);
+  // And the other direction, from the same edit: the handled case is orphaned.
+  assert.match(text, /scheduled\(\) handles "17 3 \* \* \*", which apps\/api\/wrangler\.toml does not declare/);
+});
+
+test("cron-triggers: fails when crons are declared but there is no scheduled() handler", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({ "apps/api/src/index.ts": "export default { fetch: app.fetch };\n" }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /no scheduled\(\) handler/);
+});
+
+test("cron-triggers: fails when scheduled() handles crons nothing declares", () => {
+  const result = runOne("cron-triggers", {
+    "apps/api/wrangler.toml": '[vars]\nENVIRONMENT = "development"\n',
+    "apps/api/src/index.ts": SCHEDULED_GOOD,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /declares no \[triggers\] crons — nothing will ever invoke it/);
+});
+
+test("cron-triggers: skips when wrangler.toml is not present", () => {
+  const result = runOne("cron-triggers", { "apps/api/src/index.ts": SCHEDULED_GOOD });
+  assert.equal(result.status, "skip");
+});
+
+test("parseCronTriggers reads top-level, per-env, multi-line and empty lists", () => {
+  const sections = parseCronTriggers(`
+[triggers]
+crons = [
+  "*/5 * * * *",
+  "17 3 * * *",
+]
+
+[[ratelimits]]
+name = "RL_READ"
+
+[env.preview.triggers]
+crons = []
+
+[env.production.vars]
+# crons = ["not a real declaration"]
+ENVIRONMENT = "production"
+`);
+  assert.deepEqual(sections.triggers, ["*/5 * * * *", "17 3 * * *"]);
+  // Present and empty is not the same as absent — that distinction is the
+  // whole point of the override check above.
+  assert.deepEqual(sections["env.preview.triggers"], []);
+  assert.ok(!Object.hasOwn(sections, "env.production.triggers"));
+});
+
+test("cronExpressionProblem accepts real schedules and names bad ones", () => {
+  assert.equal(cronExpressionProblem("*/5 * * * *"), null);
+  assert.equal(cronExpressionProblem("17 3 * * *"), null);
+  assert.equal(cronExpressionProblem("0 0 1 JAN MON"), null);
+  assert.equal(cronExpressionProblem("30 4 * * 0-6"), null);
+  assert.match(cronExpressionProblem("17 3 * *"), /has 4 field\(s\), not 5/);
+  assert.match(cronExpressionProblem("60 3 * * *"), /minute "60" is outside 0-59/);
+  assert.match(cronExpressionProblem("*/0 3 * * *"), /step "0"/);
+  assert.match(cronExpressionProblem("17 3 * FOO *"), /month "FOO" is not a number or name/);
+  assert.match(cronExpressionProblem("17 9-3 * * *"), /reversed range/);
+});
+
+test("scheduledCronCases reads only the switch inside scheduled()", () => {
+  assert.deepEqual(scheduledCronCases(SCHEDULED_GOOD), ["*/5 * * * *", "17 3 * * *"]);
+  assert.equal(scheduledCronCases("export default { fetch: app.fetch };\n"), null);
+});
+
 // ── models ─────────────────────────────────────────────────────────────
 
 test("models: passes when @cf/ appears only in models.ts", () => {
@@ -698,6 +1074,58 @@ test("lfs-pointers: fails on an unfetched LFS pointer", () => {
   });
   assert.equal(result.status, "fail");
   assert.match(result.details.join("\n"), /git lfs pull/);
+});
+
+// The same pointer means two different things, and the message has to say
+// which. `lfsInstalled` is passed explicitly rather than detected, so these
+// two assert both branches wherever they run — a GitHub runner has git-lfs
+// and an agent container does not, and a test that read the ambient answer
+// would only ever exercise one of them.
+const POINTER_TREE = {
+  "apps/api/seeds/postal_codes.sql":
+    "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 123\n",
+};
+
+function runLfs(files, lfsInstalled) {
+  const root = makeTree(files);
+  try {
+    return checkLfsPointers(createContext(root), lfsInstalled);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("lfs-pointers: a pointer with no git-lfs installed says the repo is fine, this box is not", () => {
+  const result = runLfs(POINTER_TREE, false);
+  assert.equal(result.status, "fail");
+  const text = result.details.join("\n");
+  assert.match(text, /git-lfs is NOT installed here/);
+  assert.match(text, /the file in the repository is fine/);
+  assert.match(text, /Install git-lfs first, then run: git lfs install && git lfs pull/);
+});
+
+test("lfs-pointers: a pointer WITH git-lfs installed is a real unfetched object, and still fails", () => {
+  const result = runLfs(POINTER_TREE, true);
+  assert.equal(result.status, "fail");
+  const text = result.details.join("\n");
+  assert.match(text, /git-lfs IS installed here, so the object was never pulled/);
+  assert.match(text, /Run: git lfs install && git lfs pull/);
+  // Never a skip or a warn: in CI (`lfs: true`) a pointer here is a real bug.
+  assert.notEqual(result.status, "skip");
+});
+
+test("lfs-pointers: a real seed passes whether or not git-lfs is installed", () => {
+  const good = { "apps/api/seeds/postal_codes.sql": "INSERT INTO postal_codes VALUES (1);\n" };
+  assert.equal(runLfs(good, false).status, "pass");
+  assert.equal(runLfs(good, true).status, "pass");
+});
+
+test("lfsPointerDetail: the two messages are different and each names its own cause", () => {
+  const missing = lfsPointerDetail("apps/api/seeds/x.sql", false);
+  const present = lfsPointerDetail("apps/api/seeds/x.sql", true);
+  assert.notEqual(missing, present);
+  assert.match(missing, /`git lfs version` fails/);
+  assert.match(present, /skipped smudge filter/);
 });
 
 // ── public-env ─────────────────────────────────────────────────────────

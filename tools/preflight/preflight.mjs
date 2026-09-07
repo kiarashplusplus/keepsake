@@ -555,6 +555,280 @@ function checkEnvParity(ctx) {
   return { status: "pass", details: [`${backendVarNames.size} var(s) consistent across .env.example and wrangler.toml (${envSectionNames.length} env block(s))`] };
 }
 
+// ── cron-triggers ─────────────────────────────────────────────────────────
+//
+// Two scheduled jobs carry real work: `moderationRetry` (every 5 minutes,
+// un-strands a listing whose moderation call died mid-`waitUntil`) and
+// `orphanSweep` (nightly, deletes never-attached photos and sweeps terminal
+// listings' R2 bytes). Both are invisible when they stop: nothing user-facing
+// changes the day a cron detaches, listings just quietly stay `pending` and
+// photos quietly accumulate. That is precisely the shape of guard this repo
+// keeps finding dead, so it gets a check.
+//
+// **Is `[triggers]` inherited into a named environment?** Yes — established,
+// not assumed. Every other block in `wrangler.toml` is restated per
+// environment because Wrangler genuinely does not inherit `[vars]` or any
+// `[[binding]]`, and `[triggers]` is declared only at the top level, which
+// looked like the same bug. It is not:
+//
+//   - `wrangler`'s own config normalizer registers `triggers` through its
+//     `inheritable(...)` helper — the same one `main`, `compatibility_date`
+//     and `routes` use — above the file's literal `// Not inherited fields`
+//     comment, under which `vars`, `secrets` and the bindings sit
+//     (`node_modules/wrangler/wrangler-dist/cli.js`, wrangler 4.129.0).
+//   - Confirmed by resolving the real file through wrangler's own API rather
+//     than by reading source: `unstable_readConfig({ config: "wrangler.toml",
+//     env })` returns `{"crons":["*/5 * * * *","17 3 * * *"]}` for `undefined`,
+//     `"preview"` and `"production"` alike.
+//
+// So the absence of `[env.*.triggers]` is correct, and this check exists to
+// keep it true rather than to fix a bug: it asserts every deployed tier still
+// resolves a non-empty, syntactically valid cron list, and — the half that
+// catches the more likely mistake — that every declared schedule matches a
+// `case` in `scheduled()` and vice versa. `scheduled()` dispatches on the
+// literal cron string (`apps/api/src/index.ts`), so editing a schedule in
+// `wrangler.toml` without editing the switch leaves the job registered with
+// Cloudflare, firing on time, and falling straight through to `default:` — a
+// `console.warn` and no work done, on a handler that reports success.
+const API_INDEX_PATH = "apps/api/src/index.ts";
+
+/** Drop a `#` comment, but only one that starts outside a quoted string. */
+function stripTomlComment(line) {
+  let inQuote = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') inQuote = !inQuote;
+    else if (ch === "#" && !inQuote) return line.slice(0, i);
+  }
+  return line;
+}
+
+/**
+ * Every `crons = [...]` in the file, keyed by the section that holds it
+ * (`triggers`, `env.preview.triggers`, …). Values may span lines.
+ *
+ * A section present with an empty list is kept as `[]` and is *not* the same
+ * as an absent section: `[env.production.triggers]\ncrons = []` is an
+ * override that switches the tier's crons off, which inheritance would
+ * otherwise have supplied — exactly the difference this check has to see.
+ */
+export function parseCronTriggers(text) {
+  const sections = {};
+  const quoted = (chunk) => [...chunk.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+  let current = null;
+  let pending = null;
+  for (const rawLine of text.split("\n")) {
+    const line = stripTomlComment(rawLine).trim();
+    if (pending) {
+      pending.chunk += ` ${line}`;
+      if (line.includes("]")) {
+        sections[pending.section] = quoted(pending.chunk);
+        pending = null;
+      }
+      continue;
+    }
+    if (!line) continue;
+    if (/^\[\[[^\]]+\]\]$/.test(line)) {
+      current = null;
+      continue;
+    }
+    const header = line.match(/^\[([^\]]+)\]$/);
+    if (header) {
+      current = header[1].trim();
+      continue;
+    }
+    if (!current || !/(^|\.)triggers$/.test(current)) continue;
+    const kv = line.match(/^crons\s*=\s*(.*)$/);
+    if (!kv) continue;
+    if (kv[1].includes("]")) sections[current] = quoted(kv[1]);
+    else pending = { section: current, chunk: kv[1] };
+  }
+  return sections;
+}
+
+const MONTH_NAMES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+const DAY_NAMES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+// `max` is the inclusive ceiling of the plain-numeric form. Day-of-week goes
+// to 7 because both 0 and 7 mean Sunday in standard cron.
+const CRON_FIELDS = [
+  { label: "minute", min: 0, max: 59 },
+  { label: "hour", min: 0, max: 23 },
+  { label: "day-of-month", min: 1, max: 31, special: /^(\?|L|LW|\d{1,2}W)$/ },
+  { label: "month", min: 1, max: 12, names: MONTH_NAMES, offset: 1 },
+  { label: "day-of-week", min: 0, max: 7, names: DAY_NAMES, offset: 0, special: /^(\?|L|\d#\d|\dL)$/ },
+];
+
+function cronEndpointValue(token, spec) {
+  if (spec.names) {
+    const index = spec.names.indexOf(token.toUpperCase());
+    if (index !== -1) return index + spec.offset;
+  }
+  if (!/^\d{1,2}$/.test(token)) return null;
+  return Number(token);
+}
+
+function cronFieldProblem(field, spec) {
+  if (field === "") return `${spec.label} is empty`;
+  if (spec.special?.test(field)) return null;
+  for (const part of field.split(",")) {
+    if (part === "") return `${spec.label} "${field}" has an empty list entry`;
+    const [rangePart, stepPart, ...rest] = part.split("/");
+    if (rest.length > 0) return `${spec.label} "${part}" has more than one "/"`;
+    if (stepPart !== undefined) {
+      if (!/^\d{1,2}$/.test(stepPart) || Number(stepPart) < 1) {
+        return `${spec.label} "${part}" has step "${stepPart}", which must be an integer >= 1`;
+      }
+    }
+    if (rangePart === "*") continue;
+    const endpoints = rangePart.split("-");
+    if (endpoints.length > 2) return `${spec.label} "${part}" has more than one "-"`;
+    const values = [];
+    for (const endpoint of endpoints) {
+      const value = cronEndpointValue(endpoint, spec);
+      if (value === null) return `${spec.label} "${endpoint}" is not a number${spec.names ? " or name" : ""}`;
+      if (value < spec.min || value > spec.max) {
+        return `${spec.label} "${endpoint}" is outside ${spec.min}-${spec.max}`;
+      }
+      values.push(value);
+    }
+    if (values.length === 2 && values[0] > values[1]) {
+      return `${spec.label} "${part}" is a reversed range`;
+    }
+  }
+  return null;
+}
+
+/** `null` if `expr` is a schedule Cloudflare would accept, else why not. */
+export function cronExpressionProblem(expr) {
+  const fields = expr.trim().split(/\s+/).filter(Boolean);
+  if (expr.trim() === "") return "is empty";
+  if (fields.length !== 5) {
+    return `has ${fields.length} field(s), not 5 (minute hour day-of-month month day-of-week)`;
+  }
+  for (let i = 0; i < CRON_FIELDS.length; i += 1) {
+    const problem = cronFieldProblem(fields[i], CRON_FIELDS[i]);
+    if (problem) return problem;
+  }
+  return null;
+}
+
+/**
+ * The cron strings `scheduled()` actually dispatches on, read out of its
+ * `switch (controller.cron)`. Bounded to that function's body so an unrelated
+ * `case "..."` elsewhere in the file is not mistaken for a cron.
+ */
+export function scheduledCronCases(text) {
+  const start = text.search(/function\s+scheduled\s*\(/);
+  if (start === -1) return null;
+  const rest = text.slice(start);
+  const end = rest.search(/\n\}/);
+  const body = end === -1 ? rest : rest.slice(0, end);
+  return [...body.matchAll(/case\s+"([^"]*)"/g)].map((m) => m[1]);
+}
+
+function checkCronTriggers(ctx) {
+  const wranglerText = ctx.readText(WRANGLER_PATH);
+  if (wranglerText === null) return { status: "skip", details: [`${WRANGLER_PATH} not present`] };
+
+  const triggerSections = parseCronTriggers(wranglerText);
+  const indexText = ctx.readText(API_INDEX_PATH);
+  const handled = indexText === null ? null : scheduledCronCases(indexText);
+  const declared = Object.keys(triggerSections).length > 0;
+
+  if (!declared) {
+    if (handled && handled.length > 0) {
+      return {
+        status: "fail",
+        details: [
+          `${API_INDEX_PATH}: scheduled() handles ${handled.map((c) => `"${c}"`).join(", ")} but ${WRANGLER_PATH} declares no [triggers] crons — nothing will ever invoke it`,
+        ],
+      };
+    }
+    return { status: "skip", details: [`${WRANGLER_PATH} declares no [triggers] crons`] };
+  }
+
+  const details = [];
+  const topLevel = triggerSections.triggers;
+  const envNames = Object.keys(parseToml(wranglerText))
+    .map((s) => s.match(/^env\.([^.]+)\.vars$/))
+    .filter(Boolean)
+    .map((m) => m[1]);
+
+  // Each deployed tier must end up with crons, whether by inheriting the
+  // top-level list (verified above) or by restating its own.
+  const tiers = [{ label: "[triggers] (top level)", crons: topLevel, own: topLevel !== undefined }];
+  for (const envName of envNames) {
+    const own = triggerSections[`env.${envName}.triggers`];
+    tiers.push({
+      label: `env.${envName}`,
+      crons: own ?? topLevel,
+      own: own !== undefined,
+      envName,
+    });
+  }
+
+  const resolved = new Set();
+  for (const tier of tiers) {
+    if (tier.crons === undefined) {
+      details.push(
+        `${tier.label}: no crons resolve — neither a top-level [triggers] nor [env.${tier.envName}.triggers] declares any, so this tier deploys with no scheduled jobs`,
+      );
+      continue;
+    }
+    if (tier.crons.length === 0) {
+      details.push(
+        tier.own
+          ? `${tier.label}: crons = [] — an empty list in an env block overrides the inherited [triggers], so ${tier.envName ?? "this tier"} deploys with no scheduled jobs at all`
+          : `${tier.label}: crons = [] — no scheduled jobs are registered anywhere`,
+      );
+      continue;
+    }
+    for (const cron of tier.crons) resolved.add(cron);
+  }
+
+  for (const cron of [...resolved].sort()) {
+    const problem = cronExpressionProblem(cron);
+    if (problem) details.push(`crons entry "${cron}": ${problem}`);
+  }
+
+  // The half that catches the likelier mistake: `scheduled()` switches on the
+  // literal cron string, so a schedule edited in one place and not the other
+  // keeps firing and does nothing.
+  if (indexText === null) {
+    details.push(`${API_INDEX_PATH} not present, so nothing was checked against the declared crons`);
+  } else if (handled === null) {
+    details.push(
+      `${API_INDEX_PATH}: no scheduled() handler, but ${WRANGLER_PATH} declares ${resolved.size} cron(s) — Cloudflare would invoke a handler that does not exist`,
+    );
+  } else {
+    for (const cron of [...resolved].sort()) {
+      if (!handled.includes(cron)) {
+        details.push(
+          `cron "${cron}" is declared in ${WRANGLER_PATH} but no case in ${API_INDEX_PATH}'s scheduled() matches it — it would fire on schedule and fall through to default:, warning and doing nothing`,
+        );
+      }
+    }
+    for (const cron of handled) {
+      if (!resolved.has(cron)) {
+        details.push(
+          `${API_INDEX_PATH}: scheduled() handles "${cron}", which ${WRANGLER_PATH} does not declare — that job never runs`,
+        );
+      }
+    }
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+  const inherited = tiers.filter((t) => t.envName && !t.own).map((t) => t.envName);
+  return {
+    status: "pass",
+    details: [
+      `${resolved.size} cron(s) valid and handled by scheduled(): ${[...resolved].sort().map((c) => `"${c}"`).join(", ")}` +
+        (inherited.length > 0 ? `; inherited by ${inherited.join(", ")}` : ""),
+    ],
+  };
+}
+
 const MODELS_PATH = "apps/api/src/models.ts";
 const API_SRC_DIR = "apps/api/src";
 
@@ -662,6 +936,255 @@ function checkIpDigest(ctx) {
 
   if (details.length > 0) return { status: "fail", details };
   return { status: "pass", details: [`${scanned} file(s) scanned under ${API_SRC_DIR}; IP digests all rotate daily via ${DAILY_DIGEST_FN}()`] };
+}
+
+// ── var-usage ─────────────────────────────────────────────────────────────
+//
+// Issue #128. `env-parity` above compares four copies of one list —
+// `.env.example` and the three `[vars]` blocks — and they can agree perfectly
+// while agreeing with nothing the Worker actually does. Two failures live in
+// that blind spot, and this repo has met both:
+//
+//   - **Read by the code, declared nowhere.** #92 added per-IP daily ceilings
+//     to the report path and the two mail-sending routes, read through a code
+//     fallback. Had the `[vars]` lines been forgotten, nothing would have
+//     looked wrong — the fallback is the same number — but the two ceilings
+//     most likely to be wanted *during* an incident (a report flood is a
+//     takedown vector at three reports; a mail runaway spends deliverability
+//     reputation on a `p=reject` domain) could not have been turned down
+//     without a code deploy. They were in fact declared; #128 was filed
+//     against a checkout from 45 minutes before that merge. Nothing here
+//     could have answered that question, which is the actual defect.
+//   - **Declared everywhere, read by nobody.** `MAX_PHOTOS` and
+//     `IMAGE_TRANSFORMS_ENABLED` sat in all three blocks referencing nothing
+//     until the 2026-09-06 launch audit removed them by eye. A knob that
+//     cannot change behavior is worse than no knob: someone reaches for it
+//     mid-incident and it does nothing, and reports the incident handled.
+//
+// A third rule keeps the first two honest. `parseIntVar` degrading to a code
+// fallback is correct — a malformed budget should not 500 the Worker — but it
+// also means a fallback that disagrees with `[vars]` makes the declared number
+// a lie about what runs when the var is missing or mistyped. So every fallback
+// this check can resolve must equal the top-level `[vars]` value.
+//
+// **Resolving the names is the whole difficulty**, because not every read is a
+// member access. `dailyBudget()` reads `c.env[options.ipDailyLimitVar]`, so
+// none of the five `*_IP_DAILY_BUDGET` names appears as `env.X` anywhere:
+// grepping for `env.REPORT_IP_DAILY_BUDGET` finds nothing whether or not it is
+// declared, which is how #128 came to be filed against a var already sitting
+// in all three blocks. Four sources, each an existing convention in the code:
+//
+//   1. `env.NAME` / `c.env.NAME` — the direct member read.
+//   2. `parseIntVar("NAME", …)` — the name is that helper's first argument,
+//      passed precisely so a failed parse can say which var it was.
+//   3. Members of a `type …Var = "A" | "B"` string-literal union
+//      (`IpDailyLimitVar` in `src/middleware/rateLimit.ts`).
+//   4. `…Var: "NAME"` properties at the call sites that feed those unions.
+//
+// The gap that leaves is a computed `env[expr]` whose key this check cannot
+// read — and an unreadable key would make it *under*-report, i.e. fail silent,
+// which is the failure mode this repo keeps finding. So that gap is itself a
+// failure: a computed access must name what it is reaching for, either a var
+// (`…Var`, whose literals rules 3 and 4 collect) or a binding (`…binding…`,
+// exempt — bindings are `[[…]]` tables, not `[vars]`, and `assertBindings`
+// plus `wrangler types` cover those). Anything else fails and asks to be
+// named. Secrets are excluded from rule 1 by `.env.example`'s `# secrets:`
+// block: they are read exactly like a var but set with `wrangler secret put`,
+// and `env-parity` already fails if one appears in `[vars]`.
+const VAR_TOKEN = String.raw`[A-Z][A-Z0-9_]{2,}`;
+// `(?<!process\.)` so a Node-side `process.env.CI` could never read as a
+// Worker var; nothing under apps/api/src does that today.
+const ENV_MEMBER_RE = new RegExp(String.raw`(?<!process\.)\benv\.(${VAR_TOKEN})\b`, "g");
+const PARSE_INT_VAR_NAME_RE = new RegExp(String.raw`parseIntVar\(\s*"(${VAR_TOKEN})"`, "g");
+const VAR_UNION_RE = /type\s+[A-Za-z_$][\w$]*Var\s*=([^;]*);/g;
+const VAR_PROPERTY_RE = new RegExp(String.raw`[A-Za-z_$][\w$]*Var\s*:\s*"(${VAR_TOKEN})"`, "g");
+const COMPUTED_ENV_RE = /(?<!process\.)\benv\[([^\]]*)\]/g;
+const QUOTED_VAR_RE = new RegExp(String.raw`"(${VAR_TOKEN})"`, "g");
+const CONST_DECL_RE = /(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::\s*[^=;]+)?=\s*([^;\n]+)/g;
+// `binding = "KV"` / `name = "RL_READ"` — the `[[…]]` tables `parseToml`
+// deliberately drops, collected straight off the text so bindings are never
+// mistaken for undeclared vars.
+const TOML_BINDING_RE = /^\s*(?:binding|name)\s*=\s*"([A-Z][A-Z0-9_]*)"/gm;
+
+/** Strip whole-line comments the same way `checkModels`/`checkIpDigest` do.
+ * Prose in this repo names vars constantly (`env.MOCK_AI === "1"` appears in
+ * three doc comments), and counting a comment as a read would let a var that
+ * nothing calls pass rule 2. */
+function stripCommentLines(text) {
+  return text
+    .split("\n")
+    .map((line) => (/^\s*(\/\/|\*|\/\*)/.test(line) ? "" : line.replace(/\/\/.*$/, "")))
+    .join("\n");
+}
+
+/** Split the argument list of a call whose `(` is at `open`, on top-level
+ * commas. Returns null if the parens never balance. Hand-rolled rather than
+ * regexed because `parseIntVar(name, c.env.X as string | undefined, FALLBACK)`
+ * is written across three lines in `src/env.ts`. */
+export function callArguments(text, open) {
+  let depth = 0;
+  let start = open + 1;
+  const args = [];
+  for (let i = open; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === "(" || ch === "[" || ch === "{") depth += 1;
+    else if (ch === ")" || ch === "]" || ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        args.push(text.slice(start, i).trim());
+        return args;
+      }
+    } else if (ch === "," && depth === 1) {
+      args.push(text.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  return null;
+}
+
+/** Resolve a fallback expression to a number, or `undefined` when it is not
+ * something this check can read (`options.fallbackIpDailyLimit` inside
+ * `dailyBudget` itself, say — the call sites supply the real value and are
+ * matched separately). Handles an integer literal, a product of integer
+ * literals (`5 * 1024 * 1024`), and an identifier declared as either, looked
+ * up in the file first and then across `apps/api/src` so an imported constant
+ * like `DEFAULT_EMAIL_IP_DAILY_BUDGET` resolves. */
+export function resolveNumericExpr(expr, localConsts, globalConsts, seen = new Set()) {
+  const trimmed = (expr ?? "").trim().replace(/;$/, "");
+  if (trimmed === "") return undefined;
+  if (/^[\d_]+$/.test(trimmed)) return Number(trimmed.replace(/_/g, ""));
+  if (/^[\d_\s*]+$/.test(trimmed) && trimmed.includes("*")) {
+    const parts = trimmed.split("*").map((p) => Number(p.trim().replace(/_/g, "")));
+    if (parts.every((n) => Number.isFinite(n))) return parts.reduce((a, b) => a * b, 1);
+  }
+  if (/^[A-Za-z_$][\w$]*$/.test(trimmed)) {
+    if (seen.has(trimmed)) return undefined;
+    seen.add(trimmed);
+    const next = localConsts?.get(trimmed) ?? globalConsts.get(trimmed);
+    if (next === undefined) return undefined;
+    return resolveNumericExpr(next, localConsts, globalConsts, seen);
+  }
+  return undefined;
+}
+
+function checkVarUsage(ctx) {
+  const wranglerText = ctx.readText(WRANGLER_PATH);
+  if (wranglerText === null) return { status: "skip", details: [`${WRANGLER_PATH} not present`] };
+  if (!ctx.exists(API_SRC_DIR)) return { status: "skip", details: [`${API_SRC_DIR} not present`] };
+  const files = ctx.walk(API_SRC_DIR).filter((f) => /\.(ts|tsx|js|mjs)$/.test(f) && !isTestFile(f));
+  if (files.length === 0) return { status: "skip", details: [`${API_SRC_DIR} has no source files yet`] };
+
+  const toml = parseToml(wranglerText);
+  const declared = new Map(Object.entries(toml.vars ?? {}));
+  if (declared.size === 0) return { status: "skip", details: [`${WRANGLER_PATH} has no top-level [vars]`] };
+
+  const bindings = new Set([...wranglerText.matchAll(TOML_BINDING_RE)].map((m) => m[1]));
+  const envExampleText = ctx.readText(ENV_EXAMPLE_PATH);
+  const secrets = envExampleText === null ? new Set() : parseEnvExample(envExampleText).secretNames;
+
+  const details = [];
+  // name -> "file:line" of the first read, so a failure can point at one.
+  const readAt = new Map();
+  const noteRead = (name, where) => {
+    if (!readAt.has(name)) readAt.set(name, where);
+  };
+  const lineOf = (text, index) => text.slice(0, index).split("\n").length;
+
+  const globalConsts = new Map();
+  const sources = new Map();
+  for (const file of files) {
+    const text = stripCommentLines(ctx.readText(file) ?? "");
+    sources.set(file, text);
+    for (const m of text.matchAll(CONST_DECL_RE)) {
+      if (!globalConsts.has(m[1])) globalConsts.set(m[1], m[2]);
+    }
+  }
+
+  // (name, resolvable fallback expression, where) triples, collected from
+  // `parseIntVar` calls and from the option objects that feed `dailyBudget`.
+  const fallbacks = [];
+
+  for (const [file, text] of sources) {
+    const localConsts = new Map([...text.matchAll(CONST_DECL_RE)].map((m) => [m[1], m[2]]));
+
+    for (const m of text.matchAll(ENV_MEMBER_RE)) noteRead(m[1], `${file}:${lineOf(text, m.index)}`);
+    for (const m of text.matchAll(VAR_PROPERTY_RE)) noteRead(m[1], `${file}:${lineOf(text, m.index)}`);
+    for (const union of text.matchAll(VAR_UNION_RE)) {
+      for (const member of union[1].matchAll(QUOTED_VAR_RE)) {
+        noteRead(member[1], `${file}:${lineOf(text, union.index)}`);
+      }
+    }
+
+    for (const m of text.matchAll(PARSE_INT_VAR_NAME_RE)) {
+      const where = `${file}:${lineOf(text, m.index)}`;
+      noteRead(m[1], where);
+      const args = callArguments(text, text.indexOf("(", m.index));
+      if (args !== null && args.length >= 3) fallbacks.push({ name: m[1], expr: args[2], where, localConsts });
+    }
+
+    // `dailyBudget({ … ipDailyLimitVar: "REPORT_IP_DAILY_BUDGET",
+    // fallbackIpDailyLimit: DEFAULT_REPORT_IP_DAILY_BUDGET })` — the name and
+    // the fallback are siblings in one object literal, so pair them within it.
+    for (const m of text.matchAll(VAR_PROPERTY_RE)) {
+      const close = text.indexOf("}", m.index);
+      const window = text.slice(m.index, close === -1 ? m.index + 200 : close);
+      const fallback = /fallback[A-Za-z_$][\w$]*\s*:\s*([^,}\n]+)/.exec(window);
+      if (fallback) {
+        fallbacks.push({ name: m[1], expr: fallback[1], where: `${file}:${lineOf(text, m.index)}`, localConsts });
+      }
+    }
+
+    for (const m of text.matchAll(COMPUTED_ENV_RE)) {
+      const key = m[1].trim();
+      if (/Var\b/.test(key) || /binding/i.test(key)) continue;
+      details.push(
+        `${file}:${lineOf(text, m.index)}: computed env[${key}] — this check cannot tell which var that reads, ` +
+          `so it would under-report. Name the key through a \`…Var\` type (like IpDailyLimitVar) or a \`…binding…\` identifier.`,
+      );
+    }
+  }
+
+  for (const [name, where] of [...readAt].sort()) {
+    if (declared.has(name) || bindings.has(name) || secrets.has(name)) continue;
+    details.push(
+      `${name}: read at ${where} but declared in no [vars] block of ${WRANGLER_PATH} — ` +
+        `it runs at the code fallback and cannot be changed without a deploy`,
+    );
+  }
+
+  for (const name of [...declared.keys()].sort()) {
+    if (readAt.has(name)) continue;
+    details.push(
+      `${name}: declared in ${WRANGLER_PATH} but read nowhere under ${API_SRC_DIR} — ` +
+        `configuration that cannot change behavior (see MAX_PHOTOS/IMAGE_TRANSFORMS_ENABLED, removed 2026-09-06)`,
+    );
+  }
+
+  let compared = 0;
+  for (const { name, expr, where, localConsts } of fallbacks) {
+    const declaredValue = declared.get(name);
+    if (declaredValue === undefined) continue; // already reported above
+    const fallbackValue = resolveNumericExpr(expr, localConsts, globalConsts);
+    if (fallbackValue === undefined) continue;
+    const declaredNumber = Number.parseInt(declaredValue, 10);
+    if (!Number.isFinite(declaredNumber)) continue;
+    compared += 1;
+    if (fallbackValue !== declaredNumber) {
+      details.push(
+        `${name}: ${WRANGLER_PATH} [vars] declares ${declaredNumber} but ${where} falls back to ${fallbackValue} — ` +
+          `the declared number is not what runs when the var is unset or unparseable`,
+      );
+    }
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+  return {
+    status: "pass",
+    details: [
+      `${declared.size} var(s) in ${WRANGLER_PATH} [vars]: all read under ${API_SRC_DIR}, ` +
+        `all reads declared, ${compared} code fallback(s) equal to the declared value`,
+    ],
+  };
 }
 
 const PACKAGES_DIR = "packages";
@@ -776,7 +1299,35 @@ function checkConflictMarkers(ctx) {
 const SEEDS_DIR = "apps/api/seeds";
 const LFS_POINTER_PREFIX = "version https://git-lfs.github.com/spec/v1";
 
-function checkLfsPointers(ctx) {
+/** Is `git lfs` usable from here at all? */
+export function gitLfsInstalled() {
+  return spawnSync("git", ["lfs", "version"], { encoding: "utf8" }).status === 0;
+}
+
+/**
+ * A pointer file means one of two very different things, and the old message
+ * ("unfetched LFS pointer — run: git lfs install && git lfs pull") read like
+ * the seed itself was corrupt in both.
+ *
+ * In an agent container git-lfs is simply not installed, so `git clone` wrote
+ * the 130-byte pointer and there was never a moment at which the real file
+ * could have arrived. Nothing is wrong with the repository, and the suggested
+ * command cannot work — `git lfs install` is not a git subcommand here.
+ *
+ * In CI the checkout is `lfs: true` (`.github/workflows/ci.yml`'s preflight
+ * job) and git-lfs is on the runner, so a pointer at this point is a real
+ * defect: the smudge filter was skipped or the fetch failed, and preflight is
+ * reading 130 bytes where 2.8 MB of postal codes should be. Both stay a
+ * FAIL — a seed file that is not the seed file is not a passing state
+ * anywhere — but they are told apart so nobody debugs the wrong one.
+ */
+export function lfsPointerDetail(file, lfsInstalled) {
+  return lfsInstalled
+    ? `${file}: unfetched LFS pointer — git-lfs IS installed here, so the object was never pulled (a skipped smudge filter, a shallow/partial clone, or a failed fetch). Run: git lfs install && git lfs pull`
+    : `${file}: unfetched LFS pointer, and git-lfs is NOT installed here (\`git lfs version\` fails) — the file in the repository is fine, this environment simply cannot materialize it. Install git-lfs first, then run: git lfs install && git lfs pull`;
+}
+
+export function checkLfsPointers(ctx, lfsInstalled = gitLfsInstalled()) {
   if (!ctx.exists(SEEDS_DIR)) return { status: "skip", details: [`${SEEDS_DIR} not present`] };
   const files = ctx.walk(SEEDS_DIR).filter((f) => f.endsWith(".sql"));
   if (files.length === 0) return { status: "skip", details: [`${SEEDS_DIR} has no *.sql files yet`] };
@@ -785,7 +1336,7 @@ function checkLfsPointers(ctx) {
   for (const file of files) {
     const text = ctx.readText(file) ?? "";
     if (text.startsWith(LFS_POINTER_PREFIX)) {
-      details.push(`${file}: unfetched LFS pointer — run: git lfs install && git lfs pull`);
+      details.push(lfsPointerDetail(file, lfsInstalled));
     }
   }
   if (details.length > 0) return { status: "fail", details };
@@ -950,6 +1501,8 @@ export const CHECKS = {
   migrations: { description: "apps/api/migrations/*.sql naming, apply order and terminators", run: checkMigrations },
   "migration-drift": { description: "no landed migration is renamed/edited/deleted (git)", run: checkMigrationDrift },
   "env-parity": { description: ".env.example vs wrangler.toml [vars] / [env.*.vars]", run: checkEnvParity },
+  "var-usage": { description: "wrangler.toml [vars] vs what apps/api/src reads and falls back to", run: checkVarUsage },
+  "cron-triggers": { description: "every tier resolves valid crons, all handled by scheduled()", run: checkCronTriggers },
   models: { description: '"@cf/" model ids confined to apps/api/src/models.ts', run: checkModels },
   "ip-digest": { description: "client-IP hashes rotate daily via lib/digest.ts's dailyIpDigest", run: checkIpDigest },
   exports: { description: "packages/*/package.json subpath exports (no \".\")", run: checkExports },

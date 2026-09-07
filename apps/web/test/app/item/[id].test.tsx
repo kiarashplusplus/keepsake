@@ -64,6 +64,35 @@ describe("item/[id]", () => {
     jest.mocked(getListing).mockReset();
   });
 
+  /**
+   * Issue #135. `PublicListing.aspects` was populated and carried in the API
+   * response for two issues before any view rendered one, so a visitor to
+   * the first real production listing saw the single word "OTHER" for an
+   * object printed KASTKING / SUPER POWER / 30 LBS 327 YDS. Asserted on the
+   * page, not on the data — the data was never the thing that was wrong.
+   */
+  it("renders the aspects the API returned", async () => {
+    jest.mocked(getListing).mockResolvedValue({
+      ...listing,
+      aspects: [
+        { name: "brand", value: "KastKing" },
+        { name: "size", value: "30 lbs 327 yds" },
+      ],
+    });
+
+    const { toJSON } = render(
+      <ToastProvider>
+        <Item />
+      </ToastProvider>,
+    );
+    await act(flush);
+
+    const json = JSON.stringify(toJSON());
+    expect(json).toContain("brand");
+    expect(json).toContain("KastKing");
+    expect(json).toContain("30 lbs 327 yds");
+  });
+
   it("renders the story and opens the RequestSheet from 'I'd love this'", async () => {
     jest.mocked(getListing).mockResolvedValue(listing);
 

@@ -50,7 +50,7 @@ import {
   fetchPhotoRowsForListings,
 } from "../lib/listingsDb.js";
 import { serializeOwnerListing, type ListingRow } from "../lib/serialize.js";
-import { sendMail } from "../email/sendMail.js";
+import { recipientDomain, sendMail } from "../email/sendMail.js";
 import { adminTest as adminTestTemplate } from "../email/templates/adminTest.js";
 import { runAspectsBackfillBatch } from "../backfill/aspects.js";
 
@@ -573,36 +573,95 @@ function todayStartMs(): number {
  */
 const EMAIL_EVENTS_WINDOW_DAYS = 7;
 
+/** Rows with no `to_domain` — every row written before
+ * `20260907083648_email_event_diagnostics.sql`. Grouped under a visible label rather
+ * than dropped: a bucket of failures nobody can attribute is still a fact
+ * about the window, and silently omitting it would understate the total. */
+const UNKNOWN_DOMAIN = "(unknown)";
+const UNSPECIFIED_REASON = "(unspecified)";
+
+/**
+ * The window is grouped on two axes at once — outcome × reason, and outcome ×
+ * domain — because either axis alone reproduces the bug this issue is about.
+ * By reason only: "3 × send_failed" is the same line whether three people
+ * mistyped their address or the binding is refusing everything. By domain
+ * only: a failure count with no denominator can't tell one bad address from a
+ * blanket refusal. `attempted` alongside `failed`, per domain, is the
+ * smallest thing that distinguishes them.
+ */
 interface EmailEventGroupRow {
   ok: number;
   error: string | null;
+  to_domain: string | null;
   count: number;
+}
+
+function summarizeEmailEvents(rows: EmailEventGroupRow[]): AdminStats["email_events_7d"] {
+  let total = 0;
+  let okCount = 0;
+  let failed = 0;
+
+  const errorCounts = new Map<string, number>();
+  // Per domain: attempts (any outcome), failures, and the failure reasons so
+  // the dominant one can be named without a second query.
+  const domains = new Map<string, { attempted: number; failed: number; reasons: Map<string, number> }>();
+
+  for (const row of rows) {
+    total += row.count;
+    const domain = row.to_domain ?? UNKNOWN_DOMAIN;
+    const entry = domains.get(domain) ?? { attempted: 0, failed: 0, reasons: new Map<string, number>() };
+    entry.attempted += row.count;
+
+    if (row.ok) {
+      okCount += row.count;
+    } else {
+      failed += row.count;
+      const reason = row.error ?? UNSPECIFIED_REASON;
+      errorCounts.set(reason, (errorCounts.get(reason) ?? 0) + row.count);
+      entry.failed += row.count;
+      entry.reasons.set(reason, (entry.reasons.get(reason) ?? 0) + row.count);
+    }
+    domains.set(domain, entry);
+  }
+
+  const byError = [...errorCounts.entries()]
+    .map(([error, count]) => ({ error, count }))
+    // Ties broken by name so the order is stable across reads — a breakdown
+    // that reshuffles on refresh is one a human stops trusting.
+    .sort((a, b) => b.count - a.count || a.error.localeCompare(b.error));
+
+  const failuresByDomain = [...domains.entries()]
+    .filter(([, entry]) => entry.failed > 0)
+    .map(([domain, entry]) => {
+      const topReason = [...entry.reasons.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+      return {
+        domain,
+        attempted: entry.attempted,
+        failed: entry.failed,
+        top_reason: topReason?.[0] ?? UNSPECIFIED_REASON,
+      };
+    })
+    .sort((a, b) => b.failed - a.failed || a.domain.localeCompare(b.domain));
+
+  return {
+    window_days: EMAIL_EVENTS_WINDOW_DAYS,
+    total,
+    ok: okCount,
+    failed,
+    by_error: byError,
+    failures_by_domain: failuresByDomain,
+  };
 }
 
 async function fetchEmailEventStats(env: Env, now: number): Promise<AdminStats["email_events_7d"]> {
   const windowStart = now - EMAIL_EVENTS_WINDOW_DAYS * 24 * 60 * 60 * 1000;
   const { results: rows } = await env.DB.prepare(
-    "SELECT ok, error, COUNT(*) AS count FROM email_events WHERE created_at >= ? GROUP BY ok, error",
+    "SELECT ok, error, to_domain, COUNT(*) AS count FROM email_events WHERE created_at >= ? GROUP BY ok, error, to_domain",
   )
     .bind(windowStart)
     .all<EmailEventGroupRow>();
 
-  let total = 0;
-  let okCount = 0;
-  let failed = 0;
-  const byError: { error: string; count: number }[] = [];
-  for (const row of rows) {
-    total += row.count;
-    if (row.ok) {
-      okCount += row.count;
-    } else {
-      failed += row.count;
-      byError.push({ error: row.error ?? "(unspecified)", count: row.count });
-    }
-  }
-  byError.sort((a, b) => b.count - a.count);
-
-  return { window_days: EMAIL_EVENTS_WINDOW_DAYS, total, ok: okCount, failed, by_error: byError };
+  return summarizeEmailEvents(rows);
 }
 
 adminRoutes.get("/stats", async (c) => {
@@ -822,6 +881,19 @@ adminRoutes.get("/health", async (c) => {
  * production has never delivered to anyone but Kiarash. `leapkg@gmail.com`
  * is on the preview allowlist (`wrangler.toml`) specifically so this
  * endpoint has a second real inbox to prove delivery against.
+ *
+ * `to` is any address `MailableEmailSchema` accepts, deliberately — the
+ * whole value of this route is aiming it at a real external inbox on demand,
+ * so it must never be pinned to a fixed test address.
+ *
+ * The response is sized for the one thing a human can do that this Worker
+ * cannot: read an inbox. `{sent: false}` alone sends them back to the logs,
+ * so this also carries the provider's raw `detail`, the `EMAIL_MODE` that
+ * decided a `blocked_*` reason, the domain addressed, and the `email_events`
+ * row id — enough to tell a binding-level refusal from a bad address, and to
+ * paste an exact row back into issue #6 as evidence. Admin-authenticated
+ * (see the `.use("*", ...)` above); `detail` never appears on a public
+ * surface.
  */
 adminRoutes.post("/test-email", validateBody(AdminTestEmailInput), async (c) => {
   const input = c.get("validatedBody") as AdminTestEmailInput;
@@ -829,7 +901,12 @@ adminRoutes.post("/test-email", validateBody(AdminTestEmailInput), async (c) => 
   const result: AdminTestEmailResult = {
     sent: outcome.sent,
     reason: outcome.reason ?? null,
+    detail: outcome.detail ?? null,
     provider: emailProviderName(c.env) ?? "unset",
+    email_mode: (c.env.EMAIL_MODE ?? "").trim().toLowerCase() || "unset",
+    to_domain: recipientDomain(input.to),
+    event_id: outcome.eventId ?? null,
+    at: Date.now(),
   };
   return ok(c, result);
 });

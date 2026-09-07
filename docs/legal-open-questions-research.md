@@ -401,3 +401,70 @@ Follow-on work this suggests, none of it currently tracked:
 - Confirm stored lat/lng is a postcode centroid, and say so on the privacy page.
 - Decide the shape of the indemnity clause (Keepsake-only, mutual, or user-to-user) before #32
   drafts it.
+
+---
+
+## Status note, 2026-09-07 — where #34 and this document's follow-ons ended up
+
+Appended rather than folded into the analysis above, so this stays a record of what was found and
+when.
+
+**#34 is closed and no lawyer answered any of it.** This document, the PR that shipped it (#58) and
+the comment posted on the issue all say explicitly that it does not close #34 and that the
+checkboxes stay unticked. All eight are still unticked in the issue body. The issue was closed as
+"completed" a second after #58 merged, and GitHub records it as closed by that PR. The disposition
+table above is a research disposition, not a set of answers from counsel — nothing in the closure
+changes that, and the method limit in this document's opening note still applies to every row.
+
+**Q8 now has its own issue: #108** — "Decide LLC vs. sole proprietor, and price general-liability
+insurance." The clause half of Q8 is finished (#63 picked the one-directional shape; ea2329e added
+it to `terms.html` and closed #32), so #108 is scoped to the substantive half only. Two facts that
+have landed since this document was written sharpen it: `privacy.html`'s "Who runs this" section now
+names Kiarash personally as controller, "not through a company or any other entity," and
+`terms.html` carries a comment beside the indemnity clause recording the individual-vs-LLC question
+as unresolved. The site does not merely operate as a sole proprietorship — it says so publicly,
+which is the fact pattern §Q8(c) above identifies as making the entity decision the substantive one.
+
+**The follow-on list above is no longer untracked** — all six were filed and are closed: #26
+(controller), #59 (PIPEDA breach reporting), #60 (privacy-page rights/retention/RI disclosure), #61
+(under-18 takedown rule), #62 (postcode centroid), #63 (clause shape). #31 remains open and advisory
+for the Montana/Rhode Island applicability question Q3 could not settle, and the three UK questions
+(Q1, Q4, Q6) are carried on `runbooks/uk-reentry-checklist.md` §§4–6 rather than here, so that
+lifting the block cannot quietly skip them.
+
+**One of the three `[unverified text]` marks can now come off.** The Montana §30-14-2811 rebuttable
+presumption — flagged in Q3 above as possibly an age-determination safe harbour — was checked
+directly against the statute text at `mca.legmt.gov` while #61 was being worked, and it is **not**
+one. The presumption is procedural and available only in an attorney-general enforcement action
+under §30-14-2817: it presumes *reasonable care* where the controller complied with the section's
+other substantive requirements, and says nothing about how to determine that someone is a minor.
+Write-up in `runbooks/admin.md`, "What 'the rebuttable presumption' in the statute's section heading
+actually is." **The other two marks stand** — PIPEDA breach mechanics, and the absence of an Ofcom
+exemption, which remains a negative established from summaries and the weakest claim here.
+
+---
+
+## Status note, 2026-09-07 (later the same day) — Q8's second half is decided
+
+**#108 is closed, and not by a lawyer.** The issue asked for an hour with a Texas business lawyer or
+accountant and did not get one; Kiarash decided on the research instead and asked for a conservative
+posture. **The decision is sole proprietorship — no LLC — with general-liability insurance as the
+protection an entity would otherwise have provided.** The record is
+[`legal-entity-and-insurance.md`](legal-entity-and-insurance.md): reasoning, costs on both sides,
+what to ask an insurance broker and in what order, the assumed-name filing the choice implies, the
+compensating commitments, and the triggers that reverse it.
+
+**What that document adds to §Q8(c) above, and it changes the shape of the argument.** §Q8(c) frames
+the LLC as the substantive protection and the indemnity clause as the cheap belt to its suspenders.
+The missing piece is that **a Texas LLC does not shield a member from liability for his own
+conduct** — the shield is against the company's obligations and the acts of its people, and here
+there is one person who performs every act. So against the claim this fact pattern actually produces
+— an injured stranger arguing the platform was negligent to introduce two people — the LLC and the
+sole proprietorship end in the same place, and what differs is defence cost, which is an insurance
+question rather than an entity one. That claim is **[summary-sourced]** like most of this document,
+and it is flagged there as the first thing to check if an hour of professional time is ever bought.
+
+**Egress was blocked again, the same way.** `statutes.capitol.texas.gov`, `comptroller.texas.gov`
+and `law.justia.com` were all refused by the proxy, so Tax Code §171.0002, Bus. & Com. Code §71.201
+and the Comptroller's franchise-tax guidance are cited there from search summaries. The method limit
+in this document's opening note applies to that document in full.

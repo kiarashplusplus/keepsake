@@ -74,6 +74,28 @@ export const PhotoSuggestionSchema = z.object({
   /** What the model says is literally in the frame — not shown in the form,
    * kept so a caller can log/debug why a suggestion looked the way it did. */
   subject: z.string().trim().max(120),
+  /**
+   * Every word printed, stamped or engraved on the object, copied verbatim
+   * — a brand, a model name, a size, a capacity. Like `subject`, this is
+   * never shown to anyone: it exists to make the model *look* before it
+   * answers, the same left-to-right think-then-answer trick `subject`
+   * plays for identification and `moderation/prompts.ts` documents at
+   * length.
+   *
+   * It is not decorative. Issue #135 measured the shipped prompt against a
+   * real listing — a fishing-line spool printed `KASTKING`, `SUPER POWER`,
+   * `30 LBS 327 YDS` — and got back exactly one aspect, `material:
+   * braided`, while the same model asked plainly to describe the photo read
+   * every word on the label. Adding this field, and telling the prompt that
+   * what it reads here belongs in `aspects`, returned `brand: KastKing`,
+   * `size: 30 lbs 327 yds` and `material: braided line` on three runs out
+   * of three.
+   *
+   * `.default("")` rather than required: an omitted key would otherwise
+   * fail `safeParse` and throw away an otherwise-good suggestion, and a
+   * photo of an unmarked object legitimately has nothing to put here.
+   */
+  markings: z.string().trim().max(200).default(""),
   /** A short, warm, specific name for the object — pre-fills the listing
    * title, so it must satisfy the same bounds `CreateListingInput` enforces. */
   title: z.string().trim().min(TITLE_MIN).max(TITLE_MAX),
@@ -84,9 +106,12 @@ export const PhotoSuggestionSchema = z.object({
   condition: z.string().trim().max(160),
   /**
    * eBay-style structured attributes read off the photo — `object`,
-   * `material`, `era`, `colour`, `maker`, `pattern` are the suggested
-   * vocabulary but not an enum; the model may use another short lowercase
-   * name if it fits better. Forward-looking: `category` is slated to be
+   * `brand`, `model`, `material`, `size`, `era`, `colour`, `pattern` are
+   * the suggested vocabulary but not an enum; the model may use another
+   * short lowercase name if it fits better. (`brand`, `model` and `size`
+   * joined that list in #135, alongside `markings` above: without a name to
+   * put it under, a model that had plainly read "KASTKING" off a label had
+   * nowhere to say so.) Forward-looking: `category` is slated to be
    * dropped in a later change in favor of these, and emitting them now
    * avoids a second vision call once that change lands.
    *

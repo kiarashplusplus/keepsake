@@ -56,6 +56,43 @@ name = "EMAIL"
 # doesn't strand a listing in `pending` forever. `orphanSweep` runs once a day,
 # off-peak, to delete photos uploaded but never attached to a listing —
 # abandoned `give` flows and abuse probes both leave these behind.
+#
+# **Not restated under `[env.preview]`/`[env.production]`, and that is
+# deliberate — verified, not assumed.** Every other block in this file is
+# repeated per environment because Wrangler genuinely does not inherit
+# `[vars]` or any `[[binding]]`; `[triggers]` sitting only at the top level
+# therefore looks exactly like the bug that would leave both crons unattached
+# in production. It is not. Checked two ways against the pinned wrangler
+# 4.129.0, 2026-09-07:
+#
+#   1. Wrangler's config normalizer registers `triggers` through its
+#      `inheritable(...)` helper — the same one `main`, `compatibility_date`
+#      and `routes` use — and it sits *above* that function's literal
+#      `// Not inherited fields` comment, under which `vars`, `secrets` and
+#      every binding are registered via `notInheritable(...)`
+#      (`node_modules/wrangler/wrangler-dist/cli.js`).
+#   2. Resolved this actual file through wrangler's own public API rather
+#      than by reading its source:
+#        node -e 'const {unstable_readConfig}=require("wrangler");
+#          for (const env of [undefined,"preview","production"])
+#            console.log(env, unstable_readConfig({config:"wrangler.toml",env}).triggers)'
+#      prints `{"crons":["*/5 * * * *","17 3 * * *"]}` for all three.
+#
+# Note `wrangler deploy --env production --dry-run` is *not* evidence here:
+# it prints bindings and vars but says nothing about triggers, in either the
+# top-level or the named-environment form. It was the first thing tried.
+#
+# Restating the list under each env block would work too, but it would mean
+# three places to keep in step for no gain. What keeps this honest instead is
+# preflight's `cron-triggers` check (`tools/preflight/preflight.mjs`): it
+# asserts every deployed tier still resolves a non-empty, syntactically valid
+# cron list — including the one override that would silently switch a tier's
+# crons off, `[env.<name>.triggers] crons = []` — and that every schedule
+# below matches a `case` in `scheduled()` (`src/index.ts`), which dispatches
+# on the literal string. Editing a schedule here without editing that switch
+# leaves the job registered with Cloudflare, firing on time, and falling
+# through to `default:`: a `console.warn` and no work, on an invocation the
+# platform records as successful.
 [triggers]
 crons = ["*/5 * * * *", "17 3 * * *"]
 
@@ -94,10 +131,22 @@ MOD_IMAGE_DAILY_BUDGET = "3000"
 # moderating. ~15 neurons/call, ~$0.17 per 1000 listings — this is runaway
 # protection, not a real usage ceiling.
 SUGGEST_DAILY_BUDGET = "1000"
-# Per-IP daily ceilings for the write endpoints. An address is not a person —
-# a household or a mobile carrier's CGNAT range sits behind one IP — so these
-# are set loose on purpose; they catch a runaway script, not a family posting
-# a few keepsakes in a day.
+# Per-IP daily ceilings for the write endpoints — all six of them: listing
+# create, request, photo upload, report, outbound email, and AI autofill,
+# each named below. An address is not a person — a household or a mobile
+# carrier's CGNAT range sits behind one IP — so these are set loose on
+# purpose; they catch a runaway script, not a family posting a few keepsakes
+# in a day.
+#
+# Issue #128: this comment used to introduce three of them as though that
+# were the set, which is how an audit came to report the report and email
+# ceilings as undeclared when they had been added an hour earlier. A comment
+# claiming completeness is not a guarantee of it, so the guarantee now lives
+# somewhere that can fail: preflight's `var-usage` check reads what
+# `apps/api/src` actually reads and requires it to be declared here (and
+# every name here to be read by something, and every code fallback to equal
+# the value declared here). Add a per-IP ceiling to the code without adding
+# it below and CI says so.
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
@@ -139,6 +188,21 @@ MAX_PHOTO_BYTES = "5242880"
 # `cf` uses the `[[send_email]]` binding; `resend` is the fallback behind the
 # same `sendMail()` interface if Email Service enablement or domain
 # onboarding (see plan Risks #1) doesn't land in time.
+#
+# Issue #127: `resend` is NOT a hot switch. Do not reach for it mid-incident
+# without doing DNS work first. `_dmarc.keepsake.ing` is `p=reject`, and the
+# only SPF/DKIM records in this zone belong to Cloudflare's
+# `cf-bounce.keepsake.ing` — which relaxed-aligns with the
+# `hello@keepsake.ing` in `EMAIL_FROM` below, and is the whole reason mail
+# passes DMARC today. Resend's bounce domain is not under keepsake.ing and
+# the zone carries none of its records, so flipping this var on its own
+# produces mail that fails DMARC against a *reject* policy: receivers
+# discard it outright rather than spam-foldering it, `sendMail()` still
+# returns success, and the policy has no `rua=` for anyone to find out from.
+# The failover meant to rescue a partial email outage would quietly convert
+# it into a total one. Add Resend's SPF/DKIM to the zone, verify alignment,
+# *then* flip this. Same rule as the `MAX_PHOTOS` note above: a control that
+# cannot do what it appears to do is worse than no control.
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 # Local and e2e never send. The bindings exist so the code path is exercised;
@@ -146,6 +210,20 @@ EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 EMAIL_MODE = "off"
 EMAIL_ALLOWLIST = ""
 SITE_URL = "http://localhost:8787"
+# Issue #94: the keepsake.ing zone that `src/lib/photoCache.ts` purges a
+# deleted photo's two variant URLs from, so the purge reaches every colo
+# instead of only the one that executed the delete request
+# (`caches.default` is per-colo). A zone id is a public identifier, not a
+# credential — it's written down in `docs/runbooks/kiarash-checklist.md` —
+# so it lives here as a var; the API token it pairs with
+# (`CF_CACHE_PURGE_TOKEN`, `Zone.Cache Purge`) is a Worker secret, set with
+# `wrangler secret put`. Empty here because local dev serves photos from
+# `http://localhost:8787`, which is not in any zone and has nothing to
+# purge; with either half missing the zone call is skipped silently and the
+# per-colo delete is still done. That's a bounded state, not a hole:
+# `images.ts` serves `max-age=3600`, so an unreached copy expires within the
+# hour regardless.
+CF_ZONE_ID = ""
 # M1: flips the moderation pipeline to canned responses for local dev and
 # Playwright, so `give` works without live Workers AI calls.
 MOCK_AI = "0"
@@ -312,6 +390,12 @@ EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 EMAIL_MODE = "allowlist"
 EMAIL_ALLOWLIST = "kiarasha@alum.mit.edu,leapkg@gmail.com"
 SITE_URL = "https://preview.keepsake.ing"
+# Same keepsake.ing zone as production (issue #94): `preview.keepsake.ing`
+# is a record inside it, so a purge-by-URL for
+# `https://preview.keepsake.ing/i/...` is in-zone and valid. Still inert
+# until `CF_CACHE_PURGE_TOKEN` is set on this Worker — see the top-level
+# `[vars]` comment.
+CF_ZONE_ID = "dcc1fb09eeeba27a343fc1d98aff9094"
 MOCK_AI = "0"
 
 [[env.preview.d1_databases]]
@@ -444,6 +528,12 @@ EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 EMAIL_MODE = "live"
 EMAIL_ALLOWLIST = ""
 SITE_URL = "https://keepsake.ing"
+# The keepsake.ing zone (issue #94), attached to this account 2026-09-07 and
+# recorded in `docs/runbooks/kiarash-checklist.md`. Inert until
+# `CF_CACHE_PURGE_TOKEN` is set on the production Worker — see the top-level
+# `[vars]` comment for the full rationale and for why an unset token is a
+# silent no-op rather than an error.
+CF_ZONE_ID = "dcc1fb09eeeba27a343fc1d98aff9094"
 MOCK_AI = "0"
 
 [[env.production.d1_databases]]
