@@ -10,6 +10,7 @@ jest.mock("@/api/photos", () => ({ suggestPhoto: jest.fn() }));
 
 const SUGGESTION = {
   subject: "a ceramic mug",
+  markings: "",
   title: "Blue ceramic mug",
   category: "home_kitchen" as const,
   condition: "small chip near the handle",
