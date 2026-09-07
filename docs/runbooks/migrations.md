@@ -60,7 +60,7 @@ under the old name, and step 5 above happens.
 A timestamp is claimed from the clock instead of from the state of `main`. Two branches cannot
 collide, so a rebase never forces a rename, so the ledger never drifts.
 
-**The existing `0001`–`0008` files are not renamed and never will be.** Renaming them to fit the
+**The existing `0001`–`0009` files are not renamed and never will be.** Renaming them to fit the
 new convention would be exactly the bug this convention exists to prevent — they are already
 applied under those names on preview and production.
 

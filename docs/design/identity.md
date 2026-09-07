@@ -24,7 +24,8 @@ listings, and the email step in `give` says so explicitly.
 - `POST /api/recover/:token` — rotates `token_hash`, returns the new owner token once. The old
   token is dead the instant this succeeds: a device that loses the recovery race gets 401 on its
   next request, by design (compromise containment, not a bug to smooth over).
-- `recovery_tokens` table: `purpose` `recover` (30 min TTL) or `verify_email` (24 h), single-use
+- `recovery_tokens` table: `purpose` `recover` (60 min TTL — `RECOVER_TTL_MS`, raised from 30 on
+  2026-09-07) or `verify_email` (24 h), single-use
   (`used_at`).
 
 ## Request withdrawal
@@ -65,7 +66,7 @@ Kiarash alone. Not an owner token with elevated scope — there is no user table
 `POST /api/recover` and `POST /api/recover/:token` (`apps/api/src/routes/recover.ts`) implement
 recovery exactly as described above: always `{ sent: true }` regardless of a match (no
 enumeration signal — the D1 lookup and the conditional send happen entirely inside the "always
-200" branch); a matching, *verified* owner gets a 30-minute `recovery_tokens` row (`purpose =
+200" branch); a matching, *verified* owner gets a 60-minute `recovery_tokens` row (`purpose =
 'recover'`) and the `recover` email template; exchanging the token rotates `owners.token_hash` and
 marks the row used in the same request, so the old token 401s on its very next call and the
 recovery token itself can't be replayed. `POST /api/me/email` mints the `verify_email` counterpart

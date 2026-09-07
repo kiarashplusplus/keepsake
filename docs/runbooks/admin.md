@@ -93,7 +93,7 @@ last changed. Each item is every `OwnerListing` field (title, story, photos, sta
 | `GET /api/admin/requests/:id` | one request's `note`/`email`/`phone`/`status`/`age_attested_at` plus its parent listing's `id`/`title`/`status` — a targeted, on-demand lookup, not a queue field (see "Minors" section below) |
 | `POST /api/admin/requests/:id/remove` | redacts that request's `note`/`email`/`phone` (`status` → `removed`), decrements the listing's `request_count`; doesn't touch the listing itself; optional `{ reason }` in the body; 409s if already `withdrawn`/`removed` |
 | `GET /api/admin/stats` | listing counts by status, requests today, email failures today, today's `mod_text`/`mod_image` AI budget usage (KV `budget:<kind>:<day>`) |
-| `GET /api/admin/health` | `postal_codes` row count (warns if 0) and `cron_last_run` timestamps (`cron:last:moderationRetry`, `cron:last:orphanSweep`, from KV) |
+| `GET /api/admin/health` | `ok`, `postal_codes` row count (warns if 0), `cron_last_run` for all **three** registered crons (`moderationRetry`, `orphanSweep`, `dailyDigest`, from KV) and `report_pressure` (auto-hidden listings awaiting review — which also flips `ok` — plus listings one report from the threshold) |
 | `POST /api/admin/test-email` | sends a real message through the real `sendMail()` path to `{ to }` and reports back `{ sent, reason, provider }` — see below |
 | `POST /api/admin/test-error` | **diagnostic only, not product API** — deliberately calls `captureException`/`captureMessage` (`{ kind: "exception" \| "message" }`, defaults to `"exception"`) so a real event can be confirmed in Workers Logs / `wrangler tail` — see below |
 
@@ -383,8 +383,16 @@ crons having stopped. **The absence of a digest is itself the alarm.**
 
 With `ADMIN_DIGEST_TO` unset the report is still built every night — which proves the queries still
 run — and logged instead of sent. That is a supported state, not a failure, and the cron does not
-fail because of it; if it did, the job would report itself *stale*, which is the exact alarm this
-report exists to raise about everything else.
+fail because of it.
+
+**But the job reports itself stale anyway, and always has** (#165). This paragraph used to end by
+saying a non-failing digest keeps itself out of the stale alarm; the counterfactual is inverted.
+`cron/dailyDigest.ts` never writes `cron:last:dailyDigest` — only `moderationRetry.ts:70` and
+`orphanSweep.ts:236` write a heartbeat, and `runCron` does not write one either, despite comments
+in `index.ts` and `cron/registry.ts` claiming it does as its final statement. A never-written key
+is stale by definition, so `GET /api/admin/health` returns `ok: false` permanently and every
+digest lists its own cron under `needs_attention`. The crons alarm is stuck on, whether or not
+`ADMIN_DIGEST_TO` is set.
 
 To see today's digest without waiting for the cron, read `.report` out of the Observatory payload —
 the page and the email render the same object, so they cannot disagree:
