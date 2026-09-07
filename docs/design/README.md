@@ -133,49 +133,78 @@ not this file, as the count; what this file is for is which of them matter and w
 - **#157** — create `keepsake-photos-production-backup`. Production photos have never been backed
   up, and until 2026-09-07 the nightly job reported success anyway.
 
-*The 2026-09-07 adversarial audit — #161–#191, 30 open, 14 of them already
-`status: in progress`.* Filed against the data, moderation, auth, ops and CI layers hours after
-this file's previous sweep. **Read the labels on GitHub before starting any of these**; roughly
-half are claimed by another session already, and per "Picking up work" in `AGENTS.md` that label
-is the lock.
+*The 2026-09-07 adversarial audit — #161–#191.* Filed against the data, moderation, auth, ops
+and CI layers hours after this file's previous sweep. Roughly half have since been fixed and the
+rest are being worked in parallel, so the counts this paragraph used to carry went stale within
+hours and are gone: **read the labels on GitHub before starting any of these**, and per "Picking
+up work" in `AGENTS.md` that label is the lock. The lists below mark what is fixed and by what;
+five — **#162, #168, #171, #184, #189** — are fixed on the branch behind PR #197 and close on
+merge, so until then they are open issues whose work is written and whose behaviour these docs
+already describe in the fixed tense.
 
-- **Launch blockers:** **#161** — moderation only ever sees the client-uploaded thumbnail, and
-  `/i/:id/full` serves the never-inspected full-resolution file to the public. **#162** —
-  `withdraw`+`relist` undoes an admin rejection, a hide, a ban sweep or a three-report auto-hide.
-  **#165** — `dailyDigest` never writes its heartbeat, so `/api/admin/health` is permanently
-  `ok: false` and the crons alarm is stuck on.
-- **Personal data and email:** #169, #188, #189. **#167 and #182 are fixed** (2026-09-07): a
-  `verify_email` token is now bound to the address it was mailed to rather than to the owner row,
-  and the recovery token travels in a POST body instead of a URL path segment — see
-  `docs/design/identity.md`. **#170 and #190 are fixed** too: the redactor has email, phone and
-  path-segment rules, and the recipient is scrubbed out of `email_events.error_detail`.
-- **More checks that could not fail:** #191 — plus **#166, #175 and #176, fixed** (PR #198):
+- **Launch blockers:** all three closed. **#161** (#205): the pipeline moderated only the
+  client-uploaded thumbnail while `/i/:id/full` published the never-inspected full-resolution
+  file, so a caller could pass on one image and publish another — every stored variant is now
+  moderated, see moderation.md step 4. **#162** (PR #197): `withdraw`+`relist` undid an admin
+  rejection, a hide, a ban sweep or a three-report auto-hide; `relist` now reads the newest
+  status-setting event of *any* kind and sends a takedown to `needs_review` rather than back to
+  `approved`. **#165** (#209): `dailyDigest` never wrote its heartbeat, so `/api/admin/health`
+  was permanently `ok: false` and the crons alarm was stuck on — `runCron` now writes the
+  heartbeat for every registered job on success and for none that throws, so a new cron cannot be
+  added without one.
+- **Personal data and email:** #188 is the one left — a request's email address is never
+  verified, so anyone can enrol a third party as a requester. **#167, #170, #182 and #190 are
+  fixed** (2026-09-07): a `verify_email` token is bound to the address it was mailed to rather
+  than to the owner row, the recovery token travels in a POST body instead of a URL path segment
+  (both in `docs/design/identity.md`), and the redactor has rules for path segments and for the
+  PII Keepsake actually holds, with the recipient scrubbed out of `email_events.error_detail`.
+  **#169 is fixed** (#209): `orphanSweep` nulls both `ip_digest` columns at 48 hours, withdrawal
+  nulls its own immediately, and the number is locked against the page and all three mechanisms
+  in `privacyPolicy.test.ts`. **#189's server half is fixed in PR #197**: the request endpoint was
+  an oracle for the giver's address and for who else had asked — both the self-request `400` and
+  the duplicate `409` now return the same `201` the success path returns, having written and sent
+  nothing. Its client half — the helpful "that's your own keepsake" message, checked in `apps/web`
+  against the owner address the device already knows — is still to do.
+- **More checks that could not fail:** all closed. **#166, #175 and #176 are fixed** (PR #198):
   preflight's `shell-syntax` now parses the workflow `run:` blocks that hold all this repo's shell
   and fails rather than skips when it finds none; `cron-triggers` reads `cron/registry.ts` and
   asserts the three-way agreement two documents already claimed; and `verify-public-env` derives
   its expectations from `.env.example` instead of from the environment that forgot the variable.
-  **#173 and #181 are fixed** as well — the consent banner now has an unseeded axe scan and a
-  dark-mode pass, and `uploadIdempotencyKey` was deleted rather than left guarding nothing. Six
-  instances of `AGENTS.md`'s table found in a single pass — the table is now at eleven rows and
-  should be read as a pattern, not a closed list.
-- **Moderation and abuse surface:** #168, #171, #183. **#179 is fixed** (2026-09-07): a budget
-  denial no longer consumes one of the three retry attempts, so an exhausted budget delays a
-  listing until the counter resets instead of stranding it in `needs_review`.
-- **Correctness:** #184. **#163, #180 and #186 are fixed** (2026-09-07): an apostrophe no longer
-  reaches FTS5 as a syntax error, a listing whose embedding failed is still returned by its own
-  search, and the candidate query is chunked below D1's 100-parameter ceiling. **#172, #174 and
-  #187 are fixed**: a failed Delete on `/mine/[id]` no longer navigates as though it succeeded; a
-  Turnstile challenge failure reports `unconfigured` and lets the server's `siteverify` decide;
-  and `useFeed`'s `loadMore` drops a page belonging to a query the visitor has already left.
-  **#185 is fixed**: choosing a recipient is one `env.DB.batch()` with a conditional claim on the
-  listing, checked before any mail goes out — see `docs/design/email.md`'s "Contact reveal rule".
-  It is also the Worker's first use of `batch()`; the other multi-write sequences that issue named
-  (create-listing + photos + aspects, `replaceListingAspects`) are still unbatched.
-- **Ops and backup:** #178 — plus **#164, fixed** (PR #198): the documented D1 backup omitted
+  **#194 is fixed** in the same PR — the CSP script hashes are now computed from the script they
+  authorise. Six instances of `AGENTS.md`'s table found in a single pass; the table is now at
+  eleven rows and should be read as a pattern, not a closed list. **#191 is fixed**
+  (#209): `/health` gives `ASSETS` a real read and reports `VECTORIZE` as `ok`/`error`/`off`
+  rather than not looking at it at all. **#173 and #181 are fixed**
+  (2026-09-07): the consent banner was never scanned by axe, because every a11y context seeded a
+  consent decision and two comments in the tree claimed a scan that did not exist —
+  `e2e/a11y.spec.ts` now builds its own unseeded contexts for the banner and runs a dark-mode
+  pass, and both comments say what is true.
+- **Moderation and abuse surface:** #183. **#179 is fixed** (#206): a budget denial no longer
+  counts against the 3 retry attempts, so an exhausted daily ceiling stops turning every listing
+  posted afterwards into permanent manual review — moderation.md step 2. **#168 and #171 are
+  fixed in PR #197**: every non-GET route on `listingRoutes` is behind a router-level
+  `burst("RL_WRITE")` and `PATCH` charges the same daily budget create does, and listing aspects
+  now run through `containsContactInfo` and reach Llama Guard. #168's siblings in
+  `routes/photos.ts` and `routes/me.ts` are untouched and still unmetered.
+- **Correctness:** all fixed. **#163, #180 and #186** (#206) — the search sanitizer, and the two
+  that ran with it. **#172, #174 and #187** (2026-09-07): a failed Delete on `/mine/[id]` no
+  longer navigates as though it succeeded; a Turnstile challenge failure reports `unconfigured`
+  and lets the server's `siteverify` decide, instead of disabling every submit button in the app
+  with no message and no retry; and `useFeed`'s `loadMore` drops a page belonging to a query the
+  visitor has already left. **#185**: choosing a recipient is one `env.DB.batch()` with a
+  conditional claim on the listing, checked before any mail goes out — see
+  `docs/design/email.md`'s "Contact reveal rule". It is also the Worker's first use of `batch()`;
+  the other multi-write sequences that issue named (create-listing + photos + aspects,
+  `replaceListingAspects`) are still unbatched. **#184 is fixed in PR #197** — the report
+  auto-hide decides on the count returned by its own `UPDATE … RETURNING`, so concurrent reports
+  trip the threshold instead of each reading zero.
+- **Ops and backup:** both closed. **#164** (PR #198): the documented D1 backup omitted
   `listing_aspects`, and because `aspects_backfilled_at` *is* in the export the loss was
-  unrecoverable. `restore.md`'s `--table` list now includes it, and preflight's new
+  unrecoverable — `restore.md`'s `--table` list now includes it, and preflight's new
   `backup-tables` check compares that list against the tables the migrations create, so the next
-  migration that adds a table fails the build instead of the backup.
+  migration that adds a table fails the build instead of the backup. #178 (**fixed** — `orphanSweep` refuses
+  to delete a photo the backup bucket does not have, so the ordering no longer rests on two
+  independent schedulers; still unguarded in production until #157 creates the bucket).
 
 *Workable by anyone (pre-audit):*
 - **#104** — `wrangler dev` dies mid-e2e with no diagnostic and `serve.mjs`'s restart hides it.

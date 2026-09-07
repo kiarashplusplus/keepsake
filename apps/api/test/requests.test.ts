@@ -52,17 +52,24 @@ describe("POST /api/listings/:id/requests", () => {
     expect(requestRow?.email).toBe("requester@keepsake.ing");
   });
 
-  it("409s a duplicate request (same listing, same email)", async () => {
+  it("silently discards a duplicate request (same listing, same email) — no second row, no 409", async () => {
     const ownerId = await insertOwner();
     const listingId = await insertApprovedListing({ ownerId });
 
     const first = await requestListing(listingId, VALID_REQUEST_BODY);
     expect(first.status).toBe(201);
 
+    // Issue #189: this used to be a `409 "You've already asked for this
+    // one."`, which told any stranger whether a named person had asked for a
+    // named keepsake. It is now the same 201 a first ask gets — see
+    // `requestOracle.test.ts` for the full indistinguishability proof.
     const second = await requestListing(listingId, VALID_REQUEST_BODY);
-    expect(second.status).toBe(409);
-    const error = await readErr(second);
-    expect(error.code).toBe("conflict");
+    expect(second.status).toBe(201);
+
+    const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM requests WHERE listing_id = ?")
+      .bind(listingId)
+      .first<{ n: number }>();
+    expect(count?.n).toBe(1);
   });
 
   it("404s a pending listing", async () => {
@@ -166,21 +173,25 @@ describe("POST /api/listings/:id/requests", () => {
     expect(error.code).toBe("not_found");
   });
 
-  it("400s when the requester's email is the giver's own (verified) email", async () => {
+  it("silently discards a request whose email is the giver's own — no row, and no 400 confirming the address", async () => {
     const ownerId = await insertOwner();
     await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE id = ?")
       .bind("giver@keepsake.ing", Date.now(), ownerId)
       .run();
     const listingId = await insertApprovedListing({ ownerId });
 
+    // Issue #189: this used to be a `400 "That's your own keepsake."`, which
+    // confirmed the giver's private address to whoever guessed it.
     const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, email: "giver@keepsake.ing" });
-    expect(res.status).toBe(400);
-    const error = await readErr(res);
-    expect(error.code).toBe("bad_request");
-    expect(error.message).toBe("That's your own keepsake.");
+    expect(res.status).toBe(201);
+
+    const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM requests WHERE listing_id = ?")
+      .bind(listingId)
+      .first<{ n: number }>();
+    expect(count?.n).toBe(0);
   });
 
-  it("matches the giver's own email case-insensitively", async () => {
+  it("matches the giver's own email case-insensitively (still discarded, still silent)", async () => {
     const ownerId = await insertOwner();
     await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE id = ?")
       .bind("giver@keepsake.ing", Date.now(), ownerId)
@@ -188,7 +199,12 @@ describe("POST /api/listings/:id/requests", () => {
     const listingId = await insertApprovedListing({ ownerId });
 
     const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, email: "GIVER@Keepsake.ING" });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(201);
+
+    const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM requests WHERE listing_id = ?")
+      .bind(listingId)
+      .first<{ n: number }>();
+    expect(count?.n).toBe(0);
   });
 
   it("400s when date_of_birth is missing (docs/legal-considerations.md Minimum age, issue #64)", async () => {

@@ -3,10 +3,11 @@ import { HTTPException } from "hono/http-exception";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { captureException, configureCapture } from "@keepsake/observability/capture";
 import { apiErr } from "@keepsake/contracts/common";
-import { assertBindings, isProduction, type Env } from "./env.js";
+import { assertBindings, isProduction, semanticSearchEnabled, type Env } from "./env.js";
 import { dailyDigest } from "./cron/dailyDigest.js";
 import { moderationRetry } from "./cron/moderationRetry.js";
 import { orphanSweep } from "./cron/orphanSweep.js";
+import { type CronJobName, writeCronHeartbeat } from "./cron/registry.js";
 import { ukBlock } from "./middleware/ukBlock.js";
 import { securityHeaders } from "./middleware/securityHeaders.js";
 import { geoRoutes } from "./routes/geo.js";
@@ -216,6 +217,60 @@ app.get("/health", async (c) => {
     kv = "error";
   }
 
+  // Same idea again, for ASSETS — issue #191. `assertBindings` only proves
+  // the binding object exists, and `/health` is answered by Worker code, not
+  // by the assets binding, so a deploy whose web export produced a broken or
+  // partial `dist/` used to verify green: `deploy.yml`'s only post-deploy
+  // check is that `/health` reports the right commit, and that check ran
+  // across exactly this gap while the site served nothing usable.
+  //
+  // The probe is a real fetch of the SPA shell through the binding. With
+  // `not_found_handling = "single-page-application"` a live deploy answers
+  // any path with `index.html`, so a non-`ok` status means the assets system
+  // has no shell to serve at all — which is the failure worth catching. The
+  // URL's origin is irrelevant to the binding (it routes on path) but must
+  // be well-formed, so it is written literally rather than derived from the
+  // incoming request, whose path is `/health`.
+  let assets: "ok" | "error";
+  try {
+    const shell = await c.env.ASSETS.fetch(new Request("https://assets.invalid/index.html"));
+    // Drain the body: an undrained response body in workerd holds the stream
+    // open for the lifetime of the request.
+    await shell.arrayBuffer();
+    assets = shell.ok ? "ok" : "error";
+    if (!shell.ok) {
+      console.error("health: ASSETS check failed", { status: shell.status });
+    }
+  } catch (err) {
+    console.error("health: ASSETS check failed", { error: err instanceof Error ? err.message : String(err) });
+    assets = "error";
+  }
+
+  // Vectorize, issue #191. This binding appeared in no health field and no
+  // Observatory panel at all, while `search/vectorize.ts` returns silently
+  // when it is absent — so a rollback across a binding change or a
+  // hand-edited `[[vectorize]]` block reverts semantic search to FTS with
+  // nothing anywhere saying so, while `SEMANTIC_SEARCH="1"` and the privacy
+  // page both keep asserting the feature is running.
+  //
+  // Three states, not two, for the reason AGENTS.md gives about the
+  // Observatory's panels: a field that cannot tell "I did not look" from "I
+  // looked and saw nothing" is another check that cannot fail.
+  //
+  //   ok      — the binding is there. (Not a query: a real Vectorize read
+  //             costs an embedding call, which is the same objection that
+  //             keeps `AI` presence-only. Presence is the honest ceiling
+  //             here and this comment is the record of that choice.)
+  //   error   — SEMANTIC_SEARCH is on and the binding is absent. Search is
+  //             silently running as FTS while every other surface claims
+  //             otherwise. This one fails `ok`.
+  //   off     — the kill switch is off and there is no binding. A supported
+  //             configuration, and explicitly not a fault.
+  const vectorize: "ok" | "error" | "off" = c.env.VECTORIZE ? "ok" : semanticSearchEnabled(c.env) ? "error" : "off";
+  if (vectorize === "error") {
+    console.error("health: SEMANTIC_SEARCH is on but the VECTORIZE binding is absent — search has silently fallen back to FTS");
+  }
+
   // Neither secret's presence nor absence is ever put in the response body
   // by name — only this rolled-up "ok"/"degraded" verdict — and only in
   // `production`. Local dev and preview routinely run without Turnstile/
@@ -224,8 +279,8 @@ app.get("/health", async (c) => {
   const secretsConfigured = Boolean(c.env.TURNSTILE_SECRET) && Boolean(c.env.ADMIN_TOKEN);
   const secrets: "ok" | "degraded" = !isProduction(c.env) || secretsConfigured ? "ok" : "degraded";
 
-  const checks = { ...bindingChecks, d1, r2, kv, secrets };
-  const ok = bindingsOk && d1 === "ok" && r2 === "ok" && kv === "ok";
+  const checks = { ...bindingChecks, d1, r2, kv, assets, vectorize, secrets };
+  const ok = bindingsOk && d1 === "ok" && r2 === "ok" && kv === "ok" && assets === "ok" && vectorize !== "error";
   const degraded = secrets === "degraded";
   const commit = c.env.COMMIT_SHA ?? "dev";
 
@@ -315,14 +370,28 @@ app.all("*", async (c) => {
  * `[observability]` in wrangler.toml — automatically, no SDK needed), this
  * function additionally captures it with the job's name attached (so the log
  * line says which cron, not just "scheduled"), and rethrowing marks the
- * invocation failed in the Cloudflare dashboard. The heartbeat each job
- * writes as its last statement (`cron:last:<name>` in KV) stays the positive
- * signal — `GET /api/admin/health` turns a stale one into `ok: false`.
+ * invocation failed in the Cloudflare dashboard.
+ *
+ * **The heartbeat is written here** (`cron:last:<name>` in KV), after the
+ * job's promise resolves and before this returns — that is the positive
+ * signal `GET /api/admin/health` turns into `ok: false` once it goes stale.
+ * Issue #165: this docblock and `cron/registry.ts` both already said so while
+ * each job wrote its own key instead, and `dailyDigest` — added last — wrote
+ * none. A never-written key is stale by definition, so the endpoint answered
+ * `ok: false` on every deployed tier permanently and the digest's subject was
+ * permanently "N needs attention". Centralizing the write is what makes a
+ * fourth cron impossible to add without one: the job author no longer writes
+ * a heartbeat at all, the dispatcher does, and `name` is typed against the
+ * registry so a job dispatched under a name no `staleAfterMs` covers does not
+ * compile.
+ *
+ * On failure nothing is written, deliberately — a job that threw did not do
+ * its job, and the whole value of the key is that it means "finished".
  *
  * `ctx` is still passed and used for `waitUntil`, so the job keeps running if
  * the request context is torn down early — belt and braces, not either/or.
  */
-async function runCron(name: string, job: (env: Env) => Promise<void>, env: Env, ctx: ExecutionContext): Promise<void> {
+async function runCron(name: CronJobName, job: (env: Env) => Promise<void>, env: Env, ctx: ExecutionContext): Promise<void> {
   // `scheduled` (below) never touches the `app.use("*", ...)` middleware
   // above — it isn't an HTTP request — so this is the only place a cron
   // invocation gets `service`/`environment`/`release` configured before any
@@ -333,6 +402,7 @@ async function runCron(name: string, job: (env: Env) => Promise<void>, env: Env,
   ctx.waitUntil(running);
   try {
     await running;
+    await writeCronHeartbeat(env.KV, name, Date.now());
     console.log("scheduled: done", { cron: name, durationMs: Date.now() - started });
   } catch (err) {
     console.error("scheduled: failed", {

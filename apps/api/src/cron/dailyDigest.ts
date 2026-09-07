@@ -31,6 +31,18 @@ import { captureMessage } from "@keepsake/observability/capture";
  * proves the queries still work), then either send it or log why not. The
  * heartbeat is written either way, because the job did do its job.
  *
+ * Both of those sentences describe `runCron` (`index.ts`), and as of #165
+ * they are mechanically true rather than aspirational: this file wrote no
+ * heartbeat at all for as long as it existed, which pinned
+ * `GET /api/admin/health` to `ok: false` on every deployed tier and put this
+ * job's own name in every digest's `needs_attention`. One consequence worth
+ * knowing rather than rediscovering: the report is built *before* the
+ * heartbeat is written, so the first run after a deploy that has never
+ * written the key still lists `dailyDigest` as stale in its own digest. It
+ * clears itself on the next night's run, and the 26-hour `staleAfterMs` in
+ * `cron/registry.ts` is wide enough that a daily job's own heartbeat is
+ * never stale when it next looks at it.
+ *
  * ## Why a send failure *is* loud
  *
  * If the recipient is configured and the send fails, nothing else will ever

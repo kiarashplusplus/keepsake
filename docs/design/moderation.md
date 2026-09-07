@@ -16,11 +16,17 @@ else is enforced by `tools/preflight`'s `models` check.
    (`contact_in_story`). The length, category-enum and 1–5-owned-photo rules are enforced
    *earlier*, at the API boundary (`CreateListingInput`/`UpdateListingInput` plus the ownership
    query in `routes/listings.ts`), and the pipeline does not re-check them.
-   The bypass block is **not** complete: client-supplied `aspects` — up to six free-text
-   name/value pairs, written verbatim from the request body on create and PATCH with no check
-   that they came from `POST /api/photos/:id/suggest` — skip this gate and both AI models, and
-   `serializePublicListing` publishes them. A URL or phone number fits in the 48-character value
-   (#171).
+   Client-supplied `aspects` are covered too, as of PR #197. They are still up to six free-text
+   name/value pairs taken from the request body with no check that they came from
+   `POST /api/photos/:id/suggest` — so they are attacker-controlled input, and
+   `serializePublicListing` still publishes them — but they no longer skip the gate. Both halves
+   of each pair (`name` as well as `value`; 24 characters is enough for a short URL) run through
+   `containsContactInfo` at the API boundary, where `POST /api/listings` and
+   `PATCH /api/listings/:id` answer `400` above every write, and this step re-checks the
+   *persisted* rows so a pair that reached `listing_aspects` some other way — a backfill, an
+   older client — is caught as well. Until then the same email address auto-rejected in the
+   story and was published verbatim as an aspect value, which is the control the regression test
+   still runs both halves of.
 2. **Budget gate**: KV daily counters `mod_text`/`mod_image` (ported from Bayan's
    `worker/src/budget.ts`). Exhausted → stays `pending` with `reason=budget`. The denial is
    logged as a `decision`/`error` event, but **`nextAttemptNumber` does not count it**
@@ -36,7 +42,10 @@ else is enforced by `tools/preflight`'s `models` check.
    is reached twice as early. The two changes are complementary — charging the true cost is what
    makes the ceiling mean what it says, and not counting the denial is what keeps hitting the
    ceiling survivable.
-3. **Text**: Llama Guard 3 (`@cf/meta/llama-guard-3-8b`) on `title\n\nstory`, 20s timeout.
+3. **Text**: Llama Guard 3 (`@cf/meta/llama-guard-3-8b`) on `title\n\nstory`, 20s timeout. The
+   listing's aspects are appended to the story half as `name: value` lines (PR #197), so they
+   reach the model inside the one text call this pipeline is budgeted for rather than costing a
+   second one.
 4. **Images**: **every stored variant of every photo** — `r2_key_thumb` *and* `r2_key_full`,
    listed in `moderation/image.ts`'s `MODERATED_PHOTO_VARIANTS`. Each is sent to Llama 3.2
    Vision, strict JSON prompt, `temperature 0`, 30s timeout, one retry on a parse failure
