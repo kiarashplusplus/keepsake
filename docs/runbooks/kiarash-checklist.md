@@ -1,6 +1,6 @@
 # What's blocked on Kiarash
 
-Everything here is now done except the production cutover. Kept as the record of what was set up and how it was verified. Everything else in M0–M4 is built, tested and
+Everything here is now done except the production cutover and one Turnstile hostname (#73). Kept as the record of what was set up and how it was verified. Everything else in M0–M4 is built, tested and
 running on preview. Do them in this order — each one unblocks the next round of verification.
 
 Account: **Leapkg@gmail.com's Account**, id `dc6a87ed4a4269ed74c8f508b275b703`
@@ -46,7 +46,25 @@ sitemap all use the real domain. Verified: `/health` 200, `/`, `/about`, `/give/
   production only from a `workflow_dispatch` run (Actions tab → Deploy → choose `production`).
   Preview deploys itself on every PR and every push to main.
 
-## 5. Production cutover — only when you're ready to be public
+## 5. Turnstile hostname for per-PR previews — one click, only when #73's CI work starts
+
+The `keepsake-pr-preview` Cloudflare token is done and verified (see
+`docs/runbooks/deploy.md#the-per-pr-preview-token-73`): it can create and delete the Worker, D1
+database, R2 bucket and KV namespace each PR preview needs, it is stored as the preview
+environment secret `CLOUDFLARE_PR_PREVIEW_TOKEN`, and it deliberately cannot mint tokens or touch
+DNS. The one thing no token here can do is Turnstile.
+
+Dashboard → Turnstile → widget **Keepsake** → add the hostname **`leapkg.workers.dev`**. Turnstile
+hostnames cover their subdomains, so that one entry covers every future `keepsake-pr-<n>` Worker;
+wildcards are rejected, and the free tier allows 10 hostnames per widget, so adding one per PR is
+not an option. Know what you're accepting: `leapkg.workers.dev` is shared across every Worker on
+this account, so any of them could use the Keepsake site key. Declining is also a real answer — PR
+previews would then run with Turnstile unenforced, which is fine for reading and useless for
+verifying a write path.
+
+Nothing is waiting on this until the per-PR deploy job in #73 is actually built.
+
+## 6. Production cutover — only when you're ready to be public
 
 **Do not do this until 1–4 are done and you've used preview yourself.** Nothing is on
 `keepsake.ing` today.
