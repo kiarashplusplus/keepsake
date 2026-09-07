@@ -37,6 +37,18 @@ reveals either party's contact info.
 Rendered with `@keepsake/tokens` (colors/typography) so transactional email doesn't visually
 diverge from the app — warm, Fraunces-titled, not a generic transactional-email look.
 
+## Subject headers
+
+Template bodies are escaped throughout via `escapeHtml`; subject lines are not, because there is
+no markup in a header to escape. That left the listing title interpolated raw into a header, so
+`sanitizeSubject()` (`src/email/templates/shared.ts`) collapses control characters at every
+`subject:` site, and `TitleSchema` rejects them on the way in.
+
+Both layers earn their place: the schema is the front door, but a title reaches a subject from a
+D1 row rather than from freshly validated input, so a row written before that check still flows
+through the runtime path. If you add a template, run its subject through `sanitizeSubject` —
+`recover.ts` and `verifyEmail.ts` are exempt only because their subjects are static.
+
 ## M3 status (API side)
 
 `src/email/sendMail.ts` now does the real thing: `cf` via `env.EMAIL.send(...)` (the

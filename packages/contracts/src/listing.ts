@@ -44,7 +44,18 @@ export const TITLE_MAX = 80;
 export const STORY_MIN = 20;
 export const STORY_MAX = 2000;
 
-const TitleSchema = z.string().trim().min(TITLE_MIN).max(TITLE_MAX);
+// Titles get interpolated straight into email subject headers (see
+// `apps/api/src/email/templates/newRequest.ts`/`chosen.ts`), which are
+// never HTML-escaped the way the body is — a raw `\n`/`\r` there could
+// smuggle extra header lines into a sent message. `sanitizeSubject` in
+// `apps/api/src/email/templates/shared.ts` is the runtime backstop for rows
+// written before this check existed; this is the front door.
+const TitleSchema = z
+  .string()
+  .trim()
+  .min(TITLE_MIN)
+  .max(TITLE_MAX)
+  .regex(/^[^\x00-\x1f\x7f]*$/, "No line breaks or control characters");
 const StorySchema = z.string().trim().min(STORY_MIN).max(STORY_MAX);
 const PostalCodeSchema = z.string().trim().min(1).max(16);
 

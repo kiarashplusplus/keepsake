@@ -134,4 +134,68 @@ describe("POST /api/listings/:id/requests", () => {
     const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, email: "GIVER@Keepsake.ING" });
     expect(res.status).toBe(400);
   });
+
+  it("410s a request against a listing that was just given to someone else", async () => {
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId });
+    await env.DB.prepare("UPDATE listings SET status = 'given' WHERE id = ?").bind(listingId).run();
+
+    const res = await requestListing(listingId, VALID_REQUEST_BODY);
+    expect(res.status).toBe(410);
+    const error = await readErr(res);
+    expect(error.code).toBe("gone");
+  });
+
+  describe("note moderation (contact info)", () => {
+    async function requestCount(listingId: string): Promise<number> {
+      const row = await env.DB.prepare("SELECT COUNT(*) as n FROM requests WHERE listing_id = ?")
+        .bind(listingId)
+        .first<{ n: number }>();
+      return row?.n ?? 0;
+    }
+
+    it("400s and inserts no row when the note contains a phone number", async () => {
+      const ownerId = await insertOwner();
+      const listingId = await insertApprovedListing({ ownerId });
+
+      const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, note: "Call me directly at 555-123-4567, thanks!" });
+      expect(res.status).toBe(400);
+      const error = await readErr(res);
+      expect(error.code).toBe("bad_request");
+      expect(await requestCount(listingId)).toBe(0);
+    });
+
+    it("400s and inserts no row when the note contains an email address", async () => {
+      const ownerId = await insertOwner();
+      const listingId = await insertApprovedListing({ ownerId });
+
+      const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, note: "Reach me at someone@example.com instead of here." });
+      expect(res.status).toBe(400);
+      expect(await requestCount(listingId)).toBe(0);
+    });
+
+    it("400s and inserts no row when the note contains a URL", async () => {
+      const ownerId = await insertOwner();
+      const listingId = await insertApprovedListing({ ownerId });
+
+      const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, note: "Check out https://example.com for more about me." });
+      expect(res.status).toBe(400);
+      expect(await requestCount(listingId)).toBe(0);
+    });
+
+    it("still accepts an ordinary clean note and still emails the giver", async () => {
+      const sent = installFakeEmail();
+      const ownerId = await insertOwner();
+      await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE id = ?")
+        .bind("giver@keepsake.ing", Date.now(), ownerId)
+        .run();
+      const listingId = await insertApprovedListing({ ownerId, title: "A quiet teacup" });
+
+      const res = await requestListing(listingId, VALID_REQUEST_BODY);
+      expect(res.status).toBe(201);
+      expect(await requestCount(listingId)).toBe(1);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.to).toBe("giver@keepsake.ing");
+    });
+  });
 });

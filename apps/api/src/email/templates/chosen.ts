@@ -1,5 +1,5 @@
 import { colorsLight } from "@keepsake/tokens/colors";
-import { renderButton, renderShell, footerLine, escapeHtml, type EmailTemplate } from "./shared.js";
+import { renderButton, renderShell, footerLine, escapeHtml, sanitizeSubject, type EmailTemplate } from "./shared.js";
 
 export interface ChosenParams {
   listingTitle: string;
@@ -26,7 +26,7 @@ export function chosen(params: ChosenParams): EmailTemplate {
     : "Reply to this email to reach them directly.";
 
   return {
-    subject: `You were chosen for "${params.listingTitle}"`,
+    subject: sanitizeSubject(`You were chosen for "${params.listingTitle}"`),
     html: renderShell({
       bodyHtml: `<p>Good news — you were chosen for <em>${title}</em>.</p>
         <blockquote style="margin:16px 0;padding:12px 16px;border-left:3px solid ${colorsLight.accent};background:${colorsLight.surfaceSunken};font-style:italic;color:${colorsLight.ink};">${note}</blockquote>

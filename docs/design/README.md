@@ -118,5 +118,40 @@ unhandled, the Metro cache shipped an empty Turnstile site key, three axe exclus
 contrast bugs unfailable, and the e2e job had never once executed. Each is fixed and each now
 has something that fails on regression. When adding a check here, confirm it can fail.
 
+### 2026-09-07 — six launch-audit issues closed
+
+Landed on `claude/keepsake-github-issues-xpp03b`, off `main`, one commit per concern:
+
+- **#19 / #21** — a request note now goes through the same contact-info regex a listing's
+  title and story do (extracted from `moderation/pipeline.ts` into `moderation/contactInfo.ts`
+  as a pure move), applied *before* the D1 insert rather than before the send, so an
+  unmoderated note reaches neither the `requests` table nor the giver's inbox. The AI gate was
+  deliberately not used: it would spend `mod_text` budget on every request, and #18 already
+  establishes that budget is exhaustible by ~50 addresses. Separately, a request against a
+  `given` listing now returns `410 gone` instead of the generic 404; every other non-approved
+  status keeps the deliberate "not found, not forbidden" treatment.
+- **#20** — listing titles reached email subject headers unescaped. Fixed at both layers:
+  `TitleSchema` rejects control characters (the front door) and `sanitizeSubject()` runs at
+  every `subject:` site (the backstop that matters, since a title reaches a subject from a D1
+  row, not from freshly validated input). `StorySchema` untouched — the story is only ever
+  interpolated into bodies that already go through `escapeHtml`, so the header vector doesn't
+  exist there.
+- **#16** — `GET /api/admin/health` on `main` set `ok` from `postal_codes_count` alone and
+  ignored `cron_last_run`, so a month-old heartbeat sat next to `ok: true`. The endpoint fix
+  was ported **byte-for-byte** from `give-flow-fixes` so it merges cleanly when #41 lands
+  rather than becoming a second implementation of the same thing. An existing test that
+  asserted `ok: true` with `moderationRetry` still `null` was pinned to the bug and was
+  rewritten. The stats strip now carries a Crons row, ink when fresh and danger when stale.
+
+Every one of these was proved the way this file's rule 6 asks: the guard was written, then the
+production code it guards was deliberately broken, the test was watched to go red, and the
+break was reverted. The specific break and its red output are recorded in each commit message
+and in the closing comment on each issue.
+
+One process note worth keeping: an early test run here reported a failure that was purely an
+artifact of running the suite while an agent was still writing — the test existed before the
+code did. Re-running after the work settled was clean. A red run mid-edit is not evidence of
+anything.
+
 The identity is **v3 "Polaroids on a table"** (`design-system.md`); v1 and v2 were rejected as
 generic. Do not drift back toward cream-and-serif cards.

@@ -375,6 +375,29 @@ adminRoutes.get("/stats", async (c) => {
 // ---------------------------------------------------------------------------
 // GET /api/admin/health
 // ---------------------------------------------------------------------------
+/**
+ * How long each cron's `cron:last:<name>` heartbeat may go unrefreshed before
+ * this endpoint calls itself unhealthy. Generous multiples of each schedule
+ * (`[triggers] crons` in wrangler.toml), so a single skipped tick or a slow
+ * night is not an alarm, but a job that has actually stopped is:
+ *
+ *  - `moderationRetry` runs every 5 minutes. Past 30 (six missed ticks),
+ *    listings are stranded in `pending` and no giver's keepsake is going
+ *    public.
+ *  - `orphanSweep` runs once a night at 03:17. 26 hours allows a late run
+ *    plus a couple of hours of slack before a whole night counts as missed.
+ *
+ * Launch audit finding 12: the heartbeats were written correctly and read
+ * correctly here, but `ok` was derived *solely* from `postal_codes_count > 0`,
+ * so a month-old timestamp sat in the response next to a cheerful `ok: true`.
+ * The value was present and the verdict ignored it, which is the same class
+ * of bug as a limiter that never fires.
+ */
+const CRON_STALE_AFTER_MS: Record<string, number> = {
+  moderationRetry: 30 * 60 * 1000,
+  orphanSweep: 26 * 60 * 60 * 1000,
+};
+
 const CRON_JOB_NAMES = ["moderationRetry", "orphanSweep"] as const;
 
 adminRoutes.get("/health", async (c) => {
@@ -384,14 +407,29 @@ adminRoutes.get("/health", async (c) => {
     console.warn("admin/health: postal_codes table is empty — geo lookups will 404 for every postcode");
   }
 
+  const now = Date.now();
   const cronLastRun: Record<string, number | null> = {};
+  const staleCrons: string[] = [];
   for (const name of CRON_JOB_NAMES) {
     const value = await c.env.KV.get(`cron:last:${name}`);
-    cronLastRun[name] = value ? Number.parseInt(value, 10) : null;
+    const lastRun = value ? Number.parseInt(value, 10) : null;
+    cronLastRun[name] = Number.isFinite(lastRun) ? lastRun : null;
+    // `null` counts as stale too. A cron that has never once written its
+    // heartbeat is not a neutral state — it is the same observable situation
+    // as a cron that stopped, and on a fresh environment it clears itself
+    // within one tick.
+    const staleAfter = CRON_STALE_AFTER_MS[name] ?? 26 * 60 * 60 * 1000;
+    if (cronLastRun[name] === null || now - (cronLastRun[name] ?? 0) > staleAfter) {
+      staleCrons.push(name);
+    }
+  }
+
+  if (staleCrons.length > 0) {
+    console.warn("admin/health: cron heartbeat stale", { crons: staleCrons, cronLastRun });
   }
 
   const health: AdminHealth = {
-    ok: postalCodesCount > 0,
+    ok: postalCodesCount > 0 && staleCrons.length === 0,
     postal_codes_count: postalCodesCount,
     cron_last_run: cronLastRun,
   };

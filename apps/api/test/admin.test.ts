@@ -330,10 +330,11 @@ describe("admin routes", () => {
       expect(health.cron_last_run.moderationRetry).toBeNull();
     });
 
-    it("reports the postal_codes count and cron last-run timestamps once seeded", async () => {
+    it("reports the postal_codes count and cron last-run timestamps once both crons are fresh", async () => {
       setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
       await seedStandardPostalCodes();
       await env.KV.put("cron:last:orphanSweep", String(Date.now()));
+      await env.KV.put("cron:last:moderationRetry", String(Date.now()));
 
       const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
       expect(res.status).toBe(200);
@@ -341,7 +342,52 @@ describe("admin routes", () => {
       expect(health.ok).toBe(true);
       expect(health.postal_codes_count).toBeGreaterThan(0);
       expect(typeof health.cron_last_run.orphanSweep).toBe("number");
+      expect(typeof health.cron_last_run.moderationRetry).toBe("number");
+    });
+
+    it("is unhealthy (ok: false) when a cron heartbeat is stale even though postal_codes is seeded", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      await seedStandardPostalCodes();
+      // moderationRetry's staleness window is 30 minutes (CRON_STALE_AFTER_MS
+      // in src/routes/admin.ts) — 31 minutes old is just past it.
+      const staleTimestamp = Date.now() - 31 * 60 * 1000;
+      await env.KV.put("cron:last:moderationRetry", String(staleTimestamp));
+      await env.KV.put("cron:last:orphanSweep", String(Date.now()));
+
+      const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
+      expect(res.status).toBe(200);
+      const health = await readOk<AdminHealth>(res);
+      expect(health.ok).toBe(false);
+      expect(health.cron_last_run.moderationRetry).toBe(staleTimestamp);
+    });
+
+    it("is healthy (ok: true) once the stale heartbeat is refreshed", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      await seedStandardPostalCodes();
+      await env.KV.put("cron:last:moderationRetry", String(Date.now()));
+      await env.KV.put("cron:last:orphanSweep", String(Date.now()));
+
+      const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
+      const health = await readOk<AdminHealth>(res);
+      expect(health.ok).toBe(true);
+    });
+
+    it("treats a cron that has never run (null) as stale, not neutral", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      await seedStandardPostalCodes();
+      // Only orphanSweep has ever written its heartbeat; moderationRetry's
+      // key is explicitly cleared (rather than simply never put) because KV
+      // in this test runtime, like D1, is shared across every `it` in this
+      // file — an earlier test in this same describe block already wrote
+      // `cron:last:moderationRetry`, so it would otherwise read back
+      // non-null here.
+      await env.KV.delete("cron:last:moderationRetry");
+      await env.KV.put("cron:last:orphanSweep", String(Date.now()));
+
+      const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
+      const health = await readOk<AdminHealth>(res);
       expect(health.cron_last_run.moderationRetry).toBeNull();
+      expect(health.ok).toBe(false);
     });
   });
 });
