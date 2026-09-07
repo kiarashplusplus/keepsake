@@ -20,8 +20,8 @@
  *   rather than failing every test that exercises a write route — a second,
  *   unrelated reason this was never going to be the precise layer.
  * - `dailyBudget(...)` wraps the KV calendar-day counters in `budget.ts` for
- *   the three non-AI kinds this Worker rations: `listing`, `request`,
- *   `upload`. (`mod_text`/`mod_image` are checked inside the moderation
+ *   the five non-AI kinds this Worker rations: `listing`, `request`,
+ *   `upload`, `report`, `email`. (`mod_text`/`mod_image` are checked inside the moderation
  *   pipeline itself, not as HTTP middleware, since that check happens in a
  *   background `waitUntil`, not on the request/response path.) Unlike
  *   `burst(...)`, this one *is* exact — a real KV read-then-write, per
@@ -83,11 +83,26 @@ export function burst(bindingName: RateLimitBindingName) {
   };
 }
 
-/** The three per-IP daily ceilings this middleware reads, all `[vars]` in
+/** The per-IP daily ceilings this middleware reads, all `[vars]` in
  * `wrangler.toml`. Kept as an explicit union (rather than `keyof Env`) so the
  * env lookup below stays a plain string, not a cast through Env's big
  * binding-and-var union type. */
-export type IpDailyLimitVar = "LISTING_IP_DAILY_BUDGET" | "REQUEST_IP_DAILY_BUDGET" | "UPLOAD_IP_DAILY_BUDGET";
+export type IpDailyLimitVar =
+  | "LISTING_IP_DAILY_BUDGET"
+  | "REQUEST_IP_DAILY_BUDGET"
+  | "UPLOAD_IP_DAILY_BUDGET"
+  | "REPORT_IP_DAILY_BUDGET"
+  | "EMAIL_IP_DAILY_BUDGET";
+
+/** Per-IP daily ceiling for the `email` kind, shared by `POST /api/recover`
+ * and `POST /api/me/email` (issue #92) — defined here rather than in either
+ * route module because neither owns it, and two copies of a fallback is how
+ * two routes end up rationing differently. Ten mails a day from one address
+ * is far past a person recovering a dashboard or confirming an address, and
+ * loose enough for a household or a CGNAT range doing the same thing a few
+ * times over (see `moderation/budget.ts`'s header on why an address is not a
+ * person). */
+export const DEFAULT_EMAIL_IP_DAILY_BUDGET = 10;
 
 export interface DailyBudgetOptions {
   kind: BudgetKind;
@@ -95,11 +110,15 @@ export interface DailyBudgetOptions {
   fallbackIpDailyLimit: number;
 }
 
-/** Global ceilings for `listing`/`request`/`upload` aren't in `wrangler.toml`
- * — only the per-IP ones are, per the plan's `[vars]` list — so the global
- * side of `checkAndBump` is given a number far past what the per-IP ceiling
- * could ever reach, making the per-IP check the only one that can actually
- * fire for these three kinds. */
+/** Global ceilings for the kinds this middleware wraps aren't in
+ * `wrangler.toml` — only the per-IP ones are, per the plan's `[vars]` list —
+ * so the global side of `checkAndBump` is given a number far past what the
+ * per-IP ceiling could ever reach, making the per-IP check the only one that
+ * can actually fire for these kinds. A global ceiling here would be a way for
+ * one caller to deny a feature to everyone (there is no account to ration
+ * against), which is the opposite of what these are for; `mod_text`,
+ * `mod_image` and `suggest` have real global ceilings because those spend a
+ * shared Workers AI allocation. */
 const EFFECTIVELY_UNLIMITED = 1_000_000;
 
 export function dailyBudget(options: DailyBudgetOptions) {

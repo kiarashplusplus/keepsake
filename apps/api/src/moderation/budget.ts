@@ -2,11 +2,11 @@
  * KV-based daily budget counters.
  *
  * Ported from Bayan `worker/src/budget.ts`. That Worker rations Workers AI
- * calls behind one unauthenticated endpoint; this one rations six different
- * things — three AI calls (`mod_text`, `mod_image`, `suggest`) and three
- * write endpoints that don't touch AI at all (`listing`, `request`,
- * `upload`) — because Keepsake has no accounts either, so the only caller
- * identity available is an IP address.
+ * calls behind one unauthenticated endpoint; this one rations eight
+ * different things — three AI calls (`mod_text`, `mod_image`, `suggest`) and
+ * five write endpoints that don't touch AI at all (`listing`, `request`,
+ * `upload`, `report`, `email`) — because Keepsake has no accounts either, so
+ * the only caller identity available is an IP address.
  *
  * `suggest` (AI autofill, `POST /api/photos/:id/suggest`) is checked with a
  * real global `dailyLimit`, the same way `mod_text`/`mod_image` are checked
@@ -60,8 +60,26 @@ import { todayISO } from "../lib/day.js";
 
 const TTL_SECONDS = 172_800; // 48 hours
 
-/** The six things this Worker rations per calendar day. */
-export type BudgetKind = "mod_text" | "mod_image" | "suggest" | "listing" | "request" | "upload";
+/**
+ * The eight things this Worker rations per calendar day.
+ *
+ * `report` and `email` joined the list in issue #92. Both were previously
+ * guarded only by a `[[ratelimits]]` burst binding, which
+ * `middleware/rateLimit.ts`'s own header calls best-effort and which was
+ * measured leaking ~2.6x its configured limit (#8) — so neither had a hard
+ * cap behind it at all:
+ *
+ * - `report` (`POST /api/listings/:id/reports`) drives the three-report
+ *   auto-hide. The handler's per-listing, per-day `ip_digest` uniqueness
+ *   check only stops one address reporting the *same* listing twice in a
+ *   day; it never stopped that address walking the catalogue and reporting
+ *   many *different* listings, each toward its own auto-hide.
+ * - `email` (`POST /api/recover`, `POST /api/me/email`) is one shared
+ *   counter for both routes on purpose: what's being rationed is outbound
+ *   mail to a real inbox, not a URL path, and two kinds would let a caller
+ *   have the allowance twice by alternating between them.
+ */
+export type BudgetKind = "mod_text" | "mod_image" | "suggest" | "listing" | "request" | "upload" | "report" | "email";
 
 export interface CheckAndBumpOptions {
   kind: BudgetKind;

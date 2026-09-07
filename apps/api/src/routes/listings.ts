@@ -33,6 +33,13 @@ export const listingRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 const DEFAULT_LISTING_IP_DAILY_BUDGET = 20;
 const DEFAULT_REQUEST_IP_DAILY_BUDGET = 20;
+/** Issue #92. Ten distinct listings reported from one address in one day is
+ * already far more than a person browsing their own area could plausibly
+ * find wrong; a script walking the catalogue passes it in seconds. Loose for
+ * the same reason as every other per-IP number here (an address is not a
+ * person — see `moderation/budget.ts`'s header on CGNAT), but unlike the
+ * burst brake it is a real ceiling. */
+const DEFAULT_REPORT_IP_DAILY_BUDGET = 10;
 const DEFAULT_REPORT_AUTOHIDE_THRESHOLD = 3;
 
 // ---------------------------------------------------------------------------
@@ -373,10 +380,31 @@ listingRoutes.get("/:id", burst("RL_READ"), async (c) => {
 // ---------------------------------------------------------------------------
 // POST /api/listings/:id/reports
 // ---------------------------------------------------------------------------
+// Issue #92: `burst("RL_REPORT")` used to be the only limiter on the one
+// endpoint that can pull a listing out of public view (three reports and
+// `REPORT_AUTOHIDE_THRESHOLD` hides it). `burst()` is best-effort by
+// Cloudflare's own documentation and was measured leaking ~2.6x its limit
+// (#8), and the `ip_digest` uniqueness check below only stops one address
+// reporting the *same* listing twice a day — it never stopped one address
+// reporting fifty *different* listings, each toward its own auto-hide. So
+// this route now carries the same hard KV ceiling `listing`/`request`/
+// `upload` do. `turnstile()` stays in front of it, so a failed challenge
+// doesn't spend a real reporter's allowance.
+//
+// What it does not do, said plainly rather than left to be discovered: the
+// ceiling is per address, so a caller with a range of them — a residential
+// IPv6 /64 is 2^64 addresses — gets a fresh ceiling with each one. That is
+// true of every per-IP number in this Worker (`moderation/budget.ts`'s
+// header says so about all of them) and the alternatives both cost more
+// than they're worth today: keying on a prefix refuses whole households and
+// CGNAT ranges at once, and per-install limiting needs a client credential
+// that doesn't exist. This raises the cost of walking the catalogue from
+// free to needing addresses. It does not end it.
 listingRoutes.post(
   "/:id/reports",
   turnstile(),
   burst("RL_REPORT"),
+  dailyBudget({ kind: "report", ipDailyLimitVar: "REPORT_IP_DAILY_BUDGET", fallbackIpDailyLimit: DEFAULT_REPORT_IP_DAILY_BUDGET }),
   validateBody(CreateReportInput),
   async (c) => {
     const id = requireParam(c, "id");
