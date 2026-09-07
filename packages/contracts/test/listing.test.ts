@@ -12,6 +12,7 @@ function validInput(overrides: Partial<Record<string, unknown>> = {}) {
     country: "US",
     postal_code: "02144",
     photo_ids: validPhotoIds,
+    age_attested: true,
     ...overrides,
   };
 }
@@ -47,6 +48,22 @@ describe("CreateListingInput", () => {
     if (!result.success) {
       expect(result.error.issues[0]?.message).toBe(RESERVED_EMAIL_DOMAIN_MESSAGE);
     }
+  });
+
+  it("rejects a missing age attestation (docs/legal-considerations.md Minimum age)", () => {
+    const { age_attested: _omit, ...withoutAttestation } = validInput();
+    const result = CreateListingInput.safeParse(withoutAttestation);
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects age_attested: false — must be affirmatively true, not merely present", () => {
+    const result = CreateListingInput.safeParse(validInput({ age_attested: false }));
+    expect(result.success).toBe(false);
+  });
+
+  it("no longer accepts GB as a country — see the UK geo-block, docs/runbooks/uk-block.md", () => {
+    const result = CreateListingInput.safeParse(validInput({ country: "GB" }));
+    expect(result.success).toBe(false);
   });
 
   // Issue #20: the title gets interpolated straight into email subject

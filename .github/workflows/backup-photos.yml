@@ -1,0 +1,76 @@
+name: Backup photos
+
+# Issue #17: R2 has no native object versioning to enable (checked directly —
+# see docs/runbooks/restore.md#r2-photo-backup for the exact `wrangler r2
+# bucket --help` output and reasoning). `tools/backup-photos.mjs` is the
+# honest alternative: it copies every photo currently referenced by a
+# `photos` row into a second, same-account bucket (`<name>-backup`) that
+# nothing else ever deletes from, so a bug in one of orphanSweep's delete
+# predicates (apps/api/src/cron/orphanSweep.ts) doesn't take a photo with it
+# permanently. It does NOT protect against an account-level failure — both
+# buckets are in the one Cloudflare account — see restore.md for why that is
+# accepted for now rather than solved.
+#
+# Scheduled before orphanSweep's own cron (wrangler.toml's `[triggers]`,
+# 03:17 UTC) so a photo that becomes eligible for deletion overnight has
+# already been copied by the time the sweep can remove it.
+#
+# Runs against both tiers from one workflow, each against its own D1/R2 via
+# its GitHub Environment's secrets — same credentials deploy.yml uses, nothing
+# new to provision. Gated on the same `DEPLOY_ENABLED` variable as deploy.yml:
+# that variable is already the repo's signal that the Cloudflare resources
+# and CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID secrets actually exist for a
+# given environment.
+#
+# This workflow has not yet run on its `schedule:` trigger as of the commit
+# that adds it — GitHub does not evaluate `schedule:` (or accept
+# `workflow_dispatch`) for a workflow file that has never been merged to the
+# default branch (confirmed: `gh workflow run backup-photos.yml --ref
+# give-flow-fixes` → 404). The script itself was run directly against preview
+# and its output is in restore.md; confirm this workflow's first scheduled
+# run succeeds after merge (`gh run list --workflow=backup-photos.yml`)
+# before treating the schedule as proven.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which tier to back up (leave default to run both)
+        type: choice
+        options: [both, preview, production]
+        default: both
+        required: true
+
+concurrency:
+  group: backup-photos
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: backup (${{ matrix.env }})
+    runs-on: ubuntu-latest
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    environment: ${{ matrix.env }}
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [preview, production]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Copy referenced photos into the backup bucket
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        # workflow_dispatch can target a single tier; skip the other matrix
+        # leg rather than running a job whose environment nobody asked for.
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.environment == 'both' || inputs.environment == matrix.env }}
+        run: node tools/backup-photos.mjs --env ${{ matrix.env }}

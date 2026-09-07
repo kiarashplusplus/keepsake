@@ -1,12 +1,23 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import type { FeedPage } from "@keepsake/contracts/feed";
-import type { AdminHealth, AdminQueueItem, AdminStats } from "@keepsake/contracts/admin";
+import type { AdminHealth, AdminQueueItem, AdminStats, AdminTestEmailResult } from "@keepsake/contracts/admin";
 import type { OwnerMe } from "@keepsake/contracts/owner";
 import { todayISO } from "../src/lib/day.js";
 import { sha256Hex } from "../src/lib/digest.js";
 import { ulid } from "../src/lib/ids.js";
-import { authHeaders, freshOwnerToken, insertApprovedListing, insertOwner, readErr, readOk, seedStandardPostalCodes, setTestEnvVar } from "./helpers.js";
+import {
+  authHeaders,
+  freshOwnerToken,
+  insertApprovedListing,
+  insertOwner,
+  installFakeEmail,
+  readErr,
+  readOk,
+  removeFakeEmail,
+  seedStandardPostalCodes,
+  setTestEnvVar,
+} from "./helpers.js";
 
 const ADMIN_TOKEN = "test-admin-token-abcdef0123456789";
 
@@ -345,6 +356,42 @@ describe("admin routes", () => {
       expect(typeof health.cron_last_run.moderationRetry).toBe("number");
     });
 
+    // Launch audit finding 12: the heartbeats were written correctly, read
+    // correctly, and then ignored — `ok` came from `postal_codes_count > 0`
+    // alone, so a cron that stopped a month ago still reported `ok: true`
+    // with a month-old timestamp sitting right next to it. The test above is
+    // the control: same seeded postal codes, same endpoint, fresh heartbeats,
+    // `ok: true`. Only the age of one KV value differs here.
+    it("is not ok when a cron heartbeat has gone stale", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      await seedStandardPostalCodes();
+      await env.KV.put("cron:last:moderationRetry", String(Date.now()));
+      // orphanSweep is nightly and allowed 26 hours; three days is dead.
+      const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+      await env.KV.put("cron:last:orphanSweep", String(threeDaysAgo));
+
+      const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
+      const health = await readOk<AdminHealth>(res);
+      expect(health.postal_codes_count).toBeGreaterThan(0);
+      expect(health.ok).toBe(false);
+      // The stale timestamp is still reported, not hidden — the admin page
+      // needs to show *when* it stopped, not just that something is wrong.
+      expect(health.cron_last_run.orphanSweep).toBe(threeDaysAgo);
+    });
+
+    it("is not ok when moderationRetry has gone quiet, even with a fresh nightly sweep", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      await seedStandardPostalCodes();
+      await env.KV.put("cron:last:orphanSweep", String(Date.now()));
+      // Every 5 minutes, allowed 30. An hour of silence means listings are
+      // stranded in `pending` and nothing is going public.
+      await env.KV.put("cron:last:moderationRetry", String(Date.now() - 60 * 60 * 1000));
+
+      const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
+      const health = await readOk<AdminHealth>(res);
+      expect(health.ok).toBe(false);
+    });
+
     it("is unhealthy (ok: false) when a cron heartbeat is stale even though postal_codes is seeded", async () => {
       setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
       await seedStandardPostalCodes();
@@ -388,6 +435,95 @@ describe("admin routes", () => {
       const health = await readOk<AdminHealth>(res);
       expect(health.cron_last_run.moderationRetry).toBeNull();
       expect(health.ok).toBe(false);
+    });
+  });
+
+  // Launch-audit finding: email failures are invisible, and production has
+  // never delivered to anyone but Kiarash. This endpoint sends a real
+  // message through the real sendMail() path and reports back exactly what
+  // happened, so delivery is verifiable on demand.
+  describe("POST /api/admin/test-email", () => {
+    afterEach(() => {
+      removeFakeEmail();
+      // Every other test file in this suite relies on `EMAIL_MODE: "test"`
+      // (set in vitest.config.ts) short-circuiting `guardRecipient` entirely
+      // — restore it after the one test below that deliberately overrides
+      // it to exercise the real reserved-domain guard.
+      setTestEnvVar("EMAIL_MODE", "test");
+    });
+
+    it("sends a real message and reports sent:true", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      const sent = installFakeEmail();
+
+      const res = await SELF.fetch("http://x/api/admin/test-email", {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ to: "leapkg@gmail.com" }),
+      });
+      expect(res.status).toBe(200);
+      const result = await readOk<AdminTestEmailResult>(res);
+      expect(result.sent).toBe(true);
+      expect(result.reason).toBeNull();
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.to).toBe("leapkg@gmail.com");
+      expect(sent[0]?.subject).toContain("Keepsake test email");
+
+      const emailEvent = await env.DB.prepare(
+        "SELECT kind, ok FROM email_events WHERE kind = 'admin_test' ORDER BY created_at DESC LIMIT 1",
+      ).first<{ kind: string; ok: number }>();
+      expect(emailEvent?.ok).toBe(1);
+    });
+
+    it("reports sent:false with the real reason when EMAIL_MODE is off, rather than pretending it worked", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      // `EMAIL_MODE: "test"` (the suite-wide default) short-circuits every
+      // guard, on purpose, so the rest of the suite can use `@example.com`
+      // fixtures freely — override it here to exercise the real guard this
+      // test is actually about: an address `AdminTestEmailInput` accepts
+      // (unlike a reserved domain, which 400s before this route ever runs)
+      // but that `sendMail`'s own `guardRecipient` still refuses.
+      setTestEnvVar("EMAIL_MODE", "off");
+      installFakeEmail();
+
+      const res = await SELF.fetch("http://x/api/admin/test-email", {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ to: "leapkg@gmail.com" }),
+      });
+      expect(res.status).toBe(200);
+      const result = await readOk<AdminTestEmailResult>(res);
+      expect(result.sent).toBe(false);
+      expect(result.reason).toBe("blocked_email_mode_off");
+
+      const emailEvent = await env.DB.prepare(
+        "SELECT ok, error FROM email_events WHERE kind = 'admin_test' ORDER BY created_at DESC LIMIT 1",
+      ).first<{ ok: number; error: string | null }>();
+      expect(emailEvent?.ok).toBe(0);
+      expect(emailEvent?.error).toBe("blocked_email_mode_off");
+    });
+
+    it("401s without a valid admin token, same as every other /api/admin/* route", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+
+      const res = await SELF.fetch("http://x/api/admin/test-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: "leapkg@gmail.com" }),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it("400s a malformed address", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+
+      const res = await SELF.fetch("http://x/api/admin/test-email", {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ to: "not-an-email" }),
+      });
+      expect(res.status).toBe(400);
     });
   });
 });

@@ -44,17 +44,25 @@ export function timingSafeEqualStrings(a: string, b: string): boolean {
   return diff === 0;
 }
 
+/** The one 401 body every failure mode returns. The docblock above has
+ * always claimed a caller can't tell "admin isn't configured yet" from
+ * "wrong token" from the response alone; until the launch audit that was
+ * only true of the status code, because the two branches below returned
+ * distinguishable messages. One string for both closes the gap the comment
+ * already promised was closed. */
+const UNAUTHORIZED_MESSAGE = "Invalid admin token.";
+
 export function adminAuth() {
   return async (c: AdminCtx, next: Next) => {
     const secret = c.env.ADMIN_TOKEN;
     if (!secret) {
-      return fail(c, "unauthorized", "Admin is not configured.", 401);
+      return fail(c, "unauthorized", UNAUTHORIZED_MESSAGE, 401);
     }
 
     const header = c.req.header("Authorization");
     const provided = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
     if (!provided || !timingSafeEqualStrings(provided, secret)) {
-      return fail(c, "unauthorized", "Invalid admin token.", 401);
+      return fail(c, "unauthorized", UNAUTHORIZED_MESSAGE, 401);
     }
 
     await next();

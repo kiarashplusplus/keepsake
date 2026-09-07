@@ -25,6 +25,7 @@ test("a stranger asks, and the giver chooses them and gets their contact", async
   await stranger.getByLabel("I'd love this").click();
   await stranger.getByLabel("Note").fill(note);
   await stranger.getByLabel("Email", { exact: true }).fill(requesterEmail);
+  await stranger.getByLabel("I'm 18 or older").click();
   await stranger.getByLabel("Send").click();
 
   await expect(stranger.getByText("Sent. The giver will choose in their own time.")).toBeVisible();

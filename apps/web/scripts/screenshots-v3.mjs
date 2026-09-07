@@ -10,9 +10,18 @@
 //             local listing; pass the real preview feed's approved id to
 //             shoot against https://keepsake-preview.leapkg.workers.dev)
 //
-// Writes apps/web/screenshots/v3-<route>-<width>-<scheme>.png. Assumes a
-// server is already serving apps/web/dist at baseUrl (e.g. `pnpm --filter
-// @keepsake/api dev`) and a Chrome binary at the path below.
+// Writes apps/web/screenshots/v3-<route>-<width>-<scheme>.png (the real,
+// viewport-bounded screenshot — what a visitor actually sees before
+// scrolling) and, separately, a v3-<route>-<width>-<scheme>-full.png (the
+// whole scrollable page, via `captureBeyondViewport`). Only the `-full` shot
+// resizes the emulated device to the page's full content height; the plain
+// one does not, on purpose. It used to be the only shot this script took,
+// which is exactly why M0's "no page scrolls" bug (see
+// docs/plans/give-flow bug report / src/ui/Page.tsx) went unnoticed for so
+// long — a screenshot rendered "as if scrolled" can't ever show a scroll
+// failure. Assumes a server is already serving apps/web/dist at baseUrl
+// (e.g. `pnpm --filter @keepsake/api dev`) and a Chrome binary at the path
+// below.
 import { Buffer } from "node:buffer";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -127,6 +136,14 @@ async function shoot({ route, name, width, scheme }) {
   });
   const info = probe.result.value;
 
+  // The viewport-only shot, at the fixed device height set above — captured
+  // *before* the full-page resize below, so this is genuinely what's on
+  // screen without scrolling. This is the one that would have caught the
+  // "no page scrolls" bug: a page whose content never made it past the fold
+  // now visibly cuts off here instead of always looking complete.
+  const viewportShot = await cdp.send("Page.captureScreenshot", { format: "png" });
+  writeFileSync(join(OUT, `v3-${name}-${width}-${scheme}.png`), Buffer.from(viewportShot.data, "base64"));
+
   const height = Math.min(Math.max(info.height, 700), 9000);
   await cdp.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile: width < 700 });
   await sleep(300);
@@ -153,7 +170,7 @@ async function shoot({ route, name, width, scheme }) {
     }
   }
   const shot = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: true });
-  const file = join(OUT, `v3-${name}-${width}-${scheme}.png`);
+  const file = join(OUT, `v3-${name}-${width}-${scheme}-full.png`);
   writeFileSync(file, Buffer.from(shot.data, "base64"));
   console.log(`${file}  theme=${info.theme} bodyBg=${info.bodyBg} height=${height}`);
   console.log(`  wordmark: ${JSON.stringify(info.wordmark)}`);

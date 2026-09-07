@@ -1,16 +1,21 @@
 /**
- * `moderateListing(env, listingId, version)` — the orchestrator described in
- * the plan's "Moderation pipeline" section. Called from `waitUntil()` right
- * after a listing is created or edited, and again by
- * `src/cron/moderationRetry.ts` for anything still `pending` a few minutes
- * later. Every call is self-contained: it re-derives the retry attempt
- * number from `moderation_events` rather than taking one as a parameter, so
- * every caller has the same simple two-line contract.
+ * `moderateListing(env, listingId, version, clientIP?)` — the orchestrator
+ * described in the plan's "Moderation pipeline" section. Called from
+ * `waitUntil()` right after a listing is created or edited (with the
+ * creating/editing request's IP, so the budget-floor check in step 2 knows
+ * who's asking), and again by `src/cron/moderationRetry.ts` for anything
+ * still `pending` a few minutes later (with no IP — the cron has no request
+ * to read one from, so those retries are never eligible for the reserved
+ * floor and only draw from the general pool). Every call is otherwise
+ * self-contained: it re-derives the retry attempt number from
+ * `moderation_events` rather than taking one as a parameter, so every
+ * caller has the same simple contract.
  */
+import * as Sentry from "@sentry/cloudflare";
 import type { Env } from "../env.js";
 import { MODELS } from "../models.js";
 import { ulid } from "../lib/ids.js";
-import { checkAndBump } from "./budget.js";
+import { checkAndBump, todayISO } from "./budget.js";
 import { parseIntVar } from "../env.js";
 import { moderateText } from "./text.js";
 import { isImageError, moderateImage } from "./image.js";
@@ -23,7 +28,52 @@ import { containsContactInfo } from "./contactInfo.js";
 const MAX_ATTEMPTS = 3;
 
 const DEFAULT_TEXT_DAILY_BUDGET = 1000;
+// Charged once per photo (`cost: photos.length` below), not once per
+// listing — see the `checkAndBump` `cost` doc comment and issue #18. Before
+// this fix the configured number was charged once per listing while the
+// pipeline made up to five vision calls per listing, so the true ceiling
+// was five times the configured one and nobody could tell from reading
+// `wrangler.toml`.
 const DEFAULT_IMAGE_DAILY_BUDGET = 3000;
+
+// Issue #18: slice of each global moderation budget held back from the
+// general pool, reachable only by a caller whose own usage of that budget
+// today is still under `FRESH_CALLER_CEILING` — see `checkAndBump`'s
+// `reservedFloor`/`freshCallerCeiling` doc comment for the full rationale.
+// 10% is a guess, not a measurement: there's no production traffic yet to
+// size it against (the same gap the launch audit called out for the
+// ceilings themselves), so it's picked to be big enough to matter without
+// giving up most of the day's headroom to a floor that, on a normal day,
+// nothing ever needs.
+const RESERVED_FLOOR_RATIO = 0.1;
+// A giver posting "a few keepsakes a day" (the budget doc's own framing)
+// stays well under this; an address that has already caused this many
+// mod_text/mod_image checks today looks like the same burst that drained
+// the general pool, not a second unlucky giver.
+const FRESH_CALLER_CEILING = 3;
+
+/**
+ * Fires a Sentry warning the first time either global moderation budget is
+ * exhausted on a given UTC day (issue #18) — before this, a queue quietly
+ * filling up with `pending`/`reason=budget` listings had no corresponding
+ * alert, so a launch-day traffic spike and a deliberate attack looked
+ * identical from the outside and neither paged anyone. Read-then-write
+ * against KV rather than a real CAS, same tradeoff `checkAndBump` itself
+ * documents: two concurrent exhaustions on the same day could in theory
+ * both slip through and double-fire, which is a firm no-op compared to the
+ * alternative of missing it, so it's accepted rather than built around.
+ *
+ * No-ops safely with `SENTRY_DSN` unset (`buildSentryOptions` returns
+ * `undefined`, so `Sentry.captureMessage` has no client to send through) —
+ * this depends on #14 to actually page anyone, exactly as the issue notes.
+ */
+async function alertBudgetExhaustedOnce(env: Env, kind: "mod_text" | "mod_image"): Promise<void> {
+  const key = `budget:alerted:${kind}:${todayISO()}`;
+  const alreadyAlerted = await env.KV.get(key);
+  if (alreadyAlerted) return;
+  await env.KV.put(key, "1", { expirationTtl: 172_800 });
+  Sentry.captureMessage(`Moderation budget exhausted for ${kind} today`, "warning");
+}
 
 interface ListingRow {
   id: string;
@@ -115,7 +165,7 @@ async function setStatus(
   }
 }
 
-export async function moderateListing(env: Env, listingId: string, version: number): Promise<void> {
+export async function moderateListing(env: Env, listingId: string, version: number, clientIP?: string): Promise<void> {
   const listing = await env.DB.prepare("SELECT id, title, story, version FROM listings WHERE id = ?")
     .bind(listingId)
     .first<ListingRow>();
@@ -168,19 +218,42 @@ export async function moderateListing(env: Env, listingId: string, version: numb
     .all<PhotoRow>();
 
   // Step 2: budget gate. Denied → stays pending, cron retries after the
-  // ceiling resets at midnight UTC.
+  // ceiling resets at midnight UTC. Both checks reserve a floor (issue #18)
+  // that only a caller who hasn't already used much of *this* budget today
+  // can draw on, and both persist `moderation_reason = 'budget'` on the
+  // listing (rather than only logging it) so the owner-facing API already
+  // tells the truth about why a listing is taking longer than usual — see
+  // `serializeOwnerListing`/`GET /api/me/listings(/:id)`, which return
+  // `moderation_reason` regardless of status, not only for `rejected`.
   const textDailyLimit = parseIntVar("MOD_TEXT_DAILY_BUDGET", env.MOD_TEXT_DAILY_BUDGET, DEFAULT_TEXT_DAILY_BUDGET);
-  const textBudget = await checkAndBump(env.KV, { kind: "mod_text", dailyLimit: textDailyLimit });
+  const textBudget = await checkAndBump(env.KV, {
+    kind: "mod_text",
+    dailyLimit: textDailyLimit,
+    ...(clientIP !== undefined ? { clientIP } : {}),
+    reservedFloor: Math.floor(textDailyLimit * RESERVED_FLOOR_RATIO),
+    freshCallerCeiling: FRESH_CALLER_CEILING,
+  });
   if (!textBudget.allowed) {
     await logEvent(env, { listingId, listingVersion: version, kind: "decision", verdict: "error", reason: "budget", attempt });
+    await setStatus(env, listingId, version, { status: "pending", moderationReason: "budget", publishIfUnset: false });
+    await alertBudgetExhaustedOnce(env, "mod_text");
     return;
   }
 
   if (photos.length > 0) {
     const imageDailyLimit = parseIntVar("MOD_IMAGE_DAILY_BUDGET", env.MOD_IMAGE_DAILY_BUDGET, DEFAULT_IMAGE_DAILY_BUDGET);
-    const imageBudget = await checkAndBump(env.KV, { kind: "mod_image", dailyLimit: imageDailyLimit });
+    const imageBudget = await checkAndBump(env.KV, {
+      kind: "mod_image",
+      dailyLimit: imageDailyLimit,
+      cost: photos.length,
+      ...(clientIP !== undefined ? { clientIP } : {}),
+      reservedFloor: Math.floor(imageDailyLimit * RESERVED_FLOOR_RATIO),
+      freshCallerCeiling: FRESH_CALLER_CEILING,
+    });
     if (!imageBudget.allowed) {
       await logEvent(env, { listingId, listingVersion: version, kind: "decision", verdict: "error", reason: "budget", attempt });
+      await setStatus(env, listingId, version, { status: "pending", moderationReason: "budget", publishIfUnset: false });
+      await alertBudgetExhaustedOnce(env, "mod_image");
       return;
     }
   }

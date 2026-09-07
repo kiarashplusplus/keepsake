@@ -1,13 +1,22 @@
 # Runbook: deploy
 
-Status: current for M0; secrets/DNS steps below are one-time setup, not per-deploy.
+Status: current for M0; secrets/DNS steps below are one-time setup, not per-deploy. Rollback and
+manual-deploy sections below were corrected 2026-09-07 (issues #13, #24) after launch audit
+finding 18 found them describing a workflow that no longer matched `deploy.yml`.
 
 ## Environments
 
 | Environment | Trigger | Worker | Data |
 |---|---|---|---|
-| preview | every PR (`.github/workflows/deploy.yml`) | one shared Worker | its own D1/R2/KV — never production's |
-| production | push to `main` | `keepsake.ing` | production D1/R2/KV |
+| preview | every PR, and every push to `main` (`.github/workflows/deploy.yml`) | one shared Worker | its own D1/R2/KV — never production's |
+| production | **manual only** — `workflow_dispatch` from the Actions tab, choosing `production` | `keepsake.ing` | production D1/R2/KV |
+
+`deploy.yml`'s trigger logic (`inputs.environment` on `workflow_dispatch`, else always `preview`)
+means a push to `main` deploys **preview**, not production — production only ever deploys when a
+human runs the workflow by hand and picks it. This page previously said "push to `main`" for
+production, which was wrong; so did `docs/design/ops.md:17`, fixed in the same pass. The reason is
+in `AGENTS.md`: GitHub's required-reviewer gate is a paid feature on private repos, so "merge to
+main ships to the public site" would have had nothing standing in front of it.
 
 Both are gated on the `DEPLOY_ENABLED` repository/environment variable being `"true"`; until the
 Cloudflare resources below exist, leave it unset (or `"false"`) so the workflow is a no-op.
@@ -73,13 +82,100 @@ not Worker secrets and are never passed to `wrangler secret put`.
 5. `curl <site>/health` and assert `.commit == github.sha` — a deploy that doesn't match its own
    commit fails the workflow rather than silently serving stale code.
 
+**Migrations apply (step 3) before the Worker deploys (step 4).** Launch audit finding 18 asked
+whether that ordering is right. It is, for the migrations this schema actually has: every one is
+additive (`CREATE TABLE`/`CREATE INDEX`/`ALTER TABLE ... ADD COLUMN`, never a `DROP` or a rewrite —
+see `apps/api/migrations/`), so the old, still-deployed code has never seen a new column or table
+it can't simply ignore. Reversing the order would be worse: new code that expects a column
+migrating hasn't created yet would fail on every request, not just the deploy step. The accepted
+risk window is narrow and one-directional — if `wrangler deploy` fails or its `/health` check
+never matches (step 5), the database is already migrated ahead of the code that's still serving
+traffic, and nothing here detects or reverts that automatically. It is a live database against old
+code, not old code against a database it doesn't understand, which is why it's survivable: rerun
+the workflow once the deploy problem is fixed, and step 3 is then a no-op (already-applied
+migrations are skipped) while step 4 catches the Worker up. This was assessed, not just asserted:
+no new migration in this repo has ever needed a `DROP`/rewrite, and D1 Time Travel
+(`docs/runbooks/restore.md`) covers the 30-day window regardless if a migration ever does.
+
 ## Rollback
 
-`wrangler deploy --env <env> --var COMMIT_SHA:<previous-sha>` after checking out the previous
-commit — there is no separate rollback command; a rollback is just a deploy of an older ref.
-Migrations are additive and forward-only (per plan), so rolling back code does not roll back
-schema; check a failing migration's compatibility with the previous code before rolling back
-across one.
+`wrangler rollback [version-id]` exists (pinned `wrangler` 4.129.0) and is real — this page
+previously said it didn't, which was wrong (launch audit finding 18). Verified directly against
+the live preview Worker, 2026-09-07:
+
+```sh
+cd apps/api
+wrangler versions list --env preview          # 10 most recent Versions, newest last
+wrangler versions view <version-id> --env preview   # bindings + every var baked into that Version
+wrangler rollback <version-id> --env preview -m "why" -y
+```
+
+What was actually observed:
+
+- **It is a traffic cutover, not a redeploy.** `curl <preview>/health` reported the target
+  version's commit within ~3 seconds of `rollback` returning `SUCCESS`. No `pnpm install`, no web
+  export, no migration step — this is why the issue calls it "much faster than a CI re-run."
+- **Each Version snapshots its own vars and bindings, not just its code.** `wrangler versions view`
+  on two different preview Versions showed different `EMAIL_ALLOWLIST` values and a real (never
+  `"dev"`) `COMMIT_SHA` on both, because CI always stamps a real SHA at deploy time. Rolling back
+  therefore reverts config too: if a var was deliberately changed since the version you're rolling
+  back to, rolling back silently un-changes it as well. Check `versions view` on the target before
+  rolling back, not just its age.
+- **`wrangler rollback` itself prints the two caveats that matter most**, verbatim from the
+  confirmation prompt: "Rolling back to a previous deployment will not rollback any of the bound
+  resources (Durable Object, D1, R2, KV, etc)." That is this project's two open traps, in
+  Cloudflare's own words:
+  - **D1 migrations are forward-only and not part of a Version.** A rollback moves the *code*
+    backward; if a migration ran after the target version was originally deployed, the database
+    stays on the new schema while the old code runs against it. Old code that only reads
+    unmigrated columns tolerates this (see the ordering note above); old code would break if a
+    later migration had ever dropped or renamed something it still expects. Check
+    `wrangler d1 migrations list <db> --env <env> --remote` before rolling back across a migration
+    boundary — it lists exactly what's applied that the target version predates.
+  - **Assets are uploaded per deploy and are part of the Version being rolled back to.** Rolling
+    back the Worker also rolls back the static web bundle to whatever was exported at that
+    version's deploy time. A rollback that leaves new-shaped API responses (post-migration) served
+    to an old web bundle expecting the old shape is the same trap as above, from the other
+    direction — check what changed in `apps/web` between the two versions, not just `apps/api`.
+- **Round-tripped without side effects**: rolled preview back one version
+  (`e4f7a11d-…`, commit `561994d3…`), confirmed via `/health`, then rolled forward again to the
+  version that was live before the test (`6e3a1929-…`, commit `4f9752d4…`), confirmed via
+  `/health` again. No deploy, migration, or data change happened in between.
+- **Non-interactive flags**: `-y` accepts the two prompts (which version, confirm), `-m` sets the
+  rollback reason shown in `versions list` afterward — both needed for scripting this from CI or a
+  runbook rather than a human's terminal.
+
+Use `wrangler versions list` to find the target, then `wrangler rollback <version-id>`. The older
+`wrangler deploy --var COMMIT_SHA:<previous-sha>` (a full redeploy of an old ref) still works and
+is the only option if you need to roll back *past* what `versions list` shows (10 most recent) or
+need to change code, not just cut back to something already uploaded — it goes through the full
+pipeline in [What a deploy actually does](#what-a-deploy-actually-does), migrations included.
+
+### Manual deploys and `COMMIT_SHA` (issue #24)
+
+`wrangler.toml`'s `[env.production.vars]` (and `[env.preview.vars]`) both check in
+`COMMIT_SHA = "dev"` as a fallback. `deploy.yml` always overrides it with
+`--var COMMIT_SHA:${{ github.sha }}`, so it never ships in practice through CI. It exists, plainly,
+because a hand-run `wrangler deploy --env production` — the thing you reach for when CI itself is
+broken, exactly the moment an accurate commit matters most — will ship `"dev"` if you forget the
+flag, and `/health` will report it as fact.
+
+**A manual production (or preview) deploy must pass the real commit:**
+
+```sh
+wrangler deploy --env production --var COMMIT_SHA:$(git rev-parse HEAD)
+```
+
+This was not made impossible to forget at the `wrangler.toml`/code level — doing that (failing
+`/health` or refusing to boot when `COMMIT_SHA === "dev"` in production) means changing
+`apps/api/src`, out of scope for this pass (owned by a concurrent agent). Instead,
+`.github/workflows/uptime.yml`'s `/health` probe now treats `commit: "dev"` on either tier as a
+failure in its own right, distinct from "down" — same mechanism launch audit finding 4 added for
+outages, extended to catch this. Verified by extracting the probe's shell and running it three
+ways: a real preview response (passes), a stubbed `{"ok":true,"commit":"dev"}` response (fails
+with `title=<tier> is running an unstamped deploy`), and a stubbed down response (fails after 3
+attempts, unchanged from before) — per `AGENTS.md`'s rule to extract a workflow's shell and run it
+rather than trust the YAML by eye.
 
 ## Account-side prerequisites
 

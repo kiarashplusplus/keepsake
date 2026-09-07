@@ -11,7 +11,7 @@ import { Sheet } from "@/ui/Sheet";
 import { Text } from "@/ui/Text";
 import { TextArea } from "@/ui/TextArea";
 import { Button } from "@/ui/Button";
-import { Turnstile } from "@/ui/Turnstile";
+import { Turnstile, type TurnstileHandle, type TurnstileStatus } from "@/ui/Turnstile";
 import { useColors } from "@/ui/theme";
 import { createReport } from "@/api/reports";
 import { ApiError } from "@/api/client";
@@ -59,10 +59,14 @@ function ReasonRow({ reason, selected, onSelect }: { reason: ReportReason; selec
 export function ReportSheet({ visible, onClose, listingId }: ReportSheetProps): React.ReactElement {
   const [reason, setReason] = React.useState<ReportReason | null>(null);
   const [details, setDetails] = React.useState("");
-  const [turnstileToken, setTurnstileToken] = React.useState<string | null>(null);
+  const [turnstileStatus, setTurnstileStatus] = React.useState<TurnstileStatus>({ status: "pending" });
+  const turnstileRef = React.useRef<TurnstileHandle>(null);
   const [phase, setPhase] = React.useState<Phase>("form");
   const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [conflict, setConflict] = React.useState(false);
+
+  const turnstileReady = turnstileStatus.status === "ready" || turnstileStatus.status === "unconfigured";
+  const turnstileToken = turnstileStatus.status === "ready" ? turnstileStatus.token : "";
 
   function reset(): void {
     setReason(null);
@@ -83,11 +87,7 @@ export function ReportSheet({ visible, onClose, listingId }: ReportSheetProps): 
     setSubmitError(null);
     setPhase("submitting");
     try {
-      await createReport(
-        listingId,
-        { reason, ...(details.trim() !== "" ? { details: details.trim() } : {}) },
-        { turnstileToken: turnstileToken ?? "" },
-      );
+      await createReport(listingId, { reason, ...(details.trim() !== "" ? { details: details.trim() } : {}) }, { turnstileToken });
       setPhase("sent");
       track(AnalyticsEvents.ReportSent);
     } catch (error) {
@@ -95,6 +95,10 @@ export function ReportSheet({ visible, onClose, listingId }: ReportSheetProps): 
         setConflict(true);
         setPhase("form");
         return;
+      }
+      if (error instanceof ApiError && error.code === "turnstile_failed") {
+        turnstileRef.current?.reset();
+        setTurnstileStatus({ status: "pending" });
       }
       setSubmitError(error instanceof ApiError ? error.message : "That didn't go through. Try again.");
       setPhase("form");
@@ -120,7 +124,7 @@ export function ReportSheet({ visible, onClose, listingId }: ReportSheetProps): 
 
           <TextArea label="Details (optional)" value={details} onChangeText={setDetails} maxLength={DETAILS_MAX} minHeight={80} placeholder="Anything else we should know" />
 
-          <Turnstile onToken={setTurnstileToken} />
+          <Turnstile ref={turnstileRef} onStatus={setTurnstileStatus} />
 
           {conflict ? (
             <Text variant="body" color="dangerText">
@@ -137,7 +141,7 @@ export function ReportSheet({ visible, onClose, listingId }: ReportSheetProps): 
             <Button
               label="Submit"
               loading={phase === "submitting"}
-              disabled={phase === "submitting" || reason === null || turnstileToken === null}
+              disabled={phase === "submitting" || reason === null || !turnstileReady}
               onPress={() => void handleSubmit()}
             />
           </View>

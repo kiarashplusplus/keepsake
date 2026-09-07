@@ -1,26 +1,14 @@
 import { z } from "zod";
-import { MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
+import { AgeAttestationSchema, MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
 import { CountrySchema } from "./geo";
 import { PublicPhoto } from "./photo";
+// Re-exported below so nothing outside the package needs to know these live
+// in their own leaf module — see category.ts for why they aren't declared
+// here directly (a circular import with photo.ts).
+import { CATEGORIES, CATEGORY_LABELS, CategorySchema, TITLE_MAX, TITLE_MIN, type Category } from "./category";
 
-export const CATEGORIES = [
-  "books_letters",
-  "jewelry_watches",
-  "home_kitchen",
-  "photos_art_handmade",
-  "other",
-] as const;
-
-export const CategorySchema = z.enum(CATEGORIES);
-export type Category = z.infer<typeof CategorySchema>;
-
-export const CATEGORY_LABELS: Record<Category, string> = {
-  books_letters: "Books & letters",
-  jewelry_watches: "Jewelry & watches",
-  home_kitchen: "Home & kitchen",
-  photos_art_handmade: "Photos, art & handmade",
-  other: "Other",
-};
+export { CATEGORIES, CATEGORY_LABELS, CategorySchema, TITLE_MAX, TITLE_MIN };
+export type { Category };
 
 export const LISTING_STATUSES = [
   "pending",
@@ -39,8 +27,6 @@ export type ListingStatus = z.infer<typeof ListingStatusSchema>;
 export const PublicListingStatusSchema = z.enum(["approved", "given"]);
 export type PublicListingStatus = z.infer<typeof PublicListingStatusSchema>;
 
-export const TITLE_MIN = 4;
-export const TITLE_MAX = 80;
 export const STORY_MIN = 20;
 export const STORY_MAX = 2000;
 
@@ -67,6 +53,11 @@ export const CreateListingInput = z.object({
   postal_code: PostalCodeSchema,
   photo_ids: z.array(UlidSchema).min(1).max(5),
   email: MailableEmailSchema.optional(),
+  // Minimum age (docs/legal-considerations.md): required only on create, not
+  // on `UpdateListingInput` below (`.partial()` makes it optional there) —
+  // attesting once at posting time is the point, not re-attesting on every
+  // edit.
+  age_attested: AgeAttestationSchema,
 });
 export type CreateListingInput = z.infer<typeof CreateListingInput>;
 
@@ -74,9 +65,21 @@ export const UpdateListingInput = CreateListingInput.partial();
 export type UpdateListingInput = z.infer<typeof UpdateListingInput>;
 
 /**
- * Giver-facing copy for each auto/human moderation outcome. `budget` is
- * internal only (moderation exhausted its daily AI budget) and must never be
- * shown to a giver — the listing just stays `pending` until the cron retry.
+ * Giver-facing copy for each auto/human moderation outcome.
+ *
+ * `budget` (issue #18) used to be internal-only, on the theory that a giver
+ * should never see the word "budget" — but that meant a listing stuck
+ * because the day's moderation budget ran out looked, from the giver's
+ * side, identical to one still going through the normal few-seconds check:
+ * both were just `pending` with no reason shown. `apps/api` now persists
+ * this reason on the listing itself (not only in the moderation log) the
+ * moment a budget denial happens, and `GET /api/me/listings(/:id)` already
+ * returns `moderation_reason` for every status, not only `rejected` — so
+ * the API is telling the truth today; whether/how `apps/web` surfaces it
+ * for a `pending` listing (currently its `mine/index.tsx` and `mine/[id].tsx`
+ * only render `MODERATION_REASONS[...]` when `status === "rejected"`) is
+ * for whoever owns that app to decide, since `pending` and `rejected` read
+ * very differently to a giver.
  *
  * Declared ahead of `OwnerListing` below, which references
  * `ModerationReasonSchema` in its own initializer.
@@ -102,7 +105,7 @@ export const MODERATION_REASONS: Record<ModerationReasonCode, string> = {
   violent_content: "This crosses a line we can't host: violent content.",
   sexual_content_minors: "This crosses a line we can't host: sexual content involving minors.",
   weapons_of_mass_harm: "This crosses a line we can't host: weapons capable of mass harm.",
-  budget: "Internal: moderation budget exhausted for the day.",
+  budget: "More listings than usual today — yours is still in the queue and will be checked automatically, no action needed.",
   held_for_review: "Taking a closer look. Usually within a day.",
 };
 

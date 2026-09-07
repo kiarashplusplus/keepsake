@@ -7,6 +7,12 @@ bundles a `country, code -> place_name, admin1, lat, lng` table straight into D1
 from GeoNames and loaded per environment. This is a manual seed, not a migration — it doesn't
 run automatically on deploy.
 
+This tool still knows how to build a GB table — deliberately left alone even though `GB` was
+removed from `@keepsake/contracts/geo`'s `COUNTRIES` on 2026-09-06 as part of geo-blocking the UK
+(see [uk-block.md](uk-block.md)). The seeded GB rows are inert without `"GB"` in `COUNTRIES`; this
+tool being untouched is what makes re-adding GB later a small, additive change instead of rebuilding
+the seed pipeline from scratch.
+
 ## Regenerate
 
 ```sh

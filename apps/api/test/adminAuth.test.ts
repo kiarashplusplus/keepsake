@@ -1,7 +1,7 @@
 import { SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { timingSafeEqualStrings } from "../src/middleware/adminAuth.js";
-import { freshClientIp, readErr, setTestEnvVar } from "./helpers.js";
+import { freshClientIp, installDenyingRateLimiter, readErr, setTestEnvVar } from "./helpers.js";
 
 const ADMIN_TOKEN = "test-admin-token-0123456789abcdef";
 
@@ -84,6 +84,108 @@ describe("/api/admin/* auth", () => {
   });
 
   it("200s with the right token", async () => {
+    setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+    const res = await SELF.fetch("http://x/api/admin/stats", {
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "CF-Connecting-IP": freshClientIp() },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  // Launch audit finding 6: the response body used to say "Admin is not
+  // configured." when ADMIN_TOKEN was unset and "Invalid admin token."
+  // otherwise, handing an attacker a free oracle for whether the credential
+  // exists at all — despite adminAuth's own docblock claiming the two are
+  // indistinguishable.
+  it("returns the same 401 body whether the token is unset or wrong", async () => {
+    const unconfigured = await SELF.fetch("http://x/api/admin/stats", {
+      headers: { Authorization: "Bearer anything", "CF-Connecting-IP": freshClientIp() },
+    });
+    const unconfiguredError = await readErr(unconfigured);
+
+    setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+    const wrong = await SELF.fetch("http://x/api/admin/stats", {
+      headers: { Authorization: "Bearer definitely-not-the-token", "CF-Connecting-IP": freshClientIp() },
+    });
+    const wrongError = await readErr(wrong);
+
+    expect(unconfigured.status).toBe(wrong.status);
+    expect(unconfiguredError.code).toBe(wrongError.code);
+    expect(unconfiguredError.message).toBe(wrongError.message);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Launch audit finding 6: the admin token could be brute-forced without
+// limit, because `adminRoutes.use("*", adminAuth(), burst("RL_ADMIN"))` ran
+// auth first and `adminAuth` answers a bad token with `fail(...)` — it never
+// calls `next()`, so `burst` was unreachable for exactly the requests that
+// needed metering. Measured against preview: 150 distinct wrong tokens from
+// one IP inside 60s, against a binding configured `limit = 120, period = 60`,
+// returned 150x401 and 0x429.
+//
+// Two tests, deliberately, because they fail for different reasons:
+//
+//  1. The counting test below reproduces the audit's own measurement — more
+//     wrong guesses than the binding's limit, from a single IP, must produce
+//     at least one 429. It is the closest thing to the observation that
+//     found the bug.
+//  2. The ordering test after it replaces `RL_ADMIN` with a binding that
+//     denies everything, so a *single* request is enough to prove the
+//     limiter runs before auth rather than behind it. It stays fast and
+//     deterministic even if Cloudflare's real bindings leak (the audit
+//     measured ~2.5x leakage on `RL_UPLOAD` in production), which is exactly
+//     the kind of approximation that could otherwise make test 1 flaky.
+//
+// Both fail with the middleware in its original order: every wrong token
+// returns 401 and the limiter never runs.
+// ---------------------------------------------------------------------------
+describe("/api/admin/* brute-force protection", () => {
+  afterEach(() => {
+    setTestEnvVar("ADMIN_TOKEN", "");
+  });
+
+  it("rate-limits more wrong tokens than RL_ADMIN's limit from a single IP", async () => {
+    setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+    // RL_ADMIN is `limit = 120, period = 60` in wrangler.toml; 150 matches
+    // the audit's own probe count and leaves headroom over the limit.
+    const ip = freshClientIp();
+    const statuses: number[] = [];
+
+    for (let attempt = 0; attempt < 150; attempt++) {
+      const res = await SELF.fetch("http://x/api/admin/stats", {
+        headers: { Authorization: `Bearer wrong-token-${attempt}`, "CF-Connecting-IP": ip },
+      });
+      // Drain the body: an unread response body keeps a stream open per
+      // iteration, and 150 of them is enough to matter.
+      await res.text();
+      statuses.push(res.status);
+    }
+
+    expect(statuses).toContain(429);
+    // And nothing leaked through: a guess is either metered or rejected,
+    // never served.
+    expect(statuses.every((status) => status === 401 || status === 429)).toBe(true);
+  });
+
+  it("runs the limiter before auth: a denied burst is a 429, not a 401", async () => {
+    setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+    const restore = installDenyingRateLimiter("RL_ADMIN");
+    try {
+      const res = await SELF.fetch("http://x/api/admin/stats", {
+        headers: { Authorization: "Bearer wrong-token", "CF-Connecting-IP": freshClientIp() },
+      });
+      expect(res.status).toBe(429);
+      expect((await readErr(res)).code).toBe("rate_limited");
+    } finally {
+      restore();
+    }
+  });
+
+  // The limiter must not become a way to lock the real admin out of an
+  // endpoint they hold the credential for: a correct token gets the same
+  // 429 as a wrong one, which is the intended cost, but only once the
+  // binding denies — the previous test's denial must not persist.
+  it("still serves a correct token once the burst binding allows again", async () => {
     setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
     const res = await SELF.fetch("http://x/api/admin/stats", {
       headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "CF-Connecting-IP": freshClientIp() },

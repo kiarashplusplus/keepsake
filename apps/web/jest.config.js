@@ -33,6 +33,10 @@ module.exports = {
     // native-module dependency chain doesn't run under Jest's jsdom
     // environment.
     "^expo-image$": "<rootDir>/test/mocks/expoImage.tsx",
+    // See test/mocks/safeAreaContext.tsx's header comment: `src/ui/Page.tsx`
+    // reads `useSafeAreaInsets()`, which throws without a `<SafeAreaProvider>`
+    // ancestor — real route tests `render()` screens directly without one.
+    "^react-native-safe-area-context$": "<rootDir>/test/mocks/safeAreaContext.tsx",
   },
   setupFiles: ["<rootDir>/test/setup/matchMedia.ts"],
   setupFilesAfterEnv: [],

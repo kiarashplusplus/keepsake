@@ -1,7 +1,8 @@
 /**
  * `sendMail(env, message)` — the one call site every notification email goes
- * through (verify, new request, chosen, recover). Two providers behind the
- * same interface, selected by `EMAIL_PROVIDER`:
+ * through (verify, new request, request received, chosen, recover, admin
+ * test). Two providers behind the same interface, selected by
+ * `EMAIL_PROVIDER`:
  *
  *  - `cf`: `env.EMAIL.send(...)` (the `[[send_email]]` binding).
  *  - `resend`: `POST https://api.resend.com/emails` with `RESEND_API_KEY`.
@@ -96,7 +97,7 @@ export function guardRecipient(env: Env, to: string): GuardDecision {
   return { allowed: false, reason: "blocked_email_mode_off" };
 }
 
-export type EmailKind = "verify_email" | "new_request" | "chosen" | "recover";
+export type EmailKind = "verify_email" | "new_request" | "request_received" | "chosen" | "recover" | "admin_test";
 
 export interface MailMessage {
   kind: EmailKind;

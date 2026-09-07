@@ -24,8 +24,17 @@ wrangler secret put ADMIN_TOKEN --env production
 Rotating invalidates every open admin session immediately (no server-side session to migrate) —
 expected, not a bug, if rotation follows a suspected leak (see `docs/runbooks/incident.md`).
 
-All `/api/admin/*` routes are also behind the `RL_ADMIN` rate-limit binding
-(120/60s, `wrangler.toml`), same as every other write surface.
+All `/api/admin/*` routes are behind the `RL_ADMIN` rate-limit binding (120/60s, `wrangler.toml`)
+**before** `adminAuth()` runs — `adminRoutes.use("*", burst("RL_ADMIN"), adminAuth())`. The order
+is the whole point and it is worth stating plainly, because this file used to assert the
+protection while the code did the opposite: with `adminAuth()` first, a wrong token was answered
+by `fail(...)` and never reached the limiter, so token guessing was unmetered (the 2026-09-06
+launch audit measured 150 wrong tokens from one IP inside 60s returning 150x401 and 0x429). With
+the limiter in front, the 401 path costs an attacker exactly what the 200 path costs. Both halves
+— the count and the ordering — are pinned by tests in `apps/api/test/adminAuth.test.ts`.
+
+Every 401 from `/api/admin/*` carries the same body (`"Invalid admin token."`) whether the token
+is wrong or `ADMIN_TOKEN` is unset, so the response never reveals whether admin is configured.
 
 ## Queue
 
@@ -54,9 +63,35 @@ last changed. Each item is every `OwnerListing` field (title, story, photos, sta
 | `POST /api/admin/owners/:id/unban` | clears `banned_at`/`ban_reason` only — listings the ban hid stay hidden until individually restored |
 | `GET /api/admin/stats` | listing counts by status, requests today, email failures today, today's `mod_text`/`mod_image` AI budget usage (KV `budget:<kind>:<day>`) |
 | `GET /api/admin/health` | `postal_codes` row count (warns if 0) and `cron_last_run` timestamps (`cron:last:moderationRetry`, `cron:last:orphanSweep`, from KV) |
+| `POST /api/admin/test-email` | sends a real message through the real `sendMail()` path to `{ to }` and reports back `{ sent, reason, provider }` — see below |
 
 Every listing action writes a `moderation_events` row with `kind='admin'` — the admin queue's own
 history is itself an audit log, not just a UI convenience.
+
+## Proving email actually works
+
+Launch-audit finding: production had never delivered mail to anyone but Kiarash, and every failure
+was swallowed silently — `sendMail()` fails closed (see `docs/design/email.md`), which is correct
+for a give/request/choose flow but means nobody would notice a broken sender domain until a real
+giver complained. `POST /api/admin/test-email` closes that gap: it's a real send through the real
+path (never a stub), to any address, reporting exactly what happened.
+
+`leapkg@gmail.com` is on the preview allowlist (`EMAIL_ALLOWLIST` in `wrangler.toml`'s
+`[env.preview.vars]`) specifically so this has a second real inbox to check delivery against — the
+`kiarasha@alum.mit.edu` route alone couldn't distinguish "it always worked" from "it only ever
+worked for the one address that's also the developer."
+
+```sh
+curl -s -X POST "$SITE_URL/api/admin/test-email" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"to":"leapkg@gmail.com"}' | jq
+```
+
+`{ "sent": true, "reason": null, "provider": "cf" }` means it went out — check the inbox to confirm
+it actually arrived, since "sent" here means "the provider accepted it," not "it was delivered."
+`{ "sent": false, "reason": "..." }` (e.g. `blocked_not_allowlisted`, `blocked_email_mode_off`,
+`send_failed: ...`) means it didn't, and the reason is `sendMail()`'s own, not a reinterpretation —
+see `apps/api/src/email/sendMail.ts`'s `guardRecipient` for what each blocked reason means.
 
 ## Curl recipes
 

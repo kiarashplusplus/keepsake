@@ -4,6 +4,7 @@
 // exported route's shell once, at export time.
 import { ScrollViewStyleReset } from "expo-router/html";
 import * as React from "react";
+import { config } from "@/lib/config";
 
 // The pre-hydration script runs before React attaches, so the very first
 // paint already has the right `data-theme`/`color-scheme` — this is what
@@ -152,6 +153,24 @@ export default function Root({ children }: { children: React.ReactNode }): React
 
         <style dangerouslySetInnerHTML={{ __html: ROOT_CSS }} />
         <script dangerouslySetInnerHTML={{ __html: THEME_PREHYDRATION_SCRIPT }} />
+
+        {/* Consent. `/consent.js` (source: `public/consent.js`) is the single
+            shared implementation of the store, the banner and every
+            third-party loader — the same file `apps/site`'s static pages load,
+            so one decision covers /about, /privacy, /terms and the app. It is
+            the ONLY thing that injects a third-party script, so it does not
+            have to be blocking: nothing is racing it to run first.
+
+            The two ids below reach it as meta tags because it is a static file
+            and cannot read `process.env`. An absent or empty value is the kill
+            switch — nothing loads, in any environment, whatever the visitor
+            consented to. `apps/web/scripts/copy-site.mjs` performs the same
+            substitution for the static pages. */}
+        {config.googleAdsId ? <meta name="ks-google-ads-id" content={config.googleAdsId} /> : null}
+        {config.cfWebAnalyticsToken ? (
+          <meta name="ks-cf-beacon-token" content={config.cfWebAnalyticsToken} />
+        ) : null}
+        <script src="/consent.js" defer />
       </head>
       <body>{children}</body>
     </html>

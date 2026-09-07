@@ -4,9 +4,10 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import * as Sentry from "@sentry/cloudflare";
 import { sentryOptions } from "@keepsake/observability/init";
 import { apiErr } from "@keepsake/contracts/common";
-import { assertBindings, type Env } from "./env.js";
+import { assertBindings, isProduction, type Env } from "./env.js";
 import { moderationRetry } from "./cron/moderationRetry.js";
 import { orphanSweep } from "./cron/orphanSweep.js";
+import { ukBlock } from "./middleware/ukBlock.js";
 import { securityHeaders } from "./middleware/securityHeaders.js";
 import { geoRoutes } from "./routes/geo.js";
 import { photoRoutes } from "./routes/photos.js";
@@ -15,9 +16,11 @@ import { meRoutes } from "./routes/me.js";
 import { imageRoutes } from "./routes/images.js";
 import { feedRoutes } from "./routes/feed.js";
 import { itemRoutes } from "./routes/item.js";
+import { robotsRoutes } from "./routes/robots.js";
 import { sitemapRoutes } from "./routes/sitemap.js";
 import { recoverRoutes } from "./routes/recover.js";
 import { adminRoutes } from "./routes/admin.js";
+import { requestWithdrawRoutes } from "./routes/requestWithdraw.js";
 
 type Variables = {
   requestId: string;
@@ -33,13 +36,32 @@ app.use("*", async (c, next) => {
   c.set("requestId", requestId);
   await next();
   c.header("X-Request-Id", requestId);
+
+  // Launch audit finding 2. `robots.txt` is a request a crawler may or may
+  // not make; this header travels on the response it already has, and is the
+  // half that gets a preview URL *removed* from an index rather than merely
+  // asking not to be added to one. Set on every non-production response, not
+  // just HTML: `/item/:id`'s OG shell, `/i/:id/:variant` photos and the JSON
+  // API are all indexable surfaces, and image search is exactly how a
+  // stranger's keepsake photo would surface from a host nobody is watching.
+  if (!isProduction(c.env)) {
+    c.header("X-Robots-Tag", "noindex, nofollow");
+  }
 });
 
 // Issue #10 — see src/middleware/securityHeaders.ts for what this sets and
-// why. Mounted globally so it covers `/item/:id`'s OG-injected HTML and
-// every `/api/*` JSON response, neither of which `apps/web/public/_headers`
+// why. Mounted globally, and *before* the UK block below, so the headers it
+// sets after `next()` land on every response family this Worker can produce
+// — including the UK block's own 451 explanation page — not just the ones
+// that reach routing. It covers `/item/:id`'s OG-injected HTML and every
+// `/api/*` JSON response, neither of which `apps/web/public/_headers`
 // (applied only by the Cloudflare assets binding) ever touches.
 app.use("*", securityHeaders());
+
+// Mounted early, before any route: see src/middleware/ukBlock.ts and
+// docs/runbooks/uk-block.md. Reads and writes both, `/api/*` and the SPA
+// shell alike — nothing behind this line should ever see a UK visitor.
+app.use("*", ukBlock());
 
 app.onError((err, c) => {
   const status: ContentfulStatusCode = err instanceof HTTPException ? err.status : 500;
@@ -109,9 +131,8 @@ app.get("/health", async (c) => {
   // `production`. Local dev and preview routinely run without Turnstile/
   // admin provisioned yet (see `.dev.vars.example`); that shouldn't make
   // their `/health` look unhealthy the way it must once traffic is real.
-  const isProduction = c.env.ENVIRONMENT === "production";
   const secretsConfigured = Boolean(c.env.TURNSTILE_SECRET) && Boolean(c.env.ADMIN_TOKEN);
-  const secrets: "ok" | "degraded" = !isProduction || secretsConfigured ? "ok" : "degraded";
+  const secrets: "ok" | "degraded" = !isProduction(c.env) || secretsConfigured ? "ok" : "degraded";
 
   const checks = { ...bindingChecks, d1, r2, kv, secrets };
   const ok = bindingsOk && d1 === "ok" && r2 === "ok" && kv === "ok";
@@ -147,6 +168,7 @@ app.route("/api/listings", listingRoutes);
 app.route("/api/me", meRoutes);
 app.route("/api/feed", feedRoutes);
 app.route("/api/recover", recoverRoutes);
+app.route("/api/requests", requestWithdrawRoutes);
 app.route("/api/admin", adminRoutes);
 app.route("/i", imageRoutes);
 // Mounted at the Worker root, per the plan's route table — not under /api/*,
@@ -155,6 +177,11 @@ app.route("/i", imageRoutes);
 // otherwise serve them as SPA-shell/404 before this Worker code ever runs.
 app.route("/item", itemRoutes);
 app.route("/sitemap.xml", sitemapRoutes);
+// Same deal as `/sitemap.xml`: reached only because `run_worker_first` lists
+// `/robots.txt`, so this handler answers instead of the static asset that
+// also exists at that path. Production delegates straight back to that asset;
+// see `routes/robots.ts`.
+app.route("/robots.txt", robotsRoutes);
 
 app.all("/api/*", (c) => c.json({ ok: false as const, error: { code: "not_found", message: "Not found" } }, 404));
 
@@ -179,18 +206,71 @@ app.all("*", async (c) => {
   });
 });
 
+/**
+ * Runs one cron job to completion and makes a failure *visible*.
+ *
+ * Launch audit finding 12: both jobs used to be handed to
+ * `ctx.waitUntil(...)` and the handler returned immediately. Two things
+ * followed from that, and neither was survivable. Sentry's scheduled
+ * instrumentation wraps this handler, so it had already resolved by the time
+ * the job did any work — its `finally` disposes the client while the job is
+ * still running, and a rejection inside `orphanSweep` or `moderationRetry`
+ * became a detached unhandled rejection with nothing to catch it. And
+ * Cloudflare judges a cron invocation by whether the handler resolved, so a
+ * job that threw every single night still reported as a successful run,
+ * forever, in silence.
+ *
+ * Awaiting instead fixes both: the exception propagates into the
+ * instrumentation that exists to report it, this function additionally
+ * captures it with the job's name attached (so the Sentry issue says which
+ * cron, not just "scheduled"), and rethrowing marks the invocation failed in
+ * the Cloudflare dashboard. The heartbeat each job writes as its last
+ * statement (`cron:last:<name>` in KV) stays the positive signal —
+ * `GET /api/admin/health` turns a stale one into `ok: false`.
+ *
+ * `ctx` is still passed and used for `waitUntil`, so the job keeps running if
+ * the request context is torn down early — belt and braces, not either/or.
+ */
+async function runCron(name: string, job: (env: Env) => Promise<void>, env: Env, ctx: ExecutionContext): Promise<void> {
+  const started = Date.now();
+  const running = job(env);
+  ctx.waitUntil(running);
+  try {
+    await running;
+    console.log("scheduled: done", { cron: name, durationMs: Date.now() - started });
+  } catch (err) {
+    console.error("scheduled: failed", {
+      cron: name,
+      durationMs: Date.now() - started,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    Sentry.captureException(err, { tags: { cron: name } });
+    // Rethrow so the invocation is recorded as failed by the platform too —
+    // Sentry is the alert, the dashboard is the audit trail, and a job that
+    // silently "succeeded" while doing nothing is the exact failure mode this
+    // whole function exists to remove.
+    throw err;
+  }
+}
+
 async function scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
   switch (controller.cron) {
     case "*/5 * * * *":
-      ctx.waitUntil(moderationRetry(env));
+      await runCron("moderationRetry", moderationRetry, env, ctx);
       break;
     case "17 3 * * *":
-      ctx.waitUntil(orphanSweep(env));
+      await runCron("orphanSweep", orphanSweep, env, ctx);
       break;
     default:
       console.warn("scheduled: unrecognized cron pattern", { cron: controller.cron });
   }
 }
+
+/** Exported for `test/cron.test.ts`: the scheduled handler is not reachable
+ * through `SELF.fetch`, and the property under test — a throwing job reaches
+ * Sentry and is rethrown rather than swallowed — is not observable from
+ * anywhere else. */
+export { runCron };
 
 /**
  * `withSentry`'s options callback, exported for direct unit testing. Returns

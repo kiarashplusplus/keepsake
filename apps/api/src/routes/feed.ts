@@ -20,6 +20,7 @@ import { boundingBox, haversineMiles, type LatLng } from "@keepsake/contracts/ge
 import type { Env } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { validateQuery } from "../middleware/validate.js";
+import { burst } from "../middleware/rateLimit.js";
 import { lookupPostalCode } from "../geo/lookup.js";
 import { serializePublicListing, type FeedListingRow } from "../lib/serialize.js";
 import { fetchPhotoRowsForListings } from "../lib/listingsDb.js";
@@ -192,7 +193,17 @@ async function buildGeoFeed(
   return { items, next_cursor };
 }
 
-feedRoutes.get("/", validateQuery(FeedQuery), async (c) => {
+// Launch audit finding 9: `RL_READ` was declared in all three environment
+// blocks of wrangler.toml and used by nothing — `grep -rn 'burst(' apps/api/src`
+// returned eight call sites and this was not among them, so every public read
+// route had no rate limiting at all (320 parallel `GET /api/feed` from one
+// address returned 320x 200). The cost of that is real but modest; the reason
+// it mattered is the class of bug — a guard that looks like protection and has
+// never once fired, which is the failure this repo keeps recording. Wired
+// rather than deleted: reads are the cheapest thing to abuse and the only
+// surface with no other brake in front of it (the write routes all have a KV
+// daily budget behind their burst binding; reads have nothing).
+feedRoutes.get("/", burst("RL_READ"), validateQuery(FeedQuery), async (c) => {
   const query = c.get("validatedQuery");
 
   let refPoint: LatLng | null = null;

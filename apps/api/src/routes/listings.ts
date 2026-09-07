@@ -17,12 +17,14 @@ import { lookupPostalCode } from "../geo/lookup.js";
 import { sendMail } from "../email/sendMail.js";
 import { verifyEmail } from "../email/templates/verifyEmail.js";
 import { newRequest as newRequestTemplate } from "../email/templates/newRequest.js";
+import { requestReceived as requestReceivedTemplate } from "../email/templates/requestReceived.js";
 import { sha256Hex } from "../lib/digest.js";
 import { todayISO } from "../lib/day.js";
 import { randomTokenRaw } from "../lib/tokens.js";
 import { clientIPFrom } from "../moderation/budget.js";
 import { parseIntVar } from "../env.js";
 import { moderateListing } from "../moderation/pipeline.js";
+import { purgePhotoCache } from "../lib/photoCache.js";
 import { containsContactInfo } from "../moderation/contactInfo.js";
 import { serializeOwnerListing, serializePublicListing } from "../lib/serialize.js";
 import { fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
@@ -37,12 +39,19 @@ const DEFAULT_REPORT_AUTOHIDE_THRESHOLD = 3;
 // ---------------------------------------------------------------------------
 // POST /api/listings
 // ---------------------------------------------------------------------------
+// `burst("RL_CREATE")` first, for the reason spelled out on `PUT /api/photos`
+// (launch audit finding 11): `ownerAuth({ createIfMissing: true })` mints an
+// `owners` row on sight of any well-formed token, so it must not be the first
+// thing a stranger's request reaches. Everything after it keeps its original
+// order — `idempotency()` scopes its KV key by `owner.id` when an owner is
+// present, and `turnstile()` stays in front of the daily budget so a failed
+// challenge doesn't spend a real giver's 20-listings-a-day allowance.
 listingRoutes.post(
   "/",
+  burst("RL_CREATE"),
   ownerAuth({ createIfMissing: true }),
   idempotency(),
   turnstile(),
-  burst("RL_CREATE"),
   dailyBudget({ kind: "listing", ipDailyLimitVar: "LISTING_IP_DAILY_BUDGET", fallbackIpDailyLimit: DEFAULT_LISTING_IP_DAILY_BUDGET }),
   validateBody(CreateListingInput),
   async (c) => {
@@ -73,8 +82,8 @@ listingRoutes.post(
     await c.env.DB.prepare(
       `INSERT INTO listings
         (id, owner_id, title, story, category, country, postal_code, place_name, admin1, lat, lng,
-         status, version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?, ?)`,
+         status, version, created_at, updated_at, age_attested_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?, ?, ?)`,
     )
       .bind(
         id,
@@ -90,6 +99,12 @@ listingRoutes.post(
         place.lng,
         now,
         now,
+        // `CreateListingInput.age_attested` is a `z.literal(true)` — always
+        // `true` by the time validation lets a request through — but we
+        // record *when* the attestation happened, not just that it did, the
+        // same way `email_verified_at`/`chosen_at` record a moment rather
+        // than a boolean elsewhere in this schema.
+        input.age_attested ? now : null,
       )
       .run();
 
@@ -117,7 +132,7 @@ listingRoutes.post(
       await sendMail(c.env, { kind: "verify_email", to: input.email, ...verifyEmail({ link: verifyUrl }) });
     }
 
-    c.executionCtx.waitUntil(moderateListing(c.env, id, 1));
+    c.executionCtx.waitUntil(moderateListing(c.env, id, 1, clientIPFrom(c.req.raw)));
 
     const row = await fetchListingRow(c.env, id);
     if (!row) return fail(c, "internal", "Listing failed to save.", 500);
@@ -201,7 +216,7 @@ listingRoutes.patch("/:id", ownerAuth(), validateBody(UpdateListingInput), async
     }
   }
 
-  c.executionCtx.waitUntil(moderateListing(c.env, id, nextVersion));
+  c.executionCtx.waitUntil(moderateListing(c.env, id, nextVersion, clientIPFrom(c.req.raw)));
 
   const updatedRow = await fetchListingRow(c.env, id);
   if (!updatedRow) return fail(c, "internal", "Listing failed to save.", 500);
@@ -220,12 +235,19 @@ listingRoutes.delete("/:id", ownerAuth(), async (c) => {
     return fail(c, "not_found", "Listing not found.", 404);
   }
 
-  const { results: photos } = await c.env.DB.prepare("SELECT r2_key_full, r2_key_thumb FROM photos WHERE listing_id = ?")
+  const { results: photos } = await c.env.DB.prepare("SELECT id, r2_key_full, r2_key_thumb FROM photos WHERE listing_id = ?")
     .bind(id)
-    .all<{ r2_key_full: string; r2_key_thumb: string }>();
+    .all<{ id: string; r2_key_full: string; r2_key_thumb: string }>();
   for (const photo of photos) {
     await c.env.BUCKET.delete(photo.r2_key_full);
     await c.env.BUCKET.delete(photo.r2_key_thumb);
+    // Issue #22: the R2 bytes are gone; also drop any cached edge copy so
+    // nothing can keep serving them from `caches.default`. See
+    // `lib/photoCache.ts` for why this is defense in depth rather than the
+    // whole fix — `GET /i/:id/:variant` already re-checks the DB before
+    // ever consulting the cache, so this route alone can't serve a deleted
+    // photo either way.
+    c.executionCtx.waitUntil(purgePhotoCache(c.env, photo.id));
   }
 
   // `photos`, `requests`, `reports`, `moderation_events` all have
@@ -301,7 +323,7 @@ listingRoutes.post("/:id/relist", ownerAuth(), async (c) => {
     .run();
 
   if (nextStatus === "pending") {
-    c.executionCtx.waitUntil(moderateListing(c.env, id, row.version));
+    c.executionCtx.waitUntil(moderateListing(c.env, id, row.version, clientIPFrom(c.req.raw)));
   }
 
   const updatedRow = await fetchListingRow(c.env, id);
@@ -313,7 +335,7 @@ listingRoutes.post("/:id/relist", ownerAuth(), async (c) => {
 // ---------------------------------------------------------------------------
 // GET /api/listings/:id — public, approved/given only
 // ---------------------------------------------------------------------------
-listingRoutes.get("/:id", async (c) => {
+listingRoutes.get("/:id", burst("RL_READ"), async (c) => {
   const id = requireParam(c, "id");
   const row = await fetchListingRow(c.env, id);
   if (!row || (row.status !== "approved" && row.status !== "given")) {
@@ -470,11 +492,30 @@ listingRoutes.post(
     const now = Date.now();
     const requestId = ulid();
 
+    // A random, single-use secret this requester can later present, with no
+    // account, to withdraw this exact request and erase its own PII — see
+    // src/routes/requestWithdraw.ts. Only the hash is stored, same as every
+    // other bearer secret this Worker mints (src/lib/tokens.ts).
+    const rawWithdrawToken = randomTokenRaw();
+    const withdrawTokenHash = await sha256Hex(rawWithdrawToken);
+
     await c.env.DB.prepare(
-      `INSERT INTO requests (id, listing_id, note, email, phone, ip_digest, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'open', ?)`,
+      `INSERT INTO requests (id, listing_id, note, email, phone, ip_digest, status, created_at, age_attested_at, withdraw_token_hash)
+       VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
     )
-      .bind(requestId, id, input.note, input.email, input.phone ?? null, ipDigest, now)
+      .bind(
+        requestId,
+        id,
+        input.note,
+        input.email,
+        input.phone ?? null,
+        ipDigest,
+        now,
+        // Same "record the moment, not just the fact" convention as the
+        // listing insert above.
+        input.age_attested ? now : null,
+        withdrawTokenHash,
+      )
       .run();
     await c.env.DB.prepare("UPDATE listings SET request_count = request_count + 1 WHERE id = ?").bind(id).run();
 
@@ -486,6 +527,20 @@ listingRoutes.post(
         await c.env.DB.prepare("UPDATE requests SET notified_at = ? WHERE id = ?").bind(Date.now(), requestId).run();
       }
     }
+
+    // Always sent — a requester never gets a dashboard or a device token, so
+    // this confirmation (and the withdraw link inside it) is the only record
+    // they get of having asked, and the only no-account way back in to
+    // remove their own note/email/phone. `/withdraw/<token>` is a web-app
+    // page the other client-side pass still needs to add; it should POST
+    // `{ token }` to `/api/requests/withdraw` the same way `/recover/:token`
+    // already POSTs to `/api/recover/:token`.
+    const withdrawLink = `${c.env.SITE_URL}/withdraw/${rawWithdrawToken}`;
+    await sendMail(c.env, {
+      kind: "request_received",
+      to: input.email,
+      ...requestReceivedTemplate({ listingTitle: row.title, withdrawLink }),
+    });
 
     const result: CreateRequestResult = { id: requestId, created_at: now };
     return ok(c, result, 201);

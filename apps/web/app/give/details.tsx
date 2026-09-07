@@ -13,9 +13,13 @@ import { Eyebrow } from "@/ui/Eyebrow";
 import { Input } from "@/ui/Input";
 import { Chip } from "@/ui/Chip";
 import { Button } from "@/ui/Button";
+import { Page } from "@/ui/Page";
 import { Card } from "@/ui/Surface";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
+import { coverPhoto } from "@/features/give/giveDraft";
 import { lookupPostalCode } from "@/api/geo";
+import { locateOnce } from "@/lib/geoLocate";
+import { MANUAL_ENTRY_MESSAGE, reverseGeocode } from "@/lib/geoReverse";
 
 const TitleFieldSchema = z.string().trim().min(TITLE_MIN).max(TITLE_MAX);
 const LOOKUP_DEBOUNCE_MS = 400;
@@ -34,6 +38,8 @@ export default function GiveDetails(): React.ReactElement {
   const { draft, dispatch } = useGiveDraft();
   const [titleTouched, setTitleTouched] = React.useState(false);
   const [resolved, setResolved] = React.useState<Resolved | null>(null);
+  const [locating, setLocating] = React.useState(false);
+  const [geoError, setGeoError] = React.useState<string | null>(null);
 
   const normalized = normalizePostalCode(draft.country, draft.postalCode);
 
@@ -71,6 +77,37 @@ export default function GiveDetails(): React.ReactElement {
     router.push("/give/email");
   }
 
+  function handleUseMyLocation(): void {
+    // `locateOnce` calls `navigator.geolocation.getCurrentPosition`
+    // synchronously, inside this press handler — awaiting anything first
+    // (even a microtask) can make iOS Safari silently drop the permission
+    // prompt. See `lib/geoLocate.ts`.
+    setGeoError(null);
+    setLocating(true);
+    locateOnce(
+      (coords) => {
+        reverseGeocode(coords.lat, coords.lng)
+          .then((result) => {
+            dispatch({ type: "set_postal_code", postalCode: result.postcode });
+            // Coordinates never leave the browser — only the postcode (and,
+            // here, a country code) either provider's response yields does.
+            if (result.countryCode !== null && (COUNTRIES as readonly string[]).includes(result.countryCode)) {
+              dispatch({ type: "set_country", country: result.countryCode as Country });
+            }
+          })
+          .catch(() => setGeoError(MANUAL_ENTRY_MESSAGE))
+          .finally(() => setLocating(false));
+      },
+      () => {
+        setLocating(false);
+        setGeoError(MANUAL_ENTRY_MESSAGE);
+      },
+    );
+  }
+
+  const cover = coverPhoto(draft);
+  const showSuggestionNote = cover !== null && draft.appliedSuggestionPhotoId !== null && draft.appliedSuggestionPhotoId === cover.id;
+
   const postcodeHelper =
     normalized === null || !isResolvedForCurrent
       ? COUNTRY_POSTCODE_HINTS[draft.country]
@@ -79,65 +116,87 @@ export default function GiveDetails(): React.ReactElement {
         : "We don't know that postcode yet.";
 
   return (
-    <Card style={{ gap: space.xl }}>
-      <View style={{ gap: space.sm }}>
-        <Eyebrow>Details</Eyebrow>
-        <Text variant="displayLg">A few details.</Text>
-      </View>
-
-      <Input
-        label="Title"
-        value={draft.title}
-        onChangeText={(title) => dispatch({ type: "set_title", title })}
-        onBlur={() => setTitleTouched(true)}
-        maxLength={TITLE_MAX}
-        error={titleError}
-        placeholder="A hand-thrown mug"
-      />
-
-      <View style={{ gap: space.sm }}>
-        <Text variant="eyebrow" color="accent2Text">
-          Category
-        </Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
-          {CATEGORIES.map((category) => (
-            <Chip
-              key={category}
-              label={CATEGORY_LABELS[category]}
-              selected={draft.category === category}
-              onPress={() => dispatch({ type: "set_category", category })}
-            />
-          ))}
+    // See app/give/index.tsx's comment on why this step wraps itself in a
+    // `Page` rather than the shell doing it once.
+    <Page>
+      <Card style={{ gap: space.xl }}>
+        <View style={{ gap: space.sm }}>
+          <Eyebrow>Details</Eyebrow>
+          <Text variant="displayLg">A few details.</Text>
         </View>
-      </View>
 
-      <View style={{ gap: space.sm }}>
-        <Text variant="eyebrow" color="accent2Text">
-          Country
-        </Text>
-        <View style={{ flexDirection: "row", gap: space.sm }}>
-          {COUNTRIES.map((country) => (
-            <Chip
-              key={country}
-              label={COUNTRY_LABELS[country]}
-              selected={draft.country === country}
-              onPress={() => dispatch({ type: "set_country", country })}
-            />
-          ))}
+        <View style={{ gap: space.xs }}>
+          <Input
+            label="Title"
+            value={draft.title}
+            onChangeText={(title) => dispatch({ type: "set_title", title })}
+            onBlur={() => setTitleTouched(true)}
+            maxLength={TITLE_MAX}
+            error={titleError}
+            placeholder="A hand-thrown mug"
+          />
+          {showSuggestionNote ? (
+            <Text variant="caption" color="textTertiary">
+              Filled in from your photo. Change anything.
+            </Text>
+          ) : null}
         </View>
-      </View>
 
-      <Input
-        label="Postcode"
-        value={draft.postalCode}
-        onChangeText={(postalCode) => dispatch({ type: "set_postal_code", postalCode })}
-        placeholder={COUNTRY_POSTCODE_HINTS[draft.country]}
-        helper={postcodeHelper}
-      />
+        <View style={{ gap: space.sm }}>
+          <Text variant="eyebrow" color="accent2Text">
+            Category
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+            {CATEGORIES.map((category) => (
+              <Chip
+                key={category}
+                label={CATEGORY_LABELS[category]}
+                selected={draft.category === category}
+                onPress={() => dispatch({ type: "set_category", category })}
+              />
+            ))}
+          </View>
+        </View>
 
-      <View style={{ flexDirection: "row" }}>
-        <Button label="Continue" disabled={!canContinue} onPress={handleContinue} />
-      </View>
-    </Card>
+        <View style={{ gap: space.sm }}>
+          <Text variant="eyebrow" color="accent2Text">
+            Country
+          </Text>
+          <View style={{ flexDirection: "row", gap: space.sm }}>
+            {COUNTRIES.map((country) => (
+              <Chip
+                key={country}
+                label={COUNTRY_LABELS[country]}
+                selected={draft.country === country}
+                onPress={() => dispatch({ type: "set_country", country })}
+              />
+            ))}
+          </View>
+        </View>
+
+        <View style={{ gap: space.sm }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md, alignItems: "flex-end" }}>
+            <Input
+              label="Postcode"
+              value={draft.postalCode}
+              onChangeText={(postalCode) => dispatch({ type: "set_postal_code", postalCode })}
+              placeholder={COUNTRY_POSTCODE_HINTS[draft.country]}
+              helper={postcodeHelper}
+              style={{ minWidth: 160 }}
+            />
+            <Button label={locating ? "Locating…" : "Use my location"} variant="secondary" loading={locating} onPress={handleUseMyLocation} />
+          </View>
+          {geoError !== null ? (
+            <Text variant="caption" color="dangerText">
+              {geoError}
+            </Text>
+          ) : null}
+        </View>
+
+        <View style={{ flexDirection: "row" }}>
+          <Button label="Continue" disabled={!canContinue} onPress={handleContinue} />
+        </View>
+      </Card>
+    </Page>
   );
 }

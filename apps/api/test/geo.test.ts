@@ -27,11 +27,12 @@ describe("GET /api/geo/lookup", () => {
     expect(body.data.code).toBe("M5V");
   });
 
-  it("resolves SW1A to London (GB outward code)", async () => {
+  it("400s bad_request for GB — removed from CountrySchema by the UK geo-block (docs/runbooks/uk-block.md); the seeded GB postal_codes row is inert, not reachable", async () => {
     await seedStandardPostalCodes();
     const res = await SELF.fetch("http://x/api/geo/lookup?country=GB&code=SW1A%201AA");
-    const body = (await res.json()) as { ok: true; data: PostalLookup };
-    expect(body.data.place_name).toBe("London");
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: false; error: { code: string } };
+    expect(body.error.code).toBe("bad_request");
   });
 
   it("404s not_found for a postcode the seed doesn't cover", async () => {

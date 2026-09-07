@@ -6,13 +6,13 @@ import * as React from "react";
 import { View } from "react-native";
 import { MailableEmailSchema, RESERVED_EMAIL_DOMAIN_MESSAGE } from "@keepsake/contracts/common";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
-import { ReadableWidth } from "@/ui/ReadableWidth";
+import { Page } from "@/ui/Page";
 import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Input } from "@/ui/Input";
 import { Button } from "@/ui/Button";
 import { Card } from "@/ui/Surface";
-import { Turnstile } from "@/ui/Turnstile";
+import { Turnstile, type TurnstileHandle, type TurnstileStatus } from "@/ui/Turnstile";
 import { recover } from "@/api/recover";
 import { ApiError } from "@/api/client";
 import { track } from "@/lib/analytics";
@@ -23,9 +23,13 @@ type Phase = "form" | "submitting" | "sent";
 export default function Recover(): React.ReactElement {
   const [email, setEmail] = React.useState("");
   const [touched, setTouched] = React.useState(false);
-  const [turnstileToken, setTurnstileToken] = React.useState<string | null>(null);
+  const [turnstileStatus, setTurnstileStatus] = React.useState<TurnstileStatus>({ status: "pending" });
+  const turnstileRef = React.useRef<TurnstileHandle>(null);
   const [phase, setPhase] = React.useState<Phase>("form");
   const [error, setError] = React.useState<string | null>(null);
+
+  const turnstileReady = turnstileStatus.status === "ready" || turnstileStatus.status === "unconfigured";
+  const turnstileToken = turnstileStatus.status === "ready" ? turnstileStatus.token : "";
 
   const validation = MailableEmailSchema.safeParse(email);
   const emailError =
@@ -41,17 +45,21 @@ export default function Recover(): React.ReactElement {
     setPhase("submitting");
     setError(null);
     try {
-      await recover({ email: email.trim() }, { turnstileToken: turnstileToken ?? "" });
+      await recover({ email: email.trim() }, { turnstileToken });
       setPhase("sent");
       track(AnalyticsEvents.RecoverRequested);
     } catch (err) {
+      if (err instanceof ApiError && err.code === "turnstile_failed") {
+        turnstileRef.current?.reset();
+        setTurnstileStatus({ status: "pending" });
+      }
       setError(err instanceof ApiError ? err.message : "That didn't go through. Try again.");
       setPhase("form");
     }
   }
 
   return (
-    <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+    <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
       <Card style={{ gap: space.xl, transform: [{ rotate: "0.3deg" }] }}>
         <View style={{ gap: space.sm }}>
           <Eyebrow tick>Lost your listings?</Eyebrow>
@@ -78,7 +86,7 @@ export default function Recover(): React.ReactElement {
               placeholder="you@example.com"
             />
 
-            <Turnstile onToken={setTurnstileToken} />
+            <Turnstile ref={turnstileRef} onStatus={setTurnstileStatus} />
 
             {error !== null ? (
               <Text variant="body" color="dangerText">
@@ -87,11 +95,11 @@ export default function Recover(): React.ReactElement {
             ) : null}
 
             <View style={{ flexDirection: "row" }}>
-              <Button label="Send the link" loading={phase === "submitting"} disabled={phase === "submitting" || turnstileToken === null} onPress={() => void handleSubmit()} />
+              <Button label="Send the link" loading={phase === "submitting"} disabled={phase === "submitting" || !turnstileReady} onPress={() => void handleSubmit()} />
             </View>
           </View>
         )}
       </Card>
-    </ReadableWidth>
+    </Page>
   );
 }

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { EmailSchema, MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
+import { AgeAttestationSchema, EmailSchema, MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
 
 export const NOTE_MIN = 10;
 export const NOTE_MAX = 500;
@@ -16,6 +16,11 @@ export const CreateRequestInput = z.object({
   note: z.string().trim().min(NOTE_MIN).max(NOTE_MAX),
   email: MailableEmailSchema,
   phone: PhoneSchema.optional(),
+  // Minimum age (docs/legal-considerations.md) — see `AgeAttestationSchema`'s
+  // own doc comment. A requester never has an account, so unlike a listing's
+  // owner there is no "attested once, don't ask again" — every request
+  // re-attests.
+  age_attested: AgeAttestationSchema,
 });
 export type CreateRequestInput = z.infer<typeof CreateRequestInput>;
 
@@ -76,3 +81,30 @@ export function maskPhone(phone: string): string {
   const masked = "•".repeat(digits.length - 2) + visible;
   return `${hasPlus ? "+" : ""}${masked}`;
 }
+
+/** Shown in place of `email_masked`/`note` once a request has been withdrawn
+ * and its personal fields erased server-side — see
+ * `POST /api/requests/withdraw` and `docs/design/identity.md`'s "Request
+ * withdrawal" section. Distinguishes "withdrawn, PII erased" from "chosen"
+ * or "open" in the owner dashboard without exposing what used to be there. */
+export const WITHDRAWN_REQUEST_PLACEHOLDER = "(withdrawn — removed by the requester)";
+
+/**
+ * `POST /api/requests/withdraw` — the no-account path for a requester to pull
+ * back their own note/email/phone. `token` is the raw, single-use secret
+ * mailed as a link in the confirmation sent when the request was created
+ * (`src/email/templates/requestReceived.ts`), the same
+ * mint-random-hash-only-the-hash-persists shape every other bearer secret in
+ * this API uses (`apps/api/src/lib/tokens.ts`).
+ */
+export const RequestWithdrawInput = z.object({
+  token: z.string().trim().min(1),
+});
+export type RequestWithdrawInput = z.infer<typeof RequestWithdrawInput>;
+
+export const RequestWithdrawResult = z.object({
+  id: UlidSchema,
+  listing_id: UlidSchema,
+  withdrawn_at: TimestampMs,
+});
+export type RequestWithdrawResult = z.infer<typeof RequestWithdrawResult>;

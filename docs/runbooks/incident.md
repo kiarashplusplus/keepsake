@@ -23,6 +23,35 @@ is expected-and-known if Cloudflare Email Service onboarding hasn't landed yet (
 | Web bundle blank/broken in production | a barrel import slipped past lint (see `docs/design/README.md#barrel-ban`), or a version-skew client is running against a moved API contract | check the deployed commit's bundle for a bare `@keepsake/*` import; check `/version.json` |
 | Sentry event has an unredacted secret in it | `@keepsake/observability/redact`'s `SENSITIVE_KEY_RE` doesn't cover a new field name | extend the regex, add a test that breaks without the fix, treat any live leak as urgent regardless of severity elsewhere |
 
+## Data loss
+
+**[restore.md](restore.md)** — D1 Time Travel (30 days, RPO ~0, restore in about two minutes),
+how to take an export that actually works on this database (`wrangler d1 export` fails outright
+here because of the `listings_fts` virtual table), how to rebuild into a new database and cut
+over, and how to re-seed `postal_codes` afterwards.
+
+The one thing to know before you get there: **photo bytes in R2 are not recoverable.** No
+versioning, no lifecycle rule, and `orphanSweep` deletes unconditionally. Time Travel brings back
+the `photos` rows; `/i/:id/:variant` still 404s for every one of them.
+
+## Alerting
+
+`.github/workflows/uptime.yml` checks `/health` on preview (and on production once the repo
+variable `PRODUCTION_LIVE` is `true`) every 15 minutes, and on failure annotates the run and
+files a deduplicated `Uptime: /health failing` issue. A failed scheduled run also emails the
+repository owner. That is the whole of the alerting: GitHub's scheduler is best-effort, so treat
+it as "we will know within the hour", not as monitoring.
+
+Cron failures now reach Sentry: `scheduled` awaits each job and rethrows
+(`apps/api/src/index.ts`), so a failing sweep is both a Sentry event tagged with the cron name and
+a failed invocation in the Cloudflare dashboard, rather than a detached unhandled rejection.
+`moderationRetry` additionally catches per listing, so one poisoned row no longer aborts the
+batch. `GET /api/admin/health` returns `ok: false` when either `cron:last:<name>` heartbeat goes
+stale (30 minutes for `moderationRetry`, 26 hours for `orphanSweep`).
+
+All of that is a no-op without `SENTRY_DSN` set on the Worker. It is still listed as "optional" in
+the cutover checklist; it is not.
+
 ## Reports / abuse
 
 Three independent reports auto-hide a listing (`REPORT_AUTOHIDE_THRESHOLD`) pending review in the

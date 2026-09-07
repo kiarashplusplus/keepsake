@@ -26,6 +26,16 @@
  * copy rather than a shared import: the two are read by unrelated runtimes
  * (a Worker module vs. a static `_headers` file consumed by the assets
  * binding) with no natural common module to hold one shared constant.
+ *
+ * `https://www.googletagmanager.com` and `https://static.cloudflareinsights.com`
+ * are in `script-src` for `apps/web/public/consent.js`'s `injectScript()` —
+ * the Google Ads tag and Cloudflare Web Analytics beacon, both loaded only
+ * after the consent gate grants them (`e2e/consent.spec.ts`). Without these,
+ * the browser's own CSP enforcement silently drops the `<script src>` before
+ * it ever reaches the network — a strictly worse failure than not having a
+ * CSP at all, since nothing throws and nothing logs outside the browser
+ * console. Caught by that same e2e suite once this middleware and the
+ * pre-existing consent loader ran together for the first time.
  */
 import type { Context, Next } from "hono";
 import type { Env } from "../env.js";
@@ -34,7 +44,7 @@ type SecurityHeadersCtx = Context<{ Bindings: Env }>;
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self' https://challenges.cloudflare.com " +
+  "script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com " +
     "'sha256-AkwQgpToGV6ZVFH02Kxg9hDSbEU98DbN9h+GJM0BMPk=' " +
     "'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' " +
     "'sha256-d6qbtEYff/sB38YyzuzhASbVmmOidU/UFC9mNit47j4='",

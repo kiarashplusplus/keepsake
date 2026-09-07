@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AdminHideInput, AdminQueueItem, AdminQueueQuery, AdminRejectInput, ImageVerdictSchema } from "../src/admin";
+import { AdminHideInput, AdminQueueItem, AdminQueueQuery, AdminRejectInput, AdminTestEmailInput, ImageVerdictSchema } from "../src/admin";
 
 const base = {
   is_physical_object: true,
@@ -103,5 +103,19 @@ describe("AdminRejectInput", () => {
 describe("AdminHideInput", () => {
   it("allows an empty body (reason is optional)", () => {
     expect(AdminHideInput.safeParse({}).success).toBe(true);
+  });
+});
+
+describe("AdminTestEmailInput", () => {
+  it("accepts a real address", () => {
+    expect(AdminTestEmailInput.safeParse({ to: "leapkg@gmail.com" }).success).toBe(true);
+  });
+
+  it("rejects a reserved-domain address — even the admin can't mail example.com", () => {
+    expect(AdminTestEmailInput.safeParse({ to: "nobody@example.com" }).success).toBe(false);
+  });
+
+  it("rejects a malformed address", () => {
+    expect(AdminTestEmailInput.safeParse({ to: "not-an-email" }).success).toBe(false);
   });
 });

@@ -1,8 +1,8 @@
 /**
  * `/api/admin/*` — Kiarash's own moderation queue, per the plan's route
  * table and `docs/runbooks/admin.md`. Every route here is guarded by
- * `adminAuth()` + `burst("RL_ADMIN")`, mounted once via `.use("*", ...)`
- * below rather than repeated on every handler.
+ * `burst("RL_ADMIN")` + `adminAuth()` — in that order — mounted once via
+ * `.use("*", ...)` below rather than repeated on every handler.
  *
  * Every state-changing action writes a `moderation_events` row with
  * `kind = 'admin'` — the queue's own history doubles as an audit log, the
@@ -14,15 +14,18 @@ import {
   AdminHideInput,
   AdminQueueQuery,
   AdminRejectInput,
+  AdminTestEmailInput,
   type AdminHealth,
   type AdminQueueItem,
   type AdminStats,
+  type AdminTestEmailResult,
 } from "@keepsake/contracts/admin";
 import { LISTING_STATUSES, type ListingStatus, type OwnerListing } from "@keepsake/contracts/listing";
 import type { FeedPage } from "@keepsake/contracts/feed";
 import { maskEmail } from "@keepsake/contracts/request";
 import type { ReportReason } from "@keepsake/contracts/report";
 import type { Env } from "../env.js";
+import { emailProviderName } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
 import { requireParam } from "../lib/params.js";
@@ -33,11 +36,23 @@ import { validateBody, validateQuery } from "../middleware/validate.js";
 import { decodeKeysetCursor, encodeKeysetCursor } from "../lib/cursor.js";
 import { fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
 import { serializeOwnerListing, type ListingRow } from "../lib/serialize.js";
+import { sendMail } from "../email/sendMail.js";
+import { adminTest as adminTestTemplate } from "../email/templates/adminTest.js";
 
 type Vars = { validatedBody: unknown; validatedQuery: unknown };
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
-adminRoutes.use("*", adminAuth(), burst("RL_ADMIN"));
+// Limiter first, auth second — deliberately, and load-bearing. `adminAuth`
+// answers a bad token with `fail(...)` and never calls `next()`, so with the
+// two the other way round a *wrong* token never reached `burst()` at all and
+// the single credential that can hide listings and ban owners was guessable
+// at an unmetered rate (measured: 150 wrong tokens from one IP inside 60s
+// against a 120/60s binding returned 150x401 and 0x429). Putting the limiter
+// in front costs a correctly-authenticated admin nothing — 120/60s is far
+// past what one human clicking through a queue produces — and makes the
+// 401 path cost the attacker the same budget as the 200 path.
+// Regression test: "rate-limits wrong tokens" in test/adminAuth.test.ts.
+adminRoutes.use("*", burst("RL_ADMIN"), adminAuth());
 
 function safeParseJson(text: string | null): unknown {
   if (text === null) return null;
@@ -434,4 +449,26 @@ adminRoutes.get("/health", async (c) => {
     cron_last_run: cronLastRun,
   };
   return ok(c, health);
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/test-email
+// ---------------------------------------------------------------------------
+/**
+ * Sends a real message through the real `sendMail()` path — not a stub, not
+ * a dry run — to whatever address is given, and reports back exactly what
+ * happened. Launch-audit finding: email failures are invisible, and
+ * production has never delivered to anyone but Kiarash. `leapkg@gmail.com`
+ * is on the preview allowlist (`wrangler.toml`) specifically so this
+ * endpoint has a second real inbox to prove delivery against.
+ */
+adminRoutes.post("/test-email", validateBody(AdminTestEmailInput), async (c) => {
+  const input = c.get("validatedBody") as AdminTestEmailInput;
+  const outcome = await sendMail(c.env, { kind: "admin_test", to: input.to, ...adminTestTemplate() });
+  const result: AdminTestEmailResult = {
+    sent: outcome.sent,
+    reason: outcome.reason ?? null,
+    provider: emailProviderName(c.env) ?? "unset",
+  };
+  return ok(c, result);
 });

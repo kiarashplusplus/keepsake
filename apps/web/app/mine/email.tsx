@@ -7,12 +7,12 @@ import { View } from "react-native";
 import { MailableEmailSchema, RESERVED_EMAIL_DOMAIN_MESSAGE } from "@keepsake/contracts/common";
 import type { OwnerMe } from "@keepsake/contracts/owner";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
-import { ReadableWidth } from "@/ui/ReadableWidth";
+import { Page } from "@/ui/Page";
 import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Input } from "@/ui/Input";
 import { Button } from "@/ui/Button";
-import { Turnstile } from "@/ui/Turnstile";
+import { Turnstile, type TurnstileHandle, type TurnstileStatus } from "@/ui/Turnstile";
 import { EmptyState } from "@/ui/EmptyState";
 import { Card } from "@/ui/Surface";
 import { Stamp } from "@/ui/Stamp";
@@ -26,10 +26,28 @@ export default function MineEmail(): React.ReactElement {
   const [hasOwnerToken] = React.useState(() => getOwnerToken() !== null);
   const [me, setMe] = React.useState<OwnerMe | null>(null);
   const [emailInput, setEmailInput] = React.useState("");
-  const [turnstileToken, setTurnstileToken] = React.useState<string | null>(null);
+  const [turnstileStatus, setTurnstileStatus] = React.useState<TurnstileStatus>({ status: "pending" });
+  const turnstileRef = React.useRef<TurnstileHandle>(null);
   const [touched, setTouched] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  const turnstileReady = turnstileStatus.status === "ready" || turnstileStatus.status === "unconfigured";
+  const turnstileToken = turnstileStatus.status === "ready" ? turnstileStatus.token : "";
+
+  /** A Turnstile token is single-use: consumed the moment `setEmail` sends
+   * it. Without this, Save then Resend shared one token from the same
+   * widget render and the second call failed every time — this forces a
+   * fresh one before the *next* submit is allowed, right after the one
+   * that just spent it. A no-op when unconfigured: there was no real token
+   * to begin with, so nothing needs replacing (and there's no later status
+   * update that would ever un-stick a `pending` set here by mistake).
+   */
+  function spendTurnstileToken(): void {
+    if (turnstileStatus.status !== "ready") return;
+    turnstileRef.current?.reset();
+    setTurnstileStatus({ status: "pending" });
+  }
 
   React.useEffect(() => {
     if (!hasOwnerToken) return;
@@ -62,10 +80,12 @@ export default function MineEmail(): React.ReactElement {
     setBusy(true);
     setError(null);
     try {
-      const result = await setEmail({ email: emailInput.trim() }, { turnstileToken: turnstileToken ?? "" });
+      const result = await setEmail({ email: emailInput.trim() }, { turnstileToken });
+      spendTurnstileToken();
       setMe(result);
       toast.show("Check your inbox to verify.");
     } catch (err) {
+      if (err instanceof ApiError && err.code === "turnstile_failed") spendTurnstileToken();
       setError(err instanceof ApiError ? err.message : "That didn't go through. Try again.");
     } finally {
       setBusy(false);
@@ -77,10 +97,12 @@ export default function MineEmail(): React.ReactElement {
     setBusy(true);
     setError(null);
     try {
-      const result = await setEmail({ email: me.email }, { turnstileToken: turnstileToken ?? "" });
+      const result = await setEmail({ email: me.email }, { turnstileToken });
+      spendTurnstileToken();
       setMe(result);
       toast.show("Sent again.");
     } catch (err) {
+      if (err instanceof ApiError && err.code === "turnstile_failed") spendTurnstileToken();
       setError(err instanceof ApiError ? err.message : "That didn't go through. Try again.");
     } finally {
       setBusy(false);
@@ -104,21 +126,21 @@ export default function MineEmail(): React.ReactElement {
 
   if (!hasOwnerToken) {
     return (
-      <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
         <EmptyState
           ornament={<Stamp state="idle" label="Email" />}
           eyebrow="Email"
           title="Nothing to show yet"
           line="Give something first — your device gets an owner identity the moment you do, and an email can attach to it then."
         />
-      </ReadableWidth>
+      </Page>
     );
   }
 
   const hasEmail = me !== null && me.email !== undefined;
 
   return (
-    <ReadableWidth variant="prose" style={{ paddingVertical: sectionRhythm.normal }}>
+    <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
       <Card style={{ gap: space.xl, transform: [{ rotate: "-0.2deg" }] }}>
         <View style={{ gap: space.sm }}>
           <Eyebrow tick>A way back</Eyebrow>
@@ -145,7 +167,7 @@ export default function MineEmail(): React.ReactElement {
           placeholder="you@example.com"
         />
 
-        <Turnstile onToken={setTurnstileToken} />
+        <Turnstile ref={turnstileRef} onStatus={setTurnstileStatus} />
 
         {error !== null ? (
           <Text variant="body" color="dangerText">
@@ -154,13 +176,13 @@ export default function MineEmail(): React.ReactElement {
         ) : null}
 
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.md }}>
-          <Button label="Save" loading={busy} disabled={busy || turnstileToken === null} onPress={() => void handleSave()} />
+          <Button label="Save" loading={busy} disabled={busy || !turnstileReady} onPress={() => void handleSave()} />
           {hasEmail && me?.email_verified === false ? (
-            <Button label="Resend" variant="secondary" disabled={busy || turnstileToken === null} onPress={() => void handleResend()} />
+            <Button label="Resend" variant="secondary" disabled={busy || !turnstileReady} onPress={() => void handleResend()} />
           ) : null}
           {hasEmail ? <Button label="Remove" variant="ghost" disabled={busy} onPress={() => void handleRemove()} /> : null}
         </View>
       </Card>
-    </ReadableWidth>
+    </Page>
   );
 }

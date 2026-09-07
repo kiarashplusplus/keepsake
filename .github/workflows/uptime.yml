@@ -1,0 +1,157 @@
+name: Uptime
+
+# Launch audit finding 4: "nothing tells anyone the Worker is broken".
+# `.github/workflows/` contained exactly two files and neither had a
+# `schedule:` trigger — there was no uptime check, no alert rule, no error
+# notification anywhere. `/health` was polled by the deploy job for two
+# minutes after a deploy and by nothing else, ever again.
+#
+# This is the smallest thing that changes that: a scheduled `curl` of
+# `/health` on both tiers with a JSON assertion on `ok`, which fails the run
+# when it is not true. A failed scheduled run emails the repository owner
+# (GitHub's default for `schedule` failures) and, below, files a deduplicated
+# issue so the alert survives an unread inbox.
+#
+# Deliberately not a third-party monitor: this needs no account, no secret,
+# and no separate thing to remember exists. It is also not a replacement for
+# one — GitHub's scheduler is best-effort and can run late under load, so
+# treat 15 minutes as "within the hour", not as an SLA. If Keepsake ever
+# needs sub-minute detection, buy a real monitor and delete this file.
+on:
+  schedule:
+    # Every 15 minutes. GitHub queues `schedule` runs on a shared pool and
+    # will drop or delay them under load; that is acceptable for a check
+    # whose job is to notice an outage measured in hours, not seconds.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  # Never pile up: if a run is already checking, a newly scheduled one has
+  # nothing to add, and cancelling the older one would lose the signal.
+  group: uptime
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # For the "file an issue when it breaks" step below.
+  issues: write
+
+jobs:
+  health:
+    name: health
+    runs-on: ubuntu-latest
+    # Opt-*out*, not opt-in. A monitor that has to be switched on is a guard
+    # that never fires, which is the failure mode this repo keeps recording;
+    # set the repo variable `UPTIME_ENABLED` to `false` to silence it.
+    if: ${{ vars.UPTIME_ENABLED != 'false' }}
+    outputs:
+      failures: ${{ steps.check.outputs.failures }}
+    steps:
+      - name: Check /health on preview and production
+        id: check
+        env:
+          # Overridable so a renamed host does not require a code change,
+          # with the real hostnames as defaults so an unset variable does not
+          # silently check nothing.
+          PREVIEW_URL: ${{ vars.PREVIEW_URL || 'https://preview.keepsake.ing' }}
+          PRODUCTION_URL: ${{ vars.PRODUCTION_URL || 'https://keepsake.ing' }}
+          # Set to `true` at cutover, when the apex domain is attached (see
+          # docs/runbooks/kiarash-checklist.md). Until then a production
+          # failure is expected — there is nothing there yet — so it is not
+          # reported as one. The `else` branch below makes that switch
+          # self-correcting rather than something that can be forgotten
+          # forever: if production answers `/health` while this is unset, the
+          # run fails on *that*.
+          PRODUCTION_LIVE: ${{ vars.PRODUCTION_LIVE }}
+        run: |
+          set -uo pipefail
+          failures=""
+
+          # Three attempts before calling it: a single failed request across
+          # the public internet is noise, and an alert that cries wolf is an
+          # alert that gets muted. Anything genuinely down fails all three.
+          probe() {
+            tier="$1"
+            url="$2"
+            body=""
+            for attempt in 1 2 3; do
+              body="$(curl -fsS --max-time 15 "$url/health" || true)"
+              ok="$(printf '%s' "$body" | jq -r '.ok // empty' 2>/dev/null || true)"
+              if [ "$ok" = "true" ]; then
+                commit="$(printf '%s' "$body" | jq -r '.commit // "?"')"
+                # Issue #24: "dev" is the checked-in wrangler.toml fallback,
+                # never a real commit. CI's own deploys always pass a real
+                # `--var COMMIT_SHA:<sha>` (deploy.yml), so seeing "dev" here
+                # means the running Worker was shipped by a hand-run
+                # `wrangler deploy` that forgot it — a state deploy.md now
+                # warns about but nothing else can catch, since it happens
+                # outside any workflow this repo controls. Treat it as a
+                # failure rather than a note: it is the loud signal the issue
+                # asked for, implemented here because failing inside the
+                # Worker itself would need apps/api/src, which is out of
+                # scope for this pass.
+                if [ "$commit" = "dev" ]; then
+                  echo "::error title=$tier is running an unstamped deploy::GET $url/health reports commit \"dev\" — a hand-run 'wrangler deploy' shipped without --var COMMIT_SHA:\$(git rev-parse HEAD). See docs/runbooks/deploy.md#manual-deploys."
+                  return 1
+                fi
+                echo "$tier: ok (commit $commit)"
+                return 0
+              fi
+              echo "$tier: attempt $attempt did not report ok:true"
+              [ "$attempt" -lt 3 ] && sleep 10
+            done
+            echo "::error title=$tier is unhealthy::GET $url/health did not return ok:true after 3 attempts. Last response: ${body:-<no response>}"
+            return 1
+          }
+
+          probe preview "$PREVIEW_URL" || failures="$failures preview"
+
+          if [ "${PRODUCTION_LIVE:-}" = "true" ]; then
+            probe production "$PRODUCTION_URL" || failures="$failures production"
+          else
+            # Production is not supposed to be live yet. If it answers
+            # anyway, the domain was attached and nobody turned monitoring
+            # on — which is exactly the state this whole workflow exists to
+            # make impossible, so it is a failure in its own right.
+            body="$(curl -fsS --max-time 15 "$PRODUCTION_URL/health" || true)"
+            ok="$(printf '%s' "$body" | jq -r '.ok // empty' 2>/dev/null || true)"
+            if [ -n "$ok" ]; then
+              echo "::error title=production is live but unmonitored::$PRODUCTION_URL/health answered, but the repo variable PRODUCTION_LIVE is not 'true', so production is not being checked. Set it."
+              failures="$failures production-unmonitored"
+            else
+              echo "production: skipped (PRODUCTION_LIVE is not 'true', and the host does not answer /health)"
+            fi
+          fi
+
+          failures="${failures# }"
+          echo "failures=$failures" >> "$GITHUB_OUTPUT"
+          if [ -n "$failures" ]; then
+            echo "::error title=Keepsake is unhealthy::Unhealthy tiers: $failures"
+            exit 1
+          fi
+          echo "all checked tiers healthy"
+
+      # A red run in the Actions tab is only an alert if someone is looking at
+      # the Actions tab. An issue is a notification, is deduplicated by title
+      # so a two-day outage does not open 192 of them, and leaves a written
+      # trace of when it started for the incident runbook.
+      - name: Open an issue when a tier is unhealthy
+        if: ${{ failure() && steps.check.outputs.failures != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FAILURES: ${{ steps.check.outputs.failures }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          title="Uptime: /health failing"
+          existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number' || true)"
+          body="\`/health\` did not report \`ok: true\` for: $FAILURES
+
+          Run: $RUN_URL
+          Runbook: docs/runbooks/incident.md"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label uptime --body "$body" \
+              || gh issue create --title "$title" --body "$body"
+          fi

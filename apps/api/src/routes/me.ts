@@ -1,7 +1,13 @@
 import { Hono } from "hono";
 import { SetEmailInput, type OwnerMe } from "@keepsake/contracts/owner";
 import type { ModerationReasonCode } from "@keepsake/contracts/listing";
-import { ChooseRequestInput, maskEmail, maskPhone, type OwnerViewRequest } from "@keepsake/contracts/request";
+import {
+  ChooseRequestInput,
+  maskEmail,
+  maskPhone,
+  WITHDRAWN_REQUEST_PLACEHOLDER,
+  type OwnerViewRequest,
+} from "@keepsake/contracts/request";
 import type { Env } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ownerAuth, type OwnerRow } from "../middleware/ownerAuth.js";
@@ -24,18 +30,34 @@ export const meRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 interface RequestRow {
   id: string;
-  note: string;
-  email: string;
+  // Nullable since `POST /api/requests/withdraw` erases both once a
+  // requester withdraws — see docs/design/identity.md's "Request
+  // withdrawal" section and migration 0005_compliance.sql.
+  note: string | null;
+  email: string | null;
   phone: string | null;
   status: string;
   created_at: number;
 }
 
 function serializeOwnerViewRequest(row: RequestRow): OwnerViewRequest {
+  if (row.status === "withdrawn" || row.email === null) {
+    // Withdrawn: the requester exercised their own erasure link, and there
+    // is nothing left to mask — showing an empty `email_masked` would read
+    // as a bug, not a choice, so this says plainly what happened instead.
+    return {
+      id: row.id,
+      note: WITHDRAWN_REQUEST_PLACEHOLDER,
+      created_at: row.created_at,
+      status: "withdrawn",
+      email_masked: WITHDRAWN_REQUEST_PLACEHOLDER,
+    };
+  }
+
   const revealed = row.status === "chosen";
   return {
     id: row.id,
-    note: row.note,
+    note: row.note ?? "",
     created_at: row.created_at,
     status: row.status as OwnerViewRequest["status"],
     email_masked: maskEmail(row.email),
@@ -139,6 +161,14 @@ meRoutes.post("/listings/:id/choose", ownerAuth(), validateBody(ChooseRequestInp
   if (request.status !== "open") {
     return fail(c, "conflict", "This request has already been decided.", 409);
   }
+  // `status === "open"` guarantees `email` was never erased — only
+  // `POST /api/requests/withdraw` nulls it, and that also flips status to
+  // `withdrawn` — but the column is nullable at the type level since the
+  // withdrawal migration, so this narrows it back for everything below.
+  if (request.email === null) {
+    return fail(c, "internal", "This request is missing its contact info.", 500);
+  }
+  const requestEmail = request.email;
 
   const now = Date.now();
   await c.env.DB.prepare("UPDATE requests SET status = 'chosen', chosen_at = ? WHERE id = ?").bind(now, request.id).run();
@@ -157,19 +187,19 @@ meRoutes.post("/listings/:id/choose", ownerAuth(), validateBody(ChooseRequestInp
   });
   await sendMail(c.env, {
     kind: "chosen",
-    to: request.email,
+    to: requestEmail,
     ...(giverVerified ? { replyTo: owner.email as string } : {}),
     ...template,
   });
 
   const revealed: OwnerViewRequest = {
     id: request.id,
-    note: request.note,
+    note: request.note ?? "",
     created_at: request.created_at,
     status: "chosen",
-    email_masked: maskEmail(request.email),
+    email_masked: maskEmail(requestEmail),
     ...(request.phone !== null ? { phone_masked: maskPhone(request.phone) } : {}),
-    email: request.email,
+    email: requestEmail,
     ...(request.phone !== null ? { phone: request.phone } : {}),
   };
   return ok(c, revealed);

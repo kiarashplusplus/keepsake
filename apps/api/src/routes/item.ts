@@ -22,6 +22,7 @@ import { Hono } from "hono";
 import type { Env } from "../env.js";
 import { fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
 import { requireParam } from "../lib/params.js";
+import { burst } from "../middleware/rateLimit.js";
 
 export const itemRoutes = new Hono<{ Bindings: Env }>();
 
@@ -64,7 +65,7 @@ function buildOgTags(params: { title: string; description: string; url: string; 
   `;
 }
 
-itemRoutes.get("/:id", async (c) => {
+itemRoutes.get("/:id", burst("RL_READ"), async (c) => {
   const id = requireParam(c, "id");
   const shellRequest = new Request(new URL("/", c.req.url), { headers: c.req.raw.headers });
   const shellResponse = await c.env.ASSETS.fetch(shellRequest);

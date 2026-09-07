@@ -8,12 +8,34 @@ import { extensionForSniffedType, sniffImageType } from "../lib/imageSniff.js";
 import { requireParam } from "../lib/params.js";
 import { ownerAuth, type OwnerRow } from "../middleware/ownerAuth.js";
 import { burst, dailyBudget } from "../middleware/rateLimit.js";
+import { checkAndBump, clientIPFrom } from "../moderation/budget.js";
+import { suggestFromPhoto } from "../suggest/suggest.js";
 
 type Vars = { owner: OwnerRow };
 export const photoRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 const DEFAULT_MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 const DEFAULT_UPLOAD_IP_DAILY_BUDGET = 60;
+// Global ceiling far past what a real day of givers reaches (~15 neurons per
+// call, about $0.17/1000 listings per the plan) — runaway protection only,
+// same spirit as MOD_TEXT_DAILY_BUDGET/MOD_IMAGE_DAILY_BUDGET. Kept as its
+// own `suggest` budget kind rather than sharing `mod_image`'s counter: an
+// exhausted image-moderation budget leaves listings `pending` until midnight
+// UTC (moderation/pipeline.ts), so a burst of autofill calls must never be
+// able to spend the budget a real listing needs to finish moderating.
+const DEFAULT_SUGGEST_DAILY_BUDGET = 1000;
+// One giver's give flow calls this once per cover-photo change — 30/day/IP
+// is loose on purpose (see budget.ts's per-IP-is-not-a-person note) and only
+// exists to stop a single retry loop from working through the global ceiling
+// alone.
+const DEFAULT_SUGGEST_IP_DAILY_BUDGET = 30;
+
+interface SuggestPhotoRow {
+  id: string;
+  owner_id: string;
+  r2_key_thumb: string;
+  content_type: string;
+}
 
 interface OrphanOrOwnedPhotoRow {
   id: string;
@@ -24,10 +46,23 @@ interface OrphanOrOwnedPhotoRow {
   listing_status: string | null;
 }
 
+// Launch audit finding 11: the burst limiter comes *before* `ownerAuth`, and
+// the order is the point. `ownerAuth({ createIfMissing: true })` inserts an
+// `owners` row for whatever random `ks_…` token the caller presented, and with
+// it running first that insert had already happened by the time the request
+// was 429'd or 400'd — unbounded, permanent junk in the table every owner
+// lookup queries, at (combined with finding 10's measured limiter leakage) on
+// the order of tens of thousands of rows a day from one address. Nothing swept
+// them, and there is no delete-account path anywhere.
+//
+// Nothing between here and the handler needs the owner, so this costs nothing:
+// `burst` keys on the caller's IP digest, not on identity. The daily KV budget
+// stays behind `ownerAuth` — it is a write, and there is no reason to spend it
+// before the token is even syntactically valid.
 photoRoutes.put(
   "/",
-  ownerAuth({ createIfMissing: true }),
   burst("RL_UPLOAD"),
+  ownerAuth({ createIfMissing: true }),
   dailyBudget({ kind: "upload", ipDailyLimitVar: "UPLOAD_IP_DAILY_BUDGET", fallbackIpDailyLimit: DEFAULT_UPLOAD_IP_DAILY_BUDGET }),
   async (c) => {
     const owner = c.get("owner");
@@ -129,4 +164,50 @@ photoRoutes.delete("/:id", ownerAuth(), async (c) => {
   await c.env.DB.prepare("DELETE FROM photos WHERE id = ?").bind(id).run();
 
   return ok(c, { id });
+});
+
+/**
+ * AI autofill for the give flow. `ownerAuth()` proves *a* caller, not
+ * ownership of *this* photo — checked below the same way `DELETE` does,
+ * with the same 404 (never 403) for someone else's photo id, matching how
+ * `routes/images.ts` never confirms a photo id exists to someone who can't
+ * see it.
+ *
+ * Never 500s on a model failure: `suggestFromPhoto` doesn't throw, and a
+ * failed suggestion is a non-event for the give flow — the giver just gets
+ * an empty, already-usable form.
+ */
+photoRoutes.post("/:id/suggest", ownerAuth(), burst("RL_WRITE"), async (c) => {
+  const owner = c.get("owner");
+  const id = requireParam(c, "id");
+
+  const photo = await c.env.DB.prepare("SELECT id, owner_id, r2_key_thumb, content_type FROM photos WHERE id = ?")
+    .bind(id)
+    .first<SuggestPhotoRow>();
+
+  if (!photo || photo.owner_id !== owner.id) {
+    return fail(c, "not_found", "Photo not found.", 404);
+  }
+
+  // Checked directly against `checkAndBump` (not the `dailyBudget`
+  // middleware used for `listing`/`request`/`upload`) because this kind
+  // needs a real global ceiling, not just a per-IP one — the same reason
+  // `moderation/pipeline.ts` checks `mod_text`/`mod_image` inline rather
+  // than through HTTP middleware.
+  const dailyLimit = parseIntVar("SUGGEST_DAILY_BUDGET", c.env.SUGGEST_DAILY_BUDGET, DEFAULT_SUGGEST_DAILY_BUDGET);
+  const ipDailyLimit = parseIntVar("SUGGEST_IP_DAILY_BUDGET", c.env.SUGGEST_IP_DAILY_BUDGET, DEFAULT_SUGGEST_IP_DAILY_BUDGET);
+  const budget = await checkAndBump(c.env.KV, {
+    kind: "suggest",
+    clientIP: clientIPFrom(c.req.raw),
+    dailyLimit,
+    ipDailyLimit,
+  });
+  if (!budget.allowed) {
+    return fail(c, "rate_limited", "Daily suggestion limit reached — please try again tomorrow.", 429, {
+      ...(budget.retryAfter !== undefined ? { retryAfter: budget.retryAfter } : {}),
+    });
+  }
+
+  const result = await suggestFromPhoto(c.env, photo);
+  return ok(c, { suggestion: result.suggestion });
 });

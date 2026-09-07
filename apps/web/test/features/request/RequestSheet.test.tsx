@@ -40,6 +40,8 @@ async function fillAndSubmit(
     await Promise.resolve();
   });
 
+  fireEvent.press(instance.UNSAFE_getByProps({ accessibilityRole: "checkbox" }));
+
   const sendButton = instance.UNSAFE_getByProps({ accessibilityLabel: "Send" });
   await act(async () => {
     fireEvent.press(sendButton);

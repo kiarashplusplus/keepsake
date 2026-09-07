@@ -2,11 +2,22 @@
  * KV-based daily budget counters.
  *
  * Ported from Bayan `worker/src/budget.ts`. That Worker rations Workers AI
- * calls behind one unauthenticated endpoint; this one rations five different
- * things — two AI calls (`mod_text`, `mod_image`) and three write endpoints
- * that don't touch AI at all (`listing`, `request`, `upload`) — because
- * Keepsake has no accounts either, so the only caller identity available is
- * an IP address.
+ * calls behind one unauthenticated endpoint; this one rations six different
+ * things — three AI calls (`mod_text`, `mod_image`, `suggest`) and three
+ * write endpoints that don't touch AI at all (`listing`, `request`,
+ * `upload`) — because Keepsake has no accounts either, so the only caller
+ * identity available is an IP address.
+ *
+ * `suggest` (AI autofill, `POST /api/photos/:id/suggest`) is checked with a
+ * real global `dailyLimit`, the same way `mod_text`/`mod_image` are checked
+ * directly from `moderation/pipeline.ts` — unlike `listing`/`request`/
+ * `upload`, whose global side is deliberately unbounded (see
+ * `middleware/rateLimit.ts`'s `EFFECTIVELY_UNLIMITED`) because only their
+ * per-IP ceiling is meant to bite. `suggest` gets its own counter rather than
+ * sharing `mod_image`'s: an exhausted image-moderation budget leaves
+ * listings `pending` until midnight UTC (`pipeline.ts`, the image budget
+ * gate), so a burst of autofill calls must never be able to spend the budget
+ * a real listing needs to finish moderating.
  *
  * Global key format:    "budget:<kind>:YYYY-MM-DD"
  * Per-client key format: "budget:ip:<kind>:<daily-digest>:YYYY-MM-DD"
@@ -46,8 +57,8 @@
 
 const TTL_SECONDS = 172_800; // 48 hours
 
-/** The five things this Worker rations per calendar day. */
-export type BudgetKind = "mod_text" | "mod_image" | "listing" | "request" | "upload";
+/** The six things this Worker rations per calendar day. */
+export type BudgetKind = "mod_text" | "mod_image" | "suggest" | "listing" | "request" | "upload";
 
 export interface CheckAndBumpOptions {
   kind: BudgetKind;
@@ -57,6 +68,37 @@ export interface CheckAndBumpOptions {
   dailyLimit: number;
   /** Per-IP ceiling for `kind` today. Omitted disables the per-IP check. */
   ipDailyLimit?: number;
+  /** How many units of `dailyLimit` this single check consumes. Defaults to
+   * 1. `moderation/pipeline.ts` passes the photo count here for `mod_image`
+   * so the ceiling counts vision inferences, not listings (launch audit
+   * finding 8 / issue #18: the budget used to be charged once per listing
+   * while the pipeline makes up to five vision calls per listing, so the
+   * configured number never meant what it said). */
+  cost?: number;
+  /**
+   * Slice of `dailyLimit` held back from the general pool (issue #18): once
+   * `globalCount` passes `dailyLimit - reservedFloor`, only a caller whose
+   * own `kind` usage today is below `freshCallerCeiling` can still draw on
+   * the remainder. Omitted (or 0) disables the floor and this behaves
+   * exactly like the plain global/per-IP check below.
+   *
+   * This exists because the global ceiling has no notion of *whose* traffic
+   * is spending it: ~50 distinct addresses each posting a handful of
+   * listings — each individually well under `LISTING_IP_DAILY_BUDGET` — can
+   * jointly exhaust the whole day's text-moderation budget, after which
+   * every other giver's genuine listing silently parks until midnight UTC.
+   * The floor doesn't stop that burst (nothing keyed only by IP can, per
+   * `clientIPFrom`'s own doc comment — an attacker can always find more
+   * addresses), but it guarantees a caller who hasn't already been part of
+   * today's burst still gets through until the floor itself runs out, so
+   * "everyone is starved" requires exhausting *both* pools, not one.
+   */
+  reservedFloor?: number;
+  /** An IP counts as "fresh" (eligible for the reserved floor) while its own
+   * count for `kind` today is below this. Ignored when `reservedFloor` is
+   * unset or `clientIP` is omitted (e.g. the cron retry path, which never
+   * knows the original caller's address). */
+  freshCallerCeiling?: number;
 }
 
 export interface CheckAndBumpResult {
@@ -75,7 +117,11 @@ export interface CheckAndBumpResult {
  * refusing them.
  */
 
-function todayISO(): string {
+/** Exported for `moderation/pipeline.ts`'s once-a-day Sentry alert on budget
+ * exhaustion (issue #18), which needs the same UTC-day key this module
+ * uses so the "have we already alerted today" flag rolls over at the same
+ * boundary the counters do. */
+export function todayISO(): string {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
 }
 
@@ -115,8 +161,8 @@ async function readCount(kv: KVNamespace, key: string): Promise<number> {
   return val ? parseInt(val, 10) : 0;
 }
 
-async function bumpCount(kv: KVNamespace, key: string): Promise<number> {
-  const next = (await readCount(kv, key)) + 1;
+async function bumpCountBy(kv: KVNamespace, key: string, amount: number): Promise<number> {
+  const next = (await readCount(kv, key)) + amount;
   await kv.put(key, String(next), { expirationTtl: TTL_SECONDS });
   return next;
 }
@@ -157,24 +203,48 @@ export async function checkAndBump(
   options: CheckAndBumpOptions,
 ): Promise<CheckAndBumpResult> {
   const { kind, clientIP, dailyLimit, ipDailyLimit } = options;
+  const cost = options.cost ?? 1;
+  const reservedFloor = options.reservedFloor ?? 0;
+  const freshCallerCeiling = options.freshCallerCeiling ?? 0;
 
-  const globalCount = await readCount(kv, todayKey(kind));
-  if (globalCount >= dailyLimit) {
+  const globalKey = todayKey(kind);
+  const globalCount = await readCount(kv, globalKey);
+
+  // With `reservedFloor` unset (every call site except the two moderation
+  // budgets), `generalCeiling === dailyLimit` and `withinReservedPool` can
+  // never be true (no `clientIP` path reaches it without `reservedFloor`),
+  // so this is exactly the old global-then-per-IP check.
+  const generalCeiling = Math.max(0, dailyLimit - reservedFloor);
+  const withinGeneralPool = globalCount + cost <= generalCeiling;
+  const withinReservedPool =
+    !withinGeneralPool && reservedFloor > 0 && clientIP !== undefined && globalCount + cost <= dailyLimit;
+
+  if (!withinGeneralPool && !withinReservedPool) {
     return { allowed: false, retryAfter: secondsUntilMidnightUTC() };
   }
 
   let ipKey: string | undefined;
-  if (clientIP !== undefined && ipDailyLimit !== undefined) {
+  let ipCount = 0;
+  if (clientIP !== undefined && (ipDailyLimit !== undefined || withinReservedPool)) {
     ipKey = await todayIPKey(kind, clientIP);
-    const ipCount = await readCount(kv, ipKey);
-    if (ipCount >= ipDailyLimit) {
-      return { allowed: false, retryAfter: secondsUntilMidnightUTC() };
-    }
+    ipCount = await readCount(kv, ipKey);
   }
 
-  await bumpCount(kv, todayKey(kind));
+  if (ipDailyLimit !== undefined && ipKey !== undefined && ipCount >= ipDailyLimit) {
+    return { allowed: false, retryAfter: secondsUntilMidnightUTC() };
+  }
+
+  // The reserved floor only exists for a caller who hasn't already driven
+  // the counter this far today — an address with `freshCallerCeiling` or
+  // more uses of `kind` already recorded is treated as part of the same
+  // burst that exhausted the general pool, not a new, unlucky giver.
+  if (withinReservedPool && ipKey !== undefined && ipCount >= freshCallerCeiling) {
+    return { allowed: false, retryAfter: secondsUntilMidnightUTC() };
+  }
+
+  await bumpCountBy(kv, globalKey, cost);
   if (ipKey !== undefined) {
-    await bumpCount(kv, ipKey);
+    await bumpCountBy(kv, ipKey, cost);
   }
 
   return { allowed: true };

@@ -86,8 +86,15 @@
   --rule: rgba(27, 24, 21, 0.32);
   --shadow: rgba(60, 40, 20, 0.18);
   --shadow-strong: rgba(60, 40, 20, 0.32);
-  --grain-opacity: 1;
-  --grain-blend: multiply;
+  /* The fibre tile is an OPAQUE grey image centred on 50% grey, blended into
+     the ground with `overlay` (see `body::before`), not a black alpha mask
+     laid over the page. Slope is the fleck's contrast; light needs less of it
+     than dark because `overlay`'s response is proportional to how far the
+     backdrop sits from black, and kraft is much further from black than
+     walnut. Tuned by eye per theme, then checked against a pixel sample. */
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='480' height='480'%3E%3Cfilter id='f' x='0' y='0' width='480' height='480' filterUnits='userSpaceOnUse' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0 0 0 0 1'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0.3' intercept='0.35'/%3E%3CfeFuncG type='linear' slope='0.3' intercept='0.35'/%3E%3CfeFuncB type='linear' slope='0.3' intercept='0.35'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='480' height='480' filter='url(%23f)'/%3E%3C/svg%3E");
+  /* The lamp's warm pool near the top of the table (`lampLight` upstream). */
+  --lamp: rgba(255, 247, 224, 0.35);
 
   --space-xxs: 2px;
   --space-xs: 4px;
@@ -140,14 +147,24 @@ html[data-theme="dark"] {
   --ink-soft: #e4d9c4;
   --text2: #cbbba0;
   --text3: #a99a82;
+  /* The one "object on the table" token this site has to flip, and for
+     the same reason `--text2`/`--text3` above flip: the two things that
+     use it — the step numerals and the `.fleuron` — sit straight on the
+     walnut table and on the dark index card, never on a print. The
+     constant #5c4726 is 1.79:1 on `--bg` and 1.51:1 on `--surface` in
+     dark, i.e. invisible; the numerals were legible only in light mode.
+     #bb9a5c is 5.91:1 on `--bg`, 4.95:1 on `--surface` and 6.82:1 on
+     `--surface-sunken`. Light keeps #5c4726 (4.77:1 on kraft). The
+     Playwright axe check only scans light, so it never saw this. */
+  --foil-text: #bb9a5c;
   --accent2: #e3d6be;
   --accent2-text: #e3d6be;
   --on-accent2: #2b2119;
   --rule: rgba(243, 236, 221, 0.24);
   --shadow: rgba(8, 5, 2, 0.55);
   --shadow-strong: rgba(8, 5, 2, 0.7);
-  --grain-opacity: 0.55;
-  --grain-blend: overlay;
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='480' height='480'%3E%3Cfilter id='f' x='0' y='0' width='480' height='480' filterUnits='userSpaceOnUse' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0 0 0 0 1'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0.45' intercept='0.275'/%3E%3CfeFuncG type='linear' slope='0.45' intercept='0.275'/%3E%3CfeFuncB type='linear' slope='0.45' intercept='0.275'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='480' height='480' filter='url(%23f)'/%3E%3C/svg%3E");
+  --lamp: rgba(255, 214, 140, 0.16);
   color-scheme: dark;
 }
 
@@ -164,14 +181,24 @@ html[data-theme="light"] {
     --ink-soft: #e4d9c4;
     --text2: #cbbba0;
     --text3: #a99a82;
+    /* The one "object on the table" token this site has to flip, and for
+       the same reason `--text2`/`--text3` above flip: the two things that
+       use it — the step numerals and the `.fleuron` — sit straight on the
+       walnut table and on the dark index card, never on a print. The
+       constant #5c4726 is 1.79:1 on `--bg` and 1.51:1 on `--surface` in
+       dark, i.e. invisible; the numerals were legible only in light mode.
+       #bb9a5c is 5.91:1 on `--bg`, 4.95:1 on `--surface` and 6.82:1 on
+       `--surface-sunken`. Light keeps #5c4726 (4.77:1 on kraft). The
+       Playwright axe check only scans light, so it never saw this. */
+    --foil-text: #bb9a5c;
     --accent2: #e3d6be;
     --accent2-text: #e3d6be;
     --on-accent2: #2b2119;
     --rule: rgba(243, 236, 221, 0.24);
     --shadow: rgba(8, 5, 2, 0.55);
     --shadow-strong: rgba(8, 5, 2, 0.7);
-    --grain-opacity: 0.55;
-    --grain-blend: overlay;
+    --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='480' height='480'%3E%3Cfilter id='f' x='0' y='0' width='480' height='480' filterUnits='userSpaceOnUse' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0 0 0 0 1'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0.45' intercept='0.275'/%3E%3CfeFuncG type='linear' slope='0.45' intercept='0.275'/%3E%3CfeFuncB type='linear' slope='0.45' intercept='0.275'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='480' height='480' filter='url(%23f)'/%3E%3C/svg%3E");
+    --lamp: rgba(255, 214, 140, 0.16);
     color-scheme: dark;
   }
 }
@@ -191,10 +218,14 @@ body {
 
 html {
   overflow-x: hidden;
+  /* The table's flat colour lives here, so it paints the canvas and `body`
+     can stay transparent. That leaves `body::before` free to be a real ground
+     layer at `z-index: -1` (below) instead of a scrim over the page. */
+  background-color: var(--bg);
 }
 
 body {
-  background: var(--bg);
+  background: transparent;
   color: var(--ink);
   font-family: "CourierPrime", ui-monospace, monospace;
   font-size: 16px;
@@ -216,23 +247,45 @@ a {
   color: inherit;
 }
 
-/* ---------- Paper grain ----------
-   Same construction as apps/web/public/kraft-grain.svg (kept in sync by
-   hand — see that file's header comment): isotropic feTurbulence run
-   through luminanceToAlpha + a low-slope feFuncA for a low-contrast fibre
-   fleck, tiled at 480x480 with stitchTiles="stitch" so no seam shows even
-   at 1920px, instead of the old anisotropic/220px pattern that read as
-   striated wood once tiled. */
+/* ---------- The table ----------
+   The kraft/walnut ground itself: flat colour, the lamp's warm pool, a soft
+   vignette, and the paper fibre — all of it BEHIND the page at `z-index: -1`,
+   the same model as the app's `apps/web/src/ui/KraftTable.web.tsx`.
+
+   This used to be a `z-index: 9999` fixed overlay carrying a black alpha mask
+   (an SVG `<rect>` with no `fill`, so black) at `opacity: 1` and
+   `mix-blend-mode: multiply`. That is not a texture, it is a filter over the
+   whole document. Measured off a headless render, it dragged `--print` from
+   #fbf9f4 to #e4e2dd, `--surface` from #f1e6cc to #ded4bc and `--bg` from
+   #d2bc97 to #bda988 — a flat ~9% black veil over every card, every photo and
+   every letter of type. That is the "grey layer" the founder saw on his phone.
+
+   The fibre now lives in this layer's own background stack, and the tile is an
+   OPAQUE image centred on 50% grey blended with `overlay`, rather than a black
+   mask composited by alpha. That matters for more than taste: for any fixed
+   backdrop `overlay` is linear in the source and 50% grey is its identity, so
+   noise symmetric about 50% leaves the ground's MEAN colour exactly where the
+   token says it is. Every contrast ratio quoted in `:root` therefore still
+   holds with the texture switched on; an alpha mask would have darkened the
+   ground under `--text2`/`--text3` and quietly broken all of them.
+
+   Tile construction (isotropic feTurbulence, numOctaves 4, 480x480 with
+   stitchTiles="stitch" so no seam shows at any width) still matches
+   apps/web/public/kraft-grain.svg — only the alpha-mask ending differs. */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
-  z-index: 9999;
+  z-index: -1;
   pointer-events: none;
-  opacity: var(--grain-opacity);
-  mix-blend-mode: var(--grain-blend);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='480' height='480'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' seed='7' stitchTiles='stitch' result='noise'/%3E%3CfeColorMatrix in='noise' type='luminanceToAlpha' result='alpha'/%3E%3CfeComponentTransfer in='alpha'%3E%3CfeFuncA type='linear' slope='0.16' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  background-size: 480px 480px;
+  background-color: var(--bg);
+  background-image:
+    var(--grain),
+    radial-gradient(ellipse 900px 480px at 50% -60px, var(--lamp), transparent 70%),
+    radial-gradient(ellipse 1400px 900px at 50% 45%, transparent 55%, rgba(0, 0, 0, 0.08) 100%);
+  background-size: 480px 480px, auto, auto;
+  background-repeat: repeat, no-repeat, no-repeat;
+  background-blend-mode: overlay, normal, normal;
 }
 
 /* ---------- Skip link ---------- */
@@ -405,7 +458,7 @@ a:focus-visible,
 
 /* ---------- Hero: asymmetric 12-col grid, text on 7, seal art on 5 ---------- */
 .hero {
-  padding: var(--rhythm-bookend) 0 var(--rhythm-tight);
+  padding: var(--rhythm-loose) 0 var(--rhythm-normal);
 }
 
 .hero-grid {
@@ -415,8 +468,32 @@ a:focus-visible,
   align-items: center;
 }
 
+/* ---------- Paper on the table ----------
+   The hero, the why-grid and the privacy/terms prose are the three places
+   where a slab of running copy would otherwise sit bare on the kraft, which
+   is what made the page read as one flat tan sheet from the header to the
+   footer. Each now rests on the index card `--surface` is cut from — the same
+   move the app makes (see docs/design/design-system.md v3, "Layout": the
+   feed's hero and filter row each sit in their own slightly-rotated Card).
+   Square corners, an offset-down-and-right cast plus a 1px inset edge, so it
+   reads as paper resting proud of the table rather than a rounded panel.
+   Tape is reserved for prints (`.tag-card`); index cards just lie there. */
+.paper,
+.hero-copy,
+.why-grid,
+.prose-content {
+  position: relative;
+  background-color: var(--surface);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.08),
+    2px 3px 0 var(--shadow),
+    4px 14px 26px -10px var(--shadow-strong);
+}
+
 .hero-copy {
   grid-column: 1 / span 7;
+  padding: var(--space-xxl) var(--space-xl) var(--space-xl);
+  transform: rotate(-0.45deg);
 }
 
 .hero-art {
@@ -492,7 +569,7 @@ h3 {
 
 .hero-actions {
   display: flex;
-  gap: var(--space-xl);
+  gap: var(--space-md) var(--space-xl);
   flex-wrap: wrap;
   align-items: center;
 }
@@ -562,7 +639,13 @@ section {
 }
 
 .section-sunken {
-  background: var(--surface-sunken);
+  /* Also table, so it takes the same fibre as `body::before` — otherwise the
+     ground has texture and the bands sitting on it are flat plastic. Same
+     `overlay` blend, so the band's mean stays exactly `--surface-sunken`. */
+  background-color: var(--surface-sunken);
+  background-image: var(--grain);
+  background-size: 480px 480px;
+  background-blend-mode: overlay;
 }
 
 .torn-top {
@@ -576,8 +659,13 @@ section {
   left: 0;
   right: 0;
   height: 14px;
-  background: inherit;
+  /* Matches `.section-sunken` above explicitly rather than by `inherit`:
+     `background-blend-mode` is not part of the `background` shorthand, so an
+     inherited image would composite normally and leave a grey scum here. */
   background-color: var(--surface-sunken);
+  background-image: var(--grain);
+  background-size: 480px 480px;
+  background-blend-mode: overlay;
   clip-path: polygon(
     0% 100%, 0% 40%, 4% 60%, 9% 30%, 14% 55%, 19% 25%, 24% 58%, 29% 35%, 34% 60%,
     39% 30%, 44% 55%, 49% 28%, 54% 58%, 59% 32%, 64% 60%, 69% 28%, 74% 55%,
@@ -727,7 +815,18 @@ h2 {
 
 .card-photo {
   aspect-ratio: 4 / 5;
-  background: var(--surface-sunken);
+  /* Constant, not `--surface-sunken` — see `.card-excerpt` below for why the
+     print's own parts don't flip. It USED to be `--surface-sunken`, i.e.
+     byte-identical to the `.section-sunken` band directly behind it, so the
+     photo field, the card's surround and the table were all one colour and
+     the whole section read as a single flat slab. This value is 74%
+     `--surface` + 26% `--surface-sunken` at their light values: a blank sheet
+     of kraft paper, plainly inside the white frame and plainly in front of
+     the table. */
+  background-color: #e2d3b5;
+  background-image: var(--grain);
+  background-size: 480px 480px;
+  background-blend-mode: overlay;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -735,10 +834,28 @@ h2 {
 }
 
 .card-photo svg {
-  width: 100%;
-  height: 100%;
-  color: var(--accent-text);
-  opacity: 0.7;
+  /* These line drawings stand in for a photograph that isn't there yet, so
+     they have to read as a small pencilled hint on a lot of paper. They were
+     `width/height: 100%`, which at phone width made each one ~300px tall and
+     filling the entire 4:5 field — a poster, not a placeholder. Sized as a
+     fraction of the field instead (proportional at every width, clamped so it
+     never gets silly on a wide or narrow column), centred by the flex parent,
+     and left in the shared 100x100 viewBox so the objects keep both their own
+     proportions and their relative sizes: the kettle stays smaller than the
+     compass, as drawn. */
+  width: clamp(88px, 42%, 150px);
+  height: auto;
+  aspect-ratio: 1;
+  flex: none;
+  /* Sepia, not stamp-red: at this size a red mark competed with the one red
+     thing on the page that should be shouting (the primary button), and three
+     of them read as three accents. Constant, like everything else on a print.
+     6.0:1 on the #e2d3b5 field. */
+  color: #5c4726;
+  /* Full strength at a thread's width, rather than a thick line at 70% —
+     opacity on a 1px stroke just makes it mushy. */
+  opacity: 1;
+  stroke-width: 1.8;
 }
 
 .card-body {
@@ -788,6 +905,8 @@ h2 {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-xxl);
+  padding: var(--space-xxl) var(--space-xl);
+  transform: rotate(0.3deg);
 }
 
 .why-grid .fleuron {
@@ -815,7 +934,11 @@ h2 {
   font-family: "Fraunces", serif;
   font-style: italic;
   font-variation-settings: "opsz" 9, "SOFT" 20, "WONK" 1;
-  color: var(--text2);
+  /* `--text2` is tuned for the kraft table (4.95:1) but `.closing` is a
+     `.section-sunken` band, where the same colour is only 3.53:1 — the one
+     pairing on this page that never cleared. `--ink-soft` is 4.81:1 on
+     `--surface-sunken` light and 13.0:1 dark. */
+  color: var(--ink-soft);
   font-size: 17px;
   margin: 0 0 var(--space-sm);
 }
@@ -883,8 +1006,16 @@ h2 {
 }
 
 /* ---------- Prose pages (privacy/terms) ---------- */
+/* Same box as `.prose-content` below, so the title and the card under it share
+   one left edge. The `padding` shorthand here also used to zero out `.wrap`'s
+   `0 var(--space-lg)` gutter (this rule wins on source order), which put `<h1>`
+   hard against the left edge of the phone screen. */
 .page-header {
-  padding: var(--rhythm-bookend) 0 var(--rhythm-tight);
+  box-sizing: border-box;
+  width: calc(100% - 2 * var(--space-lg));
+  max-width: var(--measure-prose);
+  margin-inline: auto;
+  padding: var(--rhythm-loose) var(--space-xl) var(--rhythm-tight);
 }
 
 .page-header h1 {
@@ -911,7 +1042,15 @@ h2 {
   line-height: 28px;
   color: var(--ink);
   font-variant-numeric: oldstyle-nums;
-  padding-bottom: var(--rhythm-normal);
+  /* Overrides `.prose`'s own box so the whole legal text is one index card on
+     the table, matching `/about`'s hero and why-grid. Not rotated: it runs to
+     several thousand pixels, and even a quarter of a degree throws the far
+     end of that off the side of a phone. */
+  box-sizing: border-box;
+  width: calc(100% - 2 * var(--space-lg));
+  max-width: var(--measure-prose);
+  margin: 0 auto var(--rhythm-loose);
+  padding: var(--space-xxl) var(--space-xl) var(--rhythm-tight);
 }
 
 .prose-content h2 {
@@ -981,6 +1120,26 @@ h2 {
   }
 }
 
+/* Under 861px the hero card is the full column width, so its rotation swings
+   further; the cards give back a little side padding to keep the 40px
+   headline on two lines and stay clear of the `.wrap` gutter. */
+@media (max-width: 860px) {
+  .hero-copy {
+    padding: var(--space-xl) var(--space-lg);
+    transform: rotate(-0.35deg);
+  }
+  .why-grid {
+    padding: var(--space-xl) var(--space-lg);
+    transform: rotate(0.25deg);
+  }
+  .prose-content {
+    padding: var(--space-xl) var(--space-lg) var(--space-xxl);
+  }
+  .page-header {
+    padding: var(--space-xxl) var(--space-lg) var(--space-xl);
+  }
+}
+
 @media (max-width: 640px) {
   .site-header .wrap {
     min-height: 64px;
@@ -994,8 +1153,10 @@ h2 {
   section {
     padding: var(--rhythm-tight) 0;
   }
+  /* The hero card starts near the top of the phone screen — the old 48px of
+     bare table above it was the first thing that read as "flat tan slab". */
   .hero {
-    padding: var(--rhythm-normal) 0 var(--space-xl);
+    padding: var(--space-xxl) 0 var(--space-xxl);
   }
   #examples,
   #why {
@@ -1012,5 +1173,15 @@ h2 {
   }
   .step-number {
     font-size: 32px;
+  }
+  /* A snapshot is a small object lying on a table, not a full-bleed panel. At
+     one full-width column the print ran 358px across and its 4:5 field alone
+     was 430px tall — most of a phone screen of blank paper, which is what made
+     even a modest placeholder mark look like a photo that failed to load.
+     Narrowed and centred, the three read as three prints laid out in a row. */
+  .cards {
+    grid-template-columns: min(288px, 100%);
+    justify-content: center;
+    gap: var(--space-xxxl);
   }
 }

@@ -7,7 +7,7 @@
  * HTMLRewriter OG injection on `/item/:id`.
  */
 import { test, expect, onScreen } from "./support/fixtures";
-import { uniqueTitle } from "./support/api";
+import { freshClientIp, uniqueTitle } from "./support/api";
 import { makePng } from "./support/png";
 
 const STORY =
@@ -28,7 +28,11 @@ test("a giver walks the five steps and the keepsake goes live", async ({ page, r
   const fileChooser = await fileChooserPromise;
   // A real, decodable PNG: the client decodes it with `createImageBitmap` and
   // rejects anything under 320px on the short edge before uploading.
-  await fileChooser.setFiles({ name: "keepsake.png", mimeType: "image/png", buffer: makePng(640, 800) });
+  await fileChooser.setFiles({
+    name: "keepsake.png",
+    mimeType: "image/png",
+    buffer: makePng(640, 800),
+  });
 
   // The "Cover" badge only renders once the tile's status is `done`, i.e.
   // once the resize + `PUT /api/photos` round trip has actually landed.
@@ -42,6 +46,14 @@ test("a giver walks the five steps and the keepsake goes live", async ({ page, r
 
   // --- 3. Details ----------------------------------------------------------
   await expect(page.getByText("A few details.")).toBeVisible();
+  // Autofill: `POST /api/photos/:id/suggest` (instant under `MOCK_AI=1`,
+  // see `apps/api/src/suggest/suggest.ts`'s `MOCK_SUGGESTION`) is fired by
+  // `<SuggestionFetcher>` the moment the cover photo finishes uploading in
+  // step 1, and the reducer pre-fills the title from it — this is the
+  // assertion that would have caught the flow never wiring the endpoint up
+  // at all.
+  await expect(page.getByLabel("Title")).toHaveValue("Blue ceramic mug");
+  await expect(page.getByText("Filled in from your photo. Change anything.")).toBeVisible();
   await page.getByLabel("Title").fill(title);
   await page.getByLabel("Home & kitchen", { exact: true }).click();
   await page.getByLabel("Postcode").fill("02144");
@@ -55,6 +67,10 @@ test("a giver walks the five steps and the keepsake goes live", async ({ page, r
 
   // --- 5. Review and submit ------------------------------------------------
   await expect(page.getByText("Take a last look.")).toBeVisible();
+  // The gap that let the cover photo go missing from this step entirely:
+  // the print card must actually render an image, not just a photo count.
+  await expect(page.getByAltText("Cover photo")).toBeVisible();
+  await onScreen(page, "I'm 18 or older").click();
   await onScreen(page, "Give it").click();
 
   // The breathing-stamp reviewing state, then the settled one. The screen
@@ -75,7 +91,16 @@ test("a giver walks the five steps and the keepsake goes live", async ({ page, r
 
   // And the shell a link unfurler sees carries the listing's own title,
   // injected server-side by `apps/api/src/routes/item.ts` — no JS involved.
-  const shell = await request.get(`/item/${listingId}`);
+  // The `request` fixture is its own `APIRequestContext`, separate from the
+  // page's browser context, so it doesn't inherit the `CF-Connecting-IP` the
+  // `context` fixture set — without an explicit one here this call would
+  // land on the shared "unknown" bucket `GET /item/:id`'s `burst("RL_READ")`
+  // falls back to (`clientIPFrom`), rather than this test's own address
+  // (`freshClientIp()` in `./support/api`'s own doc comment explains why the
+  // whole suite would otherwise rate-limit itself).
+  const shell = await request.get(`/item/${listingId}`, {
+    headers: { "CF-Connecting-IP": freshClientIp() },
+  });
   expect(shell.status()).toBe(200);
   const html = await shell.text();
   expect(html).toContain(`<title>${title} — Keepsake</title>`);

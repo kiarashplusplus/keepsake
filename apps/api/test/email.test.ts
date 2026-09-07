@@ -99,6 +99,7 @@ describe("POST /api/me/email + GET /api/me/email/verify", () => {
         postal_code: "02144",
         photo_ids: [photo.id],
         email: "on-create@keepsake.ing",
+        age_attested: true,
       }),
     });
     expect(res.status).toBe(201);
@@ -290,11 +291,19 @@ describe("email subjects strip CR/LF from the listing title (issue #20)", () => 
     const res = await SELF.fetch(`http://x/api/listings/${listingId}/requests`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "CF-Connecting-IP": freshClientIp() },
-      body: JSON.stringify({ note: "This would mean so much, thank you for considering us.", email: "requester@keepsake.ing" }),
+      body: JSON.stringify({
+        note: "This would mean so much, thank you for considering us.",
+        email: "requester@keepsake.ing",
+        age_attested: true,
+      }),
     });
     expect(res.status).toBe(201);
 
-    expect(sent).toHaveLength(1);
+    // Two sends: the giver's new-request notification (subject under test
+    // below), then the requester's own "we passed your note along"
+    // confirmation — see requests.test.ts's happy-path test for the full
+    // rationale.
+    expect(sent).toHaveLength(2);
     const subject = sent[0]?.subject ?? "";
     expect(subject).not.toMatch(/[\r\n]/);
     expect(subject).toContain("Grandma's");

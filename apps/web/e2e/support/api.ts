@@ -123,6 +123,7 @@ export async function createApprovedListing(
       country: "US",
       postal_code: options.postalCode ?? "02144",
       photo_ids: [photo.id],
+      age_attested: true,
       ...(options.email !== undefined ? { email: options.email } : {}),
     },
   });
@@ -146,7 +147,7 @@ export async function sendRequest(
 ): Promise<{ id: string }> {
   const response = await request.post(`/api/listings/${listingId}/requests`, {
     headers: { "CF-Connecting-IP": freshClientIp() },
-    data: body,
+    data: { ...body, age_attested: true },
   });
   return readData<{ id: string }>(response);
 }

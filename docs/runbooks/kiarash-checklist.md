@@ -53,10 +53,23 @@ sitemap all use the real domain. Verified: `/health` 200, `/`, `/about`, `/give/
 
 When you say go, I will:
 1. Apply the migrations and load the postal-code table into the production database.
-2. Set the production secrets (`TURNSTILE_SECRET`, `ADMIN_TOKEN`, optional `SENTRY_DSN`).
+2. Set the production secrets (`TURNSTILE_SECRET`, `ADMIN_TOKEN`, and **`SENTRY_DSN` — not
+   optional**). Without a DSN, every `Sentry.captureException` in the Worker is a silent no-op:
+   the auto-hide alert, the cron-failure alert and every unhandled route error all go nowhere.
+   This is launch audit finding 4, and it is the single cheapest thing on this list.
 3. Deploy `keepsake-production` and check `/health` reports the exact commit.
 4. Ask you to add the custom domain `keepsake.ing` (same clicks as step 3) — I can't create it.
-5. Post the first real keepsake from your phone and watch it through moderation.
+5. Set the repository variable **`PRODUCTION_LIVE = true`** (Settings → Secrets and variables →
+   Actions → Variables). That is what turns on the production half of the every-15-minutes
+   `/health` check in `.github/workflows/uptime.yml`. If it is forgotten, the workflow notices —
+   it fails with "production is live but unmonitored" as soon as `keepsake.ing/health` answers
+   while the variable is unset — but setting it here saves the false alarm.
+6. Post the first real keepsake from your phone and watch it through moderation.
+7. Confirm `robots.txt` differs between the two hosts: `curl https://keepsake.ing/robots.txt`
+   must show `Allow: /` and a `Sitemap:` line, and `curl https://preview.keepsake.ing/robots.txt`
+   must show `Disallow: /` with `https://preview.keepsake.ing/sitemap.xml` returning 404. Preview
+   was fully indexable until 2026-09-06 (launch audit finding 2); this is the one-command check
+   that it still is not.
 
 ---
 

@@ -8,9 +8,13 @@
  * `given` listings are intentionally omitted — they're still individually
  * reachable (`GET /api/listings/:id`, `/item/:id`) but no longer something
  * a search engine should be pointed at as "available".
+ *
+ * Served only on production. Every other environment 404s here — see the
+ * comment on the handler and `src/routes/robots.ts`.
  */
 import { Hono } from "hono";
 import type { Env } from "../env.js";
+import { isProduction } from "../env.js";
 
 export const sitemapRoutes = new Hono<{ Bindings: Env }>();
 
@@ -21,6 +25,21 @@ function escapeXml(input: string): string {
 }
 
 sitemapRoutes.get("/", async (c) => {
+  // Launch audit finding 2: this handler builds every URL from `SITE_URL`,
+  // which on preview is the preview host — so preview published a complete,
+  // crawlable index of a clone of the product, listing real people's
+  // keepsakes under a hostname whose notification email is dropped. Only
+  // production has a sitemap worth serving; everywhere else this is a 404,
+  // matching `/robots.txt`'s blanket disallow on the same deploys. 404 (not
+  // an empty `<urlset/>`) because an empty sitemap is still a live sitemap: a
+  // crawler that finds one keeps re-fetching it, and Search Console will
+  // happily accept a submission for it.
+  if (!isProduction(c.env)) {
+    c.header("Content-Type", "text/plain; charset=utf-8");
+    c.header("X-Robots-Tag", "noindex, nofollow");
+    return c.body("Not found\n", 404);
+  }
+
   const siteUrl = c.env.SITE_URL;
   const now = new Date().toISOString();
 

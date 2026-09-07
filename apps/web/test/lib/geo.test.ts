@@ -23,7 +23,7 @@ describe("formatDistance", () => {
 
 describe("serialize/deserializeLocationPref", () => {
   it("round trips a full preference", () => {
-    const pref: LocationPref = { mode: "coords", country: "GB", postal: "", lat: 51.5, lng: -0.1, radius: 50 };
+    const pref: LocationPref = { mode: "coords", country: "CA", postal: "", lat: 51.5, lng: -0.1, radius: 50 };
     expect(deserializeLocationPref(serializeLocationPref(pref))).toEqual(pref);
   });
 

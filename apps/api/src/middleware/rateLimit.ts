@@ -3,16 +3,30 @@
  * comment and `src/moderation/budget.ts`'s header:
  *
  * - `burst(...)` wraps a `[[ratelimits]]` binding (`RL_READ`, `RL_CREATE`, …):
- *   a short (10s/60s) per-minute burst brake at the edge, keyed by a digest
- *   of the caller's IP. Bindings are absent in the vitest-pool-workers test
- *   runtime (miniflare has no local rate-limiting emulator), so this treats a
- *   missing binding as "allowed" rather than failing every test that exercises
- *   a write route.
+ *   a short (10s/60s) per-minute **best-effort** burst brake at the edge,
+ *   keyed by a digest of the caller's IP. "Best-effort" is load-bearing, not
+ *   hedging (issue #8 / launch audit finding 10): Cloudflare's own docs for
+ *   this binding call it "permissive, eventually consistent, and
+ *   intentionally designed to not be used as an accurate accounting
+ *   system" — counters are cached per-colo and reconciled asynchronously.
+ *   Measured directly: `RL_UPLOAD` configured at 10/60s let 26 consecutive
+ *   requests through before the first 429. That's Cloudflare's documented
+ *   behavior working as designed, not a bug in how `.limit()` is called
+ *   here — see `wrangler.toml`'s `[[ratelimits]]` comment for the full
+ *   citation. Nothing security-critical may treat this number as exact;
+ *   `dailyBudget(...)` below is the actual hard cap. Bindings are also
+ *   absent in the vitest-pool-workers test runtime (miniflare has no local
+ *   rate-limiting emulator), so this treats a missing binding as "allowed"
+ *   rather than failing every test that exercises a write route — a second,
+ *   unrelated reason this was never going to be the precise layer.
  * - `dailyBudget(...)` wraps the KV calendar-day counters in `budget.ts` for
  *   the three non-AI kinds this Worker rations: `listing`, `request`,
  *   `upload`. (`mod_text`/`mod_image` are checked inside the moderation
  *   pipeline itself, not as HTTP middleware, since that check happens in a
- *   background `waitUntil`, not on the request/response path.)
+ *   background `waitUntil`, not on the request/response path.) Unlike
+ *   `burst(...)`, this one *is* exact — a real KV read-then-write, per
+ *   caller, per calendar day — so it's the layer anything security-critical
+ *   should actually rely on.
  */
 import type { Context, Next } from "hono";
 import type { Env } from "../env.js";

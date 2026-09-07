@@ -15,6 +15,29 @@
     <meta property="og:image" content="https://keepsake.ing/og-default.png" />
     <meta property="og:url" content="https://keepsake.ing/terms" />
     <link rel="stylesheet" href="/site.css" />
+    <!-- Scoped to this one table rather than added to site.css: the prohibited-items table is
+         the only <table> on the marketing site, so a page-local style avoids touching a shared
+         stylesheet for a single-page need. -->
+    <style>
+      .prohibited-items td {
+        padding: 0.5em 0.75em;
+        border-bottom: 1px solid rgba(128, 128, 128, 0.35);
+        vertical-align: top;
+      }
+      .prohibited-items tr:last-child td {
+        border-bottom: none;
+      }
+    </style>
+    <!-- Consent. `/consent.js` is the single shared implementation of the
+         store, the banner and every third-party loader — the same file the
+         Expo-web app loads from `apps/web/app/+html.tsx`, so one decision
+         covers these pages and the app. The two ids are substituted at build
+         time by `apps/web/scripts/copy-site.mjs` from `EXPO_PUBLIC_*`; an
+         unsubstituted `%NAME%` placeholder means "not configured" and nothing
+         third-party loads. -->
+    <meta name="ks-google-ads-id" content="%EXPO_PUBLIC_GOOGLE_ADS_ID%" />
+    <meta name="ks-cf-beacon-token" content="%EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN%" />
+    <script src="/consent.js" defer></script>
     <script>
       try {
         var t = localStorage.getItem("keepsake.theme.v1");
@@ -47,6 +70,27 @@
           the deal, in plain language.
         </p>
 
+        <h2>Where Keepsake is available</h2>
+        <p>
+          Keepsake currently serves the United States and Canada. It isn't available in the United
+          Kingdom right now — not because of anything about you, but because the UK's Online Safety
+          Act asks every service like this one for a written safety assessment, a children's-access
+          review, and a formal complaints process, and we haven't taken that work on yet for a free
+          project run by one person. This may change; we'd rather say so plainly than pretend it
+          isn't a choice.
+        </p>
+
+        <h2>Minimum age</h2>
+        <p>
+          You must be 18 or older to give or request anything on Keepsake, and we ask you to
+          confirm that each time you post a listing or ask for one. We can't verify anyone's age —
+          this is a self-declared limit, not an age-verification system. We set it higher than a
+          typical content site's 13-or-so because Keepsake's whole premise is arranging in-person
+          meetings between strangers, which is a different, higher-stakes thing than reading or
+          posting content. If we learn someone using Keepsake is under 18, we'll remove their
+          access.
+        </p>
+
         <h2>Gifting only, never sales</h2>
         <p>
           Keepsake exists to help people pass sentimental objects on to someone who'll love them.
@@ -74,6 +118,101 @@
           </li>
           <li>Anything sexually explicit, hateful, or intended to harass.</li>
         </ul>
+
+        <h2>Specific items — what's actually illegal versus what's just a bad idea</h2>
+        <p>
+          The table below spells out some categories in more detail, because we think a rule you
+          can't check for yourself isn't much of a rule. The "Basis" column matters: where a row
+          rests on an actual statute, we say so. Where it doesn't — where we're banning something
+          because it's genuinely hazardous and unverifiable, not because a law says so — we call
+          that a hazard-only rule instead of calling it illegal. A free bike helmet isn't illegal to
+          give away, for instance; we still ask you not to, because we have no way to check its
+          impact history, but we're not going to lie to you about why.
+        </p>
+        <table class="prohibited-items" style="width:100%;border-collapse:collapse;margin:1.5em 0;font-size:0.95em;">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:0.5em 0.75em;border-bottom:2px solid currentColor;">Item</th>
+              <th style="text-align:left;padding:0.5em 0.75em;border-bottom:2px solid currentColor;">Rule</th>
+              <th style="text-align:left;padding:0.5em 0.75em;border-bottom:2px solid currentColor;">Basis</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Cribs made before June 28, 2011, and all drop-side cribs</td>
+              <td>Do not give away</td>
+              <td>Statute-adjacent — the CPSC's own written guidance says these "should not [be]
+                resold, donate[d] or g[iven] away," interpreting the federal crib safety rules</td>
+            </tr>
+            <tr>
+              <td>Inclined sleepers and crib bumpers</td>
+              <td>Banned — do not give away, regardless of age</td>
+              <td>Statute (federal law, Pub. L. 117-126)</td>
+            </tr>
+            <tr>
+              <td>Used children's products with lead above federal limits (except metal jewelry)</td>
+              <td>Generally fine once used, unless you actually know it violates the limit</td>
+              <td>Statute (15 U.S.C. §1278a(b)(7) exempts used children's products from lead
+                limits even when donated)</td>
+            </tr>
+            <tr>
+              <td>Children's metal jewelry (used)</td>
+              <td>Do not give away without verifying lead content</td>
+              <td>Statute — specifically carved out of the used-goods exemption above</td>
+            </tr>
+            <tr>
+              <td>Car seats</td>
+              <td>Allowed — disclose age and any crash history in your listing</td>
+              <td>Hazard-only. Not federally restricted once first sold; we ask for disclosure
+                because we can't verify crash or recall history ourselves</td>
+            </tr>
+            <tr>
+              <td>Helmets (bike, sports)</td>
+              <td>Allowed — disclose age and any impact history in your listing</td>
+              <td>Hazard-only. No law restricts giving these away; we ask for disclosure for the
+                same reason as car seats</td>
+            </tr>
+            <tr>
+              <td>Radioactive antiques (vaseline glass, some Fiestaware)</td>
+              <td>Allowed — note "not for food or drink contact"</td>
+              <td>Statute — expressly exempt under federal regulation (10 CFR §§30.15/40.13)</td>
+            </tr>
+            <tr>
+              <td>Weapons, ammunition, explosives</td>
+              <td>Do not give away</td>
+              <td>Statute, varying by item and jurisdiction — several categories require a
+                licensed transfer wherever you are</td>
+            </tr>
+            <tr>
+              <td>Drugs, controlled substances</td>
+              <td>Do not give away</td>
+              <td>Statute (federal and state controlled-substances law)</td>
+            </tr>
+            <tr>
+              <td>Live animals</td>
+              <td>Do not give away through Keepsake</td>
+              <td>Hazard-only as a platform-fit decision (we can't verify care, transport, or
+                welfare conditions); many places also have their own statutes covering animal
+                transfers specifically</td>
+            </tr>
+            <tr>
+              <td>Recalled products generally, beyond the categories above</td>
+              <td>Do not give away if you actually know about the recall</td>
+              <td>Hazard-only as a general platform rule, modeled on the "actual knowledge"
+                standard federal law uses for the specific categories above — but not itself a
+                universal statute</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          One row above deserves an extra word of honesty: the U.S. Consumer Product Safety
+          Commission's own published guidance says its rules reach "individuals holding yard sales"
+          and that people who give away used products for free "cannot sell or donate products that
+          do not meet the requirements of the law." No court has actually decided whether that
+          reach extends to a free, one-to-one platform like this one — it's the regulator's stated
+          position, not a settled legal fact, and we're telling you that distinction rather than
+          dressing up an untested claim as certain.
+        </p>
 
         <h2>We may remove listings</h2>
         <p>
@@ -124,6 +263,7 @@
         <nav class="footer-links" aria-label="Footer">
           <a href="/privacy">Privacy</a>
           <a href="/terms" aria-current="page">Terms</a>
+          <button type="button" data-ks-consent>Privacy choices</button>
           <span>Data: postal codes © GeoNames, CC BY 4.0</span>
         </nav>
         <span class="footer-aside">Made in Texas</span>
