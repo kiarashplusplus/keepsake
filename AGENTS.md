@@ -187,7 +187,7 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
   number is a shared namespace: two sessions cut from the same `main` both claim `0009`, the one
   that merges second must renumber on rebase, and renaming a file the shared preview has already
   applied makes the next deploy re-run its SQL. That broke `deploy (preview)` for every
-  concurrent pull request once already (#99). The existing `0001`–`0008` stay exactly as they
+  concurrent pull request once already (#99). The existing `0001`–`0009` stay exactly as they
   are — renaming them would *be* the bug. `node tools/preflight/preflight.mjs --only
   migrations,migration-drift` enforces both halves; `docs/runbooks/migrations.md` has the detail.
 - **Never edit, rename or delete a migration that has landed on `main`, or that this branch has
@@ -241,7 +241,9 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
   staleness threshold live together in `apps/api/src/cron/registry.ts`; `wrangler.toml`'s
   `[triggers] crons` has to restate the schedule because Cloudflare reads that file, and
   `index.ts`'s `scheduled()` switch has to match the literal string (preflight's `cron-triggers`
-  check enforces both). The part that surprises people: `GET /api/admin/health` derives `ok` from
+  check enforces the `wrangler.toml` ↔ `scheduled()` pair only — it never reads `registry.ts`,
+  so a job added to `CRON_JOBS` that nothing dispatches still passes it clean, #176). The part
+  that surprises people: `GET /api/admin/health` derives `ok` from
   **every** job in the registry, so adding one turns `ok: true` into `ok: false` in any test that
   seeds only the heartbeats it knew about. That is the guard working — a job nothing watches is
   the bug — but budget for updating those tests.
@@ -261,7 +263,14 @@ pnpm --filter @keepsake/web e2e    # 84 specs, mobile and desktop
 node tools/preflight/preflight.mjs
 ```
 
-The accessibility specs carry **no exclusions**. If your change fails them, it is your change.
+The accessibility specs carry **no per-rule or per-selector exclusions** — but two things still
+narrow what they can catch, so "green" is not "everything was scanned". `a11y.spec.ts` fails only
+on `serious` and `critical` impacts, so `moderate`/`minor` violations are reported and never fail
+the run; and the shared fixture (`e2e/support/fixtures.ts`) seeds a consent decision into every
+context, so the consent banner is never rendered during a scan and has therefore never been
+scanned at all (#173 — `fixtures.ts`'s own comment claims a banner a11y scan builds its own
+context, and no such scan exists). Within that scope: if your change fails them, it is your
+change.
 
 ## Where the thinking is written down
 
