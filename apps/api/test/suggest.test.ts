@@ -1,7 +1,8 @@
 import { env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { MODELS } from "../src/models.js";
-import { authHeaders, freshOwnerToken, readErr, readOk, setTestEnvVar, uploadPhoto } from "./helpers.js";
+import { todayISO } from "../src/moderation/budget.js";
+import { authHeaders, freshClientIp, freshOwnerToken, readErr, readOk, setTestEnvVar, uploadPhoto } from "./helpers.js";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
 
 interface SuggestResponseBody {
@@ -46,6 +47,17 @@ async function suggestFor(photoId: string, token: string): Promise<Response> {
     method: "POST",
     headers: authHeaders(token),
   });
+}
+
+/** Every successful (and every `SUGGEST_DAILY_BUDGET=0`-denied-at-zero-cost)
+ * call in this file shares one KV key for the day (`budget:suggest:<date>`,
+ * see `moderation/budget.ts`'s "Global key format" doc comment) — tests
+ * earlier in this file that actually reach `checkAndBump` leave that counter
+ * non-zero. A test asserting "the Nth call is refused" for a specific,
+ * non-zero N needs to start from a known count or it becomes order-dependent
+ * on how many prior tests in the file happened to succeed first. */
+async function resetGlobalSuggestBudget(): Promise<void> {
+  await env.KV.delete(`budget:suggest:${todayISO()}`);
 }
 
 beforeEach(() => {
@@ -214,6 +226,93 @@ describe("POST /api/photos/:id/suggest", () => {
     expect(error.code).toBe("rate_limited");
     expect(typeof error.retryAfter).toBe("number");
 
+    setTestEnvVar("SUGGEST_DAILY_BUDGET", "1000");
+  });
+
+  // Issue #45: a var declared in wrangler.toml and read by nothing (or read
+  // but ignored by a hardcoded check) is the exact bug this project has
+  // already shipped twice (MAX_PHOTOS/IMAGE_TRANSFORMS_ENABLED, RL_READ).
+  // Denying at budget=0 (the test above) proves *some* guard exists, but a
+  // route that special-cased "if the configured limit is 0, deny" would pass
+  // that test while never actually reading the var for any other value. This
+  // test moves the ceiling to two different non-zero numbers and checks the
+  // refusal point moves with it — the only way that happens is if the value
+  // read from `env.SUGGEST_DAILY_BUDGET` is the number actually compared
+  // against the running count.
+  it("the global daily budget's refusal point tracks SUGGEST_DAILY_BUDGET's value, not a hardcoded number", async () => {
+    mockSuggestAi(() => VALID_SUGGESTION_JSON);
+    setTestEnvVar("SUGGEST_IP_DAILY_BUDGET", "1000"); // keep the per-IP ceiling out of the way
+
+    await resetGlobalSuggestBudget();
+    setTestEnvVar("SUGGEST_DAILY_BUDGET", "1");
+    const tokenA = freshOwnerToken();
+    const photoA = await readOk<PublicPhoto>(await uploadPhoto({ token: tokenA }));
+    const firstAtOne = await suggestFor(photoA.id, tokenA);
+    expect(firstAtOne.status).toBe(200);
+    // A different owner and a different CF-Connecting-IP (authHeaders mints
+    // a fresh one per call) — the only counter that can explain this denial
+    // is the *global* one, since this caller's own per-IP count is still 0.
+    const tokenB = freshOwnerToken();
+    const photoB = await readOk<PublicPhoto>(await uploadPhoto({ token: tokenB }));
+    const secondAtOne = await suggestFor(photoB.id, tokenB);
+    expect(secondAtOne.status).toBe(429);
+
+    // Raise the ceiling to 3 and reset the counter: now three distinct
+    // callers get through and a fourth is refused. If the earlier denial had
+    // come from something other than SUGGEST_DAILY_BUDGET, raising the var
+    // would not move where the refusal starts.
+    await resetGlobalSuggestBudget();
+    setTestEnvVar("SUGGEST_DAILY_BUDGET", "3");
+    for (let i = 0; i < 3; i++) {
+      const token = freshOwnerToken();
+      const photo = await readOk<PublicPhoto>(await uploadPhoto({ token }));
+      const res = await suggestFor(photo.id, token);
+      expect(res.status).toBe(200);
+    }
+    const tokenOver = freshOwnerToken();
+    const photoOver = await readOk<PublicPhoto>(await uploadPhoto({ token: tokenOver }));
+    const overBudget = await suggestFor(photoOver.id, tokenOver);
+    expect(overBudget.status).toBe(429);
+    const error = await readErr(overBudget);
+    expect(error.code).toBe("rate_limited");
+
+    setTestEnvVar("SUGGEST_DAILY_BUDGET", "1000");
+    setTestEnvVar("SUGGEST_IP_DAILY_BUDGET", "30");
+  });
+
+  // SUGGEST_IP_DAILY_BUDGET had no HTTP-level coverage at all before this —
+  // only the generic `checkAndBump` primitive was exercised (budget.test.ts),
+  // with numbers unrelated to this route's actual env var. This drives the
+  // real route from one fixed CF-Connecting-IP, with the global budget wide
+  // open, so any refusal is attributable only to the per-IP ceiling — then
+  // repeats it at a second value to prove that ceiling, too, tracks the var
+  // rather than a number baked into the route.
+  it("the per-IP daily budget's refusal point tracks SUGGEST_IP_DAILY_BUDGET's value even with the global budget wide open", async () => {
+    mockSuggestAi(() => VALID_SUGGESTION_JSON);
+    setTestEnvVar("SUGGEST_DAILY_BUDGET", "1000");
+
+    const runFromOneIpWithLimit = async (limit: string, allowedCount: number) => {
+      setTestEnvVar("SUGGEST_IP_DAILY_BUDGET", limit);
+      const token = freshOwnerToken();
+      const photo = await readOk<PublicPhoto>(await uploadPhoto({ token }));
+      const ip = freshClientIp();
+      const headers = { Authorization: `Bearer ${token}`, "CF-Connecting-IP": ip };
+      const call = () => SELF.fetch(`http://x/api/photos/${photo.id}/suggest`, { method: "POST", headers });
+
+      for (let i = 0; i < allowedCount; i++) {
+        const res = await call();
+        expect(res.status).toBe(200);
+      }
+      const overBudget = await call();
+      expect(overBudget.status).toBe(429);
+      const error = await readErr(overBudget);
+      expect(error.code).toBe("rate_limited");
+    };
+
+    await runFromOneIpWithLimit("2", 2);
+    await runFromOneIpWithLimit("1", 1);
+
+    setTestEnvVar("SUGGEST_IP_DAILY_BUDGET", "30");
     setTestEnvVar("SUGGEST_DAILY_BUDGET", "1000");
   });
 
