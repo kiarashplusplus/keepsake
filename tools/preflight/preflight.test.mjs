@@ -1435,6 +1435,70 @@ test("public-env: skips when nothing is present to scan", () => {
   assert.equal(result.status, "skip");
 });
 
+// ── public-env-passthrough ─────────────────────────────────────────────
+//
+// #175: `.env.example` declared seven EXPO_PUBLIC_* names and deploy.yml
+// passed four, and nothing reconciled the two lists — `env-parity` excludes
+// EXPO_PUBLIC_* on purpose, and verify-public-env.mjs derived its
+// expectations from the very environment that was missing the variable.
+
+const DEPLOY_WORKFLOW = `name: Deploy
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Export web
+        env:
+          EXPO_PUBLIC_SITE_URL: \${{ vars.EXPO_PUBLIC_SITE_URL }}
+          EXPO_PUBLIC_ENV: \${{ env.DEPLOY_ENV }}
+        run: pnpm --filter @keepsake/web export
+`;
+
+test("public-env-passthrough: passes when the two lists agree", () => {
+  const result = runOne("public-env-passthrough", {
+    ".env.example": "ENVIRONMENT=development\nEXPO_PUBLIC_SITE_URL=http://localhost:8081\nEXPO_PUBLIC_ENV=development\n",
+    ".github/workflows/deploy.yml": DEPLOY_WORKFLOW,
+  });
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  assert.match(result.details[0], /2 EXPO_PUBLIC_\* name\(s\)/);
+});
+
+test("public-env-passthrough: fails on a declared name deploy.yml never passes (#175's shape)", () => {
+  const result = runOne("public-env-passthrough", {
+    ".env.example": "EXPO_PUBLIC_SITE_URL=http://localhost:8081\nEXPO_PUBLIC_GOOGLE_ADS_ID=\nEXPO_PUBLIC_ENV=development\n",
+    ".github/workflows/deploy.yml": DEPLOY_WORKFLOW,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /declares EXPO_PUBLIC_GOOGLE_ADS_ID but .* never passes it/);
+});
+
+test("public-env-passthrough: fails on a name deploy.yml passes that nothing declares", () => {
+  const result = runOne("public-env-passthrough", {
+    ".env.example": "EXPO_PUBLIC_ENV=development\n",
+    ".github/workflows/deploy.yml": DEPLOY_WORKFLOW,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /passes EXPO_PUBLIC_SITE_URL, which .* does not declare/);
+});
+
+test("public-env-passthrough: a commented-out declaration is not a declaration", () => {
+  const result = runOne("public-env-passthrough", {
+    ".env.example": "EXPO_PUBLIC_SITE_URL=x\nEXPO_PUBLIC_ENV=development\n# EXPO_PUBLIC_LATER=\n",
+    ".github/workflows/deploy.yml": DEPLOY_WORKFLOW,
+  });
+  assert.equal(result.status, "pass", result.details.join("\n"));
+});
+
+test("public-env-passthrough: this repository's deploy.yml passes every declared name", () => {
+  const result = runChecks(["public-env-passthrough"], REPO_ROOT)[0];
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  const deploy = createContext(REPO_ROOT).readText(".github/workflows/deploy.yml");
+  assert.match(deploy, /EXPO_PUBLIC_GOOGLE_ADS_ID:/, "#175's fix: the ads ids are wired through");
+});
+
 // ── shell-syntax ───────────────────────────────────────────────────────
 
 test("shell-syntax: passes for a valid script", () => {

@@ -1918,6 +1918,62 @@ function checkShellSyntax(ctx) {
   return { status: "pass", details: summary };
 }
 
+// ── public-env-passthrough ─────────────────────────────────────────────────
+//
+// Issue #175, the half that can be settled statically. `.env.example`
+// declares the `EXPO_PUBLIC_*` names the client bundle is supposed to
+// contain; `deploy.yml`'s "Export web" step is the only thing that puts them
+// in the environment `expo export` inlines from. Those two lists disagreed
+// for the life of the ads feature — seven declared, four passed — and nothing
+// reconciled them: `env-parity` deliberately excludes `EXPO_PUBLIC_*` (they
+// are not wrangler vars), and `verify-public-env.mjs` derived its
+// expectations from the same environment that was missing the variable, so a
+// name deploy.yml forgot could never be reported.
+//
+// `verify-public-env.mjs` now catches this against a real bundle, which is
+// the stronger evidence — but only at deploy time. This catches the same
+// mistake on the pull request that makes it.
+
+const DEPLOY_WORKFLOW_PATH = ".github/workflows/deploy.yml";
+const PUBLIC_ENV_DECL_RE = /^[ \t]*(EXPO_PUBLIC_[A-Z0-9_]+)[ \t]*=/gm;
+// An `env:` mapping key in a workflow, i.e. `EXPO_PUBLIC_FOO: ${{ vars.FOO }}`.
+const PUBLIC_ENV_YAML_KEY_RE = /^[ \t]+(EXPO_PUBLIC_[A-Z0-9_]+)[ \t]*:/gm;
+
+function checkPublicEnvPassthrough(ctx) {
+  const envExample = ctx.readText(ENV_EXAMPLE_PATH);
+  if (envExample === null) return { status: "skip", details: [`${ENV_EXAMPLE_PATH} not present`] };
+  const deployText = ctx.readText(DEPLOY_WORKFLOW_PATH);
+  if (deployText === null) return { status: "skip", details: [`${DEPLOY_WORKFLOW_PATH} not present`] };
+
+  const declared = [...new Set([...envExample.matchAll(PUBLIC_ENV_DECL_RE)].map((m) => m[1]))];
+  if (declared.length === 0) {
+    return { status: "skip", details: [`${ENV_EXAMPLE_PATH} declares no EXPO_PUBLIC_* names`] };
+  }
+  const passed = new Set([...deployText.matchAll(PUBLIC_ENV_YAML_KEY_RE)].map((m) => m[1]));
+
+  const details = [];
+  for (const name of declared) {
+    if (passed.has(name)) continue;
+    details.push(
+      `${ENV_EXAMPLE_PATH} declares ${name} but ${DEPLOY_WORKFLOW_PATH} never passes it — it inlines as "" in every deployed bundle, and whatever reads it is dead code that nothing logs (#175)`,
+    );
+  }
+  for (const name of passed) {
+    if (declared.includes(name)) continue;
+    details.push(
+      `${DEPLOY_WORKFLOW_PATH} passes ${name}, which ${ENV_EXAMPLE_PATH} does not declare — the one human-readable list of what the client bundle carries is incomplete`,
+    );
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+  return {
+    status: "pass",
+    details: [
+      `${declared.length} EXPO_PUBLIC_* name(s) declared in ${ENV_EXAMPLE_PATH} and all passed by ${DEPLOY_WORKFLOW_PATH}`,
+    ],
+  };
+}
+
 // ── backup-tables ──────────────────────────────────────────────────────────
 //
 // Issue #164. `wrangler d1 export` refuses this database outright — migration
@@ -2179,6 +2235,7 @@ export const CHECKS = {
   "conflict-markers": { description: "no unresolved <<<<<<< / >>>>>>> in tracked text", run: checkConflictMarkers },
   "lfs-pointers": { description: "apps/api/seeds/*.sql are not unfetched LFS pointers", run: checkLfsPointers },
   "public-env": { description: "EXPO_PUBLIC_* names are never secrets", run: checkPublicEnv },
+  "public-env-passthrough": { description: ".env.example's EXPO_PUBLIC_* block vs what deploy.yml passes to the export", run: checkPublicEnvPassthrough },
   "gh-repo-context": { description: "workflow steps running `gh` can resolve the repo", run: checkGhRepoContext },
   "shell-syntax": { description: "bash -n on every workflow `run:` block and every *.sh under tools/ and .github/", run: checkShellSyntax },
 };
@@ -2210,7 +2267,7 @@ function colorize(text, useColor, ...styles) {
 function printHuman(results, useColor) {
   for (const { name, status, details } of results) {
     const style = STATUS_STYLE[status];
-    const line = `${colorize(style.label.padEnd(5), useColor, ANSI.bold, style.color)} ${name.padEnd(18)} ${details[0] ?? ""}`;
+    const line = `${colorize(style.label.padEnd(5), useColor, ANSI.bold, style.color)} ${name.padEnd(22)} ${details[0] ?? ""}`;
     console.log(line);
     for (const detail of details.slice(1)) {
       console.log(`         ${detail}`);
@@ -2263,7 +2320,7 @@ function main(argv) {
 
   if (args.list) {
     for (const [name, { description }] of Object.entries(CHECKS)) {
-      console.log(`${name.padEnd(18)} ${description}`);
+      console.log(`${name.padEnd(22)} ${description}`);
     }
     return 0;
   }
