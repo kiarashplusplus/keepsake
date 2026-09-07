@@ -3,7 +3,7 @@ import { guardRecipient, recipientDomain, sendMail } from "../src/email/sendMail
 import type { Env } from "../src/env.js";
 import { sanitizeSubject } from "../src/email/templates/shared.js";
 import { env, SELF } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
 import {
   authHeaders,
@@ -313,7 +313,7 @@ describe("POST /api/me/email + GET /api/me/email/verify", () => {
   });
 });
 
-describe("POST /api/recover + POST /api/recover/:token", () => {
+describe("POST /api/recover + POST /api/recover/exchange", () => {
   afterEach(() => removeFakeEmail());
 
   it("still returns {sent:true} for an email with no owner (no enumeration)", async () => {
@@ -348,7 +348,11 @@ describe("POST /api/recover + POST /api/recover/:token", () => {
     expect(link).toBeTruthy();
     const recoverToken = (link as string).split("/recover/")[1];
 
-    const exchangeRes = await SELF.fetch(`http://x/api/recover/${recoverToken}`, { method: "POST" });
+    const exchangeRes = await SELF.fetch("http://x/api/recover/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: recoverToken }),
+    });
     expect(exchangeRes.status).toBe(200);
     const result = await readOk<{ ownerToken: string }>(exchangeRes);
     expect(result.ownerToken).not.toBe(oldToken);
@@ -363,8 +367,90 @@ describe("POST /api/recover + POST /api/recover/:token", () => {
     expect(newRes.status).toBe(200);
 
     // The recovery token itself is single-use.
-    const secondExchange = await SELF.fetch(`http://x/api/recover/${recoverToken}`, { method: "POST" });
+    const secondExchange = await SELF.fetch("http://x/api/recover/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: recoverToken }),
+    });
     expect(secondExchange.status).toBe(401);
+  });
+
+  // Issue #182. Exchanging a recovery token rotates `owners.token_hash` —
+  // full takeover of a giver's dashboard — and it used to travel as
+  // `POST /api/recover/<token>`, a URL path segment. `index.ts`'s `onError`
+  // wrote `path: c.req.path` into a bare `console.error` and into a
+  // `captureException` tag, and Workers Logs keeps every line, so a giver
+  // clicking their emailed link during any request that threw put a *live*
+  // credential into a log store. The fix is the route shape, so what this
+  // pins is the shape: there must be no way to put the token in a URL.
+  it("refuses to exchange a token supplied as a URL path segment", async () => {
+    const sent = installFakeEmail();
+    const ownerToken = freshOwnerToken();
+    await registerOwner(ownerToken);
+    const now = Date.now();
+    await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE token_hash = ?")
+      .bind("path-shape@keepsake.ing", now, await sha256Hex(ownerToken))
+      .run();
+
+    const requested = await SELF.fetch("http://x/api/recover", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "path-shape@keepsake.ing" }),
+    });
+    expect(requested.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    const recoverToken = (sent[0]?.text.match(/https?:\/\/\S+\/recover\/\S+/)?.[0] as string).split("/recover/")[1];
+    expect(recoverToken).toBeTruthy();
+
+    // A real, live, unused token — the strongest form of the assertion,
+    // since a bad token would 401 whatever the route shape was.
+    const viaPath = await SELF.fetch(`http://x/api/recover/${recoverToken}`, { method: "POST" });
+    expect(viaPath.status).toBe(404);
+
+    // And it is still live afterwards, i.e. the 404 is "no such route", not
+    // "the token got spent by the old handler".
+    const viaBody = await SELF.fetch("http://x/api/recover/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: recoverToken }),
+    });
+    expect(viaBody.status).toBe(200);
+  });
+
+  // The other half of #182: whatever `onError` writes into a log field must
+  // not be able to carry a caller's secret. It logs the matched route
+  // *pattern* now, never the concrete path — a string this repo wrote rather
+  // than one a caller supplied. Driven by making D1 throw, which is exactly
+  // the "a D1 blip while a giver clicks their link" case the issue describes.
+  it("logs the route pattern, not the request path, when a request throws", async () => {
+    const secretish = "hQ2n0Xa9Vb7cD3eF5gH8iJ1kL4mN6oP0qR2sT4uV6wY";
+    const logged: unknown[][] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args);
+    };
+    const prepare = vi.spyOn(env.DB, "prepare").mockImplementation(() => {
+      throw new Error("D1_ERROR: simulated 7403");
+    });
+    try {
+      const res = await SELF.fetch("http://x/api/recover/exchange", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: secretish }),
+      });
+      expect(res.status).toBe(500);
+    } finally {
+      prepare.mockRestore();
+      console.error = originalError;
+    }
+
+    const unhandled = logged.find((args) => args[0] === "unhandled error");
+    expect(unhandled).toBeTruthy();
+    const fields = (unhandled as unknown[])[1] as Record<string, unknown>;
+    expect(fields.route).toBe("/api/recover/exchange");
+    // The field that carried the token is gone entirely, not merely cleaned.
+    expect(fields).not.toHaveProperty("path");
+    expect(JSON.stringify(fields)).not.toContain(secretish);
   });
 
   // The email tells the reader when their link stops working. That sentence
