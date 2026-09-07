@@ -158,7 +158,9 @@ is the lock.
 - **Moderation and abuse surface:** #168, #171, #179, #183.
 - **Correctness:** #163, #172, #174, #180, #184, #185, #186, #187.
 - **Ops and backup:** #164 (the documented D1 backup omits `listing_aspects`, and
-  `aspects_backfilled_at` makes the loss unrecoverable), #178.
+  `aspects_backfilled_at` makes the loss unrecoverable), #178 (**fixed** — `orphanSweep` refuses
+  to delete a photo the backup bucket does not have, so the ordering no longer rests on two
+  independent schedulers; still unguarded in production until #157 creates the bucket).
 
 *Workable by anyone (pre-audit):*
 - **#104** — `wrangler dev` dies mid-e2e with no diagnostic and `serve.mjs`'s restart hides it.

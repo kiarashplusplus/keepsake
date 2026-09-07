@@ -32,6 +32,26 @@
  */
 export type Env = Cloudflare.Env & { VECTORIZE?: VectorizeIndex };
 
+/**
+ * The `<bucket>-backup` R2 bucket `tools/backup-photos.mjs` copies photos
+ * into, read (never written) by `cron/orphanSweep.ts` so a photo is not
+ * deleted before its bytes are safe — issue #178.
+ *
+ * Reached through a function rather than `env.PHOTO_BACKUP_BUCKET` because
+ * **it is genuinely absent in production**: `keepsake-photos-production-backup`
+ * does not exist yet (#157), so `wrangler.toml` declares the binding at the
+ * top level and under `[env.preview]` and deliberately not under
+ * `[env.production]`. `wrangler types` generates the binding as non-optional
+ * from the blocks that do exist, which would make the absent case
+ * unreachable-by-type and let the fallback rot — the same reasoning the
+ * `VECTORIZE?` declaration above records, applied where the two environments
+ * really do differ. Returning `R2Bucket | undefined` keeps
+ * `orphanSweep`'s degrade-and-warn path a live, type-checked branch.
+ */
+export function photoBackupBucket(env: Env): R2Bucket | undefined {
+  return (env as { PHOTO_BACKUP_BUCKET?: R2Bucket }).PHOTO_BACKUP_BUCKET;
+}
+
 /** One of the five bindings `/health` and `assertBindings` care about. */
 type CheckedBinding = "DB" | "BUCKET" | "KV" | "AI" | "ASSETS" | "EMAIL";
 
