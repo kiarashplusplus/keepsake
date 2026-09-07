@@ -349,6 +349,11 @@ listingRoutes.post("/:id/given", ownerAuth(), async (c) => {
   return ok(c, serializeOwnerListing(updatedRow, photos, aspects));
 });
 
+// Withdraw deliberately still accepts a `rejected`, `hidden` or
+// `needs_review` listing (issue #162 asked the question explicitly): an owner
+// who wants a taken-down listing gone entirely is doing something legitimate,
+// and refusing here would only teach them to delete it instead. The one-way
+// door is `relist` below, not this guard.
 listingRoutes.post("/:id/withdraw", ownerAuth(), async (c) => {
   const owner = c.get("owner");
   const id = requireParam(c, "id");
@@ -379,16 +384,65 @@ listingRoutes.post("/:id/relist", ownerAuth(), async (c) => {
     return fail(c, "conflict", "Only a withdrawn listing can be relisted.", 409);
   }
 
-  const lastDecision = await c.env.DB.prepare(
-    `SELECT verdict FROM moderation_events WHERE listing_id = ? AND listing_version = ? AND kind = 'decision' ORDER BY created_at DESC LIMIT 1`,
+  // Issue #162. This used to read `kind = 'decision'` only, which meant it
+  // could not see any of the four takedowns this product actually has —
+  // `POST /api/admin/listings/:id/reject`, `.../hide`, the ban sweep (all
+  // three `kind = 'admin'`, see admin.ts's `logAdminEvent`) and the
+  // three-report auto-hide (`kind = 'report_autohide'`, below). None of them
+  // bumps `version`, so the newest `decision` row was still the pipeline's
+  // original `approved` and an owner could undo any of them with
+  // `withdraw` + `relist` — two calls authenticated by nothing but the
+  // device token they already had. Indefinitely, with no cooldown, and the
+  // relisted row dropped out of the admin queue's `report_pressure` view on
+  // the way past.
+  //
+  // So: the newest *status-setting* event of any kind, not the newest
+  // `decision`. `text`/`image` events are excluded because they are
+  // per-model sub-results, not decisions, and `admin`/`request_removed`
+  // (issue #70) is excluded because it is an event about one request inside
+  // the listing and says nothing about the listing's own status.
+  //
+  // `created_at DESC, rowid DESC`: ULIDs are only monotonic across
+  // milliseconds, so two events written in the same millisecond order
+  // randomly by `id`. `rowid` is insertion order, which is the thing we
+  // actually mean, and `moderation_events` is an ordinary rowid table
+  // (0001_init.sql — no `WITHOUT ROWID`).
+  const lastStatusEvent = await c.env.DB.prepare(
+    `SELECT kind, verdict, reason FROM moderation_events
+     WHERE listing_id = ? AND listing_version = ?
+       AND (kind = 'decision'
+            OR kind = 'report_autohide'
+            OR (kind = 'admin' AND verdict IN ('approved', 'restored', 'hidden', 'rejected')))
+     ORDER BY created_at DESC, rowid DESC LIMIT 1`,
   )
     .bind(id, row.version)
-    .first<{ verdict: string }>();
+    .first<{ kind: string; verdict: string; reason: string | null }>();
+
+  // A takedown is never relistable straight back to `approved`, and — the
+  // part that is easy to get wrong — it must not go to `pending` either.
+  // `pending` re-runs the AI pipeline, which is precisely the judgement a
+  // human overrode when they rejected or hid the listing, so the pipeline
+  // would cheerfully re-approve it seconds later and the bypass would be
+  // exactly as complete, just slower. `needs_review` puts it back in front
+  // of a person instead, and `held_for_review` is the honest reason the
+  // owner sees (`MODERATION_REASONS` in @keepsake/contracts/listing).
+  const wasTakenDown =
+    lastStatusEvent !== null &&
+    (lastStatusEvent.kind === "report_autohide" ||
+      (lastStatusEvent.kind === "admin" && (lastStatusEvent.verdict === "hidden" || lastStatusEvent.verdict === "rejected")));
+
+  // `restored` is an admin explicitly putting a hidden listing back — it is
+  // as much an approval as the pipeline's own.
+  const wasApproved =
+    !wasTakenDown &&
+    ((lastStatusEvent?.kind === "decision" && lastStatusEvent.verdict === "approved") ||
+      (lastStatusEvent?.kind === "admin" && (lastStatusEvent.verdict === "approved" || lastStatusEvent.verdict === "restored")));
 
   const now = Date.now();
-  const nextStatus = lastDecision?.verdict === "approved" ? "approved" : "pending";
-  await c.env.DB.prepare("UPDATE listings SET status = ?, moderation_reason = NULL, updated_at = ? WHERE id = ? AND version = ?")
-    .bind(nextStatus, now, id, row.version)
+  const nextStatus = wasTakenDown ? "needs_review" : wasApproved ? "approved" : "pending";
+  const nextReason = wasTakenDown ? "held_for_review" : null;
+  await c.env.DB.prepare("UPDATE listings SET status = ?, moderation_reason = ?, updated_at = ? WHERE id = ? AND version = ?")
+    .bind(nextStatus, nextReason, now, id, row.version)
     .run();
 
   if (nextStatus === "pending") {
