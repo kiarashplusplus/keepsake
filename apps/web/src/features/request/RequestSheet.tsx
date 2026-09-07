@@ -164,6 +164,12 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
           <Text variant="body" color="textSecondary">
             Sent. The giver will choose in their own time.
           </Text>
+          <Text variant="caption" color="textTertiary">
+            {"If you're chosen: meet somewhere public and well-lit, bring a friend or tell " +
+              "someone the plan, and keep working out the details here in Keepsake rather than " +
+              "switching to text. Leaving it on a porch instead of meeting face to face is always " +
+              "fine too — just say so."}
+          </Text>
           <Button label="Done" onPress={handleClose} />
         </View>
       ) : (
@@ -192,6 +198,12 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
           <Input label="Phone (optional)" value={phone} onChangeText={setPhone} keyboardType="phone-pad" error={phoneError} placeholder="Optional" />
 
           <AgeAttestationCheckbox checked={ageAttested} onToggle={() => setAgeAttested((current) => !current)} />
+
+          <Text variant="caption" color="textTertiary">
+            {"A note before you send this: if you two meet up, pick a public spot, bring a " +
+              "friend if you can, and keep talking here in Keepsake rather than trading numbers " +
+              "early. A porch handoff works too, if you'd both rather skip meeting in person."}
+          </Text>
 
           <Turnstile ref={turnstileRef} onStatus={setTurnstileStatus} />
 
