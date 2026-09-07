@@ -96,6 +96,7 @@ const HEALTH: AdminHealth = {
   ok: true,
   postal_codes_count: 1,
   cron_last_run: { moderationRetry: 0, orphanSweep: 0 },
+  report_pressure: { threshold: 3, autohidden_awaiting_review: [], near_threshold: [] },
 };
 
 function item(id: string, title: string): AdminQueueItem {

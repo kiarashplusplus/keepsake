@@ -120,3 +120,24 @@ export function parseIntVar(name: string, value: string | undefined, fallback: n
 export function shelfMinItems(env: Env): number {
   return parseIntVar("SHELF_MIN_ITEMS", env.SHELF_MIN_ITEMS as string | undefined, 3);
 }
+
+/**
+ * How many distinct reporters take a live listing down on their own
+ * (`POST /api/listings/:id/reports` in `src/routes/listings.ts`).
+ *
+ * Lives here rather than beside the route that enforces it because
+ * `GET /api/admin/health` has to report the same number back — issue #89:
+ * an auto-hide pages nobody today, so the health payload now names both the
+ * listings this threshold has already hidden and the ones one report away
+ * from it. Two copies of `3` that could drift is exactly how a "listings
+ * near the threshold" counter ends up counting the wrong listings.
+ */
+export const DEFAULT_REPORT_AUTOHIDE_THRESHOLD = 3;
+
+export function reportAutohideThreshold(env: Env): number {
+  return parseIntVar(
+    "REPORT_AUTOHIDE_THRESHOLD",
+    env.REPORT_AUTOHIDE_THRESHOLD as string | undefined,
+    DEFAULT_REPORT_AUTOHIDE_THRESHOLD,
+  );
+}

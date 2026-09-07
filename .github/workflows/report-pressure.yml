@@ -1,0 +1,134 @@
+name: Report pressure
+
+# Issue #89: `REPORT_AUTOHIDE_THRESHOLD = 3` means three independent
+# reporters can hide a live listing between them, and nothing told a human it
+# happened. `uptime.yml` polls `/health`, but an auto-hide changes a
+# *listing's* status, not the Worker's — `/health` reported `ok: true`
+# straight through the whole event. The auto-hide's `captureMessage` writes a
+# line to Workers Logs, which has no Tail Worker and no Logpush reading it
+# (docs/runbooks/incident.md), and the admin queue only shows it to someone
+# who opens the admin queue.
+#
+# So this is the scheduled read that escalates, shaped exactly like
+# uptime.yml: run on a schedule, and file a **deduplicated** issue, because a
+# red run in the Actions tab is only an alert if someone is looking at the
+# Actions tab.
+#
+# Why it reads D1 rather than `GET /api/admin/health`, which returns the same
+# numbers: `ADMIN_TOKEN` is a Worker secret, not a GitHub Actions secret, and
+# there is no Actions secret in this repository that can authenticate to an
+# admin route. A job that curled it would 401 on every run forever — another
+# check that cannot fail, which is the exact table AGENTS.md keeps. The
+# credentials this job *does* use, `CLOUDFLARE_API_TOKEN` /
+# `CLOUDFLARE_ACCOUNT_ID`, already exist per-environment and already carry D1
+# access: deploy.yml applies migrations with them and
+# tools/backup-photos.mjs already runs `wrangler d1 execute --remote` with
+# them against a real database.
+#
+# Hourly, not every 15 minutes like uptime: the listing is already down by
+# the time this can see it, so what is being bounded is how long a human
+# takes to *review* it. The issue's own bar is "a human looking within
+# hours". Hourly meets that at a third of the runner cost, and GitHub's
+# scheduler is best-effort anyway.
+#
+# NOT YET PROVEN AGAINST A REAL DEPLOY, and read this before trusting it:
+# GitHub does not evaluate `schedule:` (or accept `workflow_dispatch`) for a
+# workflow file that has never been on the default branch, so — exactly as
+# backup-photos.yml records for itself — this file's first real run can only
+# happen after merge. `tools/report-pressure.mjs` itself was run end to end
+# against a local `wrangler dev` with a listing genuinely auto-hidden by
+# three real POSTs to `/api/listings/:id/reports`; the `--remote` leg and
+# this YAML are what remain unobserved. Confirm the first scheduled run
+# (`gh run list --workflow=report-pressure.yml`) before treating this as
+# working.
+on:
+  schedule:
+    # Deliberately not on the hour: GitHub's shared scheduler is at its most
+    # congested at :00, and this check has no reason to be there.
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which tier to check (leave default to check both)
+        type: choice
+        options: [both, preview, production]
+        default: both
+        required: true
+
+concurrency:
+  # Never pile up, and never cancel: a run already looking has nothing to
+  # gain from a second one, and killing the older one would lose the signal.
+  group: report-pressure
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # For the "file an issue" step below.
+  issues: write
+
+jobs:
+  check:
+    name: check (${{ matrix.env }})
+    runs-on: ubuntu-latest
+    # Same gate as deploy.yml/backup-photos.yml: that variable is the repo's
+    # signal that the Cloudflare resources and the API-token secrets actually
+    # exist for a given environment. Without it this would fail hourly on a
+    # tree that has never been deployed.
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    environment: ${{ matrix.env }}
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [preview, production]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Look for listings auto-hidden by reports and never reviewed
+        id: check
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.environment == 'both' || inputs.environment == matrix.env }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node tools/report-pressure.mjs --env ${{ matrix.env }}
+
+      # Deduplicated by title, like uptime.yml — a listing nobody reviews for
+      # two days must not open 48 issues. The fingerprint goes one step
+      # further and keeps this quiet on repeat runs: it is a hash of the exact
+      # set of listing ids, so an already-filed alert is silent until a
+      # *different* listing is auto-hidden, and the issue does not collect a
+      # comment an hour for as long as it stays open.
+      - name: File or update the moderation alert
+        if: ${{ steps.check.outputs.findings != '' && steps.check.outputs.findings != '0' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TIER: ${{ matrix.env }}
+          FINGERPRINT: ${{ steps.check.outputs.fingerprint }}
+          SUMMARY_FILE: ${{ steps.check.outputs.summary_file }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          title="Moderation: report auto-hide awaiting review ($TIER)"
+          body="$(cat "$SUMMARY_FILE")
+
+          Run: $RUN_URL
+          <!-- report-pressure-fingerprint: $FINGERPRINT -->"
+
+          existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number' || true)"
+          if [ -z "$existing" ]; then
+            gh issue create --title "$title" --label moderation --body "$body" \
+              || gh issue create --title "$title" --body "$body"
+            exit 0
+          fi
+
+          # Already open. Only say something if the set of listings changed.
+          if gh issue view "$existing" --comments 2>/dev/null | grep -qF "report-pressure-fingerprint: $FINGERPRINT"; then
+            echo "issue #$existing already covers fingerprint $FINGERPRINT — staying quiet"
+            exit 0
+          fi
+          gh issue comment "$existing" --body "$body"

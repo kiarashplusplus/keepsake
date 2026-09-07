@@ -31,7 +31,7 @@ import { maskEmail, type RequestStatus } from "@keepsake/contracts/request";
 import type { ReportReason } from "@keepsake/contracts/report";
 import { captureException, captureMessage } from "@keepsake/observability/capture";
 import type { Env } from "../env.js";
-import { emailProviderName } from "../env.js";
+import { emailProviderName, reportAutohideThreshold } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
 import { requireParam } from "../lib/params.js";
@@ -673,6 +673,94 @@ const CRON_STALE_AFTER_MS: Record<string, number> = {
 
 const CRON_JOB_NAMES = ["moderationRetry", "orphanSweep"] as const;
 
+/**
+ * Issue #89: three independent reporters can hide a live listing on their
+ * own (`REPORT_AUTOHIDE_THRESHOLD`, enforced in
+ * `POST /api/listings/:id/reports`), and until this block existed nothing
+ * told a human it had happened. `GET /health` is a Worker liveness check —
+ * an auto-hide changes a *listing's* status, not the Worker's, so it stayed
+ * `ok: true` right through the event — and the `captureMessage` the
+ * auto-hide fires writes to Workers Logs, which has no Tail Worker and no
+ * Logpush reading it on a schedule (docs/runbooks/incident.md).
+ *
+ * Same shape as the cron-staleness read above: pull the raw signal, log a
+ * `console.warn` when it is non-empty, put it in the payload for the admin
+ * strip, and let it decide `ok`. Both directions of the risk land in the
+ * same bucket on purpose — a genuinely harmful listing that needs
+ * confirming, and a legitimate keepsake taken down by three coordinated
+ * reporters that needs restoring — because from here they are
+ * indistinguishable, and both want the same next step: a human, within
+ * hours.
+ */
+const AUTOHIDDEN_SAMPLE_LIMIT = 20;
+
+interface AutohiddenRow {
+  listing_id: string;
+  report_count: number;
+  autohidden_at: number;
+}
+
+interface NearThresholdRow {
+  listing_id: string;
+  report_count: number;
+}
+
+/**
+ * "Auto-hidden and nobody has looked" is `status = 'hidden'` plus a
+ * `report_autohide` event with no `kind = 'admin'` event at or after it.
+ * Deriving it from `moderation_events` rather than from a time window is
+ * what makes it self-clearing and non-nagging: every admin action on the
+ * listing (`logAdminEvent`) writes a newer `admin` row, so approving,
+ * restoring, rejecting or re-hiding it all take it off this list, while a
+ * listing nobody touches stays on it however many days pass. A hide an
+ * admin performed by hand never appears here at all — it has no
+ * `report_autohide` event to join against.
+ */
+async function fetchReportPressure(env: Env): Promise<AdminHealth["report_pressure"]> {
+  const threshold = reportAutohideThreshold(env);
+
+  const { results: autohiddenRows } = await env.DB.prepare(
+    `SELECT l.id AS listing_id, l.report_count AS report_count, MAX(e.created_at) AS autohidden_at
+       FROM listings l
+       JOIN moderation_events e ON e.listing_id = l.id AND e.kind = 'report_autohide'
+      WHERE l.status = 'hidden'
+        AND NOT EXISTS (
+              SELECT 1 FROM moderation_events a
+               WHERE a.listing_id = l.id AND a.kind = 'admin' AND a.created_at >= e.created_at)
+      GROUP BY l.id, l.report_count
+      ORDER BY autohidden_at DESC
+      LIMIT ?`,
+  )
+    .bind(AUTOHIDDEN_SAMPLE_LIMIT)
+    .all<AutohiddenRow>();
+
+  // `threshold - 1` rather than "any reports at all": this is the set where
+  // one more stranger takes the listing down, which is the only count that
+  // gives a moderator time to act *before* a legitimate keepsake disappears.
+  // Floored at 1 so a misconfigured `REPORT_AUTOHIDE_THRESHOLD=1` doesn't
+  // turn this into "every approved listing".
+  const nearFloor = Math.max(threshold - 1, 1);
+  const { results: nearRows } = await env.DB.prepare(
+    `SELECT id AS listing_id, report_count
+       FROM listings
+      WHERE status = 'approved' AND report_count >= ?
+      ORDER BY report_count DESC, updated_at DESC
+      LIMIT ?`,
+  )
+    .bind(nearFloor, AUTOHIDDEN_SAMPLE_LIMIT)
+    .all<NearThresholdRow>();
+
+  return {
+    threshold,
+    autohidden_awaiting_review: autohiddenRows.map((row) => ({
+      listing_id: row.listing_id,
+      report_count: row.report_count,
+      autohidden_at: row.autohidden_at,
+    })),
+    near_threshold: nearRows.map((row) => ({ listing_id: row.listing_id, report_count: row.report_count })),
+  };
+}
+
 adminRoutes.get("/health", async (c) => {
   const postalCountRow = await c.env.DB.prepare("SELECT COUNT(*) AS count FROM postal_codes").first<{ count: number }>();
   const postalCodesCount = postalCountRow?.count ?? 0;
@@ -701,10 +789,22 @@ adminRoutes.get("/health", async (c) => {
     console.warn("admin/health: cron heartbeat stale", { crons: staleCrons, cronLastRun });
   }
 
+  const reportPressure = await fetchReportPressure(c.env);
+  if (reportPressure.autohidden_awaiting_review.length > 0) {
+    // Same level and shape as the cron warning above, so one Workers Logs
+    // filter (`level = "warn"` on this Worker) catches every "needs a human"
+    // signal this endpoint knows about rather than one per feature.
+    console.warn("admin/health: listings auto-hidden by reports await review", {
+      count: reportPressure.autohidden_awaiting_review.length,
+      listing_ids: reportPressure.autohidden_awaiting_review.map((entry) => entry.listing_id),
+    });
+  }
+
   const health: AdminHealth = {
-    ok: postalCodesCount > 0 && staleCrons.length === 0,
+    ok: postalCodesCount > 0 && staleCrons.length === 0 && reportPressure.autohidden_awaiting_review.length === 0,
     postal_codes_count: postalCodesCount,
     cron_last_run: cronLastRun,
+    report_pressure: reportPressure,
   };
   return ok(c, health);
 });

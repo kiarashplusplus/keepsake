@@ -22,7 +22,7 @@ import { sha256Hex } from "../lib/digest.js";
 import { todayISO } from "../lib/day.js";
 import { randomTokenRaw } from "../lib/tokens.js";
 import { clientIPFrom } from "../moderation/budget.js";
-import { parseIntVar } from "../env.js";
+import { reportAutohideThreshold } from "../env.js";
 import { moderateListing } from "../moderation/pipeline.js";
 import { purgePhotoCache } from "../lib/photoCache.js";
 import { containsContactInfo } from "../moderation/contactInfo.js";
@@ -34,7 +34,6 @@ export const listingRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 const DEFAULT_LISTING_IP_DAILY_BUDGET = 20;
 const DEFAULT_REQUEST_IP_DAILY_BUDGET = 20;
-const DEFAULT_REPORT_AUTOHIDE_THRESHOLD = 3;
 
 // ---------------------------------------------------------------------------
 // POST /api/listings
@@ -425,7 +424,7 @@ listingRoutes.post(
     await c.env.DB.prepare("UPDATE listings SET report_count = report_count + 1 WHERE id = ?").bind(id).run();
 
     const reportCount = row.report_count + 1;
-    const threshold = parseIntVar("REPORT_AUTOHIDE_THRESHOLD", c.env.REPORT_AUTOHIDE_THRESHOLD, DEFAULT_REPORT_AUTOHIDE_THRESHOLD);
+    const threshold = reportAutohideThreshold(c.env);
 
     // Only pulls a listing that's currently public — a report against a
     // listing already `given`/`hidden`/etc. still counts (report_count
@@ -447,7 +446,22 @@ listingRoutes.post(
       // without having to remember to check the queue — the listing id is a
       // public ULID (already in every share link), not PII, so it's safe to
       // put in the message itself.
-      captureMessage(`Listing ${id} auto-hidden after ${reportCount} reports`, "warning");
+      //
+      // Issue #89: this line goes to Workers Logs and nothing reads Workers
+      // Logs on a schedule (no Tail Worker, no Logpush — see
+      // docs/runbooks/incident.md), so on its own it never reached a human.
+      // It is kept, and tagged, because it is still the only record of the
+      // *moment* the hide happened that survives a later admin action: the
+      // durable, actually-polled signal is now
+      // `GET /api/admin/health`'s `report_pressure` (src/routes/admin.ts)
+      // and the hourly `.github/workflows/report-pressure.yml` that reads
+      // the same rows out of D1. `tags.source` makes this filterable in the
+      // Workers Logs UI (`tags.source = "report_autohide"`) instead of
+      // needing a substring match on the message.
+      captureMessage(`Listing ${id} auto-hidden after ${reportCount} reports`, "warning", {
+        tags: { source: "report_autohide" },
+        extra: { listing_id: id, report_count: reportCount, threshold },
+      });
     }
 
     return ok(c, { id: reportId }, 201);

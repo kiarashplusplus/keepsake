@@ -184,6 +184,39 @@ admin queue (`docs/runbooks/admin.md`). This is not itself an incident — it's 
 — but a spike in auto-hides from a small number of IPs is worth a look via the `reports` table's
 `ip_digest` (never a raw IP; see `docs/design/README.md` data-model notes).
 
+**It does need a human, though, and until issue #89 nothing said so.** `GET /health` is a Worker
+liveness check: an auto-hide changes a *listing's* `status`, so `/health` (and therefore
+`uptime.yml`) reported `ok: true` right through the whole event. The auto-hide's
+`captureMessage` writes to Workers Logs, which — see above — has no Tail Worker and no Logpush
+reading it on a schedule. The admin queue knew, but only for someone who opened the admin queue.
+
+Two things now escalate it, both keyed on the same predicate — a listing that is currently
+`hidden`, has a `report_autohide` moderation event, and has no `kind = 'admin'` event at or after
+it. That means **any admin action clears the alert automatically**: restore, reject or re-hide the
+listing and it drops off both surfaces. Nothing to acknowledge, nothing to snooze.
+
+1. `GET /api/admin/health` returns `report_pressure` (`autohidden_awaiting_review` and, as a
+   heads-up that changes nothing, `near_threshold` — live listings one report from the same
+   fate), and refuses to report `ok: true` while anything is awaiting review. The admin page's
+   stats strip renders it with the same red badge a stale cron gets.
+2. `.github/workflows/report-pressure.yml` runs `tools/report-pressure.mjs` hourly against each
+   tier's D1 and files a deduplicated issue titled
+   `Moderation: report auto-hide awaiting review (<tier>)`. It reads D1 with
+   `CLOUDFLARE_API_TOKEN` rather than calling the admin endpoint because `ADMIN_TOKEN` is a
+   Worker secret and no GitHub Actions secret can authenticate to an admin route — see that
+   file's header. The comment carries a fingerprint of the listing ids so an open issue does not
+   collect a comment every hour.
+
+**Both directions of the risk land in the same alert on purpose.** A harmful listing that needs
+confirming and a legitimate keepsake taken down by three coordinated reporters are
+indistinguishable from here, and both want the same next step: a person, within hours.
+
+To reproduce the whole chain locally without Cloudflare credentials (this is how it was verified):
+apply migrations to a throwaway `--persist-to` directory, seed one `approved` listing, run
+`wrangler dev --env preview --local` against that directory, `POST /api/listings/:id/reports`
+three times from three different `CF-Connecting-IP` values, then
+`node tools/report-pressure.mjs --env preview --local --persist-to <dir>`.
+
 ## Rate-limit / budget exhaustion
 
 Per-IP daily budgets (`LISTING_IP_DAILY_BUDGET`, `REQUEST_IP_DAILY_BUDGET`,
