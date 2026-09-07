@@ -17,37 +17,28 @@ to everything). API: any `Authorization: Bearer <ADMIN_TOKEN>` request to `/api/
 
 ### Where a session gets the token
 
-The two tiers have **different** tokens. They are not interchangeable, and nothing in the response
-tells you which one you are holding — a production token against preview is an ordinary `401`,
-indistinguishable from a typo.
+**Both tokens are written down in `AGENTS.md`, under "Admin tokens".** That is a deliberate
+decision for this private repo (2026-09-07): a session — local, phone, or claude.ai — should be
+able to read the Observatory without asking a human for a credential first. A claude.ai session
+in particular has only the repository, so a token that lives anywhere else is a token it cannot
+use.
 
-| Variable | Tier |
-| --- | --- |
-| `KEEPSAKE_PREVIEW_ADMIN_TOKEN` | `https://preview.keepsake.ing` |
-| `KEEPSAKE_PRODUCTION_ADMIN_TOKEN` | `https://keepsake.ing` |
+The two tiers do **not** share a token, and nothing in the response tells you which one you are
+holding: a production token against preview is an ordinary `401`, indistinguishable from a typo.
 
-A **local** session reads them from Kiarash's `~/Documents/.env`, which is outside this repo and
-is never committed:
+What follows from writing them down, and what the rest of this runbook assumes:
 
-```sh
-set -a && . ~/Documents/.env && set +a
-curl -s https://preview.keepsake.ing/api/admin/observatory \
-  -H "Authorization: Bearer $KEEPSAKE_PREVIEW_ADMIN_TOKEN" | jq
-```
+- **Rotation is now two steps, not one.** `wrangler secret put ADMIN_TOKEN --env <tier>` changes
+  what the Worker accepts; the table in `AGENTS.md` has to change in the same breath or every
+  session is holding a dead token. And the old value stays in git history — rotating makes it
+  useless, it does not erase it.
+- **Rotate both before this repo becomes public or gains a collaborator who should not have
+  admin.** These tokens reach real givers' email addresses through
+  `GET /api/admin/requests/:id`; that is the exposure to reason about, not the tier name.
 
-A **claude.ai / cloud** session cannot see that file — it runs in a sandbox with only this
-repository — so the same two names are configured as Claude Code environment secrets for this
-repo. Same variable names on purpose, so a runbook command works unchanged in either place. If
-they are unset, say so and stop: there is no fallback, and `/api/admin/*` returns the same `401`
-whether the token is wrong, missing, or never configured, so a failed call is not evidence about
-which.
-
-**Treat this as the most powerful credential in the project.** It is a single secret with no
-scopes: the same string that reads the Observatory can hide listings, ban owners, remove requests
-and reveal givers' email addresses. Prefer the preview token by default and reach for production
-only when you specifically mean the live site. It is deliberately *not* stored as a GitHub secret
-— those are readable only by workflow runs, and putting it there would hand it to every workflow
-that ever runs in this repo.
+`ADMIN_TOKEN` itself is still a Worker secret and is still set with `wrangler secret put` — what
+is committed is the value a session presents, not the Worker's configuration. Every other
+credential remains outside the repo.
 
 Rotate with:
 

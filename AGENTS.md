@@ -65,6 +65,49 @@ conflicted files, and hid a live bug on `main` until the two finally met. The fu
 runs on a pull request, so an unmerged branch is also an untested one.
 `docs/runbooks/issue-workflow.md` has the detail.
 
+## Admin tokens
+
+`/api/admin/*` takes `Authorization: Bearer <token>`. **The tokens are written down here**, on
+purpose: this is a private repo, and a session that has to ask a human for a credential before it
+can look at the Observatory is a session that will guess instead.
+
+| Tier | Base URL | Token |
+| --- | --- | --- |
+| preview | `https://preview.keepsake.ing` | `1ZY1sOARvge6cX-0y5c_eOEEAA8-AMMfl-Ob4kHwMIA` |
+| production | `https://keepsake.ing` | `ydPctMVuNm9-FR4TEZmZzuS1HsW64o1REcPVn_f1VcQ` |
+
+```sh
+curl -s https://preview.keepsake.ing/api/admin/observatory \
+  -H "Authorization: Bearer 1ZY1sOARvge6cX-0y5c_eOEEAA8-AMMfl-Ob4kHwMIA" | jq
+```
+
+**Use preview unless you specifically mean the live site.** The tiers do not share a token, and a
+mismatched one is an ordinary `401` — indistinguishable from a typo, because `/api/admin/*`
+answers `401` identically for wrong, missing and never-configured. That is deliberate (the
+response must not reveal whether admin is set up), so a failed call tells you nothing about which
+of the three it was.
+
+**What these grant.** There are no scopes. The same string that reads the Observatory can hide
+listings, approve and reject them, ban owners, remove requests, and read a requester's note, email
+address and phone number. Treat the production one as reaching real people's contact details,
+because it does.
+
+Consequences of them living here, so nobody is surprised later:
+
+- **Rotation is a commit, not just `wrangler secret put ADMIN_TOKEN --env <tier>`.** Both halves
+  have to move together, and the old value stays in git history regardless — rotation makes the
+  committed value useless, it does not remove it.
+- These values are in every clone, every CI checkout and every agent's context. Do not paste them
+  into anything outside this project, and do not echo them into a log, an issue comment or a PR
+  body.
+- If this repository is ever made public, or gains a collaborator who should not have admin,
+  **rotate both tokens first** — treating the history rewrite as optional is the mistake.
+
+Every other credential is still a real secret and is *not* here: `ADMIN_TOKEN` remains a Worker
+secret set with `wrangler secret put`, and the Cloudflare tokens live in Worker secrets or GitHub
+environment secrets, which no session can read back (the GitHub secrets API returns only `name`,
+`created_at` and `updated_at` — there is no value field).
+
 ## The one rule that matters
 
 **A passing test is not evidence. Verify the artifact.**
@@ -156,14 +199,10 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
     and web out concurrently on a loaded machine. Measured on both `main` and a feature branch with
     no difference, so it is load, not a regression — the flake its own comment and #65 describe.
     Re-run it alone before believing it.
-- **Credentials live outside this repo, and where depends on where you are running.** A local
-  session sources `~/Documents/.env`; a claude.ai session cannot see that file and reads the same
-  variable names from Claude Code environment secrets. The admin API needs
-  `KEEPSAKE_PREVIEW_ADMIN_TOKEN` or `KEEPSAKE_PRODUCTION_ADMIN_TOKEN` — the tiers do not share one,
-  and a mismatched token is an ordinary `401`, indistinguishable from a typo. If they are unset,
-  say so rather than guessing: `/api/admin/*` answers `401` identically for wrong, missing and
-  never-configured, so a failed call proves nothing about which. Full detail, and why this token
-  deserves more care than the others, in `docs/runbooks/admin.md#where-a-session-gets-the-token`.
+- **The admin tokens are in this file** (see "Admin tokens" below), so no session — local, phone
+  or claude.ai — needs to source anything to call `/api/admin/*`. Every other credential still
+  lives outside the repo: Cloudflare tokens are Worker secrets or GitHub environment secrets, and
+  a session cannot read those.
 - **A sandboxed agent may not be able to reach the product at all.** Some environments' egress
   policy answers `403` to `CONNECT` for `keepsake.ing`, `preview.keepsake.ing` and
   `workers.cloudflare.com`, and blocks GitHub's Actions-configuration API paths. That is a policy
