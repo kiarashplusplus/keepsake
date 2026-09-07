@@ -142,15 +142,19 @@ is the lock.
 - **Launch blockers:** **#161** — moderation only ever sees the client-uploaded thumbnail, and
   `/i/:id/full` serves the never-inspected full-resolution file to the public. **#162** —
   `withdraw`+`relist` undoes an admin rejection, a hide, a ban sweep or a three-report auto-hide.
-  **#165** — `dailyDigest` never writes its heartbeat, so `/api/admin/health` is permanently
-  `ok: false` and the crons alarm is stuck on.
+  **#165** — `dailyDigest` never wrote its heartbeat, so `/api/admin/health` was permanently
+  `ok: false` and the crons alarm was stuck on. **Fixed** (2026-09-07): `runCron` writes the
+  heartbeat for every registered job on success and for none that throws, so a new cron cannot be
+  added without one.
 - **Personal data and email:** #169, #170, #188, #189, #190. Between them: a redactor with no rule
   for the only PII Keepsake holds, IP hashes kept forever against a privacy page that promises
   48-hour expiry twice, and a request endpoint that is an oracle for the giver's address.
   **#167 and #182 are fixed** (2026-09-07): a `verify_email` token is now bound to the address it
   was mailed to rather than to the owner row, and the recovery token travels in a POST body
   instead of a URL path segment — see `docs/design/identity.md`. #170 still owns the redactor's
-  own missing path-segment and PII rules.
+  own missing path-segment and PII rules. **#169 is fixed** too (2026-09-07): `orphanSweep` nulls
+  both `ip_digest` columns at 48 hours, withdrawal nulls its own immediately, and the number is
+  locked against the page and all three mechanisms in `privacyPolicy.test.ts`.
 - **More checks that could not fail:** #166 (preflight's shell-syntax check has never examined a
   byte of shell), #175, #176, #181, #191. Six more instances of `AGENTS.md`'s table, found in a
   single pass — the table is at seven rows and should be read as a pattern, not a closed list.
@@ -169,7 +173,9 @@ is the lock.
   Worker's first use of `batch()`; the other multi-write sequences that issue named
   (create-listing + photos + aspects, `replaceListingAspects`) are still unbatched.
 - **Ops and backup:** #164 (the documented D1 backup omits `listing_aspects`, and
-  `aspects_backfilled_at` makes the loss unrecoverable), #178.
+  `aspects_backfilled_at` makes the loss unrecoverable), #178 (**fixed** — `orphanSweep` refuses
+  to delete a photo the backup bucket does not have, so the ordering no longer rests on two
+  independent schedulers; still unguarded in production until #157 creates the bucket).
 
 *Workable by anyone (pre-audit):*
 - **#104** — `wrangler dev` dies mid-e2e with no diagnostic and `serve.mjs`'s restart hides it.

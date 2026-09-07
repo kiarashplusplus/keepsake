@@ -1,6 +1,7 @@
-import { env, SELF } from "cloudflare:test";
+import { createExecutionContext, env, SELF, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { orphanSweep } from "../src/cron/orphanSweep.js";
+import { runCron } from "../src/index.js";
 import { ulid } from "../src/lib/ids.js";
 import {
   authHeaders,
@@ -13,8 +14,43 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Stands in for `.github/workflows/backup-photos.yml` having already run.
+ *
+ * Issue #178: `orphanSweep` refuses to delete a photo whose keys are not in
+ * the backup bucket, so every deletion case below has to say explicitly that
+ * the backup happened — which is the point. Before this, the ordering between
+ * the two jobs was an assumption living in a comment on a cron schedule; now
+ * it is a precondition every test has to state.
+ *
+ * `wrangler.toml` binds `PHOTO_BACKUP_BUCKET` at the top level, so the test
+ * runtime has a real local R2 bucket for it.
+ */
+async function markBackedUp(...keys: string[]): Promise<void> {
+  const backup = (env as unknown as { PHOTO_BACKUP_BUCKET: R2Bucket }).PHOTO_BACKUP_BUCKET;
+  for (const key of keys) {
+    await backup.put(key, new Uint8Array([9]));
+  }
+}
+
+/** Runs `body` with the backup binding removed, the way production runs today
+ * (#157: `keepsake-photos-production-backup` does not exist, so
+ * `wrangler.toml` deliberately omits the binding under `[env.production]`). */
+async function withoutBackupBinding(body: () => Promise<void>): Promise<void> {
+  const original = (env as unknown as Record<string, unknown>).PHOTO_BACKUP_BUCKET;
+  delete (env as unknown as Record<string, unknown>).PHOTO_BACKUP_BUCKET;
+  try {
+    await body();
+  } finally {
+    (env as unknown as Record<string, unknown>).PHOTO_BACKUP_BUCKET = original;
+  }
+}
+
 interface InsertOrphanPhotoOptions {
   createdAt: number;
+  /** Default true: the nightly backup has already copied this photo. Set
+   * false for the #178 cases that test what happens when it has not. */
+  backedUp?: boolean;
 }
 
 async function insertOrphanPhoto(options: InsertOrphanPhotoOptions): Promise<{ id: string; fullKey: string; thumbKey: string }> {
@@ -32,6 +68,8 @@ async function insertOrphanPhoto(options: InsertOrphanPhotoOptions): Promise<{ i
   )
     .bind(id, ownerId, fullKey, thumbKey, options.createdAt)
     .run();
+
+  if (options.backedUp !== false) await markBackedUp(fullKey, thumbKey);
 
   return { id, fullKey, thumbKey };
 }
@@ -75,6 +113,9 @@ describe("orphanSweep: orphan photos", () => {
     const thumbKey = `photos/${id}/thumb.jpg`;
     await env.BUCKET.put(fullKey, new Uint8Array([1]));
     await env.BUCKET.put(thumbKey, new Uint8Array([2]));
+    // Backed up, so the only reason this photo can survive the sweep is the
+    // one under test — that it belongs to a listing — and not #178's guard.
+    await markBackedUp(fullKey, thumbKey);
     await env.DB.prepare(
       `INSERT INTO photos (id, owner_id, listing_id, position, r2_key_full, r2_key_thumb, width, height, bytes_full, blurhash, content_type, moderation_status, created_at)
        VALUES (?, ?, ?, 0, ?, ?, 800, 600, 1, 'LEHV6nWB2yk8pyo0adR*.7kCMdnj', 'image/jpeg', 'unchecked', ?)`,
@@ -99,11 +140,197 @@ describe("orphanSweep: orphan photos", () => {
   });
 
   it("records its own last-run time in KV for GET /api/admin/health", async () => {
+    // Through `runCron`, because since #165 the heartbeat is written by the
+    // dispatcher rather than by each job's last statement — one writer, so a
+    // new cron cannot be added without one. `cron.test.ts` covers the same
+    // property for all three jobs by driving the real `scheduled()` handler;
+    // this stays because a sweep that stops writing its heartbeat is a
+    // sweep-shaped failure and belongs in the sweep's own file.
+    await env.KV.delete("cron:last:orphanSweep");
     const before = Date.now();
-    await orphanSweep(env);
+    const ctx = createExecutionContext();
+    await runCron("orphanSweep", orphanSweep, env, ctx);
+    await waitOnExecutionContext(ctx);
     const stored = await env.KV.get("cron:last:orphanSweep");
     expect(stored).not.toBeNull();
     expect(Number.parseInt(stored ?? "0", 10)).toBeGreaterThanOrEqual(before);
+  });
+});
+
+/**
+ * Issue #169. The 48-hour expiry the privacy page promises twice was real
+ * only for the KV budget counters; the same `dailyIpDigest` value written
+ * into `requests.ip_digest` and `reports.ip_digest` had no TTL, no sweep and
+ * no delete path at all.
+ */
+/**
+ * Issue #178. The photo backup's whole safety argument was that GitHub
+ * Actions starts it at 03:00 and this cron fires at 03:17 — 17 minutes of
+ * margin against a queue GitHub documents as best-effort, on a repository
+ * whose measured drift is routinely larger than that, and whose one and only
+ * scheduled run of that workflow started at 03:18, *after* the sweep.
+ *
+ * When the sweep wins that race it deletes the R2 objects and the `photos`
+ * row; the backup then reads D1, no longer sees the row, copies nothing, and
+ * exits green. The bytes it exists to insure are gone with no copy anywhere
+ * and nothing distinguishes that run from a quiet one.
+ *
+ * So the ordering is enforced by the deleter now, and these are the cases
+ * that hold it there.
+ */
+describe("orphanSweep: no photo is deleted before it is backed up (#178)", () => {
+  it("defers a photo the backup has not copied yet, R2 bytes and D1 row both", async () => {
+    const unsaved = await insertOrphanPhoto({ createdAt: Date.now() - 2 * DAY_MS, backedUp: false });
+
+    await orphanSweep(env);
+
+    // Both halves matter: keeping the row without the bytes would leave a
+    // photo the API still lists and `/i/:id/:variant` 404s, and keeping the
+    // bytes without the row would orphan them from the backup script's own
+    // `SELECT ... FROM photos`, which is how it decides what to copy.
+    expect(await r2ObjectExists(unsaved.fullKey)).toBe(true);
+    expect(await photoRowExists(unsaved.id)).toBe(true);
+  });
+
+  it("deletes it on a later night, once the backup has caught up", async () => {
+    // A late backup delays a deletion; it does not cancel one. This is the
+    // whole trade — an orphan photo costs storage for a night, a deleted
+    // un-backed-up one costs a keepsake.
+    const late = await insertOrphanPhoto({ createdAt: Date.now() - 2 * DAY_MS, backedUp: false });
+    await orphanSweep(env);
+    expect(await photoRowExists(late.id)).toBe(true);
+
+    await markBackedUp(late.fullKey, late.thumbKey);
+    await orphanSweep(env);
+
+    expect(await photoRowExists(late.id)).toBe(false);
+    expect(await r2ObjectExists(late.fullKey)).toBe(false);
+    expect(await r2ObjectExists(late.thumbKey)).toBe(false);
+  });
+
+  it("defers a photo whose thumbnail was copied but whose full-size was not", async () => {
+    // A partial copy is a real state — `tools/backup-photos.mjs` copies key
+    // by key and reports `failed` per key — and half a photo is not a backup.
+    const partial = await insertOrphanPhoto({ createdAt: Date.now() - 2 * DAY_MS, backedUp: false });
+    await markBackedUp(partial.thumbKey);
+
+    await orphanSweep(env);
+
+    expect(await photoRowExists(partial.id)).toBe(true);
+  });
+
+  it("does not let one un-backed-up photo block the ones behind it", async () => {
+    // The deferred row stays in the table and would be re-selected by an
+    // unchanged `LIMIT` query forever. Without the OFFSET this hangs on the
+    // first blocked photo and nothing else in the backlog is ever collected.
+    const blocked = await insertOrphanPhoto({ createdAt: Date.now() - 3 * DAY_MS, backedUp: false });
+    const ready = await insertOrphanPhoto({ createdAt: Date.now() - 3 * DAY_MS });
+
+    await orphanSweep(env);
+
+    expect(await photoRowExists(blocked.id)).toBe(true);
+    expect(await photoRowExists(ready.id)).toBe(false);
+  });
+
+  it("deletes as before when the backup binding is absent, rather than blocking deletion forever", async () => {
+    // Production runs exactly this way today: #157 means
+    // `keepsake-photos-production-backup` does not exist, so `wrangler.toml`
+    // omits the binding there on purpose. A guard that refused every deletion
+    // without it would turn one missing bucket into unbounded R2 growth and a
+    // `photos` table nothing prunes — a worse failure, and a silent one. The
+    // skip is loud instead (`warnIfUnguarded`, gated on `isDeployed`).
+    const unsaved = await insertOrphanPhoto({ createdAt: Date.now() - 2 * DAY_MS, backedUp: false });
+
+    await withoutBackupBinding(async () => {
+      await orphanSweep(env);
+    });
+
+    expect(await photoRowExists(unsaved.id)).toBe(false);
+    expect(await r2ObjectExists(unsaved.fullKey)).toBe(false);
+  });
+});
+
+describe("orphanSweep: hashed IPs expire at 48 hours (#169)", () => {
+  const HOUR_MS = 60 * 60 * 1000;
+
+  async function insertRequest(createdAt: number): Promise<string> {
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId });
+    const id = ulid();
+    await env.DB.prepare(
+      `INSERT INTO requests (id, listing_id, note, email, ip_digest, status, created_at)
+       VALUES (?, ?, 'A note', ?, ?, 'open', ?)`,
+    )
+      .bind(id, listingId, `requester-${id}@keepsake.ing`, `digest-${id}`, createdAt)
+      .run();
+    return id;
+  }
+
+  async function insertReport(createdAt: number): Promise<string> {
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId });
+    const id = ulid();
+    await env.DB.prepare(
+      `INSERT INTO reports (id, listing_id, reason, ip_digest, created_at) VALUES (?, ?, 'spam', ?, ?)`,
+    )
+      .bind(id, listingId, `digest-${id}`, createdAt)
+      .run();
+    return id;
+  }
+
+  async function digestOf(table: "requests" | "reports", id: string): Promise<string | null> {
+    const row = await env.DB.prepare(`SELECT ip_digest FROM ${table} WHERE id = ?`)
+      .bind(id)
+      .first<{ ip_digest: string | null }>();
+    return row?.ip_digest ?? null;
+  }
+
+  it("nulls ip_digest on requests and reports older than 48 hours, and leaves the rest of the row alone", async () => {
+    const now = Date.now();
+    const oldRequest = await insertRequest(now - 49 * HOUR_MS);
+    const oldReport = await insertReport(now - 49 * HOUR_MS);
+
+    await orphanSweep(env);
+
+    expect(await digestOf("requests", oldRequest)).toBeNull();
+    expect(await digestOf("reports", oldReport)).toBeNull();
+
+    // The row itself survives — this is a retention rule about one column,
+    // not a deletion. A requester's note and a reporter's reason are what the
+    // moderation queue and the owner dashboard are made of.
+    const request = await env.DB.prepare("SELECT note, status FROM requests WHERE id = ?")
+      .bind(oldRequest)
+      .first<{ note: string | null; status: string }>();
+    expect(request?.note).toBe("A note");
+    expect(request?.status).toBe("open");
+  });
+
+  it("keeps a hash that is still inside the window, because the day-scoped uniqueness check reads it", async () => {
+    // The control. Without this, "nulls everything unconditionally" would
+    // pass the test above, and the same-day duplicate-report check that
+    // `ip_digest` exists for would silently stop working.
+    const now = Date.now();
+    const freshRequest = await insertRequest(now - 2 * HOUR_MS);
+    const freshReport = await insertReport(now - 2 * HOUR_MS);
+
+    await orphanSweep(env);
+
+    expect(await digestOf("requests", freshRequest)).not.toBeNull();
+    expect(await digestOf("reports", freshReport)).not.toBeNull();
+  });
+
+  it("is idempotent: a second run the same night clears nothing further", async () => {
+    const now = Date.now();
+    const oldRequest = await insertRequest(now - 72 * HOUR_MS);
+
+    await orphanSweep(env);
+    expect(await digestOf("requests", oldRequest)).toBeNull();
+
+    // `ip_digest IS NOT NULL` in the WHERE clause is what makes this true —
+    // and what keeps the logged count an honest measure of what each run
+    // actually erased rather than of how many old rows exist.
+    await expect(orphanSweep(env)).resolves.toBeUndefined();
+    expect(await digestOf("requests", oldRequest)).toBeNull();
   });
 });
 
@@ -204,6 +431,7 @@ async function insertListingPhoto(listingId: string, ownerId: string): Promise<{
   const thumbKey = `photos/${id}/thumb.jpg`;
   await env.BUCKET.put(fullKey, new Uint8Array([1, 2, 3]));
   await env.BUCKET.put(thumbKey, new Uint8Array([4, 5, 6]));
+  await markBackedUp(fullKey, thumbKey);
   await env.DB.prepare(
     `INSERT INTO photos (id, owner_id, listing_id, position, r2_key_full, r2_key_thumb, width, height, bytes_full, blurhash, content_type, moderation_status, created_at)
      VALUES (?, ?, ?, 0, ?, ?, 800, 600, 3, 'LEHV6nWB2yk8pyo0adR*.7kCMdnj', 'image/jpeg', 'passed', ?)`,

@@ -243,9 +243,18 @@
           hours, then it expires automatically.
         </p>
         <p>
-          Two things use that hash: a brake that slows down a burst of requests within a single
-          minute, and a counter for how much you've done today. Both use the same date-scoped
-          hash, so neither one can follow you from one day into the next.
+          Three things use that hash: a brake that slows down a burst of requests within a single
+          minute, a counter for how much you've done today, and a check that stops the same person
+          asking for one keepsake twice or reporting the same listing twice on the same day. All
+          three use the same date-scoped hash, so none of them can follow you from one day into
+          the next.
+        </p>
+        <p>
+          The 48 hours covers every copy, not just the counters. The last of those checks means a
+          copy of the hash is written next to the request or the report itself, in our database —
+          so a nightly job clears it from there at 48 hours too, and withdrawing a request
+          (see below) clears it immediately along with your note, email and phone number. After
+          that the row keeps no trace of the address it came from.
         </p>
 
         <h2>Your choice, before anything loads</h2>
@@ -361,9 +370,10 @@
           above) or you ask us to remove them. A link we send to verify an email or recover your
           dashboard expires in 24 hours (or 30 minutes for a recovery link) and the record of it is
           cleared within a further week.
-          Rate-limit hashes expire automatically after 48 hours (see "Rate limiting" above), and
-          moderation and email-delivery logs are kept for 90 days as an abuse-prevention audit
-          trail.
+          Hashes of your IP address expire automatically after 48 hours (see "Rate limiting"
+          above) — both the rate-limit counters and the copy stored alongside a request or a
+          report — and moderation and email-delivery logs are kept for 90 days as an
+          abuse-prevention audit trail.
         </p>
         <p>
           Your own email is the one thing on that list with no expiry date, and it's worth stating
@@ -421,6 +431,18 @@
             A date at the top of a policy tells you something moved but not what, so this is the
             record. It's kept by hand, newest first, and it starts the day we started keeping it —
             there's no entry here for anything before that date.
+          </p>
+          <p>
+            <strong>7 September 2026.</strong> The 48-hour expiry on hashes of your IP address is
+            now true of every copy. It always was for the rate-limit counters, and it was not for
+            the copy stored next to a request or a report: that one had no expiry at all, so it
+            stayed in our database indefinitely, including after someone used their withdraw link
+            to remove their note, email and phone number. The page said otherwise, twice, and the
+            page was wrong. The code changed rather than the promise — a nightly job now clears
+            those hashes at 48 hours, and withdrawing a request clears its hash immediately along
+            with everything else. "Rate limiting" now also says plainly that a third thing uses
+            the hash: the check that stops the same person asking for one keepsake twice, or
+            reporting the same listing twice, on the same day.
           </p>
           <p>
             <strong>7 September 2026.</strong> Search by meaning was switched on. This one is a
