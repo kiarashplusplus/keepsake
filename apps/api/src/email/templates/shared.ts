@@ -26,6 +26,21 @@ export function escapeHtml(input: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * Collapses CR/LF and other control characters out of a subject line.
+ * Subject headers, unlike the HTML/text bodies, are never run through
+ * `escapeHtml` — there's no markup to escape — so a title containing a raw
+ * newline could otherwise inject extra header lines into the sent message.
+ * `TitleSchema` (`packages/contracts/src/listing.ts`) now rejects control
+ * characters on the way in, but `sendMail` is also called with titles read
+ * straight back out of D1 rows written before that check existed, so this
+ * runs at every `subject:` site regardless of whether the title was
+ * revalidated.
+ */
+export function sanitizeSubject(input: string): string {
+  return input.replace(/[\x00-\x1f\x7f]+/g, " ").trim();
+}
+
 export function renderButton(href: string, label: string): string {
   return `<p style="text-align:center;margin:28px 0;">
     <a href="${href}" style="display:inline-block;background:${colorsLight.accent};color:${colorsLight.onAccent};text-decoration:none;padding:12px 28px;border-radius:8px;font-family:${SANS};font-size:15px;font-weight:600;">${escapeHtml(label)}</a>

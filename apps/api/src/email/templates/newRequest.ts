@@ -1,5 +1,5 @@
 import { colorsLight } from "@keepsake/tokens/colors";
-import { renderButton, renderShell, footerLine, escapeHtml, type EmailTemplate } from "./shared.js";
+import { renderButton, renderShell, footerLine, escapeHtml, sanitizeSubject, type EmailTemplate } from "./shared.js";
 
 export interface NewRequestParams {
   listingTitle: string;
@@ -17,7 +17,7 @@ export function newRequest(params: NewRequestParams): EmailTemplate {
   const note = escapeHtml(params.note);
 
   return {
-    subject: `Someone would love "${params.listingTitle}"`,
+    subject: sanitizeSubject(`Someone would love "${params.listingTitle}"`),
     html: renderShell({
       bodyHtml: `<p>Someone would love your keepsake, <em>${title}</em>.</p>
         <blockquote style="margin:16px 0;padding:12px 16px;border-left:3px solid ${colorsLight.accent};background:${colorsLight.surfaceSunken};font-style:italic;color:${colorsLight.ink};">${note}</blockquote>
