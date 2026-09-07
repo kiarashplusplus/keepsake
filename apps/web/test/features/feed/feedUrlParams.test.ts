@@ -4,7 +4,7 @@ describe("feed URL params round trip", () => {
   const cases: FeedUrlQuery[] = [
     { q: "grandmother", category: "photos_art_handmade", country: "US", postal: "02144", radius_mi: 25 },
     { category: "other" },
-    { country: "GB", postal: "SW1A", radius_mi: 100 },
+    { country: "CA", postal: "M5V", radius_mi: 100 },
     {},
   ];
 

@@ -1,15 +1,38 @@
 /**
  * Cloudflare Turnstile, explicit-render API. `EXPO_PUBLIC_TURNSTILE_SITE_KEY`
  * is empty until the widget is provisioned for the domain — in that case
- * this renders nothing and reports a token of `""` immediately, so the give
- * flow (and any other Turnstile-protected submit) still works end to end on
- * preview before the real widget exists (the API's own server-side
- * `siteverify` call is likewise skipped when no secret is configured).
+ * this reports `{status:"unconfigured"}` immediately, so the give flow (and
+ * any other Turnstile-protected submit) still works end to end on preview
+ * before the real widget exists (the API's own server-side `siteverify`
+ * call is likewise skipped when no secret is configured).
+ *
+ * `status` is an explicit union rather than a token-or-`""` sentinel so a
+ * caller can tell "not configured" (submit allowed) apart from "still
+ * loading" or "genuinely broken" (submit must wait) — see the give-flow
+ * plan's Turnstile section for why the old `""` sentinel couldn't do that.
  */
 import * as React from "react";
 import { View } from "react-native";
 import { config } from "@/lib/config";
 import { useThemeMode } from "@/ui/theme";
+
+export type TurnstileStatus =
+  | { status: "unconfigured" }
+  | { status: "pending" }
+  | { status: "ready"; token: string }
+  | { status: "expired" }
+  | { status: "error"; reason: "script" | "widget" };
+
+export type TurnstileHandle = {
+  /** Forces the widget to fetch a fresh token — used after a `turnstile_failed`
+   * response, so a retry gets a new challenge instead of resubmitting the
+   * same (already-rejected) one. */
+  reset: () => void;
+};
+
+export type TurnstileProps = {
+  onStatus: (status: TurnstileStatus) => void;
+};
 
 type TurnstileRenderOptions = {
   sitekey: string;
@@ -32,6 +55,14 @@ declare global {
 }
 
 const SCRIPT_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+// Set on the `<script>` element once its `load`/`error` event has actually
+// fired, so a *second* mount that finds this same tag already in the DOM
+// (rather than `scriptPromise` — see below) can tell "already finished,
+// resolve immediately" apart from "still in flight, attach a listener"
+// instead of attaching a `load` listener to an event that already happened
+// and will never fire again.
+const LOAD_STATE_ATTR = "data-ks-turnstile-load-state";
+
 let scriptPromise: Promise<void> | null = null;
 
 function loadTurnstileScript(): Promise<void> {
@@ -39,59 +70,118 @@ function loadTurnstileScript(): Promise<void> {
   if (window.turnstile) return Promise.resolve();
   if (scriptPromise) return scriptPromise;
 
-  scriptPromise = new Promise((resolve, reject) => {
+  const promise = new Promise<void>((resolve, reject) => {
     const existing = document.querySelector<HTMLScriptElement>(`script[src="${SCRIPT_SRC}"]`);
     if (existing) {
-      existing.addEventListener("load", () => resolve());
-      return;
+      const state = existing.getAttribute(LOAD_STATE_ATTR);
+      if (state === "loaded") {
+        resolve();
+        return;
+      }
+      if (state !== "error") {
+        existing.addEventListener("load", () => resolve());
+        existing.addEventListener("error", () => reject(new Error("Failed to load the Turnstile script")));
+        return;
+      }
+      // A tag that already errored won't retry itself just because we ask
+      // again — remove it so this attempt (paired with `scriptPromise`
+      // having been cleared on the earlier rejection, below) is a *real*
+      // retry, with a fresh `<script>`, not a replay of the same failure.
+      existing.remove();
     }
     const script = document.createElement("script");
     script.src = SCRIPT_SRC;
     script.async = true;
     script.defer = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Failed to load the Turnstile script"));
+    script.onload = () => {
+      script.setAttribute(LOAD_STATE_ATTR, "loaded");
+      resolve();
+    };
+    script.onerror = () => {
+      script.setAttribute(LOAD_STATE_ATTR, "error");
+      reject(new Error("Failed to load the Turnstile script"));
+    };
     document.head.appendChild(script);
+  });
+
+  // Cache the promise so concurrent/later mounts share one script load —
+  // but only while it can still resolve. A failed load must NOT poison
+  // every later mount for the life of the tab: clear the cache on
+  // rejection so the next caller gets a fresh attempt (e.g. a retry after
+  // the giver disables their ad blocker).
+  scriptPromise = promise.catch((err: unknown) => {
+    scriptPromise = null;
+    throw err;
   });
   return scriptPromise;
 }
 
-export type TurnstileProps = {
-  onToken: (token: string) => void;
-};
-
-export function Turnstile({ onToken }: TurnstileProps): React.ReactElement {
+export const Turnstile = React.forwardRef<TurnstileHandle, TurnstileProps>(function Turnstile({ onStatus }, ref) {
   const { mode } = useThemeMode();
   const containerRef = React.useRef<View>(null);
   const widgetIdRef = React.useRef<string | null>(null);
-  const onTokenRef = React.useRef(onToken);
+  const onStatusRef = React.useRef(onStatus);
   React.useEffect(() => {
-    onTokenRef.current = onToken;
+    onStatusRef.current = onStatus;
   });
+
+  // Read once: the widget's own theme is fixed at render time by
+  // Cloudflare's API, and re-running this whole effect on every theme
+  // toggle used to remount the widget and discard whatever token the
+  // giver already had — see the file's `useEffect` deps below.
+  const initialModeRef = React.useRef(mode);
+
+  React.useImperativeHandle(
+    ref,
+    () => ({
+      reset: () => {
+        if (widgetIdRef.current && window.turnstile) window.turnstile.reset(widgetIdRef.current);
+      },
+    }),
+    [],
+  );
 
   React.useEffect(() => {
     if (!config.turnstileSiteKey) {
-      onTokenRef.current("");
+      onStatusRef.current({ status: "unconfigured" });
       return undefined;
     }
 
     let cancelled = false;
+    onStatusRef.current({ status: "pending" });
 
-    void loadTurnstileScript().then(() => {
-      if (cancelled) return;
-      const node = containerRef.current as unknown as HTMLElement | null;
-      if (!node || !window.turnstile) return;
-      widgetIdRef.current = window.turnstile.render(node, {
-        sitekey: config.turnstileSiteKey,
-        theme: mode,
-        callback: (token: string) => onTokenRef.current(token),
-        "expired-callback": () => {
-          // Turnstile tokens expire after 300s; reset re-issues a fresh one.
-          if (widgetIdRef.current && window.turnstile) window.turnstile.reset(widgetIdRef.current);
-        },
-        "error-callback": () => onTokenRef.current(""),
+    loadTurnstileScript()
+      .then(() => {
+        if (cancelled) return;
+        const node = containerRef.current as unknown as HTMLElement | null;
+        if (!node || !window.turnstile) {
+          onStatusRef.current({ status: "error", reason: "widget" });
+          return;
+        }
+        widgetIdRef.current = window.turnstile.render(node, {
+          sitekey: config.turnstileSiteKey,
+          theme: initialModeRef.current,
+          callback: (token: string) => onStatusRef.current({ status: "ready", token }),
+          "expired-callback": () => {
+            // Turnstile tokens expire after 300s; reset re-issues a fresh
+            // one, but the *current* token is no longer good — callers must
+            // not go on treating `ready` as still true.
+            onStatusRef.current({ status: "expired" });
+            if (widgetIdRef.current && window.turnstile) window.turnstile.reset(widgetIdRef.current);
+          },
+          "error-callback": () => onStatusRef.current({ status: "error", reason: "widget" }),
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // The script itself failed to load outright — an ad blocker, a
+        // blocked CDN, offline. There's no way to prove humanity client-side
+        // in that case, but that's no reason to dead-end someone behind a
+        // blocker: report `unconfigured` (submit allowed) and let the
+        // server's own `siteverify` call decide, the same as it already
+        // does when no site key is configured at all.
+        onStatusRef.current({ status: "unconfigured" });
       });
-    });
 
     return () => {
       cancelled = true;
@@ -100,9 +190,12 @@ export function Turnstile({ onToken }: TurnstileProps): React.ReactElement {
         widgetIdRef.current = null;
       }
     };
-  }, [mode]);
+    // Empty on purpose: `mode` is read once into `initialModeRef` above
+    // (not referenced directly here), so a theme toggle no longer remounts
+    // the widget and discards whatever token the giver already has.
+  }, []);
 
   if (!config.turnstileSiteKey) return <View />;
 
   return <View ref={containerRef} accessibilityLabel="Verification widget" />;
-}
+});

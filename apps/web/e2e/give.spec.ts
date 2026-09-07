@@ -42,6 +42,14 @@ test("a giver walks the five steps and the keepsake goes live", async ({ page, r
 
   // --- 3. Details ----------------------------------------------------------
   await expect(page.getByText("A few details.")).toBeVisible();
+  // Autofill: `POST /api/photos/:id/suggest` (instant under `MOCK_AI=1`,
+  // see `apps/api/src/suggest/suggest.ts`'s `MOCK_SUGGESTION`) is fired by
+  // `<SuggestionFetcher>` the moment the cover photo finishes uploading in
+  // step 1, and the reducer pre-fills the title from it — this is the
+  // assertion that would have caught the flow never wiring the endpoint up
+  // at all.
+  await expect(page.getByLabel("Title")).toHaveValue("Blue ceramic mug");
+  await expect(page.getByText("Filled in from your photo. Change anything.")).toBeVisible();
   await page.getByLabel("Title").fill(title);
   await page.getByLabel("Home & kitchen", { exact: true }).click();
   await page.getByLabel("Postcode").fill("02144");
@@ -55,6 +63,10 @@ test("a giver walks the five steps and the keepsake goes live", async ({ page, r
 
   // --- 5. Review and submit ------------------------------------------------
   await expect(page.getByText("Take a last look.")).toBeVisible();
+  // The gap that let the cover photo go missing from this step entirely:
+  // the print card must actually render an image, not just a photo count.
+  await expect(page.getByAltText("Cover photo")).toBeVisible();
+  await onScreen(page, "I'm 18 or older").click();
   await onScreen(page, "Give it").click();
 
   // The breathing-stamp reviewing state, then the settled one. The screen

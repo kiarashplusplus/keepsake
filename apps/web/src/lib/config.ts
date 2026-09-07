@@ -13,8 +13,10 @@ export type Config = {
    * serves both the SPA and /api/* in preview/production). */
   siteUrl: string;
   /** Cloudflare Turnstile widget site key. Empty until the widget is
-   * provisioned — `Turnstile.web.tsx` renders nothing and reports a token of
-   * `""` in that case, so the flow still works before it exists. */
+   * provisioned — `Turnstile.web.tsx` renders nothing and reports
+   * `{status:"unconfigured"}` in that case (a caller treats that the same
+   * as a valid token for enabling submit), so the flow still works before
+   * it exists. */
   turnstileSiteKey: string;
   /**
    * Google Ads tag id (`AW-…`). Public by design — it is visible in the page

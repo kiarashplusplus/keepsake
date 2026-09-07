@@ -14,6 +14,7 @@ import { Chip } from "@/ui/Chip";
 import { Input } from "@/ui/Input";
 import { Button } from "@/ui/Button";
 import { saveLocationPref, type LocationPref, type RadiusChoice } from "@/lib/geo";
+import { locateOnce } from "@/lib/geoLocate";
 
 export type LocationBarProps = {
   value: LocationPref;
@@ -48,22 +49,20 @@ export function LocationBar({ value, onChange }: LocationBarProps): React.ReactE
   }
 
   function handleUseMyLocation(): void {
-    if (typeof navigator === "undefined" || typeof navigator.geolocation === "undefined") {
-      setGeoError("Location isn't available in this browser. Try a postcode instead.");
-      return;
-    }
+    // `locateOnce` must be called synchronously from this press handler
+    // (not after an `await`) or iOS Safari can silently drop the
+    // permission prompt — see `lib/geoLocate.ts`.
     setGeoError(null);
     setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
+    locateOnce(
+      (coords) => {
         setLocating(false);
-        commit({ ...value, mode: "coords", postal: "", lat: position.coords.latitude, lng: position.coords.longitude });
+        commit({ ...value, mode: "coords", postal: "", lat: coords.lat, lng: coords.lng });
       },
       () => {
         setLocating(false);
         setGeoError("Couldn't get your location. Try a postcode instead.");
       },
-      { timeout: 10000 },
     );
   }
 

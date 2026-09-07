@@ -7,6 +7,7 @@ import { Link, Stack, usePathname } from "expo-router";
 import { space } from "@keepsake/tokens/spacing";
 import { GiveDraftProvider } from "@/features/give/GiveDraftContext";
 import { useEditHydration } from "@/features/give/useEditHydration";
+import { SuggestionFetcher } from "@/features/give/SuggestionFetcher";
 import { ReadableWidth } from "@/ui/ReadableWidth";
 import { StepNumerals } from "@/ui/StepNumerals";
 import { Card } from "@/ui/Surface";
@@ -71,6 +72,7 @@ export default function GiveLayout(): React.ReactElement {
   return (
     <GiveDraftProvider>
       <EditHydrator />
+      <SuggestionFetcher />
       <StepShell>
         <Stack screenOptions={{ headerShown: false }} />
       </StepShell>

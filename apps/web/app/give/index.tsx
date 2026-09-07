@@ -17,7 +17,7 @@ import { Page } from "@/ui/Page";
 import { Card } from "@/ui/Surface";
 import { useColors } from "@/ui/theme";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
-import { makeClientId, type GiveDraftPhoto } from "@/features/give/giveDraft";
+import { coverPhoto, makeClientId, type GiveDraftPhoto } from "@/features/give/giveDraft";
 import { tiltDegForId } from "@/lib/masonry";
 import { pickImages } from "@/lib/images/pickImages";
 import { readImageDimensions, resizeImage } from "@/lib/images/resizeImage";
@@ -38,11 +38,12 @@ type PhotoTileProps = {
   photo: GiveDraftPhoto;
   index: number;
   total: number;
+  isCover: boolean;
   onRemove: () => void;
   onMove: (direction: -1 | 1) => void;
 };
 
-function PhotoTile({ photo, index, total, onRemove, onMove }: PhotoTileProps): React.ReactElement {
+function PhotoTile({ photo, index, total, isCover, onRemove, onMove }: PhotoTileProps): React.ReactElement {
   const colors = useColors();
   const overlayStyle: ViewStyle = {
     position: "absolute",
@@ -80,7 +81,7 @@ function PhotoTile({ photo, index, total, onRemove, onMove }: PhotoTileProps): R
               </Text>
             </View>
           ) : null}
-          {index === 0 && photo.status === "done" ? (
+          {isCover ? (
             <View
               style={{
                 position: "absolute",
@@ -216,6 +217,7 @@ export default function GivePhotos(): React.ReactElement {
   const doneCount = draft.photos.filter((photo) => photo.status === "done").length;
   const isUploading = draft.photos.some((photo) => photo.status === "uploading");
   const canContinue = doneCount >= 1 && !isUploading;
+  const cover = coverPhoto(draft);
 
   return (
     // `Page`, not a bare `Card`: this step is rendered by the give flow's
@@ -242,6 +244,7 @@ export default function GivePhotos(): React.ReactElement {
               photo={photo}
               index={index}
               total={draft.photos.length}
+              isCover={cover !== null && cover.clientId === photo.clientId}
               onRemove={() => handleRemove(photo)}
               onMove={(direction) => dispatch({ type: "move_photo", clientId: photo.clientId, direction })}
             />

@@ -5,8 +5,9 @@
 // one, which is what makes the rejected-state "Edit" button below actually
 // resubmit the same listing rather than spawning a duplicate.
 import * as React from "react";
-import { View } from "react-native";
+import { Pressable, View } from "react-native";
 import { useRouter } from "expo-router";
+import { Image as ExpoImage } from "expo-image";
 import type { CreateListingInput, OwnerListing as OwnerListingT } from "@keepsake/contracts/listing";
 import { CATEGORY_LABELS, MODERATION_REASONS } from "@keepsake/contracts/listing";
 import { COUNTRY_LABELS } from "@keepsake/contracts/geo";
@@ -17,14 +18,17 @@ import { Button } from "@/ui/Button";
 import { Print } from "@/ui/Print";
 import { Card } from "@/ui/Surface";
 import { Stamp, type StampState } from "@/ui/Stamp";
-import { Turnstile } from "@/ui/Turnstile";
+import { Turnstile, type TurnstileHandle, type TurnstileStatus } from "@/ui/Turnstile";
 import { Page } from "@/ui/Page";
+import { useColors } from "@/ui/theme";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
-import { makeClientId } from "@/features/give/giveDraft";
+import { coverPhoto, makeClientId } from "@/features/give/giveDraft";
 import { editStepForReason, resolveReviewOutcome } from "@/features/give/reviewOutcome";
 import { createListing, updateListing } from "@/api/listings";
 import { getMyListing } from "@/api/me";
 import { ApiError } from "@/api/client";
+import { getOwnerToken } from "@/lib/ownerToken";
+import { config } from "@/lib/config";
 import { shareListing } from "@/lib/share";
 import { useToast } from "@/ui/Toast";
 import { track } from "@/lib/analytics";
@@ -36,18 +40,68 @@ const POLL_TIMEOUT_MS = 2 * 60 * 1000;
 
 type Phase = "review" | "submitting" | "polling";
 
+/**
+ * Self-declared 18+ attestation — `CreateListingInput.age_attested` is a
+ * `z.literal(true)` (see `@keepsake/contracts/common`'s `AgeAttestationSchema`),
+ * required so a client can't accidentally post `age_attested: false`/omit it
+ * and have that silently count. No shared checkbox primitive exists yet in
+ * `src/ui`, so this mirrors `ReportSheet.tsx`'s own inline `ReasonRow`
+ * rather than inventing one for a single call site.
+ */
+function AgeAttestationCheckbox({ checked, onToggle }: { checked: boolean; onToggle: () => void }): React.ReactElement {
+  const colors = useColors();
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+      accessibilityLabel="I'm 18 or older"
+      onPress={onToggle}
+      style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 44 }}
+    >
+      <View
+        style={{
+          width: 18,
+          height: 18,
+          borderWidth: 2,
+          borderColor: checked ? colors.accent : colors.rule,
+          backgroundColor: checked ? colors.accent : "transparent",
+        }}
+      />
+      <Text variant="body">{"I confirm I'm 18 or older."}</Text>
+    </Pressable>
+  );
+}
+
+function coverImageSource(photo: ReturnType<typeof coverPhoto>): { uri: string; headers?: Record<string, string> } | null {
+  if (photo === null || photo.id === null) return null;
+  if (photo.objectUrl !== null) return { uri: photo.objectUrl };
+  const origin = config.siteUrl || (typeof window !== "undefined" ? window.location.origin : "");
+  const token = getOwnerToken();
+  return {
+    uri: `${origin}/i/${photo.id}/thumb`,
+    ...(token !== null ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+  };
+}
+
 export default function GiveReview(): React.ReactElement {
   const router = useRouter();
   const toast = useToast();
+  const colors = useColors();
   const { draft, dispatch } = useGiveDraft();
   const [phase, setPhase] = React.useState<Phase>("review");
-  const [turnstileToken, setTurnstileToken] = React.useState<string | null>(null);
+  const [turnstileStatus, setTurnstileStatus] = React.useState<TurnstileStatus>({ status: "pending" });
+  const turnstileRef = React.useRef<TurnstileHandle>(null);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
+  const [ageAttested, setAgeAttested] = React.useState(false);
   const [listing, setListing] = React.useState<OwnerListingT | null>(null);
   const [timedOut, setTimedOut] = React.useState(false);
   const idempotencyKeyRef = React.useRef(makeClientId());
 
+  const turnstileReady = turnstileStatus.status === "ready" || turnstileStatus.status === "unconfigured";
+  const turnstileToken = turnstileStatus.status === "ready" ? turnstileStatus.token : "";
+
   const photoIds = draft.photos.filter((photo) => photo.status === "done" && photo.id !== null).map((photo) => photo.id as string);
+  const cover = coverPhoto(draft);
 
   React.useEffect(() => {
     if (phase !== "polling" || listing === null || listing.status !== "pending") return undefined;
@@ -86,7 +140,7 @@ export default function GiveReview(): React.ReactElement {
   }, [listing]);
 
   async function handleSubmit(): Promise<void> {
-    if (draft.category === null || photoIds.length === 0) return;
+    if (draft.category === null || photoIds.length === 0 || !ageAttested) return;
     setSubmitError(null);
     setPhase("submitting");
 
@@ -97,6 +151,11 @@ export default function GiveReview(): React.ReactElement {
       country: draft.country,
       postal_code: draft.postalCode,
       photo_ids: photoIds,
+      // Literal `true`, not the `ageAttested` state variable: the guard
+      // above already proved it, and the contract's `AgeAttestationSchema`
+      // is `z.literal(true)` specifically so a value can't be threaded
+      // through as a plain (possibly-false) boolean.
+      age_attested: true,
       ...(draft.email.trim() !== "" ? { email: draft.email.trim() } : {}),
     };
 
@@ -104,13 +163,27 @@ export default function GiveReview(): React.ReactElement {
       const result =
         draft.listingId !== null
           ? await updateListing(draft.listingId, input)
-          : await createListing(input, { turnstileToken: turnstileToken ?? "", idempotencyKey: idempotencyKeyRef.current });
+          // `idempotencyKeyRef` is created once via `useRef` and never
+          // regenerated, so a retry after a failed attempt (including a
+          // `turnstile_failed` one, below) reuses the same key rather than
+          // minting a new one — the whole point being that a retry can't
+          // double-create the listing.
+          : await createListing(input, { turnstileToken, idempotencyKey: idempotencyKeyRef.current });
 
       dispatch({ type: "set_listing_id", listingId: result.id });
       setListing(result);
       setPhase("polling");
       track(AnalyticsEvents.GiveSubmitted);
     } catch (error) {
+      if (error instanceof ApiError && error.code === "turnstile_failed") {
+        // The token was spent (or rejected) server-side; the widget's own
+        // token is now useless even though our state still calls it
+        // "ready". Reset it and wait for a fresh one before allowing
+        // another attempt — the idempotency key above is untouched, so the
+        // retry still can't double-create.
+        turnstileRef.current?.reset();
+        setTurnstileStatus({ status: "pending" });
+      }
       setSubmitError(error instanceof ApiError ? error.message : "That didn't go through. Try again.");
       setPhase("review");
     }
@@ -246,6 +319,19 @@ export default function GiveReview(): React.ReactElement {
         {/* The listing as it will lie on the table: an actual print. */}
         <Print tiltDeg={-1.5} style={{ alignSelf: "stretch", padding: space.sm }}>
           <View style={{ paddingTop: space.xl, paddingHorizontal: space.md, paddingBottom: space.md, gap: space.sm }}>
+            {/* Source ladder: the local object URL from this session's
+                upload; else the owner-token-authed thumb route (covers a
+                reload or a `?edit=` prefill, where the object URL is
+                always null); else the blurhash alone. */}
+            <View style={{ width: 96, height: 96, alignSelf: "flex-start", overflow: "hidden", backgroundColor: colors.tableEdge }}>
+              <ExpoImage
+                source={coverImageSource(cover)}
+                placeholder={cover !== null && cover.blurhash !== "" ? { blurhash: cover.blurhash } : null}
+                style={{ width: "100%", height: "100%" }}
+                contentFit="cover"
+                accessibilityLabel="Cover photo"
+              />
+            </View>
             <Text variant="storyExcerpt" color="textSecondary" hangingPunctuation>
               “{draft.story.slice(0, 140)}
               {draft.story.length > 140 ? "…" : ""}”
@@ -262,7 +348,9 @@ export default function GiveReview(): React.ReactElement {
           </View>
         </Print>
 
-        <Turnstile onToken={setTurnstileToken} />
+        <AgeAttestationCheckbox checked={ageAttested} onToggle={() => setAgeAttested((current) => !current)} />
+
+        <Turnstile ref={turnstileRef} onStatus={setTurnstileStatus} />
 
         {submitError !== null ? (
           <Text variant="body" color="dangerText">
@@ -274,7 +362,7 @@ export default function GiveReview(): React.ReactElement {
           <Button
             label="Give it"
             loading={phase === "submitting"}
-            disabled={phase === "submitting" || turnstileToken === null || photoIds.length === 0}
+            disabled={phase === "submitting" || !turnstileReady || photoIds.length === 0 || !ageAttested}
             onPress={() => void handleSubmit()}
           />
         </View>

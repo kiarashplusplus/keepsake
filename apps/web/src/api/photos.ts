@@ -1,4 +1,5 @@
-import { PublicPhoto, type PublicPhoto as PublicPhotoT } from "@keepsake/contracts/photo";
+import { z } from "zod";
+import { PhotoSuggestionSchema, PublicPhoto, type PhotoSuggestion, type PublicPhoto as PublicPhotoT } from "@keepsake/contracts/photo";
 import { apiFetch } from "@/api/client";
 import { fixPhotoUrls } from "@/api/fixPhotoUrls";
 
@@ -38,4 +39,21 @@ export async function deletePhoto(id: string, signal?: AbortSignal): Promise<voi
     owner: true,
     ...(signal !== undefined ? { signal } : {}),
   });
+}
+
+const SuggestPhotoResult = z.object({ suggestion: PhotoSuggestionSchema.nullable() });
+
+/** `POST /api/photos/:id/suggest` — asks the vision model to read the
+ * photo's cover and returns give-flow prefill fields, or `null` when the
+ * model failed/timed out/hit the daily budget (never thrown as an error for
+ * those cases — see `apps/api/src/suggest/suggest.ts`; a rejected `ApiError`
+ * here means the request itself failed, e.g. network or a 404 for someone
+ * else's photo). */
+export async function suggestPhoto(id: string, signal?: AbortSignal): Promise<PhotoSuggestion | null> {
+  const data = await apiFetch<unknown>(`/api/photos/${encodeURIComponent(id)}/suggest`, {
+    method: "POST",
+    owner: true,
+    ...(signal !== undefined ? { signal } : {}),
+  });
+  return SuggestPhotoResult.parse(data).suggestion;
 }

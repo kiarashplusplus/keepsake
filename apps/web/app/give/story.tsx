@@ -10,9 +10,11 @@ import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { TextArea } from "@/ui/TextArea";
 import { Button } from "@/ui/Button";
+import { IconButton } from "@/ui/IconButton";
 import { Page } from "@/ui/Page";
-import { Card } from "@/ui/Surface";
+import { Card, Sunken } from "@/ui/Surface";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
+import { coverPhoto } from "@/features/give/giveDraft";
 import { STORY_PROMPTS, STORY_PROMPT_ROTATE_MS } from "@/features/give/storyPrompts";
 
 const StoryFieldSchema = z
@@ -26,6 +28,7 @@ export default function GiveStory(): React.ReactElement {
   const { draft, dispatch } = useGiveDraft();
   const [promptIndex, setPromptIndex] = React.useState(0);
   const [touched, setTouched] = React.useState(false);
+  const [conditionDismissed, setConditionDismissed] = React.useState(false);
 
   React.useEffect(() => {
     const id = setInterval(() => {
@@ -43,6 +46,17 @@ export default function GiveStory(): React.ReactElement {
     router.push("/give/details");
   }
 
+  // The cover's suggested `condition` (visible wear/material/age cues) is
+  // an *opener*, never a pre-fill — the story is the giver's own words, by
+  // design (see the give-flow plan's Part 3). `appliedSuggestionPhotoId`
+  // matching the current cover's id is what makes this decidable rather
+  // than guessed: if the cover has since changed, the note simply
+  // disappears rather than showing something about a different photo.
+  const cover = coverPhoto(draft);
+  const condition =
+    cover !== null && cover.id !== null && draft.appliedSuggestionPhotoId === cover.id ? draft.suggestions[cover.id]?.condition : undefined;
+  const showConditionOpener = !conditionDismissed && condition !== undefined && condition !== "";
+
   return (
     // See app/give/index.tsx's comment on why this step wraps itself in a
     // `Page` rather than the shell doing it once.
@@ -55,6 +69,15 @@ export default function GiveStory(): React.ReactElement {
             {STORY_PROMPTS[promptIndex]}
           </Text>
         </View>
+
+        {showConditionOpener ? (
+          <Sunken style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm, padding: space.md }}>
+            <Text variant="body" color="textSecondary" style={{ flex: 1 }}>
+              Your photo shows {condition}. Worth a line?
+            </Text>
+            <IconButton icon="close" label="Dismiss" size={16} onPress={() => setConditionDismissed(true)} />
+          </Sunken>
+        ) : null}
 
         <TextArea
           label="Story"

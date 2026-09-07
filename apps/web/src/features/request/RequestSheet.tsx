@@ -3,7 +3,7 @@
 // retry can't double-post the same request (the API also enforces a unique
 // (listing_id, email) constraint independently, surfaced here as a 409).
 import * as React from "react";
-import { View } from "react-native";
+import { Pressable, View } from "react-native";
 import { z } from "zod";
 import { NOTE_MAX, NOTE_MIN, PhoneSchema } from "@keepsake/contracts/request";
 import { MailableEmailSchema, RESERVED_EMAIL_DOMAIN_MESSAGE } from "@keepsake/contracts/common";
@@ -13,7 +13,8 @@ import { Text } from "@/ui/Text";
 import { TextArea } from "@/ui/TextArea";
 import { Input } from "@/ui/Input";
 import { Button } from "@/ui/Button";
-import { Turnstile } from "@/ui/Turnstile";
+import { Turnstile, type TurnstileHandle, type TurnstileStatus } from "@/ui/Turnstile";
+import { useColors } from "@/ui/theme";
 import { createRequest } from "@/api/requests";
 import { ApiError } from "@/api/client";
 import { hashIdempotencyKey } from "@/lib/hashIdempotencyKey";
@@ -27,6 +28,32 @@ const NoteSchema = z
   .min(NOTE_MIN, `At least ${NOTE_MIN} characters — say why it should be yours.`)
   .max(NOTE_MAX, `Keep it under ${NOTE_MAX} characters.`);
 
+/** Self-declared 18+ attestation — see `app/give/review.tsx`'s identical
+ * component for why this is a checkbox, not a passed-through boolean. */
+function AgeAttestationCheckbox({ checked, onToggle }: { checked: boolean; onToggle: () => void }): React.ReactElement {
+  const colors = useColors();
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+      accessibilityLabel="I'm 18 or older"
+      onPress={onToggle}
+      style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 44 }}
+    >
+      <View
+        style={{
+          width: 18,
+          height: 18,
+          borderWidth: 2,
+          borderColor: checked ? colors.accent : colors.rule,
+          backgroundColor: checked ? colors.accent : "transparent",
+        }}
+      />
+      <Text variant="body">{"I confirm I'm 18 or older."}</Text>
+    </Pressable>
+  );
+}
+
 export type RequestSheetProps = {
   visible: boolean;
   onClose: () => void;
@@ -39,11 +66,16 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
   const [note, setNote] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [phone, setPhone] = React.useState("");
-  const [turnstileToken, setTurnstileToken] = React.useState<string | null>(null);
+  const [turnstileStatus, setTurnstileStatus] = React.useState<TurnstileStatus>({ status: "pending" });
+  const turnstileRef = React.useRef<TurnstileHandle>(null);
   const [touched, setTouched] = React.useState(false);
   const [phase, setPhase] = React.useState<Phase>("form");
   const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [conflict, setConflict] = React.useState(false);
+  const [ageAttested, setAgeAttested] = React.useState(false);
+
+  const turnstileReady = turnstileStatus.status === "ready" || turnstileStatus.status === "unconfigured";
+  const turnstileToken = turnstileStatus.status === "ready" ? turnstileStatus.token : "";
 
   function reset(): void {
     setNote("");
@@ -53,6 +85,7 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
     setPhase("form");
     setSubmitError(null);
     setConflict(false);
+    setAgeAttested(false);
   }
 
   function handleClose(): void {
@@ -77,16 +110,26 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
     setTouched(true);
     setConflict(false);
     setSubmitError(null);
-    if (!noteValidation.success || !emailValidation.success || !phoneValidation.success) return;
+    if (!noteValidation.success || !emailValidation.success || !phoneValidation.success || !ageAttested) return;
 
     setPhase("submitting");
     const trimmedEmail = email.trim().toLowerCase();
     try {
+      // A deterministic key from the same (listingId, email) every time —
+      // not a ref generated once — so it's already stable across a retry
+      // with no extra bookkeeping needed here.
       const idempotencyKey = hashIdempotencyKey(`${listingId}:${trimmedEmail}`);
       await createRequest(
         listingId,
-        { note: note.trim(), email: trimmedEmail, ...(phone.trim() !== "" ? { phone: phone.trim() } : {}) },
-        { turnstileToken: turnstileToken ?? "", idempotencyKey },
+        {
+          note: note.trim(),
+          email: trimmedEmail,
+          // Literal `true`: the guard above already proved it — see
+          // `app/give/review.tsx`'s identical comment on `age_attested`.
+          age_attested: true,
+          ...(phone.trim() !== "" ? { phone: phone.trim() } : {}),
+        },
+        { turnstileToken, idempotencyKey },
       );
       setPhase("sent");
       track(AnalyticsEvents.RequestSent);
@@ -96,6 +139,10 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
         setConflict(true);
         setPhase("form");
         return;
+      }
+      if (error instanceof ApiError && error.code === "turnstile_failed") {
+        turnstileRef.current?.reset();
+        setTurnstileStatus({ status: "pending" });
       }
       setSubmitError(error instanceof ApiError ? error.message : "That didn't go through. Try again.");
       setPhase("form");
@@ -136,7 +183,9 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
           />
           <Input label="Phone (optional)" value={phone} onChangeText={setPhone} keyboardType="phone-pad" error={phoneError} placeholder="Optional" />
 
-          <Turnstile onToken={setTurnstileToken} />
+          <AgeAttestationCheckbox checked={ageAttested} onToggle={() => setAgeAttested((current) => !current)} />
+
+          <Turnstile ref={turnstileRef} onStatus={setTurnstileStatus} />
 
           {conflict ? (
             <Text variant="body" color="dangerText">
@@ -150,7 +199,12 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
           ) : null}
 
           <View style={{ flexDirection: "row" }}>
-            <Button label="Send" loading={phase === "submitting"} disabled={phase === "submitting" || turnstileToken === null} onPress={() => void handleSubmit()} />
+            <Button
+              label="Send"
+              loading={phase === "submitting"}
+              disabled={phase === "submitting" || !turnstileReady || !ageAttested}
+              onPress={() => void handleSubmit()}
+            />
           </View>
         </View>
       )}

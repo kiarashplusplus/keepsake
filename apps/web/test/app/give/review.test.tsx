@@ -106,10 +106,13 @@ describe("give/review", () => {
 
     const { toJSON, UNSAFE_getByProps } = renderReview();
 
-    // Let Turnstile's no-site-key effect call onToken("") so Submit enables.
+    // Let Turnstile's no-site-key effect report `unconfigured` so Submit's
+    // Turnstile gate is satisfied.
     await act(async () => {
       await Promise.resolve();
     });
+
+    fireEvent.press(UNSAFE_getByProps({ accessibilityRole: "checkbox" }));
 
     const submitButton = UNSAFE_getByProps({ accessibilityRole: "button" });
     await act(async () => {
@@ -148,6 +151,8 @@ describe("give/review", () => {
     await act(async () => {
       await Promise.resolve();
     });
+
+    fireEvent.press(UNSAFE_getByProps({ accessibilityRole: "checkbox" }));
 
     const submitButton = UNSAFE_getByProps({ accessibilityRole: "button" });
     await act(async () => {
