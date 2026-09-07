@@ -17,9 +17,19 @@ had seen (#161, fixed 2026-09-07; see `docs/design/moderation.md` step 4 for the
   `frontend/src/utils/ResizeImage.ts` and `imageValidation.ts` rather than re-derived.
 - `blurhash` (4×3 components) computed from the thumb canvas client-side, so the server never
   needs an image-processing dependency just to get a placeholder.
-- `uploadIdempotencyKey.ts` (FNV-1a hash), also ported from Finderly, backs the
-  `X-Idempotency-Key` header on `POST /api/listings` — a retried submit from a flaky connection
-  does not create a duplicate listing.
+- **Photo uploads are not idempotent, and nothing here claims they are.** The
+  `X-Idempotency-Key` header on `POST /api/listings` comes from
+  `apps/web/src/lib/hashIdempotencyKey.ts` (FNV-1a, ported from Finderly), sent by
+  `give/review.tsx`; `PUT /api/photos` mounts no `idempotency()` and `uploadPhoto` sends no key.
+  A sibling `images/uploadIdempotencyKey.ts` existed and said in its own docblock that it did,
+  keyed on the source file's `name:size:lastModified` — it was called from nowhere on the client
+  and read by nothing on the server, and five green unit tests guarded it (#181). Deleted
+  2026-09-07 rather than wired up: that key cannot tell a retried upload apart from a giver
+  deliberately adding the same photo twice, so wiring it would have handed two draft tiles the
+  same `photo.id`. A duplicate orphan photo row is reaped by the orphan sweep within 24h; a
+  duplicated id in a submitted listing is a live bug. If upload idempotency is wanted, key it on
+  something per-attempt from the client and namespace the middleware's KV key by route first
+  (`middleware/idempotency.ts`).
 
 ## Server-side
 
