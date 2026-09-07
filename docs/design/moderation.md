@@ -28,11 +28,20 @@ else is enforced by `tools/preflight`'s `models` check.
    story and was published verbatim as an aspect value, which is the control the regression test
    still runs both halves of.
 2. **Budget gate**: KV daily counters `mod_text`/`mod_image` (ported from Bayan's
-   `worker/src/budget.ts`). Exhausted → stays `pending` with `reason=budget`, **but the denial
-   is logged as a `decision`/`error` event, so it consumes one of the 3 attempts** — and
-   `moderationRetry` runs every 5 minutes against anything `pending` for 2 minutes, so three
-   denials inside ~15 minutes escalate the listing to `needs_review` long before the
-   midnight-UTC counter reset it is waiting on (#179).
+   `worker/src/budget.ts`). Exhausted → stays `pending` with `reason=budget`. The denial is
+   logged as a `decision`/`error` event, but **`nextAttemptNumber` does not count it**
+   (`reason <> 'budget'`), so it does not consume one of the 3 attempts: `moderationRetry` keeps
+   picking the listing up every 5 minutes and it stays `pending` until the midnight-UTC counter
+   reset lets a real attempt run. Until #179 the denial *was* counted, and since the cron re-runs
+   anything `pending` for 2 minutes, three denials inside ~15 minutes escalated the listing to
+   `needs_review` — a status the cron never selects again — so an exhausted budget turned every
+   listing posted for the rest of the day into permanent manual review.
+
+   That trap got *faster* the same week it was removed: step 4 now spends two vision calls per
+   photo instead of one (#161), so `mod_image` is consumed twice as quickly and the day's ceiling
+   is reached twice as early. The two changes are complementary — charging the true cost is what
+   makes the ceiling mean what it says, and not counting the denial is what keeps hitting the
+   ceiling survivable.
 3. **Text**: Llama Guard 3 (`@cf/meta/llama-guard-3-8b`) on `title\n\nstory`, 20s timeout. The
    listing's aspects are appended to the story half as `name: value` lines (PR #197), so they
    reach the model inside the one text call this pipeline is budgeted for rather than costing a
@@ -82,7 +91,8 @@ model id, seed a miniflare D1, run the pipeline, assert the resulting rows — n
 text still says the right thing. Matrix: all-pass, S12→needs_review, S4→rejected, drugs 0.9→
 rejected, nsfw 0.55→needs_review, malformed JSON once then valid, malformed twice→pending,
 AI throws→pending, budget 0→pending/budget, stale version→no approval, cron escalation after
-3 attempts.
+3 attempts, and (#179) three cron passes under an exhausted budget leaving the listing `pending`
+rather than escalating it, with the restored budget then letting the next pass decide it.
 
 ## Open risk
 

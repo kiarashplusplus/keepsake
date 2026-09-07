@@ -2,19 +2,35 @@ import * as React from "react";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import { ToastProvider } from "@/ui/Toast";
 import { chooseRequest, getMyListing, type OwnerListingDetail } from "@/api/me";
+import { deleteListing } from "@/api/listings";
+import { ApiError } from "@/api/client";
 import MineDetail from "../../../app/mine/[id]";
+
+// One router object for the whole file, rather than a fresh `jest.fn()` per
+// `useRouter()` call: the delete regression below (issue #172) asserts on
+// whether `replace` was called at all, which a per-call mock makes
+// unobservable. The `mock` prefix is what lets `babel-plugin-jest-hoist`
+// allow the reference from inside the hoisted factory.
+const mockRouter = { replace: jest.fn(), push: jest.fn() };
 
 jest.mock("expo-router", () => {
   const ReactActual = jest.requireActual("react");
   return {
     useLocalSearchParams: () => ({ id: "listing-1" }),
-    useRouter: () => ({ replace: jest.fn(), push: jest.fn() }),
+    useRouter: () => mockRouter,
     Link: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) =>
       asChild ? children : ReactActual.createElement(ReactActual.Fragment, null, children),
   };
 });
 
 jest.mock("@/api/me", () => ({ getMyListing: jest.fn(), chooseRequest: jest.fn() }));
+
+jest.mock("@/api/listings", () => ({
+  deleteListing: jest.fn(),
+  markGiven: jest.fn(),
+  relistListing: jest.fn(),
+  withdrawListing: jest.fn(),
+}));
 
 // See test/app/item/[id].test.tsx's header comment on why `Sheet` (used by
 // both the delete-confirm and Handoff sheets here) is mocked down to "render
@@ -187,5 +203,78 @@ describe("mine/[id] choose flow", () => {
     });
 
     expect(JSON.stringify(instance.toJSON())).toContain("We couldn't reach them to say you chose them");
+  });
+});
+
+// Issue #172. `runAction` swallowed the error and resolved either way, and
+// `handleDelete` chained `.then(() => router.replace("/mine"))` onto it — so a
+// DELETE that never reached the API still landed the giver on the dashboard,
+// with the error state discarded by the unmount. They were shown a completed
+// deletion for a listing that was still public.
+describe("mine/[id] delete", () => {
+  beforeEach(() => {
+    jest.mocked(getMyListing).mockReset();
+    jest.mocked(deleteListing).mockReset();
+    mockRouter.replace.mockReset();
+    mockRouter.push.mockReset();
+  });
+
+  async function openDeleteConfirmAndPress(): Promise<ReturnType<typeof render>> {
+    jest.mocked(getMyListing).mockResolvedValue(detailWithOpenRequest());
+
+    const instance = render(
+      <ToastProvider>
+        <MineDetail />
+      </ToastProvider>,
+    );
+    await act(async () => {
+      await flush();
+    });
+
+    // The bare "Delete" on the card opens the confirm sheet; the primary
+    // "Delete" inside the sheet is the one that fires the request. `Sheet` is
+    // mocked (above) to render its children inline once visible, so after the
+    // first press both are on screen — the sheet's is the last.
+    const openers = instance.UNSAFE_getAllByProps({ accessibilityLabel: "Delete" });
+    const opener = openers[0];
+    if (opener === undefined) throw new Error("no Delete control rendered");
+    await act(async () => {
+      fireEvent.press(opener);
+      await flush();
+    });
+
+    const confirms = instance.UNSAFE_getAllByProps({ accessibilityLabel: "Delete" });
+    const confirm = confirms[confirms.length - 1];
+    if (confirm === undefined) throw new Error("no Delete confirm rendered");
+    await act(async () => {
+      fireEvent.press(confirm);
+      await flush();
+    });
+
+    return instance;
+  }
+
+  it("GUARD: a failed delete does not navigate to /mine, and shows the error", async () => {
+    // The exact error `apiFetch`'s catch produces for a dropped connection.
+    jest
+      .mocked(deleteListing)
+      .mockRejectedValue(new ApiError("unavailable", "Couldn't reach Keepsake. Check your connection and try again.", 0));
+
+    const instance = await openDeleteConfirmAndPress();
+
+    expect(jest.mocked(deleteListing)).toHaveBeenCalledWith("listing-1");
+    // The whole issue: this used to be called anyway.
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    // And the giver is told why, on the page they are still standing on.
+    expect(JSON.stringify(instance.toJSON())).toContain("Couldn't reach Keepsake.");
+  });
+
+  it("navigates to /mine when the delete actually succeeds", async () => {
+    jest.mocked(deleteListing).mockResolvedValue(undefined);
+
+    await openDeleteConfirmAndPress();
+
+    expect(jest.mocked(deleteListing)).toHaveBeenCalledWith("listing-1");
+    expect(mockRouter.replace).toHaveBeenCalledWith("/mine");
   });
 });

@@ -12,8 +12,7 @@ export type TurnstileStatus =
   | { status: "unconfigured" }
   | { status: "pending" }
   | { status: "ready"; token: string }
-  | { status: "expired" }
-  | { status: "error"; reason: "script" | "widget" };
+  | { status: "expired" };
 
 export type TurnstileHandle = {
   /** Forces the widget to fetch a fresh token. No-op on native (there is no

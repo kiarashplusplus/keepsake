@@ -16,9 +16,32 @@
  * nothing here handles removal.
  *
  * Never throws: a failure here must never surface as a 500 on a listing
- * write. The fallback design in `routes/feed.ts` means a listing that never
- * got embedded (budget exhausted, AI call failed, Vectorize down) is still
- * findable by title/story through FTS in the meantime.
+ * write. A listing that never got embedded (budget exhausted, AI call
+ * failed, Vectorize down) is still findable by title/story through FTS,
+ * because `routes/feed.ts` merges the FTS matches into the vector result set
+ * rather than choosing one path per query — issue #180, which is also why
+ * that sentence is now true. It used to say the same thing while the route
+ * picked one path per query, so an un-embedded listing was in fact missing
+ * from any search another listing's vector answered.
+ *
+ * ## Recording the outcome (issue #180)
+ *
+ * Every exit below now writes `listings.vector_indexed_at`: the epoch-ms
+ * time of the successful upsert, or NULL on any failure. Before this, all
+ * four failure paths returned void and wrote nothing anywhere, so "this
+ * listing has no vector" was not a fact any query, panel or cron could ask
+ * about — the same "a panel that cannot tell 'I did not look' from 'I looked
+ * and saw nothing'" defect AGENTS.md describes, one layer down. NULL is now
+ * the queryable form of "needs (re-)indexing".
+ *
+ * Failure deliberately *clears* the column rather than leaving whatever was
+ * there: after an edit whose re-embed failed, any vector still in the index
+ * describes the listing's old text, and a stale vector is a re-index
+ * candidate for the same reason a missing one is.
+ *
+ * `updated_at` is intentionally not touched by that write —
+ * `cron/moderationRetry.ts` selects `pending` listings by `updated_at`, and
+ * an indexing bookkeeping write must not look like a content change.
  */
 import type { Env } from "../env.js";
 import { parseIntVar, semanticSearchEnabled } from "../env.js";
@@ -28,6 +51,12 @@ import { embed, embeddingText } from "./embedding.js";
 import { upsertListingVector } from "./vectorize.js";
 
 const DEFAULT_EMBED_DAILY_BUDGET = 2000;
+
+/** `indexedAt = null` means "this listing has no vector for its current
+ * text" — never indexed, or invalidated by a failed re-embed. */
+async function recordVectorIndexed(env: Env, listingId: string, indexedAt: number | null): Promise<void> {
+  await env.DB.prepare("UPDATE listings SET vector_indexed_at = ? WHERE id = ?").bind(indexedAt, listingId).run();
+}
 
 export async function reembedListing(env: Env, listingId: string): Promise<void> {
   // Same kill switch the read path checks (`search/search.ts`), checked
@@ -49,6 +78,7 @@ export async function reembedListing(env: Env, listingId: string): Promise<void>
   const budget = await checkAndBump(env.KV, { kind: "embed", dailyLimit });
   if (!budget.allowed) {
     console.warn("reembedListing: EMBED_DAILY_BUDGET exhausted, skipping", { listingId });
+    await recordVectorIndexed(env, listingId, null);
     return;
   }
 
@@ -56,7 +86,21 @@ export async function reembedListing(env: Env, listingId: string): Promise<void>
   const text = embeddingText(listing.title, listing.story, aspects);
 
   const vector = await embed(env, text);
-  if (!vector) return;
+  if (!vector) {
+    // `embed` already logged which of its failure modes fired (no binding, a
+    // thrown call, a timeout, an unparseable response) — this records the
+    // consequence: no current vector for this listing.
+    console.warn("reembedListing: embedding unavailable, listing left unindexed", { listingId });
+    await recordVectorIndexed(env, listingId, null);
+    return;
+  }
 
-  await upsertListingVector(env, listingId, vector);
+  const upserted = await upsertListingVector(env, listingId, vector);
+  if (!upserted) {
+    console.warn("reembedListing: Vectorize upsert did not land, listing left unindexed", { listingId });
+    await recordVectorIndexed(env, listingId, null);
+    return;
+  }
+
+  await recordVectorIndexed(env, listingId, Date.now());
 }

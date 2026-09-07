@@ -11,8 +11,11 @@
  *    sitting over the bottom of a 390px viewport intercepting the "Continue"
  *    every other spec is trying to click. It seeds a REFUSAL, so the rest of
  *    the suite runs against the same nothing-loaded document a privacy-minded
- *    visitor gets. `consent.spec.ts` and the banner's a11y scan build their own
- *    contexts precisely so they see the banner.
+ *    visitor gets. Two places build their own contexts precisely so they see
+ *    the banner: `consent.spec.ts`, and the "consent banner" block at the
+ *    bottom of `a11y.spec.ts` (which asks only for `browser`, so this fixture
+ *    never runs for it). Until #173 that second one did not exist and this
+ *    comment claimed it did — the banner had never been scanned by axe at all.
  *  - a "has visited before" flag already on file (issue #44), so `/` is the
  *    feed and not the new-visitor explainer. `welcome.spec.ts` builds its
  *    own context precisely so it sees the redirect.

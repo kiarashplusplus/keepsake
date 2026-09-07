@@ -5,11 +5,19 @@
  *  - default: newest-first keyset on `(published_at DESC, id DESC)`.
  *  - `q`: semantic search first (`src/search/search.ts`, Vectorize +
  *    Workers AI embeddings, issue #38), ranked by vector score, bounded
- *    offset. Falls back to FTS5 (`src/db/fts.ts`), `bm25` order, when
+ *    offset, **with the FTS5 matches merged in behind it** (`src/db/fts.ts`,
+ *    `bm25` order, deduplicated by id). FTS5 alone answers the query when
  *    Vectorize is unavailable, embedding the query fails, or the vector
  *    search comes back with nothing useful — see `vectorSearchCandidates`
  *    (`src/search/search.ts`) and the `useVector` check in the route
  *    handler below for exactly which of those fired.
+ *
+ *    The merge is issue #180: this used to be a per-query choice of one
+ *    path or the other, so a listing whose embedding call failed (nothing
+ *    retries it, and `reembedListing` is fire-and-forget) was missing from
+ *    its own exact-title search whenever any *other* listing cleared
+ *    `MIN_SCORE`. Now a missing vector costs a listing its ranking, not its
+ *    presence in the result set.
  *  - `country`+`postal` or `lat`+`lng`: bounding-box + haversine radius
  *    search, sorted by distance (or by search relevance when combined with
  *    `q` — see `buildGeoFeed`/`buildVectorGeoFeed` below), bounded offset.
@@ -20,6 +28,7 @@
  * public is visible at all.
  */
 import { Hono } from "hono";
+import { captureException } from "@keepsake/observability/capture";
 import { FeedQuery, type FeedPage, type RadiusMi } from "@keepsake/contracts/feed";
 import type { PublicListing } from "@keepsake/contracts/listing";
 import type { AspectShelf, ShelvesResponse } from "@keepsake/contracts/shelves";
@@ -33,6 +42,7 @@ import { lookupPostalCode } from "../geo/lookup.js";
 import { serializePublicListing, type FeedListingRow } from "../lib/serialize.js";
 import { fetchAspectRowsForListings, fetchPhotoRowsForListings } from "../lib/listingsDb.js";
 import { sanitizeFtsQuery } from "../db/fts.js";
+import { fetchCandidateRows } from "../search/candidateRows.js";
 import { vectorSearchCandidates, type VectorMatch } from "../search/search.js";
 import { decodeKeysetCursor, decodeOffsetCursor, encodeKeysetCursor, encodeOffsetCursor } from "../lib/cursor.js";
 
@@ -66,42 +76,80 @@ const FEED_COLUMNS_L = FEED_COLUMNS.split(", ")
   .map((column) => `l.${column}`)
   .join(", ");
 
-/**
- * Fetches full listing rows for a set of Vectorize match ids, filtered the
- * same way every other feed mode filters (`status = 'approved'`, optional
- * `category`, optional geo bounding box) — Vectorize itself knows nothing
- * about status or location, only similarity, so this is where a match
- * against a `pending`/`hidden`/`given` listing (the index isn't pruned by
- * status — see `search/reembed.ts`, it embeds regardless of status, the
- * same way `listings_fts`'s insert trigger does) gets excluded, exactly
- * like `buildSearchFeed`'s `l.status = 'approved'` join condition does for
- * FTS. Returned as a map so callers can re-apply the caller's own rank
- * order (`matches` is already sorted by vector score; `IN (...)` is not).
- */
-async function fetchCandidateRows(
-  env: Env,
-  ids: string[],
-  category: string | undefined,
-  bbox?: { minLat: number; maxLat: number; minLng: number; maxLng: number },
-): Promise<Map<string, FeedListingRow>> {
-  if (ids.length === 0) return new Map();
+/** SQL-level cap on FTS rows fetched to merge into a vector result set
+ * (issue #180). Same reasoning as `GEO_CANDIDATE_LIMIT`: bigger than
+ * `MAX_OFFSET + limit` ever needs to be, so the offset window can't run out
+ * of merged candidates before hitting `MAX_OFFSET` itself. */
+const FTS_MERGE_CANDIDATE_LIMIT = 500;
 
-  const placeholders = ids.map(() => "?").join(",");
-  const conditions = ["status = 'approved'", `id IN (${placeholders})`];
-  const params: unknown[] = [...ids];
+/**
+ * Every `listings_fts MATCH` in this file runs through here (issue #163).
+ *
+ * FTS5 answers a query string its grammar can't parse with a driver-level
+ * error; nothing between here and `app.onError` caught it, so a malformed
+ * `q=` came back as a **500 whose body carried the raw D1 driver message**.
+ * `db/fts.ts` no longer produces such a string — every token is a quoted
+ * FTS5 literal — but "the sanitizer is correct today" is exactly the kind of
+ * claim this project has been burned by, so a slip degrades to an empty
+ * result set (and a captured exception) rather than a 500 in a visitor's
+ * face.
+ *
+ * Deliberately narrow: only the MATCH-bearing statements go through this, so
+ * a genuine D1 outage on any other query still surfaces as an error instead
+ * of being silently turned into "no results".
+ */
+async function runFtsQuery(env: Env, sql: string, params: unknown[]): Promise<FeedListingRow[]> {
+  try {
+    const { results } = await env.DB.prepare(sql)
+      .bind(...params)
+      .all<FeedListingRow>();
+    return results;
+  } catch (err) {
+    console.error("feed: FTS MATCH failed, degrading to empty results", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    captureException(err, { tags: { route: "feed", stage: "fts_match" } });
+    return [];
+  }
+}
+
+/** FTS candidates in `bm25` order, no offset — the merge half of issue #180
+ * needs the whole candidate window at once so it can be appended to a vector
+ * result set and paginated as one list. */
+async function fetchFtsMergeRows(env: Env, ftsQuery: string, category: string | undefined): Promise<FeedListingRow[]> {
+  const conditions = ["l.status = 'approved'"];
+  const params: unknown[] = [ftsQuery];
   if (category) {
-    conditions.push("category = ?");
+    conditions.push("l.category = ?");
     params.push(category);
   }
-  if (bbox) {
-    conditions.push("lat BETWEEN ? AND ?", "lng BETWEEN ? AND ?");
-    params.push(bbox.minLat, bbox.maxLat, bbox.minLng, bbox.maxLng);
-  }
+  params.push(FTS_MERGE_CANDIDATE_LIMIT);
 
-  const { results } = await env.DB.prepare(`SELECT ${FEED_COLUMNS} FROM listings WHERE ${conditions.join(" AND ")}`)
-    .bind(...params)
-    .all<FeedListingRow>();
-  return new Map(results.map((row) => [row.id, row]));
+  return runFtsQuery(
+    env,
+    `SELECT ${FEED_COLUMNS_L}
+     FROM listings_fts JOIN listings l ON l.rowid = listings_fts.rowid
+     WHERE listings_fts MATCH ? AND ${conditions.join(" AND ")}
+     ORDER BY bm25(listings_fts)
+     LIMIT ?`,
+    params,
+  );
+}
+
+/** Appends rows the vector path didn't already return, preserving both
+ * orders: vector rank first, then `bm25` rank for the FTS-only additions.
+ * This is what stops a listing with no vector (a failed embed — issue #180)
+ * from being invisible to a query that any *other* listing matched
+ * semantically. */
+function mergeUnseenRows(ordered: FeedListingRow[], extra: FeedListingRow[]): FeedListingRow[] {
+  const seen = new Set(ordered.map((row) => row.id));
+  const merged = [...ordered];
+  for (const row of extra) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    merged.push(row);
+  }
+  return merged;
 }
 
 async function serializePage(env: Env, rows: FeedListingRow[], distances?: Map<string, number>): Promise<PublicListing[]> {
@@ -156,15 +204,15 @@ async function buildSearchFeed(env: Env, query: FeedQuery, ftsQuery: string): Pr
   }
   params.push(limit, offset);
 
-  const { results } = await env.DB.prepare(
+  const results = await runFtsQuery(
+    env,
     `SELECT ${FEED_COLUMNS_L}
      FROM listings_fts JOIN listings l ON l.rowid = listings_fts.rowid
      WHERE listings_fts MATCH ? AND ${conditions.join(" AND ")}
      ORDER BY bm25(listings_fts)
      LIMIT ? OFFSET ?`,
-  )
-    .bind(...params)
-    .all<FeedListingRow>();
+    params,
+  );
 
   const items = await serializePage(env, results);
   const nextOffset = offset + limit;
@@ -173,20 +221,40 @@ async function buildSearchFeed(env: Env, query: FeedQuery, ftsQuery: string): Pr
 }
 
 /** Same offset pagination as `buildSearchFeed`, but the ranked candidate
- * list already came back from Vectorize (`vectorSearchCandidates`) instead
- * of a `bm25` SQL query — see the module doc comment for when this path is
- * used instead of FTS. */
-async function buildVectorSearchFeed(env: Env, query: FeedQuery, matches: VectorMatch[]): Promise<FeedPage<PublicListing>> {
+ * list came back from Vectorize (`vectorSearchCandidates`) rather than only
+ * from a `bm25` SQL query — see the module doc comment for how the two are
+ * combined.
+ *
+ * Issue #180: FTS rows are **merged in after** the vector-ranked ones rather
+ * than the route picking one path per query. A listing whose embedding call
+ * failed has no vector at all, and `reembedListing` is fire-and-forget, so
+ * under the old "vector or FTS, never both" rule that listing was absent
+ * from its own exact-title search for as long as any *other* listing cleared
+ * `MIN_SCORE`. Merging makes a missing vector cost that listing its ranking,
+ * not its existence. */
+async function buildVectorSearchFeed(
+  env: Env,
+  query: FeedQuery,
+  matches: VectorMatch[],
+  ftsQuery: string | null,
+): Promise<FeedPage<PublicListing>> {
   const limit = query.limit;
   const offset = decodeOffsetCursor(query.cursor);
   if (offset >= MAX_OFFSET) return { items: [], next_cursor: null };
 
   const rowsById = await fetchCandidateRows(
     env,
+    FEED_COLUMNS,
     matches.map((match) => match.id),
-    query.category,
+    { category: query.category },
   );
-  const ordered = matches.map((match) => rowsById.get(match.id)).filter((row): row is FeedListingRow => row !== undefined);
+  const vectorOrdered = matches
+    .map((match) => rowsById.get(match.id))
+    .filter((row): row is FeedListingRow => row !== undefined);
+
+  const ordered = ftsQuery
+    ? mergeUnseenRows(vectorOrdered, await fetchFtsMergeRows(env, ftsQuery, query.category))
+    : vectorOrdered;
 
   const page = ordered.slice(offset, offset + limit);
   const items = await serializePage(env, page);
@@ -194,6 +262,60 @@ async function buildVectorSearchFeed(env: Env, query: FeedQuery, matches: Vector
   const hasMore = ordered.length > nextOffset;
   const next_cursor = hasMore && nextOffset < MAX_OFFSET ? encodeOffsetCursor(nextOffset) : null;
   return { items, next_cursor };
+}
+
+/**
+ * The bounding-box candidate query shared by the two geo paths: plain radius
+ * browse (`ftsQuery === null`, newest first) and FTS-ranked geo search
+ * (`bm25` order). `buildVectorGeoFeed` calls it too, with a non-null
+ * `ftsQuery`, to merge FTS matches into a vector result set (issue #180).
+ *
+ * The bind list here is fixed-width (at most one MATCH + four bbox bounds +
+ * one category + the limit = 7), unlike the `id IN (…)` shape that issue
+ * #186 was about — nothing accumulates per candidate.
+ */
+async function fetchGeoRows(
+  env: Env,
+  ftsQuery: string | null,
+  bbox: { minLat: number; maxLat: number; minLng: number; maxLng: number },
+  category: string | undefined,
+): Promise<FeedListingRow[]> {
+  const whereParts: string[] = [];
+  const params: unknown[] = [];
+  let fromClause = "listings l";
+
+  if (ftsQuery) {
+    fromClause = "listings_fts JOIN listings l ON l.rowid = listings_fts.rowid";
+    whereParts.push("listings_fts MATCH ?");
+    params.push(ftsQuery);
+  }
+  whereParts.push("l.status = 'approved'");
+  whereParts.push("l.lat BETWEEN ? AND ?");
+  params.push(bbox.minLat, bbox.maxLat);
+  whereParts.push("l.lng BETWEEN ? AND ?");
+  params.push(bbox.minLng, bbox.maxLng);
+  if (category) {
+    whereParts.push("l.category = ?");
+    params.push(category);
+  }
+  params.push(GEO_CANDIDATE_LIMIT);
+
+  const orderClause = ftsQuery ? "ORDER BY bm25(listings_fts)" : "ORDER BY l.published_at DESC";
+  const sql = `SELECT ${FEED_COLUMNS_L}
+     FROM ${fromClause}
+     WHERE ${whereParts.join(" AND ")}
+     ${orderClause}
+     LIMIT ?`;
+
+  // Only the MATCH-bearing shape gets the degrade-to-empty treatment; a
+  // plain geo browse has no user-controlled query grammar in it, so a
+  // failure there is a real error and must stay one.
+  if (ftsQuery) return runFtsQuery(env, sql, params);
+
+  const { results } = await env.DB.prepare(sql)
+    .bind(...params)
+    .all<FeedListingRow>();
+  return results;
 }
 
 /** Handles both geo-only and geo+search: `ftsQuery` is `null` for a plain
@@ -214,36 +336,7 @@ async function buildGeoFeed(
   if (offset >= MAX_OFFSET) return { items: [], next_cursor: null };
 
   const bbox = boundingBox(refPoint.lat, refPoint.lng, radiusMi);
-  const whereParts: string[] = [];
-  const params: unknown[] = [];
-  let fromClause = "listings l";
-
-  if (ftsQuery) {
-    fromClause = "listings_fts JOIN listings l ON l.rowid = listings_fts.rowid";
-    whereParts.push("listings_fts MATCH ?");
-    params.push(ftsQuery);
-  }
-  whereParts.push("l.status = 'approved'");
-  whereParts.push("l.lat BETWEEN ? AND ?");
-  params.push(bbox.minLat, bbox.maxLat);
-  whereParts.push("l.lng BETWEEN ? AND ?");
-  params.push(bbox.minLng, bbox.maxLng);
-  if (query.category) {
-    whereParts.push("l.category = ?");
-    params.push(query.category);
-  }
-  params.push(GEO_CANDIDATE_LIMIT);
-
-  const orderClause = ftsQuery ? "ORDER BY bm25(listings_fts)" : "ORDER BY l.published_at DESC";
-  const { results } = await env.DB.prepare(
-    `SELECT ${FEED_COLUMNS_L}
-     FROM ${fromClause}
-     WHERE ${whereParts.join(" AND ")}
-     ${orderClause}
-     LIMIT ?`,
-  )
-    .bind(...params)
-    .all<FeedListingRow>();
+  const results = await fetchGeoRows(env, ftsQuery, bbox, query.category);
 
   const withDistance = results
     .map((row) => ({ row, distanceMi: haversineMiles(refPoint, { lat: row.lat, lng: row.lng }) }))
@@ -284,6 +377,7 @@ async function buildVectorGeoFeed(
   refPoint: LatLng,
   radiusMi: number,
   matches: VectorMatch[],
+  ftsQuery: string | null,
 ): Promise<FeedPage<PublicListing>> {
   const limit = query.limit;
   const offset = decodeOffsetCursor(query.cursor);
@@ -292,14 +386,23 @@ async function buildVectorGeoFeed(
   const bbox = boundingBox(refPoint.lat, refPoint.lng, radiusMi);
   const rowsById = await fetchCandidateRows(
     env,
+    FEED_COLUMNS,
     matches.map((match) => match.id),
-    query.category,
-    bbox,
+    { category: query.category, bbox },
   );
 
-  const withDistance = matches
+  const vectorOrdered = matches
     .map((match) => rowsById.get(match.id))
-    .filter((row): row is FeedListingRow => row !== undefined)
+    .filter((row): row is FeedListingRow => row !== undefined);
+
+  // Issue #180, geo half: same merge as `buildVectorSearchFeed`, against the
+  // bounding-box-filtered FTS candidates so an un-embedded listing is still
+  // reachable by a location-plus-search browse.
+  const ordered = ftsQuery
+    ? mergeUnseenRows(vectorOrdered, await fetchGeoRows(env, ftsQuery, bbox, query.category))
+    : vectorOrdered;
+
+  const withDistance = ordered
     .map((row) => ({ row, distanceMi: haversineMiles(refPoint, { lat: row.lat, lng: row.lng }) }))
     .filter((entry) => entry.distanceMi <= radiusMi);
 
@@ -356,17 +459,21 @@ feedRoutes.get("/", burst("RL_READ"), validateQuery(FeedQuery), async (c) => {
   // of them are actually relevant, so treating "matched nothing useful" the
   // same as "couldn't try" is what makes `db/fts.ts` a real fallback rather
   // than a path that only fires on an outage.
+  //
+  // `useVector` now decides only whether the vector ranking *leads*, not
+  // whether FTS runs at all: both vector builders take `ftsQuery` and merge
+  // the FTS matches in behind their own (issue #180).
   const vectorMatches = query.q !== undefined ? await vectorSearchCandidates(c.env, query.q) : null;
   const useVector = vectorMatches !== null && vectorMatches.length > 0;
 
   if (refPoint) {
     if (useVector) {
-      return ok(c, await buildVectorGeoFeed(c.env, query, refPoint, radiusMi, vectorMatches));
+      return ok(c, await buildVectorGeoFeed(c.env, query, refPoint, radiusMi, vectorMatches, ftsQuery));
     }
     return ok(c, await buildGeoFeed(c.env, query, refPoint, radiusMi, ftsQuery));
   }
   if (useVector) {
-    return ok(c, await buildVectorSearchFeed(c.env, query, vectorMatches));
+    return ok(c, await buildVectorSearchFeed(c.env, query, vectorMatches, ftsQuery));
   }
   if (ftsQuery) {
     return ok(c, await buildSearchFeed(c.env, query, ftsQuery));

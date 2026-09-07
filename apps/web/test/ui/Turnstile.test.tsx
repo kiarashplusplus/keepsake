@@ -49,9 +49,9 @@ function renderTurnstile(onStatus: (status: TurnstileStatus) => void, ref?: Reac
     // `react-test-renderer`, even under the "web" jest preset — there is no
     // real DOM, so the component's own `containerRef.current` (cast to
     // `HTMLElement` for the real browser) would otherwise be null and the
-    // component would report `{status:"error", reason:"widget"}` before
-    // ever reaching `window.turnstile.render`. `createNodeMock` stands in
-    // for the real element react-test-renderer can't produce.
+    // component would report `{status:"unconfigured"}` before ever reaching
+    // `window.turnstile.render`. `createNodeMock` stands in for the real
+    // element react-test-renderer can't produce.
     { createNodeMock: () => ({}) },
   );
 }
@@ -106,7 +106,15 @@ describe("Turnstile (jest-expo/web resolves the .web.tsx implementation)", () =>
     expect(api.reset).toHaveBeenCalledWith("widget-1");
   });
 
-  it("GUARD: a widget-level error does not enable submit (status is `error`, not `ready`/`unconfigured`)", async () => {
+  // Issue #174. This case used to assert the opposite — that a widget error
+  // left submit disabled — which is exactly the dead end it describes: five
+  // call sites compute `turnstileReady = status === "ready" || status ===
+  // "unconfigured"` and pass it to `disabled`, nothing anywhere renders copy
+  // for a failed challenge, and the error branch never reset the widget, so
+  // it could not self-heal. A challenge failure now answers the same way a
+  // blocked script already did: `unconfigured`, and the API's `siteverify`
+  // makes the real decision server-side.
+  it("GUARD: a widget-level error does not dead-end submit — it reports unconfigured, like a blocked script", async () => {
     mockConfig.turnstileSiteKey = "1x00000000000000000000AA";
     const api = installFakeTurnstile();
     const onStatus = jest.fn();
@@ -116,10 +124,48 @@ describe("Turnstile (jest-expo/web resolves the .web.tsx implementation)", () =>
     const options = api.render.mock.calls[0]?.[1] as RenderOptions;
     options["error-callback"]();
 
-    expect(onStatus).toHaveBeenLastCalledWith({ status: "error", reason: "widget" });
+    expect(onStatus).toHaveBeenLastCalledWith({ status: "unconfigured" });
+    // Computed exactly the way all five consumers compute it.
     const last = onStatus.mock.calls[onStatus.mock.calls.length - 1]?.[0] as TurnstileStatus;
-    const wouldEnableSubmit = last.status === "ready" || last.status === "unconfigured";
-    expect(wouldEnableSubmit).toBe(false);
+    const submitEnabled = last.status === "ready" || last.status === "unconfigured";
+    expect(submitEnabled).toBe(true);
+  });
+
+  it("GUARD: does not reset the widget from the error path, which would be an unbounded retry loop on a permanent 110200", async () => {
+    mockConfig.turnstileSiteKey = "1x00000000000000000000AA";
+    const api = installFakeTurnstile();
+    const onStatus = jest.fn();
+    renderTurnstile(onStatus);
+    await waitFor(() => expect(api.render).toHaveBeenCalledTimes(1));
+
+    const options = api.render.mock.calls[0]?.[1] as RenderOptions;
+    options["error-callback"]();
+    options["error-callback"]();
+
+    expect(api.reset).not.toHaveBeenCalled();
+  });
+
+  it("GUARD: a late widget error does not throw away a token the giver can still spend", async () => {
+    mockConfig.turnstileSiteKey = "1x00000000000000000000AA";
+    const api = installFakeTurnstile();
+    const onStatus = jest.fn();
+    renderTurnstile(onStatus);
+    await waitFor(() => expect(api.render).toHaveBeenCalledTimes(1));
+
+    const options = api.render.mock.calls[0]?.[1] as RenderOptions;
+    options.callback("a-real-token");
+    // A failed *refresh* after a good challenge. Downgrading to
+    // `unconfigured` here would submit an empty `cf-turnstile-response` and
+    // earn a `turnstile_failed` the giver did nothing to deserve.
+    options["error-callback"]();
+
+    expect(onStatus).toHaveBeenLastCalledWith({ status: "ready", token: "a-real-token" });
+
+    // Expiry still retires it, and after that an error is free to report
+    // `unconfigured` again.
+    options["expired-callback"]();
+    options["error-callback"]();
+    expect(onStatus).toHaveBeenLastCalledWith({ status: "unconfigured" });
   });
 
   it("exposes a reset handle that resets the underlying widget", async () => {
