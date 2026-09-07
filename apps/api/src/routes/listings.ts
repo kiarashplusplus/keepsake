@@ -74,6 +74,42 @@ const ASPECT_CONTACT_INFO_MESSAGE =
   "Keep contact details out of the item details — people reach you through Keepsake.";
 
 // ---------------------------------------------------------------------------
+// Router-level write brake (issue #168)
+// ---------------------------------------------------------------------------
+// Until this existed, `adminRoutes.use("*", burst("RL_ADMIN"), adminAuth())`
+// was the only router-level middleware in the Worker and every other
+// owner-authenticated write reached its handler with no metering at all.
+// `POST /api/listings` was carefully triple-guarded (burst + Turnstile +
+// daily budget) while `PATCH /api/listings/:id` — which costs the *same*
+// Workers AI calls, unconditionally scheduling the full moderation pipeline
+// and, on any title/story/aspect change, a re-embed — had nothing. Measured
+// by the audit: 60 PATCHes from one token and one fixed `CF-Connecting-IP`
+// returned 60x200, with `EMBED_DAILY_BUDGET` and the `mod_text` pool moving
+// one-for-one. `EMBED_DAILY_BUDGET` is global with no per-IP twin, so a
+// couple of minutes of that loop leaves every genuine listing created for
+// the rest of the UTC day with no vector at all.
+//
+// Deliberately router-level rather than one more per-route decision: a
+// per-route decision is exactly what let this drift, and a write route added
+// to this file next year is metered by default instead of by remembering.
+//
+// GET is skipped so the read path keeps its own `RL_READ` accounting rather
+// than being charged against two bindings at once; `GET /api/listings/:id`
+// already carries `burst("RL_READ")`, which is sized for reads (300/60s
+// against RL_WRITE's 60/60s). Routes that already name a tighter binding
+// (`RL_CREATE`, `RL_REQUEST`, `RL_REPORT`, all 5/60s) keep it and simply sit
+// behind this one too — the tighter of the two is what a caller actually
+// feels.
+// `.on(methods, "*", ...)` rather than `.use("*", ...)` + a method check
+// inside: it is the same router-level registration, applied before every
+// matching route's own middleware, but Hono does the method filtering itself
+// so there is no hand-written `if (c.req.method === "GET")` to get wrong, and
+// `burst()` keeps its own context type instead of needing a cast. `PUT` is
+// listed although this router has none today — the point of the guard is the
+// route nobody has written yet.
+listingRoutes.on(["POST", "PATCH", "PUT", "DELETE"], "*", burst("RL_WRITE"));
+
+// ---------------------------------------------------------------------------
 // POST /api/listings
 // ---------------------------------------------------------------------------
 // `burst("RL_CREATE")` first, for the reason spelled out on `PUT /api/photos`
@@ -201,116 +237,137 @@ listingRoutes.post(
 // ---------------------------------------------------------------------------
 // PATCH /api/listings/:id
 // ---------------------------------------------------------------------------
-listingRoutes.patch("/:id", ownerAuth(), validateBody(UpdateListingInput), async (c) => {
-  const owner = c.get("owner");
-  const id = requireParam(c, "id");
-  const input = c.get("validatedBody") as import("@keepsake/contracts/listing").UpdateListingInput;
+// `dailyBudget` on the `listing` kind, the same pool and the same per-IP
+// ceiling `POST /` draws on (issue #168). One pool rather than a new
+// `listing_edit` kind on purpose: an edit costs exactly the AI calls a create
+// costs — one moderation run, one re-embed — so rationing the two together is
+// what the number `LISTING_IP_DAILY_BUDGET = 20` already means, and it needs
+// no new `[vars]` entry in three wrangler env blocks to say so.
+//
+// After `ownerAuth`, matching create's relative order (auth, then budget), so
+// a caller with no usable token is refused before spending anyone's
+// allowance. Turnstile is deliberately *not* added here: the web edit step
+// mints no token today, so it would break the real edit flow rather than
+// harden it. Said plainly rather than quietly skipped — the burst brake above
+// and this ceiling are what stand between an owner token (minted client-side,
+// `ownerAuth({createIfMissing:true})` creates the row on sight) and the
+// global AI budgets.
+listingRoutes.patch(
+  "/:id",
+  ownerAuth(),
+  dailyBudget({ kind: "listing", ipDailyLimitVar: "LISTING_IP_DAILY_BUDGET", fallbackIpDailyLimit: DEFAULT_LISTING_IP_DAILY_BUDGET }),
+  validateBody(UpdateListingInput),
+  async (c) => {
+    const owner = c.get("owner");
+    const id = requireParam(c, "id");
+    const input = c.get("validatedBody") as import("@keepsake/contracts/listing").UpdateListingInput;
 
-  const row = await fetchListingRow(c.env, id);
-  if (!row || row.owner_id !== owner.id) {
-    return fail(c, "not_found", "Listing not found.", 404);
-  }
-  if (row.status === "given") {
-    return fail(c, "conflict", "This keepsake has already been given and can't be edited.", 409);
-  }
-
-  // Issue #171 — same gate as create. An edit is the other way client-supplied
-  // aspect text reaches `listing_aspects` and `PublicListing.aspects`.
-  if (aspectsContainContactInfo(input.aspects)) {
-    return fail(c, "bad_request", ASPECT_CONTACT_INFO_MESSAGE, 400);
-  }
-
-  let place: { country: Country; code: string; place_name: string; admin1: string | null; lat: number; lng: number } | null = null;
-  if (input.country && input.postal_code) {
-    place = await lookupPostalCode(c.env, input.country, input.postal_code);
-    if (!place) return fail(c, "bad_request", "We don't know that postcode yet.", 400);
-  }
-
-  if (input.photo_ids) {
-    const placeholders = input.photo_ids.map(() => "?").join(",");
-    const { results: ownedPhotos } = await c.env.DB.prepare(
-      `SELECT id FROM photos WHERE owner_id = ? AND (listing_id IS NULL OR listing_id = ?) AND id IN (${placeholders})`,
-    )
-      .bind(owner.id, id, ...input.photo_ids)
-      .all<{ id: string }>();
-    if (ownedPhotos.length !== input.photo_ids.length) {
-      return fail(c, "bad_request", "One or more photos aren't available to attach.", 400);
+    const row = await fetchListingRow(c.env, id);
+    if (!row || row.owner_id !== owner.id) {
+      return fail(c, "not_found", "Listing not found.", 404);
     }
-  }
+    if (row.status === "given") {
+      return fail(c, "conflict", "This keepsake has already been given and can't be edited.", 409);
+    }
 
-  const nextVersion = row.version + 1;
-  const now = Date.now();
+    // Issue #171 — same gate as create. An edit is the other way client-supplied
+    // aspect text reaches `listing_aspects` and `PublicListing.aspects`.
+    if (aspectsContainContactInfo(input.aspects)) {
+      return fail(c, "bad_request", ASPECT_CONTACT_INFO_MESSAGE, 400);
+    }
 
-  await c.env.DB.prepare(
-    `UPDATE listings SET
-       title = ?, story = ?, category = ?,
-       country = ?, postal_code = ?, place_name = ?, admin1 = ?, lat = ?, lng = ?,
-       status = 'pending', moderation_reason = NULL, version = ?, updated_at = ?
-     WHERE id = ? AND version = ?`,
-  )
-    .bind(
-      input.title ?? row.title,
-      input.story ?? row.story,
-      input.category ?? row.category,
-      place?.country ?? row.country,
-      place?.code ?? row.postal_code,
-      place?.place_name ?? row.place_name,
-      place?.admin1 ?? row.admin1,
-      place?.lat ?? row.lat,
-      place?.lng ?? row.lng,
-      nextVersion,
-      now,
-      id,
-      row.version,
+    let place: { country: Country; code: string; place_name: string; admin1: string | null; lat: number; lng: number } | null = null;
+    if (input.country && input.postal_code) {
+      place = await lookupPostalCode(c.env, input.country, input.postal_code);
+      if (!place) return fail(c, "bad_request", "We don't know that postcode yet.", 400);
+    }
+
+    if (input.photo_ids) {
+      const placeholders = input.photo_ids.map(() => "?").join(",");
+      const { results: ownedPhotos } = await c.env.DB.prepare(
+        `SELECT id FROM photos WHERE owner_id = ? AND (listing_id IS NULL OR listing_id = ?) AND id IN (${placeholders})`,
+      )
+        .bind(owner.id, id, ...input.photo_ids)
+        .all<{ id: string }>();
+      if (ownedPhotos.length !== input.photo_ids.length) {
+        return fail(c, "bad_request", "One or more photos aren't available to attach.", 400);
+      }
+    }
+
+    const nextVersion = row.version + 1;
+    const now = Date.now();
+
+    await c.env.DB.prepare(
+      `UPDATE listings SET
+         title = ?, story = ?, category = ?,
+         country = ?, postal_code = ?, place_name = ?, admin1 = ?, lat = ?, lng = ?,
+         status = 'pending', moderation_reason = NULL, version = ?, updated_at = ?
+       WHERE id = ? AND version = ?`,
     )
-    .run();
-
-  if (input.photo_ids) {
-    // Detach anything currently on this listing that isn't in the new set,
-    // then (re)attach the new set in order.
-    const placeholders = input.photo_ids.map(() => "?").join(",");
-    await c.env.DB.prepare(`UPDATE photos SET listing_id = NULL, position = NULL WHERE listing_id = ? AND id NOT IN (${placeholders})`)
-      .bind(id, ...input.photo_ids)
+      .bind(
+        input.title ?? row.title,
+        input.story ?? row.story,
+        input.category ?? row.category,
+        place?.country ?? row.country,
+        place?.code ?? row.postal_code,
+        place?.place_name ?? row.place_name,
+        place?.admin1 ?? row.admin1,
+        place?.lat ?? row.lat,
+        place?.lng ?? row.lng,
+        nextVersion,
+        now,
+        id,
+        row.version,
+      )
       .run();
-    for (let position = 0; position < input.photo_ids.length; position++) {
-      await c.env.DB.prepare("UPDATE photos SET listing_id = ?, position = ? WHERE id = ?")
-        .bind(id, position, input.photo_ids[position])
+
+    if (input.photo_ids) {
+      // Detach anything currently on this listing that isn't in the new set,
+      // then (re)attach the new set in order.
+      const placeholders = input.photo_ids.map(() => "?").join(",");
+      await c.env.DB.prepare(`UPDATE photos SET listing_id = NULL, position = NULL WHERE listing_id = ? AND id NOT IN (${placeholders})`)
+        .bind(id, ...input.photo_ids)
         .run();
+      for (let position = 0; position < input.photo_ids.length; position++) {
+        await c.env.DB.prepare("UPDATE photos SET listing_id = ?, position = ? WHERE id = ?")
+          .bind(id, position, input.photo_ids[position])
+          .run();
+      }
     }
-  }
 
-  // `UpdateListingInput.aspects` is a plain `.optional()` override, not the
-  // usual `.partial()` treatment (see the contract's own comment on why) —
-  // an `aspects` key genuinely absent from the request body parses to
-  // `undefined` here, distinct from an explicit `[]`, which is truthy
-  // (arrays always are) and does replace. Only overwrite when the client
-  // actually sent something, the same rule `input.photo_ids` above already
-  // follows: a re-submit that never touched aspects must not silently wipe
-  // them.
-  if (input.aspects) {
-    await replaceListingAspects(c.env, id, input.aspects);
-  }
+    // `UpdateListingInput.aspects` is a plain `.optional()` override, not the
+    // usual `.partial()` treatment (see the contract's own comment on why) —
+    // an `aspects` key genuinely absent from the request body parses to
+    // `undefined` here, distinct from an explicit `[]`, which is truthy
+    // (arrays always are) and does replace. Only overwrite when the client
+    // actually sent something, the same rule `input.photo_ids` above already
+    // follows: a re-submit that never touched aspects must not silently wipe
+    // them.
+    if (input.aspects) {
+      await replaceListingAspects(c.env, id, input.aspects);
+    }
 
-  c.executionCtx.waitUntil(moderateListing(c.env, id, nextVersion, clientIPFrom(c.req.raw)));
-  // Issue #38: re-embed whenever the request could have changed what's
-  // actually searchable — title, story, or aspects. `input.title`/
-  // `input.story` are `UpdateListingInput`'s normal `.partial()` optionals
-  // (absent means "unchanged", same convention `place`/`photo_ids` above
-  // already follow); `input.aspects` uses the non-defaulting override
-  // `replaceListingAspects`'s own doc comment explains. Skipping this for a
-  // photo-only or location-only edit isn't just an optimization — it also
-  // means a listing that's exhausted EMBED_DAILY_BUDGET for the day doesn't
-  // get charged again for an edit that couldn't have changed its vector.
-  if (input.title !== undefined || input.story !== undefined || input.aspects !== undefined) {
-    c.executionCtx.waitUntil(reembedListing(c.env, id));
-  }
+    c.executionCtx.waitUntil(moderateListing(c.env, id, nextVersion, clientIPFrom(c.req.raw)));
+    // Issue #38: re-embed whenever the request could have changed what's
+    // actually searchable — title, story, or aspects. `input.title`/
+    // `input.story` are `UpdateListingInput`'s normal `.partial()` optionals
+    // (absent means "unchanged", same convention `place`/`photo_ids` above
+    // already follow); `input.aspects` uses the non-defaulting override
+    // `replaceListingAspects`'s own doc comment explains. Skipping this for a
+    // photo-only or location-only edit isn't just an optimization — it also
+    // means a listing that's exhausted EMBED_DAILY_BUDGET for the day doesn't
+    // get charged again for an edit that couldn't have changed its vector.
+    if (input.title !== undefined || input.story !== undefined || input.aspects !== undefined) {
+      c.executionCtx.waitUntil(reembedListing(c.env, id));
+    }
 
-  const updatedRow = await fetchListingRow(c.env, id);
-  if (!updatedRow) return fail(c, "internal", "Listing failed to save.", 500);
-  const photos = await fetchPhotoRows(c.env, id);
-  const aspects = await fetchAspectRows(c.env, id);
-  return ok(c, serializeOwnerListing(updatedRow, photos, aspects));
-});
+    const updatedRow = await fetchListingRow(c.env, id);
+    if (!updatedRow) return fail(c, "internal", "Listing failed to save.", 500);
+    const photos = await fetchPhotoRows(c.env, id);
+    const aspects = await fetchAspectRows(c.env, id);
+    return ok(c, serializeOwnerListing(updatedRow, photos, aspects));
+  },
+);
 
 // ---------------------------------------------------------------------------
 // DELETE /api/listings/:id
