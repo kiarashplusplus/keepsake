@@ -294,3 +294,37 @@ export type AdminRequestRemoveResult = {
   removed: true;
   removed_at: number;
 };
+
+// ---------------------------------------------------------------------------
+// #37: POST /api/admin/backfill-aspects — one batch of the aspects backfill.
+// ---------------------------------------------------------------------------
+
+/**
+ * Body for one batch of the aspects backfill (issue #37). `limit` bounds how
+ * many pre-existing, aspect-less listings this single call processes —
+ * small and admin-driven rather than one huge request, since each listing
+ * costs a real (budget-metered) vision call and a Worker request has a CPU
+ * time ceiling. Re-POSTing `{}` (or the same `limit`) repeatedly is the
+ * normal way to drive the whole backfill to completion; see
+ * `AdminBackfillAspectsResult.remaining`.
+ */
+export const AdminBackfillAspectsInput = z.object({
+  limit: z.coerce.number().int().min(1).max(20).default(5),
+});
+export type AdminBackfillAspectsInput = z.infer<typeof AdminBackfillAspectsInput>;
+
+/**
+ * Plain data, not a client-submitted shape — same rule as `AdminStats`
+ * above. `with_aspects`/`without_aspects` are both "processed successfully";
+ * they're split out because a run that's all `without_aspects` looks like a
+ * bug (nothing came back) unless you can see that's actually what an honest
+ * "no confident attributes" answer looks like across a batch.
+ */
+export type AdminBackfillAspectsResult = {
+  processed: number;
+  with_aspects: number;
+  without_aspects: number;
+  failed: number;
+  budget_exhausted: boolean;
+  remaining: number;
+};
