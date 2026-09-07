@@ -571,19 +571,56 @@ listingRoutes.post(
     )
       .bind(reportId, id, input.reason, input.details ?? null, ipDigest, now)
       .run();
-    await c.env.DB.prepare("UPDATE listings SET report_count = report_count + 1 WHERE id = ?").bind(id).run();
+    // Issue #184: `RETURNING`, not a second read and not `row.report_count + 1`.
+    // The increment was always atomic; the *decision* was not. `row` is
+    // fetched at the top of this handler, before the `reports` insert and
+    // before this update, so three people reporting the same listing in the
+    // same second — which is exactly how reports on genuinely bad content
+    // arrive, because they arrive when the content is being seen — all read
+    // `report_count = 0`, all computed `1`, and `1 >= 3` was false for every
+    // one of them. The stored count was 3 and the listing stayed public
+    // until a fourth, non-concurrent report showed up. A listing at a true
+    // count of 5 could still be evaluated as 1. The `report_autohide` event
+    // and the warning were skipped along with the hide, so nothing recorded
+    // that the threshold had been crossed and the admin queue's
+    // report-pressure view had nothing to join against either.
+    //
+    // `RETURNING` closes the window entirely and keeps it to one round trip:
+    // the count and status this branch reads are the post-increment ones,
+    // read inside the same statement that wrote them, so exactly one of N
+    // concurrent reporters sees the value that crosses the threshold.
+    const incremented = await c.env.DB.prepare(
+      "UPDATE listings SET report_count = report_count + 1 WHERE id = ? RETURNING report_count, status",
+    )
+      .bind(id)
+      .first<{ report_count: number; status: string }>();
 
-    const reportCount = row.report_count + 1;
+    const reportCount = incremented?.report_count ?? row.report_count + 1;
+    const statusAfterIncrement = incremented?.status ?? row.status;
     const threshold = reportAutohideThreshold(c.env);
 
     // Only pulls a listing that's currently public — a report against a
     // listing already `given`/`hidden`/etc. still counts (report_count
     // above already incremented) but never flips status out from under a
-    // state this middleware didn't put it in.
-    if (reportCount >= threshold && row.status === "approved") {
-      await c.env.DB.prepare("UPDATE listings SET status = 'hidden', updated_at = ? WHERE id = ? AND status = 'approved'")
+    // state this middleware didn't put it in. Reading the status off the
+    // same `RETURNING` row is what stops a later concurrent reporter
+    // re-hiding (and re-eventing) a listing an earlier one already hid.
+    if (reportCount >= threshold && statusAfterIncrement === "approved") {
+      // `AND status = 'approved'` was already here; `RETURNING id` is what
+      // makes it usable as a compare-and-set. With five overlapping reports,
+      // two callers can both read `approved` off their own increment (the
+      // third one's hide has not committed yet) and both enter this branch —
+      // measured, two `report_autohide` events for one hide. Only the caller
+      // whose UPDATE actually changed a row writes the event and the warning,
+      // so the record of the hide is exactly one row however many reporters
+      // arrive at once.
+      const hidden = await c.env.DB.prepare(
+        "UPDATE listings SET status = 'hidden', updated_at = ? WHERE id = ? AND status = 'approved' RETURNING id",
+      )
         .bind(now, id)
-        .run();
+        .first<{ id: string }>();
+      if (!hidden) return ok(c, { id: reportId }, 201);
+
       await c.env.DB.prepare(
         `INSERT INTO moderation_events (id, listing_id, listing_version, kind, verdict, reason, attempt, created_at)
          VALUES (?, ?, ?, 'report_autohide', 'hidden', 'report_autohide', 1, ?)`,
