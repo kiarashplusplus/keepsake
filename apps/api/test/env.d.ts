@@ -14,3 +14,19 @@ declare global {
     }
   }
 }
+
+// `import.meta.glob` is a Vite build-time transform, not a runtime API, so no
+// package ships its type into this project: `apps/api/tsconfig.json` pins
+// `types` to the worker configuration and the vitest-pool-workers types, and
+// pulling in `vite/client` wholesale would drag DOM/asset ambient
+// declarations into a Worker project to get one method. `emailSubjects.test.ts`
+// (issue #86) uses it to enumerate `src/email/templates/*.ts` from inside the
+// Workers runtime, which has no `node:fs` to list the directory itself.
+declare global {
+  interface ImportMeta {
+    glob<T = unknown>(
+      pattern: string,
+      options: { eager: true; query?: string; import?: string },
+    ): Record<string, T>;
+  }
+}

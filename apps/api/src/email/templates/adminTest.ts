@@ -1,4 +1,4 @@
-import { renderShell, footerLine, type EmailTemplate } from "./shared.js";
+import { renderShell, footerLine, sanitizeSubject, type EmailTemplate } from "./shared.js";
 
 /**
  * `POST /api/admin/test-email` — a real message through the real
@@ -12,7 +12,7 @@ export function adminTest(now: Date = new Date()): EmailTemplate {
   const stamp = now.toISOString();
 
   return {
-    subject: `Keepsake test email — ${stamp}`,
+    subject: sanitizeSubject(`Keepsake test email — ${stamp}`),
     html: renderShell({
       bodyHtml: `<p>This is a test message sent from <code>POST /api/admin/test-email</code> at ${stamp}.</p>
         <p>If you're reading this, delivery works right now, through whichever provider is configured

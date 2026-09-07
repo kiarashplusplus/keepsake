@@ -1,4 +1,4 @@
-import { renderButton, renderShell, plainLinkLine, footerLine, type EmailTemplate } from "./shared.js";
+import { renderButton, renderShell, plainLinkLine, footerLine, sanitizeSubject, type EmailTemplate } from "./shared.js";
 
 export interface RecoverParams {
   link: string;
@@ -14,7 +14,7 @@ export function recover(params: RecoverParams): EmailTemplate {
   const intro = "Use this link to get back into your Keepsake dashboard. It works once, and expires in 30 minutes.";
 
   return {
-    subject: "Recover your Keepsake dashboard",
+    subject: sanitizeSubject("Recover your Keepsake dashboard"),
     html: renderShell({
       bodyHtml: `<p>${intro}</p>${renderButton(params.link, "Recover dashboard")}${plainLinkLine(params.link)}<p style="font-size:13px;color:#7A7168;">Didn't ask for this? You can ignore this email.</p>`,
       footerReason: reason,
