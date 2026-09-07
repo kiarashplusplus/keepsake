@@ -74,10 +74,33 @@ export type CronJobName = (typeof CRON_JOBS)[number]["name"];
 export const CRON_JOB_NAMES: readonly CronJobName[] = CRON_JOBS.map((job) => job.name);
 
 /** KV key holding the last successful completion of `name`, written by
- * `runCron` in `index.ts` as its final statement so the timestamp only ever
- * means "this job finished", never "this job started". */
+ * `writeCronHeartbeat` below — called from `runCron` in `index.ts` as its
+ * final statement — so the timestamp only ever means "this job finished",
+ * never "this job started". */
 export function cronHeartbeatKey(name: string): string {
   return `cron:last:${name}`;
+}
+
+/**
+ * Records that `name` finished. The **only** writer of a heartbeat, and it is
+ * called from exactly one place: `runCron`, after the job's promise resolves.
+ *
+ * Issue #165. Until this existed each job wrote its own key as its last
+ * statement, and the comments in `index.ts` and above already described
+ * `runCron` as the writer — aspirationally. `dailyDigest` simply never wrote
+ * one. `readCronHeartbeats` counts a missing key as stale (correctly), so
+ * `GET /api/admin/health` returned `ok: false` on every deployed tier from
+ * the day that job was registered, and every nightly digest listed its own
+ * cron under `needs_attention`. The only "the crons died" channel this system
+ * has was jammed in the alarm position, which carries exactly as much
+ * information as one jammed in the all-clear position.
+ *
+ * A per-job write is a rule a person has to remember; this is a rule the
+ * dispatcher enforces. Adding a fourth cron cannot now ship without a
+ * heartbeat, because the author never writes one.
+ */
+export async function writeCronHeartbeat(kv: KVNamespace, name: CronJobName, at: number): Promise<void> {
+  await kv.put(cronHeartbeatKey(name), String(at));
 }
 
 export function staleAfterMs(name: string): number {

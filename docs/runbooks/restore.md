@@ -256,8 +256,9 @@ Full details, including regenerating from GeoNames, in [geodata.md](geodata.md).
 - `GET /api/admin/health` — `postal_codes_count > 0`, and `cron_last_run` fresh for all **three**
   jobs (`moderationRetry`, `orphanSweep`, `dailyDigest`). `ok` is false if any heartbeat is stale,
   if postcodes are missing, or if auto-hidden reports are awaiting review; see
-  `docs/runbooks/admin.md`. Note `dailyDigest` never writes its heartbeat today, so `ok` is
-  currently `false` regardless (#165) — do not read that as a failed restore.
+  `docs/runbooks/admin.md`. On a freshly restored KV namespace every heartbeat is missing, which
+  counts as stale — `moderationRetry` clears within five minutes, the two nightly jobs on their
+  next run, so `ok: false` immediately after a restore is expected and is not itself a finding.
 - Search still works: `GET /api/feed?q=<a word you know is in a listing>` returns it. This is the
   one thing a restore can break silently, because an empty FTS index looks exactly like "no
   results".
@@ -385,6 +386,36 @@ pnpm exec wrangler r2 bucket lifecycle add keepsake-photos-preview-backup \
 terminal-photo grace period, so the backup outlives every other recovery mechanism in this
 document rather than expiring a photo those mechanisms would still consider live.
 
+### The ordering is enforced by the sweep
+
+Issue #178. This runbook used to state, as a fact and one paragraph above the timestamp that
+contradicts it, that the backup runs before `orphanSweep` and therefore always copies a photo
+before the sweep can delete it. The backup was scheduled at 03:00 and the sweep's cron is 03:17:
+seventeen minutes of margin against GitHub's `schedule:` queue, which GitHub documents as
+best-effort. Measured drift on this repository is regularly larger than that — `report-pressure.yml`
+has started up to 18 minutes late — and **the one scheduled run `backup-photos.yml` has ever had
+started at 03:18, after the sweep's trigger.**
+
+When the sweep wins that race it deletes the R2 objects and the `photos` row; the backup then
+queries D1, no longer sees the row, copies nothing, and exits green. The bytes are gone with no
+copy anywhere, and a green run looks identical to a quiet one.
+
+So `orphanSweep` now reads the backup bucket itself and **refuses to delete a photo whose two keys
+are not already there** (`PHOTO_BACKUP_BUCKET` in `apps/api/wrangler.toml`, `isBackedUp` in
+`apps/api/src/cron/orphanSweep.ts`). A late backup delays a deletion by a night instead of losing
+bytes. Deferrals are counted in the sweep's `orphanSweep: done` log line as `photosDeferred`, and
+a `console.warn` names them — a non-zero count on one night is the guard working; a non-zero count
+every night means the backup workflow has stopped, and orphan cleanup has stopped with it.
+
+**Production runs without that guard today, on purpose.** `keepsake-photos-production-backup` does
+not exist (#157), so `wrangler.toml` deliberately declares `PHOTO_BACKUP_BUCKET` at the top level
+and under `[env.preview]` only. With the binding absent the sweep deletes as it always did and
+logs a warn saying deletion is running unguarded — because refusing every deletion for want of a
+bucket nobody has created would turn one missing resource into unbounded R2 growth and a `photos`
+table nothing prunes. **Creating that bucket and uncommenting the four lines under
+`[env.production]` is the second half of #157**, and it is what turns the guard on for the live
+site.
+
 ### What this does not fix
 
 **The backup bucket is in the same Cloudflare account as the bucket it insures against.** This is
@@ -412,8 +443,11 @@ node tools/backup-photos.mjs --env production
 ```
 
 **The cron fires, and its production leg has not yet proved anything.**
-`.github/workflows/backup-photos.yml` runs `tools/backup-photos.mjs` for both tiers at 03:00 UTC,
-before `orphanSweep`'s own 03:17. It has fired once on its `schedule:` trigger —
+`.github/workflows/backup-photos.yml` runs `tools/backup-photos.mjs` for both tiers, at 01:00 UTC
+since #178 (03:00 before that). **That time is not what keeps a photo safe** — see
+[The ordering is enforced by the sweep](#the-ordering-is-enforced-by-the-sweep) below, which is
+the correction to what this paragraph used to claim. It has fired once on its `schedule:`
+trigger —
 [run 34079182574](https://github.com/kiarashplusplus/keepsake/actions/runs/34079182574),
 2026-09-07 03:18 UTC, both legs green — which retires the "no green Actions run is possible yet"
 caveat this paragraph used to carry (a workflow file GitHub has never seen on the default branch

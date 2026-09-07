@@ -19,6 +19,7 @@ import { env, SELF } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OBSERVATORY_WINDOWS, type Observatory } from "@keepsake/contracts/observatory";
 import { MAX_EDGE_WINDOW_DAYS } from "../src/observatory/cloudflare.js";
+import { CRON_JOB_NAMES, cronHeartbeatKey } from "../src/cron/registry.js";
 import { insertApprovedListing, insertOwner, readOk, setTestEnvVar } from "./helpers.js";
 
 const ADMIN_TOKEN = "test-admin-token-observatory";
@@ -323,15 +324,48 @@ describe("the daily digest", () => {
   });
 
   it("flags a cron that has never run as stale rather than as healthy", async () => {
+    // #165: this used to single out `dailyDigest`, which read as "that job
+    // is stale" — a true statement about the world at the time, because that
+    // job never wrote a heartbeat at all, and one this test would have gone
+    // on asserting after the bug was fixed. The rule under test is the
+    // general one in `readCronHeartbeats`: a *missing* key is not read as
+    // "fine". So clear every key first and assert it for every job, which
+    // also makes the test independent of which jobs happen to be registered.
+    for (const name of CRON_JOB_NAMES) {
+      await env.KV.delete(cronHeartbeatKey(name));
+    }
+
     const observatory = await getObservatory();
 
-    // The test D1/KV has no heartbeats, so every job is stale — the point is
-    // that a *missing* key is not read as "fine".
-    const digestCron = observatory.report.crons.find((cron) => cron.name === "dailyDigest");
-    expect(digestCron).toBeDefined();
-    expect(digestCron?.last_run_at).toBeNull();
-    expect(digestCron?.stale).toBe(true);
+    expect(observatory.report.crons.length).toBe(CRON_JOB_NAMES.length);
+    for (const cron of observatory.report.crons) {
+      expect(cron.last_run_at).toBeNull();
+      expect(cron.stale).toBe(true);
+    }
     expect(observatory.report.needs_attention.some((alert) => alert.code === "cron_stale")).toBe(true);
+  });
+
+  it("stops flagging a cron once it has actually run", async () => {
+    // The control the assertion above never had. A test that only ever sees
+    // an empty KV cannot tell "counts a missing key as stale" from "reports
+    // every cron as stale, always" — which is precisely the state #165 left
+    // the deployed tiers in, and precisely what a permanently-red signal
+    // looks like from inside the suite.
+    for (const name of CRON_JOB_NAMES) {
+      await env.KV.put(cronHeartbeatKey(name), String(Date.now()));
+    }
+
+    const observatory = await getObservatory();
+
+    for (const cron of observatory.report.crons) {
+      expect(cron.last_run_at).not.toBeNull();
+      expect(cron.stale).toBe(false);
+    }
+    expect(observatory.report.needs_attention.some((alert) => alert.code === "cron_stale")).toBe(false);
+
+    for (const name of CRON_JOB_NAMES) {
+      await env.KV.delete(cronHeartbeatKey(name));
+    }
   });
 
   it("carries every cron in the registry, so a new job cannot be added unwatched", async () => {

@@ -142,28 +142,34 @@ five — **#162, #168, #171, #184, #189** — are fixed on the branch behind PR 
 merge, so until then they are open issues whose work is written and whose behaviour these docs
 already describe in the fixed tense.
 
-- **Launch blockers:** **#165** — `dailyDigest` never writes its heartbeat, so
-  `/api/admin/health` is permanently `ok: false` and the crons alarm is stuck on. **#161 is
-  fixed** (#205): the pipeline moderated only the client-uploaded thumbnail while `/i/:id/full`
-  published the never-inspected full-resolution file, so a caller could pass on one image and
-  publish another — every stored variant is now moderated, see moderation.md step 4. **#162 is
-  fixed in PR #197**: `withdraw`+`relist` undid an admin rejection, a hide, a ban sweep or a
-  three-report auto-hide; `relist` now reads the newest status-setting event of *any* kind and
-  sends a takedown to `needs_review` rather than back to `approved`.
-- **Personal data and email:** #169, #188. Between them: IP hashes kept forever against a privacy
-  page that promises 48-hour expiry twice, and the unverified-requester-email question.
-  **#167, #170, #182 and #190 are fixed** (2026-09-07): a `verify_email` token is bound to the
-  address it was mailed to rather than to the owner row, the recovery token travels in a POST
-  body instead of a URL path segment (both in `docs/design/identity.md`), and the redactor has
-  rules for path segments and for the PII Keepsake actually holds. **#189's server half is fixed
-  in PR #197**: the request endpoint was an oracle for the giver's address and for who else had
-  asked — both the self-request `400` and the duplicate `409` now return the same `201` the
-  success path returns, having written and sent nothing. Its client half — the helpful "that's
-  your own keepsake" message, checked in `apps/web` against the owner address the device already
-  knows — is still to do.
+- **Launch blockers:** all three closed. **#161** (#205): the pipeline moderated only the
+  client-uploaded thumbnail while `/i/:id/full` published the never-inspected full-resolution
+  file, so a caller could pass on one image and publish another — every stored variant is now
+  moderated, see moderation.md step 4. **#162** (PR #197): `withdraw`+`relist` undid an admin
+  rejection, a hide, a ban sweep or a three-report auto-hide; `relist` now reads the newest
+  status-setting event of *any* kind and sends a takedown to `needs_review` rather than back to
+  `approved`. **#165** (#209): `dailyDigest` never wrote its heartbeat, so `/api/admin/health`
+  was permanently `ok: false` and the crons alarm was stuck on — `runCron` now writes the
+  heartbeat for every registered job on success and for none that throws, so a new cron cannot be
+  added without one.
+- **Personal data and email:** #188 is the one left — a request's email address is never
+  verified, so anyone can enrol a third party as a requester. **#167, #170, #182 and #190 are
+  fixed** (2026-09-07): a `verify_email` token is bound to the address it was mailed to rather
+  than to the owner row, the recovery token travels in a POST body instead of a URL path segment
+  (both in `docs/design/identity.md`), and the redactor has rules for path segments and for the
+  PII Keepsake actually holds, with the recipient scrubbed out of `email_events.error_detail`.
+  **#169 is fixed** (#209): `orphanSweep` nulls both `ip_digest` columns at 48 hours, withdrawal
+  nulls its own immediately, and the number is locked against the page and all three mechanisms
+  in `privacyPolicy.test.ts`. **#189's server half is fixed in PR #197**: the request endpoint was
+  an oracle for the giver's address and for who else had asked — both the self-request `400` and
+  the duplicate `409` now return the same `201` the success path returns, having written and sent
+  nothing. Its client half — the helpful "that's your own keepsake" message, checked in `apps/web`
+  against the owner address the device already knows — is still to do.
 - **More checks that could not fail:** #166 (preflight's shell-syntax check has never examined a
-  byte of shell), #175, #176, #191. Instances of `AGENTS.md`'s table found in a single pass — the
-  table should be read as a pattern, not a closed list. **#173 and #181 are fixed**
+  byte of shell), #175, #176 — all three land with PR #198. Instances of `AGENTS.md`'s table found
+  in a single pass — the table should be read as a pattern, not a closed list. **#191 is fixed**
+  (#209): `/health` gives `ASSETS` a real read and reports `VECTORIZE` as `ok`/`error`/`off`
+  rather than not looking at it at all. **#173 and #181 are fixed**
   (2026-09-07): the consent banner was never scanned by axe, because every a11y context seeded a
   consent decision and two comments in the tree claimed a scan that did not exist —
   `e2e/a11y.spec.ts` now builds its own unseeded contexts for the banner and runs a dark-mode
@@ -188,7 +194,9 @@ already describe in the fixed tense.
   auto-hide decides on the count returned by its own `UPDATE … RETURNING`, so concurrent reports
   trip the threshold instead of each reading zero.
 - **Ops and backup:** #164 (the documented D1 backup omits `listing_aspects`, and
-  `aspects_backfilled_at` makes the loss unrecoverable), #178.
+  `aspects_backfilled_at` makes the loss unrecoverable), #178 (**fixed** — `orphanSweep` refuses
+  to delete a photo the backup bucket does not have, so the ordering no longer rests on two
+  independent schedulers; still unguarded in production until #157 creates the bucket).
 
 *Workable by anyone (pre-audit):*
 - **#104** — `wrangler dev` dies mid-e2e with no diagnostic and `serve.mjs`'s restart hides it.

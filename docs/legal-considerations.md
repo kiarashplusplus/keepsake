@@ -71,8 +71,11 @@ stays an honest record of what was found and when:**
 - **Privacy page retention/rights/Rhode Island (issue #60): done.** The page now names access and
   portability alongside deletion, states retention in concrete numbers pulled from the actual crons
   (30-day terminal-photo grace period and 24-hour orphan-upload cleanup from
-  `apps/api/src/cron/orphanSweep.ts`; 90-day moderation/email-event retention; 48-hour rate-limit
-  hash TTL from `apps/api/src/moderation/budget.ts`), and says plainly that an owner's email is kept
+  `apps/api/src/cron/orphanSweep.ts`; 90-day moderation/email-event retention; 48-hour IP-hash
+  expiry, enforced in `apps/api/src/moderation/budget.ts` for the KV counters and, since #169, in
+  `orphanSweep`'s `IP_DIGEST_RETENTION_MS` pass for the `requests.ip_digest` / `reports.ip_digest`
+  copies that previously had no expiry at all — `apps/web/test/guards/privacyPolicy.test.ts` locks
+  the number against all three mechanisms), and says plainly that an owner's email is kept
   indefinitely once set (inactivity alone doesn't delete it — `sweepEmptyOwners` requires
   `email IS NULL`) rather than leaving that undocumented. It also carries a designated
   "Categories of information we collect" section satisfying Rhode Island's RIDTPPA §6-48.1-3(a)
