@@ -8,7 +8,7 @@ import { Text, type TextColor } from "@/ui/Text";
 
 /**
  * primary   — the ONE stamped rectangle filled stamp-red, print-white label.
- * secondary — the same stamped rectangle, unfilled: a 2px ink outline.
+ * secondary — the same stamped rectangle filled ink, cream label.
  * link      — the underlined typewritten line with a trailing arrow.
  * ghost     — bare typewritten text, for destructive/quiet actions.
  *
@@ -38,9 +38,18 @@ const MIN_HEIGHT = 44;
 
 const TEXT_COLOR: Record<ButtonVariant, TextColor> = {
   primary: "onAccent",
-  secondary: "ink",
+  secondary: "onAccent2",
   link: "ink",
   ghost: "textSecondary",
+};
+
+/** The spinner has to sit on whatever the variant filled behind it — ink for
+ * `secondary` since #134, where a `colors.ink` spinner would have been
+ * invisible on its own ink fill. */
+const SPINNER_COLOR = (colors: ReturnType<typeof useColors>, variant: ButtonVariant): string => {
+  if (variant === "primary") return colors.onAccent;
+  if (variant === "secondary") return colors.onAccent2;
+  return colors.ink;
 };
 
 /** A small, stable rotation in [-1.1, 1.1] degrees, keyed off the label so
@@ -73,14 +82,33 @@ export function Button({ label, onPress, variant = "primary", loading = false, d
           ...({ boxShadow: lifted ? "3px 5px 0px rgba(27,24,21,0.35)" : "2px 3px 0px rgba(27,24,21,0.3)" } as ViewStyle),
         };
       case "secondary":
+        // Issue #134. This used to fill `colors.print` (#FBF9F4) inside a 2px
+        // ink outline. Against the card it sits on (`colors.surface`,
+        // #F1E6CC) that fill measures 1.18:1 — for practical purposes the
+        // same colour as the paper — so the button read as an empty field
+        // with a line round it rather than as an action. Reported from a
+        // phone about "Use my location", which is the one affordance a giver
+        // has when they don't know their postcode.
+        //
+        // Filled ink instead, cream label: `accent2`/`onAccent2`, a pair
+        // already in the tokens, so no new colour enters the system. 14.25:1
+        // for the label, and the same 14.25:1 for the fill against the card,
+        // so the shape is unmistakably a control. Still clearly subordinate
+        // to the one stamp-red primary, which is the only thing on a page
+        // wearing the accent.
+        //
+        // The border stays, at the fill colour: it keeps this variant's box
+        // geometry identical to the outlined one it replaces.
         return {
-          backgroundColor: lifted ? colors.accentSoft : colors.print,
+          backgroundColor: colors.accent2,
           paddingHorizontal: space.lg,
           borderRadius: radii.sm,
           borderWidth: 2,
-          borderColor: colors.ink,
+          borderColor: colors.accent2,
           opacity,
           transform: [{ rotate: `${rotateDeg}deg` }, { scale: pressScale }],
+          // The same pressed-stamp lift the primary gets, a touch lighter.
+          ...({ boxShadow: lifted ? "3px 5px 0px rgba(27,24,21,0.28)" : "2px 3px 0px rgba(27,24,21,0.22)" } as ViewStyle),
         };
       case "link":
         return {
@@ -120,7 +148,7 @@ export function Button({ label, onPress, variant = "primary", loading = false, d
         ];
       }}
     >
-      {loading ? <ActivityIndicator color={variant === "primary" ? colors.onAccent : colors.ink} /> : null}
+      {loading ? <ActivityIndicator color={SPINNER_COLOR(colors, variant)} /> : null}
       <Text variant="label" color={TEXT_COLOR[variant]} style={{ fontSize: 13 }}>
         {label}
       </Text>

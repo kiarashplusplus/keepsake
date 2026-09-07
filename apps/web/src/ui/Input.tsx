@@ -1,9 +1,7 @@
 import * as React from "react";
-import { TextInput, View, type TextInputProps, type TextStyle, type ViewStyle } from "react-native";
-import { radii } from "@keepsake/tokens/radii";
-import { space } from "@keepsake/tokens/spacing";
-import { useColors, useContainerBorder } from "@/ui/theme";
-import { Text } from "@/ui/Text";
+import { TextInput, type TextInputProps, type TextStyle, type ViewStyle } from "react-native";
+import { useColors } from "@/ui/theme";
+import { FieldFrame, FIELD_FONT_FAMILY, FIELD_FONT_SIZE, FIELD_MIN_HEIGHT, useFieldControlLook } from "@/ui/FieldFrame";
 
 export type InputProps = Omit<TextInputProps, "style"> & {
   label: string;
@@ -13,20 +11,21 @@ export type InputProps = Omit<TextInputProps, "style"> & {
   style?: ViewStyle;
 };
 
-const MIN_HEIGHT = 44;
-
 /** A single-line field styled as a lined index card: kraft-tinted paper,
  * mono type (this is the one place the product allows a typewritten field
  * instead of a stamp/label), and a 2px ink baseline instead of a boxed
  * border — the baseline thickens and turns stamp-red when focused (the
- * baseline IS the focus ring), and the error colour takes it over. */
+ * baseline IS the focus ring), and the error colour takes it over.
+ *
+ * The label, helper/error line and counter live in `FieldFrame`, shared with
+ * `DateField` since issue #133; the look of the control itself lives in
+ * `useFieldControlLook` for the same reason. */
 export function Input({ label, helper, error, maxLength, value, style, onFocus, onBlur, ...rest }: InputProps): React.ReactElement {
   const colors = useColors();
-  const border = useContainerBorder();
   const [focused, setFocused] = React.useState(false);
+  const look = useFieldControlLook({ focused, hasError: error !== undefined });
 
   const count = typeof value === "string" ? value.length : 0;
-  const helperOrError = error ?? helper;
 
   // Typed via an index into `TextInputProps` (rather than re-importing
   // `NativeSyntheticEvent`/`TextInputFocusEventData` directly) so the
@@ -45,10 +44,7 @@ export function Input({ label, helper, error, maxLength, value, style, onFocus, 
   };
 
   return (
-    <View style={[{ gap: space.sm }, style]}>
-      <Text variant="eyebrow" color="accent2Text">
-        {label}
-      </Text>
+    <FieldFrame label={label} helper={helper} error={error} count={count} maxLength={maxLength} style={style}>
       <TextInput
         accessibilityLabel={label}
         value={value}
@@ -57,32 +53,15 @@ export function Input({ label, helper, error, maxLength, value, style, onFocus, 
         onBlur={handleBlur}
         placeholderTextColor={colors.textTertiary}
         style={{
-          minHeight: MIN_HEIGHT,
-          paddingHorizontal: space.md,
-          borderRadius: radii.tag,
-          backgroundColor: colors.surface,
-          color: colors.ink,
-          fontFamily: "CourierPrime",
-          fontSize: 15,
-          borderBottomWidth: focused ? 3 : border.borderBottomWidth,
-          borderBottomColor: error !== undefined ? colors.danger : focused ? colors.focus : border.borderBottomColor,
+          minHeight: FIELD_MIN_HEIGHT,
+          fontFamily: FIELD_FONT_FAMILY,
+          fontSize: FIELD_FONT_SIZE,
+          ...look,
           // The baseline above is the focus ring; drop the browser's own outline (web-only CSS).
           ...({ outlineStyle: "none" } as unknown as TextStyle),
         }}
         {...rest}
       />
-      {helperOrError !== undefined || maxLength !== undefined ? (
-        <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.sm }}>
-          <Text variant="caption" color={error !== undefined ? "dangerText" : "textTertiary"} style={{ flex: 1 }}>
-            {helperOrError ?? ""}
-          </Text>
-          {maxLength !== undefined ? (
-            <Text variant="caption" color="textTertiary">
-              {count}/{maxLength}
-            </Text>
-          ) : null}
-        </View>
-      ) : null}
-    </View>
+    </FieldFrame>
   );
 }
