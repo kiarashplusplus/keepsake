@@ -23,7 +23,18 @@ import { config } from "@/lib/config";
 // looking at the feed.
 //
 // ROOT REDIRECT: `keepsake.ing` should show a short explainer to a
-// first-time visitor and the feed to everyone else. The naive fix — branch
+// first-time visitor and the feed to everyone else — **unless the URL carries
+// a query string**, added 2026-09-07. `location.replace("/welcome")` drops
+// `location.search`, so a first-time visitor arriving at `keepsake.ing/?q=teacup`
+// landed on the explainer with their search silently discarded. That is also
+// exactly what a client following the `SearchAction` in the root JSON-LD below
+// does, which would have made the structured data describe a search entry
+// point that does not work. Editing the script below changes its CSP hash —
+// see the note above `PREHYDRATION_SCRIPT`'s enumeration in
+// `apps/web/public/_headers` and `apps/api/src/middleware/securityHeaders.ts`,
+// which must be updated together, byte for byte.
+//
+// The naive fix — branch
 // on visitor state inside the Feed component itself, after mount — was
 // rejected for two reasons: (1) despite `web.output: "static"`, `expo
 // export`'s per-route HTML ships an EMPTY body (a Suspense placeholder, no
@@ -62,7 +73,7 @@ const PREHYDRATION_SCRIPT = `
     var OWNER_KEY = "keepsake.ownerToken.v1";
     var VISITED_KEY = "keepsake.visited.v1";
     var returning = !!window.localStorage.getItem(OWNER_KEY) || !!window.localStorage.getItem(VISITED_KEY);
-    if (window.location.pathname === "/" && !returning) {
+    if (window.location.pathname === "/" && !window.location.search && !returning) {
       window.localStorage.setItem(VISITED_KEY, "1");
       window.location.replace("/welcome");
       return;
@@ -88,6 +99,73 @@ const PREHYDRATION_SCRIPT = `
   }
 })();
 `;
+
+/**
+ * Site-level structured data, emitted on every exported page.
+ *
+ * Two nodes, linked by `@id` so a consumer knows the site and the
+ * organisation behind it are the same subject rather than two unrelated
+ * things that happen to share a name. The per-listing `Product` is injected
+ * server-side instead (`apps/api/src/routes/item.ts`), because it needs the
+ * row.
+ *
+ * ## Why this is at export time and not in the Worker
+ *
+ * Serving `/` through the Worker would mean adding it to production's
+ * `run_worker_first`, putting a Worker hop on every root request — which
+ * `wrangler.toml`'s own comment argues against, and for markup that is
+ * identical for every visitor. This is a constant; it belongs in the shell.
+ *
+ * ## Why no `logo`
+ *
+ * Google's Organization logo guidance wants at least 112x112 and
+ * `favicon.png` is 64x64. A `logo` Google rejects is worse than no `logo`:
+ * it turns a clean parse into a validation warning. Add one when there is a
+ * real square mark to point at.
+ *
+ * ## CSP
+ *
+ * `<script type="application/ld+json">` is a data block, never executed, so
+ * `script-src` does not apply and this needs no fourth hash in
+ * `apps/web/public/_headers` / `apps/api/src/middleware/securityHeaders.ts`.
+ * That is the spec and the observed behaviour, but this repo has been bitten
+ * by a silent CSP drop before (the `www.googletagmanager.com` incident both
+ * of those files record), so it was checked in a browser rather than
+ * assumed. If a violation ever does appear, the fix is a new hash added
+ * byte-identically to both files — never to only one.
+ *
+ * `SearchAction` points at `/?q=`, which is the real feed parameter
+ * (`src/features/feed/feedUrlParams.ts`). The pre-hydration script above had
+ * to stop dropping `location.search` for that to be true; see its comment.
+ */
+const ROOT_JSON_LD = JSON.stringify([
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "@id": "https://keepsake.ing/#website",
+    url: "https://keepsake.ing/",
+    name: "Keepsake",
+    description: "Give a keepsake a second life.",
+    inLanguage: "en",
+    publisher: { "@id": "https://keepsake.ing/#organization" },
+    potentialAction: {
+      "@type": "SearchAction",
+      target: {
+        "@type": "EntryPoint",
+        urlTemplate: "https://keepsake.ing/?q={search_term_string}",
+      },
+      "query-input": "required name=search_term_string",
+    },
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "@id": "https://keepsake.ing/#organization",
+    name: "Keepsake",
+    url: "https://keepsake.ing/",
+    description: "A free gifting marketplace for objects with a story.",
+  },
+]);
 
 const ROOT_CSS = `
 html, body, #root { height: 100%; }
@@ -244,6 +322,7 @@ export default function Root({ children }: { children: React.ReactNode }): React
 
         <style dangerouslySetInnerHTML={{ __html: ROOT_CSS }} />
         <script dangerouslySetInnerHTML={{ __html: PREHYDRATION_SCRIPT }} />
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: ROOT_JSON_LD }} />
 
         {/* Consent. `/consent.js` (source: `public/consent.js`) is the single
             shared implementation of the store, the banner and every

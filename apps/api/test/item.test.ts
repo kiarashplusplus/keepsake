@@ -137,3 +137,120 @@ describe("GET /item/:id", () => {
     expect(html).not.toContain("og:title");
   });
 });
+
+describe("GET /item/:id — structured data", () => {
+  /** The single `application/ld+json` block, parsed. */
+  async function readJsonLd(listingId: string): Promise<Record<string, unknown>> {
+    const html = await (await SELF.fetch(`http://x/item/${listingId}`)).text();
+    const match = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(html);
+    expect(match).not.toBeNull();
+    return JSON.parse((match as RegExpExecArray)[1] as string) as Record<string, unknown>;
+  }
+
+  it("describes the keepsake as a free, used Product", async () => {
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId, title: "A quiet teacup" });
+    await insertPhoto(ownerId, listingId);
+
+    const ld = await readJsonLd(listingId);
+    expect(ld["@type"]).toBe("Product");
+    expect(ld.name).toBe("A quiet teacup");
+    expect(ld.itemCondition).toBe("https://schema.org/UsedCondition");
+    expect(ld.image).toEqual([expect.stringMatching(/\/i\/[0-9A-Z]+\/full$/)]);
+
+    const offer = ld.offers as Record<string, unknown>;
+    expect(offer["@type"]).toBe("Offer");
+    // "0" as a string, not the number 0 — schema.org's price is a Text/Number
+    // union and a falsy number is exactly the sort of thing a consumer drops.
+    expect(offer.price).toBe("0");
+    expect(offer.priceCurrency).toBe("USD");
+    expect(offer.availability).toBe("https://schema.org/InStock");
+  });
+
+  it("flips availability to SoldOut once the keepsake is given", async () => {
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId });
+    await env.DB.prepare("UPDATE listings SET status = 'given' WHERE id = ?").bind(listingId).run();
+
+    const offer = (await readJsonLd(listingId)).offers as Record<string, unknown>;
+    // SoldOut, not OutOfStock: it is gone, not awaiting restock.
+    expect(offer.availability).toBe("https://schema.org/SoldOut");
+  });
+
+  it("claims nothing it cannot back up", async () => {
+    // No accounts, no inventory, no reviews — so no `seller`, `sku`, `brand`
+    // or `aggregateRating`. Structured data is the one place a false claim is
+    // machine-readable and repeated, and `aggregateRating` in particular is
+    // what gets a site's rich results turned off entirely.
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId });
+    const ld = await readJsonLd(listingId);
+    for (const key of ["seller", "sku", "brand", "aggregateRating", "review"]) {
+      expect(ld).not.toHaveProperty(key);
+    }
+  });
+
+  it("gives a location without the postcode, and omits admin1 rather than nulling it", async () => {
+    const ownerId = await insertOwner();
+    const withRegion = await insertApprovedListing({ ownerId, postalCode: "02144", placeName: "Somerville", admin1: "MA" });
+    const ldWith = await readJsonLd(withRegion);
+    const place = (ldWith.offers as Record<string, unknown>).availableAtOrFrom as Record<string, unknown>;
+    const address = place.address as Record<string, unknown>;
+    expect(address.addressLocality).toBe("Somerville");
+    expect(address.addressRegion).toBe("MA");
+    expect(address.addressCountry).toBe("US");
+    expect(address).not.toHaveProperty("postalCode");
+
+    // Set via SQL, not through the helper: `insertApprovedListing` defaults
+    // `admin1` with `??`, so passing `null` yields "MA" and the test would
+    // assert nothing.
+    const noRegion = await insertApprovedListing({ ownerId, placeName: "Somewhere" });
+    await env.DB.prepare("UPDATE listings SET admin1 = NULL WHERE id = ?").bind(noRegion).run();
+    const ldWithout = await readJsonLd(noRegion);
+    const addressWithout = ((ldWithout.offers as Record<string, unknown>).availableAtOrFrom as Record<string, unknown>)
+      .address as Record<string, unknown>;
+    // Absent, not `null`: validators treat an explicit null as a malformed
+    // value rather than a missing one.
+    expect(addressWithout).not.toHaveProperty("addressRegion");
+  });
+
+  it("survives a title that tries to break out of the script block", async () => {
+    // The reason `lib/jsonLd.ts` exists and the reason it must never be
+    // "tidied" into `escapeHtml`. Two things have to hold at once: the block
+    // cannot be terminated early, AND the value must round-trip byte for
+    // byte — HTML-entity escaping would satisfy the first and quietly fail
+    // the second, turning "Salt & pepper" into "Salt &amp;amp; pepper" in
+    // Google's index.
+    const hostile = `A "teacup" </script><img src=x onerror=alert(1)> & <b>`;
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId, title: hostile });
+
+    const html = await (await SELF.fetch(`http://x/item/${listingId}`)).text();
+    const block = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/.exec(html) as RegExpExecArray;
+
+    expect(block[1]).not.toContain("</script>");
+    expect(block[1]).not.toContain("<img");
+    const parsed = JSON.parse(block[1] as string) as Record<string, unknown>;
+    expect(parsed.name).toBe(hostile);
+
+    // And the OG meta tag, which IS an HTML attribute, is escaped the other
+    // way — two destinations, two rules, both exercised here.
+    expect(html).toContain("&lt;/script&gt;");
+  });
+
+  it("emits exactly one ld+json block", async () => {
+    // Two `Product` blocks on one page is a validation error, and is what an
+    // absent-minded second `el.append` would produce.
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId });
+    const html = await (await SELF.fetch(`http://x/item/${listingId}`)).text();
+    expect(html.match(/application\/ld\+json/g)).toHaveLength(1);
+  });
+
+  it("puts no structured data on a page that is not a listing", async () => {
+    // A 404 shell must stay the unchanged shell — describing a Product that
+    // does not exist, or confirming an id does, are both wrong.
+    const html = await (await SELF.fetch("http://x/item/01UNKNOWNIDXXXXXXXXXXXXXXX")).text();
+    expect(html).not.toContain("application/ld+json");
+  });
+});

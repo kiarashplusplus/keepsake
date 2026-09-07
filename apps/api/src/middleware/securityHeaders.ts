@@ -65,7 +65,7 @@ const CONTENT_SECURITY_POLICY = [
   // which is exactly the drift `launch-audit.md` §7 already caught once.
   "connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org",
   "script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com " +
-    "'sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g=' " +
+    "'sha256-VYy8ShHUfzzRt7GXnoWUg8bhL+AVi/uK7Oqzytw8Se4=' " +
     "'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' " +
     "'sha256-d6qbtEYff/sB38YyzuzhASbVmmOidU/UFC9mNit47j4='",
   "style-src 'self' 'unsafe-inline'",

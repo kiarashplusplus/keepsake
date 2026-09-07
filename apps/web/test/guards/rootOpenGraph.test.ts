@@ -18,6 +18,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { feedQueryFromUrlParams } from "@/features/feed/feedUrlParams";
 
 const SHELL = fs.readFileSync(path.resolve(__dirname, "../../app/+html.tsx"), "utf8");
 const SITE_PAGES = ["about.html", "privacy.html", "terms.html"].map((f) =>
@@ -71,5 +72,72 @@ describe("the root shell's Open Graph tags", () => {
     for (const page of SITE_PAGES) {
       expect(metaContent(page, "property", "og:image")).toMatch(/^https:\/\/keepsake\.ing\//);
     }
+  });
+});
+
+describe("the root shell's structured data", () => {
+  /** The `ROOT_JSON_LD` literal, parsed. */
+  function rootJsonLd(): Record<string, unknown>[] {
+    const match = /const ROOT_JSON_LD = JSON\.stringify\((\[[\s\S]*?\n\])\);/.exec(SHELL);
+    expect(match).not.toBeNull();
+    // The literal is JS, not JSON (unquoted keys), so it is evaluated rather
+    // than parsed. Reading the source instead of the built output is the
+    // point: a guard on `dist/` only holds after an export has run.
+    // eslint-disable-next-line no-new-func
+    return new Function(`return ${(match as RegExpExecArray)[1] as string}`)() as Record<string, unknown>[];
+  }
+
+  it("declares a WebSite and an Organization, linked by @id", () => {
+    const nodes = rootJsonLd();
+    const website = nodes.find((n) => n["@type"] === "WebSite") as Record<string, unknown>;
+    const org = nodes.find((n) => n["@type"] === "Organization") as Record<string, unknown>;
+    expect(website).toBeTruthy();
+    expect(org).toBeTruthy();
+    // The link is what tells a consumer these are one subject rather than two
+    // things that share a name.
+    expect((website.publisher as Record<string, unknown>)["@id"]).toBe(org["@id"]);
+  });
+
+  it("describes a SearchAction the feed can actually answer", () => {
+    // The whole risk with a `SearchAction` is describing an entry point that
+    // does not work. This resolves the declared template against the feed's
+    // own parser rather than eyeballing the query key.
+    const website = rootJsonLd().find((n) => n["@type"] === "WebSite") as Record<string, unknown>;
+    const action = website.potentialAction as Record<string, unknown>;
+    const template = (action.target as Record<string, unknown>).urlTemplate as string;
+
+    expect(action["query-input"]).toBe("required name=search_term_string");
+    expect(template).toContain("{search_term_string}");
+
+    const url = new URL(template.replace("{search_term_string}", "teacup"));
+    expect(url.pathname).toBe("/");
+    const params: Record<string, string> = {};
+    url.searchParams.forEach((value, key) => {
+      params[key] = value;
+    });
+    expect(feedQueryFromUrlParams(params).q).toBe("teacup");
+  });
+
+  it("does not claim a logo Google would reject", () => {
+    // `favicon.png` is 64x64 and the Organization logo guidance wants >=112.
+    // A rejected `logo` turns a clean parse into a validation warning, so
+    // there is deliberately none. If one is added, this test should be
+    // replaced by an assertion on the new file's real dimensions.
+    const org = rootJsonLd().find((n) => n["@type"] === "Organization") as Record<string, unknown>;
+    if (org.logo !== undefined) {
+      const logoUrl = (org.logo as Record<string, unknown>).url as string;
+      const file = path.resolve(__dirname, "../../public", logoUrl.replace(/^https:\/\/keepsake\.ing\//, ""));
+      const png = fs.readFileSync(file);
+      expect(png.readUInt32BE(16)).toBeGreaterThanOrEqual(112);
+      expect(png.readUInt32BE(20)).toBeGreaterThanOrEqual(112);
+    }
+  });
+
+  it("keeps the root redirect from eating a search query", () => {
+    // `SearchAction` sends a client to `/?q=...`, and that client is by
+    // definition a first-time visitor — exactly the one the pre-hydration
+    // script redirects to `/welcome`, dropping `location.search` on the way.
+    // The structured data above is only true because of this condition.
+    expect(SHELL).toContain('window.location.pathname === "/" && !window.location.search && !returning');
   });
 });

@@ -30,9 +30,11 @@
  */
 import { Hono } from "hono";
 import { CATEGORY_LABELS, type Category } from "@keepsake/contracts/listing";
+import { CURRENCY_BY_COUNTRY, type Country as GeoCountry } from "@keepsake/contracts/geo";
 import { storyExcerpt } from "@keepsake/contracts/story";
 import type { Env } from "../env.js";
 import { fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
+import { jsonLdScript, type JsonLdValue } from "../lib/jsonLd.js";
 import { CARD_HEIGHT, CARD_WIDTH } from "../og/card.js";
 import { cardFingerprint, placeLine } from "../og/fingerprint.js";
 import { requireParam } from "../lib/params.js";
@@ -91,6 +93,75 @@ function buildOgTags(params: {
   `;
 }
 
+/**
+ * schema.org `Product` for the listing.
+ *
+ * `Product` with a zero-price `Offer` rather than a bare `CreativeWork`: a
+ * keepsake is a physical second-hand object someone can acquire, which is
+ * what `Product` describes, and `price: "0"` is how "free" is stated in a way
+ * a search engine understands. `priceCurrency` is required whenever `price`
+ * is present (hence `CURRENCY_BY_COUNTRY`), even though nothing here is ever
+ * sold.
+ *
+ * Deliberately absent: `seller`, `sku`, `brand`, `aggregateRating`,
+ * `review`. There are no accounts, no inventory and no reviews on this
+ * platform, and inventing any of them would be a false claim in structured
+ * data — the one place a false claim is machine-readable and repeated.
+ *
+ * **`postal_code` never appears.** `listings.postal_code` is owner-only
+ * (`OwnerListing` carries it, `PublicListing` does not), so `PostalAddress`
+ * gets `addressLocality`/`addressRegion` only. `test/item.test.ts` asserts
+ * the postcode is absent from the whole response, not just from this object.
+ */
+function buildProductJsonLd(params: {
+  id: string;
+  title: string;
+  description: string;
+  url: string;
+  status: string;
+  country: string;
+  placeName: string;
+  admin1: string | null;
+  categoryLabel: string;
+  imageUrls: string[];
+}): string {
+  const currency = CURRENCY_BY_COUNTRY[params.country as GeoCountry];
+
+  const address: Record<string, JsonLdValue | undefined> = {
+    "@type": "PostalAddress",
+    addressLocality: params.placeName,
+    // Omitted entirely when null — never emitted as `null`, which validators
+    // treat as a malformed value rather than an absent one.
+    ...(params.admin1 ? { addressRegion: params.admin1 } : {}),
+    addressCountry: params.country,
+  };
+
+  const product: Record<string, JsonLdValue | undefined> = {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    name: params.title,
+    description: params.description,
+    url: params.url,
+    category: params.categoryLabel,
+    itemCondition: "https://schema.org/UsedCondition",
+    ...(params.imageUrls.length > 0 ? { image: params.imageUrls } : {}),
+    offers: {
+      "@type": "Offer",
+      price: "0",
+      // A listing whose country somehow isn't US/CA gets no price at all
+      // rather than an `Offer` missing its required `priceCurrency`.
+      ...(currency ? { priceCurrency: currency } : {}),
+      // `SoldOut`, not `OutOfStock`: the keepsake is gone, not restockable.
+      availability: params.status === "given" ? "https://schema.org/SoldOut" : "https://schema.org/InStock",
+      itemCondition: "https://schema.org/UsedCondition",
+      url: params.url,
+      availableAtOrFrom: { "@type": "Place", address },
+    },
+  };
+
+  return jsonLdScript(product as JsonLdValue);
+}
+
 itemRoutes.get("/:id", burst("RL_READ"), async (c) => {
   const id = requireParam(c, "id");
   const shellRequest = new Request(new URL("/", c.req.url), { headers: c.req.raw.headers });
@@ -142,6 +213,22 @@ itemRoutes.get("/:id", burst("RL_READ"), async (c) => {
     ...(cardUrl ? { cardUrl } : {}),
   });
 
+  // The canonical image for structured data is the photo itself, not the
+  // share card: `/i/:id/full` is what the page actually shows, and the card
+  // is a social artifact (it is served `X-Robots-Tag: noindex`).
+  const jsonLd = buildProductJsonLd({
+    id: row.id,
+    title: row.title,
+    description: storyExcerpt(row.story, 200),
+    url: pageUrl,
+    status: row.status,
+    country: row.country,
+    placeName: row.place_name,
+    admin1: row.admin1,
+    categoryLabel: CATEGORY_LABELS[row.category as Category] ?? row.category,
+    imageUrls: photos.map((photo) => `${siteUrl}/i/${photo.id}/full`),
+  });
+
   // Drop the shell's default title/OG/Twitter tags first: crawlers take the
   // first og:* they see, and the exported shell already carries the site-wide
   // defaults ahead of the marker.
@@ -154,6 +241,7 @@ itemRoutes.get("/:id", burst("RL_READ"), async (c) => {
     .on("head", {
     element(el) {
       el.append(tags, { html: true });
+      el.append(jsonLd, { html: true });
     },
   });
 
