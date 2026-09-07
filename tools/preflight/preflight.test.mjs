@@ -335,32 +335,80 @@ test("migration-drift: fails when a migration this branch already committed is r
 
 // A check that cannot run must say so, not pass. Locally that is a SKIP;
 // anywhere the baseline is guaranteed fetchable it is a FAIL.
+/**
+ * Run `fn` with specific environment variables forced on or off.
+ *
+ * `migration-drift` escalates its SKIP to a FAIL when it detects CI
+ * (`GITHUB_ACTIONS=true`) or an explicit `PREFLIGHT_REQUIRE_GIT_BASELINE=1`,
+ * so any test asserting *either* outcome has to state which world it is in.
+ * Inheriting the ambient value means a test that passes on a laptop fails on a
+ * runner, which is exactly what happened: two of these went green locally and
+ * red in CI, because GitHub always sets GITHUB_ACTIONS=true.
+ */
+function withEnv(overrides, fn) {
+  const previous = {};
+  for (const [key, value] of Object.entries(overrides)) {
+    previous[key] = process.env[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+/** No baseline required: the world a contributor's laptop is in. */
+const NO_BASELINE_REQUIRED = { GITHUB_ACTIONS: undefined, PREFLIGHT_REQUIRE_GIT_BASELINE: undefined };
+
 test("migration-drift: skips with a reason when origin/main cannot be resolved", () => {
-  const result = runDrift({ main: LANDED, plantOriginMain: false });
+  const result = withEnv(NO_BASELINE_REQUIRED, () => runDrift({ main: LANDED, plantOriginMain: false }));
   assert.equal(result.status, "skip");
   assert.match(result.details.join("\n"), /no origin\/main ref/);
   assert.match(result.details.join("\n"), /did NOT run/);
 });
 
 test("migration-drift: that skip becomes a failure when a baseline is required", () => {
-  const previous = process.env.PREFLIGHT_REQUIRE_GIT_BASELINE;
-  process.env.PREFLIGHT_REQUIRE_GIT_BASELINE = "1";
-  try {
-    const result = runDrift({ main: LANDED, plantOriginMain: false });
-    assert.equal(result.status, "fail");
-    assert.match(result.details.join("\n"), /a baseline is required here/);
-  } finally {
-    if (previous === undefined) delete process.env.PREFLIGHT_REQUIRE_GIT_BASELINE;
-    else process.env.PREFLIGHT_REQUIRE_GIT_BASELINE = previous;
-  }
+  const result = withEnv({ GITHUB_ACTIONS: undefined, PREFLIGHT_REQUIRE_GIT_BASELINE: "1" }, () =>
+    runDrift({ main: LANDED, plantOriginMain: false }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /a baseline is required here/);
+});
+
+// The condition that actually holds on every GitHub runner. Asserted on its
+// own rather than left to the ambient environment, so this suite means the
+// same thing wherever it runs.
+test("migration-drift: GITHUB_ACTIONS alone is enough to require a baseline", () => {
+  const result = withEnv({ GITHUB_ACTIONS: "true", PREFLIGHT_REQUIRE_GIT_BASELINE: undefined }, () =>
+    runDrift({ main: LANDED, plantOriginMain: false }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /a baseline is required here/);
 });
 
 test("migration-drift: skips outside a git work tree rather than passing", () => {
-  const result = runOne("migration-drift", {
-    "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
-  });
+  const result = withEnv(NO_BASELINE_REQUIRED, () =>
+    runOne("migration-drift", {
+      "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
+    }),
+  );
   assert.equal(result.status, "skip");
   assert.match(result.details.join("\n"), /not a git work tree/);
+});
+
+test("migration-drift: outside a git work tree, CI fails rather than skipping", () => {
+  const result = withEnv({ GITHUB_ACTIONS: "true", PREFLIGHT_REQUIRE_GIT_BASELINE: undefined }, () =>
+    runOne("migration-drift", {
+      "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /a baseline is required here/);
 });
 
 // ── env-parity ─────────────────────────────────────────────────────────
