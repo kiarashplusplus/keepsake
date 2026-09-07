@@ -126,8 +126,6 @@ issues nothing in `docs/` mentioned at all were missing.
   they actually happen.
 - **#156** — revoke `keepsake-pr-preview` or build the job it was minted for. #73 was reversed and
   the create-and-delete token it produced is still live and used by nothing.
-- **#157** — create `keepsake-photos-production-backup`. Production photos have never been backed
-  up, and until 2026-09-07 the nightly job reported success anyway.
 - **#158** — check whether anything was indexed while preview was crawlable (replaces the deleted
   #85).
 

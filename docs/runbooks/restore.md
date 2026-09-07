@@ -395,25 +395,49 @@ Sippy's *other* direction or a direct upload) needs credentials that don't exist
 environment and is Kiarash's call to provision — not something to fake by writing a script that
 would work if the credentials existed.
 
-**Production has no backup bucket yet.** `wrangler r2 bucket create keepsake-photos-production-backup`
-was attempted and blocked by this environment's own safety controls (a production-write action
-requires explicit approval this session didn't have). The one-time setup, for whoever has that
-approval:
+**Production's backup bucket now exists, and holds real bytes.** `keepsake-photos-production-backup`
+was created 2026-09-07 21:59 UTC (location hint `eeur`, matching `keepsake-photos-production`;
+storage class Standard) with the same `expire-after-400d` lifecycle rule the preview bucket
+carries — 400 days is deliberate, longer than D1's 30-day Time Travel window and longer than
+`orphanSweep`'s 30-day terminal-photo grace period, so a backup outlives every other recovery
+mechanism rather than expiring a photo those still consider live. The one-time setup that was run:
 
 ```sh
 cd apps/api
-wrangler r2 bucket create keepsake-photos-production-backup
+wrangler r2 bucket create keepsake-photos-production-backup --location eeur
 wrangler r2 bucket lifecycle add keepsake-photos-production-backup expire-after-400d --expire-days 400 -y
 node tools/backup-photos.mjs --env production
 ```
 
-**The cron fires, and its production leg has not yet proved anything.**
+That run copied all 4 keys then referenced by production's 2 `photos` rows
+(`copied=4 skipped=0 failed=0`), and a second run immediately after reported
+`copied=0 skipped=4`, which is the additive-only, already-present path doing what it claims.
+Verified past the script's own accounting: `photos/01M1XP59MT3HX470YX69604WFB/full.jpg` pulled
+from both buckets is byte-identical — 672,825 bytes, SHA-256
+`30e0f038bc10c09ba438e1e353ae30b477e4b85b655992890701216f53ed2f95` from each.
+
+One credential note for whoever runs this next by hand: the `cf` token in `~/Documents/.env` has
+R2 but **no D1 read**, so it clears the bucket probe and then dies on the `d1 execute` with a
+7403. A token needs *both* R2 Storage and D1 read for this script to run end to end; the
+GitHub Environment's `CLOUDFLARE_API_TOKEN` that the workflow uses has both.
+
+**The cron fires, and its production leg has now proved something.**
 `.github/workflows/backup-photos.yml` runs `tools/backup-photos.mjs` for both tiers at 03:00 UTC,
 before `orphanSweep`'s own 03:17. It has fired once on its `schedule:` trigger —
 [run 34079182574](https://github.com/kiarashplusplus/keepsake/actions/runs/34079182574),
 2026-09-07 03:18 UTC, both legs green — which retires the "no green Actions run is possible yet"
 caveat this paragraph used to carry (a workflow file GitHub has never seen on the default branch
 gets neither `schedule:` nor `workflow_dispatch`; merging fixed that).
+
+It has since run against a production tier that actually has photos:
+[run 34165271088](https://github.com/kiarashplusplus/keepsake/actions/runs/34165271088),
+2026-09-07 22:03 UTC, `workflow_dispatch`, production leg green with `backup bucket
+keepsake-photos-production-backup confirmed present` / `4 referenced key(s) in D1` /
+`copied=0 skipped=4`. `copied=0` there is the correct steady state, not a vacuous pass — the
+by-hand run twenty minutes earlier is what copied those 4, and the probe line above it is the
+thing the old green could never say. What to read on any future run: `skipped` tracking the key
+count means the set is fully covered; `copied` non-zero means new photos arrived and were
+protected; `failed` non-zero exits 1.
 
 **That green was the shape `AGENTS.md`'s table warns about, and it has been fixed.** The
 production leg's whole log read `0 referenced key(s) in D1` — production had no `photos` rows at

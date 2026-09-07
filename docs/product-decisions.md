@@ -147,7 +147,7 @@ steps intact and is the one path currently missing at every layer. Whatever ship
 giver's explicit choice silently overwritten by a later model run would be a worse bug than the
 one being fixed.
 
-### 7. Photo bytes are backed up into the same account, and production may not be backed up at all
+### 7. Photo bytes are backed up, into the same account
 
 **Decided** 2026-09-07 (#17): R2 has no versioning to turn on (checked directly, not assumed), so
 `tools/backup-photos.mjs` copies every referenced photo into a `<name>-backup` bucket that nothing
@@ -155,17 +155,19 @@ deletes from. Explicitly *not* solved: both buckets sit in the one Cloudflare ac
 account-level failure takes them together. Getting bytes to a separate provider needs a credential
 that does not exist.
 
-**And the production leg has never done any work.** `backup-photos.yml` fired on schedule once and
-both legs went green — but the production job's log reads `0 referenced key(s) in D1`, so it
-touched no bucket and proves nothing about whether `keepsake-photos-production-backup` exists.
-Production has had a listing with photos since. This is the exact shape of `AGENTS.md`'s table: a
-green check mark that could not have failed.
+**The production leg went green once without doing any work, and that is fixed.**
+`backup-photos.yml` fired on schedule and both legs passed — but the production job's log read
+`0 referenced key(s) in D1`, so it touched no bucket and proved nothing about whether
+`keepsake-photos-production-backup` existed. It did not. That is the exact shape of `AGENTS.md`'s
+table: a green check mark that could not have failed.
 
-**Half of this is now fixed.** `tools/backup-photos.mjs` probes the backup bucket before the key
-count can make a run trivially green, and exits 1 when it cannot confirm it — so the job stops
-reporting success for having done nothing. Creating the production bucket still needs Cloudflare
-access: **#157**. Read the next run's log and confirm `copied` is non-zero, rather than its check
-mark.
+**Both halves are now closed (#157, 2026-09-07).** `tools/backup-photos.mjs` probes the backup
+bucket before the key count can make a run trivially green and exits 1 when it cannot confirm it;
+and `keepsake-photos-production-backup` now exists, with the same 400-day expiry as preview's.
+Production's 4 referenced keys were copied and one was verified byte-identical out of both
+buckets by SHA-256. Run 34165271088 is the first production leg that both confirmed the
+destination and saw real keys. Keep reading the log rather than the check mark: `skipped`
+tracking the key count means full coverage, `copied` non-zero means new photos were protected.
 
 **Re-evaluate the offsite question if** production ever holds photos whose loss would actually
 matter — one bucket in one account is a fine answer for a catalogue of one, and a poor one for a
