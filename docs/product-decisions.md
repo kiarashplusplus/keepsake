@@ -79,7 +79,9 @@ the daily digest at 00:07 UTC. That is genuinely better than "nobody would ever 
 
 **Re-evaluate if** an incident's diagnosis needs history older than three days, or a Saturday
 outage runs long enough that the hour matters. The named follow-up is a Tail Worker or Logpush
-pushing events somewhere alerting is possible; nobody has built it and no issue tracks it.
+pushing events somewhere alerting *is* possible. **#159** now tracks it — as a decision, not a
+task: "no, and here is why" is a perfectly good close, and is better than an unwritten default
+that every session re-raises.
 
 ### 4. Production ships only when a human dispatches it — so production runs behind `main`
 
@@ -112,10 +114,13 @@ tear down, not the resources, which were measured as a rounding error.
 account-scoped token that can create *and delete* Workers, D1 databases, R2 buckets and KV
 namespaces, and nothing uses it. That is real blast radius bought for a feature that was declined.
 
-**Decide one of two things**, rather than leaving it: revoke `keepsake-pr-preview` and delete the
-secret (and skip §5 of [`kiarash-checklist.md`](./runbooks/kiarash-checklist.md) permanently), or
-build the per-PR job. Leaving a create-and-delete credential live for a feature nobody is building
-is the only option that is wrong on both counts.
+**Decide one of two things** (**#156**), rather than leaving it: revoke `keepsake-pr-preview` and
+delete the secret (and drop §5 of [`kiarash-checklist.md`](./runbooks/kiarash-checklist.md)
+permanently), or build the per-PR job. Leaving a create-and-delete credential live for a feature
+nobody is building is the only option that is wrong on both counts. Revoking is the
+recommendation: what per-PR previews were *for* — verifying a branch — is now done by
+`pnpm --filter @keepsake/web e2e` against real `workerd`, which #73 itself argues is closer to
+production than the shared Worker ever was.
 
 ### 6. A listing's category comes from the model, and no human can override it
 
@@ -133,10 +138,13 @@ edits nothing but the fields it shows, and the admin API has no set-category rou
 re-runs the model and applies whatever comes back. If the model is wrong twice, the listing stays
 wrong, and the giver — whose object it is — cannot fix it.
 
-**Re-evaluate now**, because the premise has been tested and half-failed. The cheapest honest
-version is not the old picker: it is a correction affordance on a listing that already exists
-(the giver sees what the model decided and can change it), which keeps the give flow's five steps
-intact and is the one path currently missing at every layer.
+**Re-evaluate now** (**#155**), because the premise has been tested and half-failed. The cheapest
+honest version is not the old picker: it is a correction affordance on a listing that already
+exists (the giver sees what the model decided and can change it), which keeps the give flow's five
+steps intact and is the one path currently missing at every layer. Whatever ships has to survive
+`resuggest` and the aspects backfill, both of which write `category` unconditionally today — a
+giver's explicit choice silently overwritten by a later model run would be a worse bug than the
+one being fixed.
 
 ### 7. Photo bytes are backed up into the same account, and production may not be backed up at all
 
@@ -152,7 +160,12 @@ touched no bucket and proves nothing about whether `keepsake-photos-production-b
 Production has had a listing with photos since. This is the exact shape of `AGENTS.md`'s table: a
 green check mark that could not have failed.
 
-**Do this before re-deciding anything:** read the next run's log and confirm `copied` is non-zero.
+**Half of this is now fixed.** `tools/backup-photos.mjs` probes the backup bucket before the key
+count can make a run trivially green, and exits 1 when it cannot confirm it — so the job stops
+reporting success for having done nothing. Creating the production bucket still needs Cloudflare
+access: **#157**. Read the next run's log and confirm `copied` is non-zero, rather than its check
+mark.
+
 **Re-evaluate the offsite question if** production ever holds photos whose loss would actually
 matter — one bucket in one account is a fine answer for a catalogue of one, and a poor one for a
 catalogue of a thousand.
@@ -250,8 +263,9 @@ knows to check them:
    last comment said it must stay open until someone reads an inbox. Whatever happened is not in
    the repository, and no one can now tell "tested and fine" from "closed to tidy up."
 3. **A deleted issue.** #85 — whether anything indexed while preview was crawlable needs a Search
-   Console removal — returns `410 This issue was deleted`. The question is now tracked in exactly
-   one place: a sentence in `launch-audit.md` and this line.
+   Console removal — returns `410 This issue was deleted`, and for a while the question survived
+   only as a sentence in `launch-audit.md`. Refiled as **#158**. Deleting an issue deletes the
+   record of the question, which is a different and worse thing than closing it.
 
 The cheap habit that fixes all three: when a decision is made in a comment, add its row here in the
 same session. This file is small on purpose.

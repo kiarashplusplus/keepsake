@@ -14,3 +14,15 @@ Two rules, both learned the hard way elsewhere:
 
 Keep this directory small — a screenshot here is evidence for one change, not an archive.
 Delete one once the change it argued for has shipped and been looked at.
+
+**Emptied 2026-09-07**, applying that rule for the first time. The seven files that were here
+argued for #108, #133, #134, #135 and #136 — all five closed, all five shipped to `main`. They are
+in git history, not gone:
+
+```sh
+git log --diff-filter=D --oneline -- docs/qa/    # the commit that removed them
+git checkout <that-sha>^ -- docs/qa/<file>.png   # bring one back
+```
+
+If you restore one because the change it argued for turns out not to be finished, say so in the
+issue too — a screenshot reappearing with no explanation is worse than one that never left.

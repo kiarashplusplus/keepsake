@@ -110,6 +110,12 @@ issues nothing in `docs/` mentioned at all were missing.
 - **#142** — bind general-liability cover and file the Harris County assumed-name certificate. The
   two paper halves of the #108 sole-proprietor decision, which is only the conservative choice if
   they actually happen.
+- **#156** — revoke `keepsake-pr-preview` or build the job it was minted for. #73 was reversed and
+  the create-and-delete token it produced is still live and used by nothing.
+- **#157** — create `keepsake-photos-production-backup`. Production photos have never been backed
+  up, and until 2026-09-07 the nightly job reported success anyway.
+- **#158** — check whether anything was indexed while preview was crawlable (replaces the deleted
+  #85).
 
 *Workable by anyone:*
 - **#104** — `wrangler dev` dies mid-e2e with no diagnostic and `serve.mjs`'s restart hides it.
@@ -119,8 +125,11 @@ issues nothing in `docs/` mentioned at all were missing.
 - **#145** — DNSSEC is disabled on the `keepsake.ing` zone.
 - **#147** — an api-only pull request never runs `e2e`, because the job is scoped by
   `dorny/paths-filter` like everything else. This is the mirror image of row four of `AGENTS.md`'s
-  "checks that could not fail" table, and it is currently un-mirrored in `docs/design/ops.md`
-  except where this pass added it.
+  "checks that could not fail" table.
+- **#155** — a listing's category comes from the model alone and no human can correct it, at any
+  layer. A product decision (#35) whose premise has been tested and half-failed.
+- **#159** — decide whether a Tail Worker or Logpush is worth it. Nothing pushes an alert anywhere;
+  "no" is a legitimate close, an unwritten default is not.
 
 *Tracking issues, open by design*: #49 (launch blockers), #50 (legal & compliance), #52
 (production cutover). They stay open until every child does.

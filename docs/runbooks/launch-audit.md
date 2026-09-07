@@ -32,9 +32,9 @@ that note came first and this table agrees with it.
 >
 > One dangling reference: finding 2's superseded note points at **issue #85** ("whether anything
 > indexed during the window before this landed needs a Search Console removal"). #85 has been
-> **deleted** from GitHub (`410 This issue was deleted`), so that question is now tracked nowhere.
-> It is small and probably moot — preview was indexable for at most a day — but it is not
-> "handled", and this is the only place it is written down.
+> **deleted** from GitHub (`410 This issue was deleted`). Refiled as **#158** — read that, not #85.
+> It is small and probably moot (preview was indexable for at most a day) but it was never
+> checked.
 
 **Source, and what "closed" means here.** The mapping is taken from
 [#49's full reconciliation comment of 2026-09-07](https://github.com/kiarashplusplus/keepsake/issues/49#issuecomment-5565544019),
@@ -104,7 +104,9 @@ issue open".
   closed out.~~ All closed.
 - **New, and not from this audit**: #116 (the `adminAuth` flake is back on unmodified `main`, so
   #65's fix did not hold), #145 (DNSSEC off on the zone), #147 (an api-only pull request never runs
-  `e2e`).
+  `e2e`), and, filed 2026-09-07 out of the docs sweep: #155 (no human can correct a listing's
+  category), #156 (the stranded per-PR preview token), #157 (production photos have never been
+  backed up), #158 (above), #159 (decide whether push alerting is worth it).
 
 ---
 
@@ -216,6 +218,7 @@ rule; see `apps/api/test/robotsConfig.test.ts`) for both `--env preview` (header
 `Disallow: /admin` is gone from the public `robots.txt`, replaced by an unconditional
 `X-Robots-Tag: noindex` on that one path in every environment. Issue #85 (blocked on Kiarash) covers
 whether anything indexed during the window before this landed needs a Search Console removal.
+**[#85 has since been deleted from GitHub; that question is #158 now.](https://github.com/kiarashplusplus/keepsake/issues/158)**
 
 ### 3. `EMAIL_MODE=live` has never been exercised against a real stranger, and every failure is silent. [code]
 

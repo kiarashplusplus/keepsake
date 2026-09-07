@@ -415,13 +415,30 @@ before `orphanSweep`'s own 03:17. It has fired once on its `schedule:` trigger �
 caveat this paragraph used to carry (a workflow file GitHub has never seen on the default branch
 gets neither `schedule:` nor `workflow_dispatch`; merging fixed that).
 
-**Read the production leg's green carefully, because it is the shape `AGENTS.md`'s table warns
-about.** Its log says `0 referenced key(s) in D1` — production had no `photos` rows at 03:18 that
-morning — so the job did no work, touched no bucket, and passed. It therefore does **not** prove
-`keepsake-photos-production-backup` exists; the "Production has no backup bucket yet" paragraph
-above still stands until someone creates it or a run copies a real key. Production has had at
-least one listing with photos since (#135's fishing-line spool), so the next run either copies
-bytes or fails loudly on the `put` — the script has no create-the-bucket path and
-`existsInBucket` reads a missing bucket the same as a missing object. **Read that run's log, not
-just its check mark**, and confirm `copied` is non-zero before treating production photos as
-backed up.
+**That green was the shape `AGENTS.md`'s table warns about, and it has been fixed.** The
+production leg's whole log read `0 referenced key(s) in D1` — production had no `photos` rows at
+03:18 that morning — so the job did no work, touched no bucket, and passed. It proved nothing
+about whether `keepsake-photos-production-backup` exists, and it would have gone on passing until
+the first production photo, at which point the `put` fails and the bytes it was meant to protect
+never were.
+
+`tools/backup-photos.mjs` now **probes the backup bucket before the key count can make the run
+trivially green** (`wrangler r2 bucket info`, account-level and read-only) and exits 1 if it cannot
+confirm it, printing wrangler's own stderr verbatim plus the two create commands. It also says
+plainly when there is nothing to copy, rather than letting a silent success read as "photos are
+backed up." So a green run now means at minimum "the destination exists"; before, it could mean
+nothing at all.
+
+The failure is deliberately not diagnosed past what is honest: a non-zero exit means *could not
+confirm*, which is a missing bucket **or** absent/too-narrow credentials. Wrangler's message
+distinguishes them; the script does not guess.
+
+Verified by breaking it: with the check commented out the script sails past to the D1 query, and
+the "confirmed present" line no longer prints at all — it is emitted inside the check rather than
+by the caller, after a first draft where commenting the call out still printed it, which is the
+same bug one level up. Restored, it stops at the bucket probe with the new message.
+
+**Production still has no backup bucket as far as anyone can show** (the paragraph above stands).
+What has changed is that the next scheduled run will now say so out loud instead of passing.
+Still: read the run's log, not just its check mark, and confirm `copied` is non-zero before
+treating production photos as backed up.
