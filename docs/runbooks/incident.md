@@ -29,6 +29,7 @@ Redeploy with the flag — see [deploy.md](deploy.md#manual-deploys-and-commit_s
 | A listing that should be held is publicly visible | moderation decide logic regression — this should never happen (fail-closed by design) | `apps/api/src/moderation/decide.ts` + its test matrix; treat as a P0, not a queue item |
 | Web bundle blank/broken in production | a barrel import slipped past lint (see `docs/design/README.md#barrel-ban`), or a version-skew client is running against a moved API contract | check the deployed commit's bundle for a bare `@keepsake/*` import; check `/version.json` |
 | A captured log line has an unredacted secret in it | `@keepsake/observability/redact`'s `SENSITIVE_KEY_RE` doesn't cover a new field name | extend the regex, add a test that breaks without the fix, treat any live leak as urgent regardless of severity elsewhere |
+| A captured log line has an unredacted **email or phone** in it | a *shape* problem, not a field-name one — `SENSITIVE_KEY_RE` is the wrong lever | fix the pattern in `packages/observability/src/patterns.ts` (one definition, shared with moderation's `contactInfo.ts`), and add a must-survive case alongside it so the fix can't over-redact. If the line came from a bare `console.*` rather than `captureException`, no redactor was ever in the path — scrub at the call site, as `sendMail.ts` does |
 
 ## Data loss
 

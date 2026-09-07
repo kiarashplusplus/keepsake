@@ -136,6 +136,25 @@ or the send itself throwing all fall through to a `[email:stub]` log and `{ sent
 in `email_events` (migration `0004_email_events.sql`), keyed by `sha256(lowercased address)`
 (`to_hash`) — never the raw address.
 
+That last clause was true of the *key* and false of the row. `error_detail`
+(`20260907083648_email_event_diagnostics.sql`) held the provider's rejection sentence verbatim,
+and SMTP and Email-Routing rejections quote the destination address — so the column that exists so
+we never store who was mailed sat beside a column that stored who was mailed, for the 90 days of
+`orphanSweep`'s retention, surviving both the requester's withdraw link and `DELETE
+/api/me/email`. The one copy that outlived a deletion request was the one nobody knew was there
+(#190). A test enforced it, two lines above the assertion defending `to_hash`.
+
+`sendMail.ts`'s `scrubProviderDetail(text, to)` now runs at the point the provider string is
+captured — not on the way into D1 — so it covers all three diagnostic surfaces at once: the
+`email_events` row, `POST /api/admin/test-email`, and the `console.error` line. That placement is
+the point: the log line is a *direct* console call and never reaches
+`@keepsake/observability/redact`. The recipient becomes `<recipient>`, then `redactString` runs as
+a backstop for a *different* address the provider quotes. The sentence survives whole —
+`"destination address not verified: <recipient> is not a verified destination address for this
+Email Routing zone"` — because that is the half that would answer #6; only the identifier goes.
+It is called *before* `truncateDetail`, so the 1000-char cut can never leave half an address
+behind. Keep that order.
+
 Seven templates in `src/email/templates/*.ts` (`verifyEmail`, `newRequest`, `requestReceived`,
 `chosen`, `recover`, `adminTest`, `dailyDigest`), sharing `templates/shared.ts`'s table-based HTML shell styled
 with `@keepsake/tokens/colors`'
