@@ -108,9 +108,28 @@ jobs:
         with:
           script: |
             const url = `${{ vars.EXPO_PUBLIC_SITE_URL }}`;
+            const sha = `${{ github.sha }}`;
+            const body = [
+              `Preview deployed: ${url}`,
+              `Commit: \`${sha.slice(0, 7)}\``,
+              '',
+              '⚠️ Preview is one shared Worker — every open PR deploys here (#66). This ' +
+                'comment only proves the commit above was live the instant the deploy job ' +
+                'checked it; another PR may have redeployed since. Before trusting anything ' +
+                'you observe on preview, re-check:',
+              '```',
+              `node tools/ci/verify-preview-commit.mjs ${url} ${sha}`,
+              '```',
+              'For anything that takes more than an instant (a manual click-through, a ' +
+                'curl against a write path), wrap it so drift mid-verification fails loud ' +
+                'instead of silently passing:',
+              '```',
+              `node tools/ci/verify-preview-commit.mjs ${url} ${sha} -- <your command>`,
+              '```',
+            ].join('\n');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `Preview deployed: ${url}\nCommit: \`${context.sha.slice(0, 7)}\``,
+              body,
             });

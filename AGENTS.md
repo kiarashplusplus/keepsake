@@ -14,8 +14,13 @@ The product is the story. Anything that makes a listing feel like a classified a
 
 ## Where things stand
 
-- **Preview**: <https://preview.keepsake.ing> — the whole product, live from `main`, which
-  redeploys itself on every push.
+- **Preview**: <https://preview.keepsake.ing> — the whole product, but **not** stably "live from
+  `main`": it is one shared Worker that redeploys on every push to `main` **and on every open
+  pull request** (`.github/workflows/deploy.yml`). Whichever deploy landed most recently wins,
+  which means the commit preview is serving at any instant belongs to whichever session pushed
+  last — not necessarily yours, and not necessarily `main`. With several sessions working this
+  repo at once (see below), that gap is routine, not an edge case: see #66 and
+  "Verifying against preview" below.
 - **Production**: `keepsake-production` exists, migrated, seeded, secrets set — but **no domain
   points at it** and that is deliberate. Attaching `keepsake.ing` is Kiarash's call, and
   production deploys are manual (`workflow_dispatch`) because GitHub's required-reviewer gate is a
@@ -66,6 +71,27 @@ So: when you add a guard, **break the code and watch the guard fail**, then rest
 issue comment which one you broke. When you fix something user-visible, look at it — curl the
 deployed URL, read the actual bytes, take a viewport screenshot. Do not screenshot with
 `captureBeyondViewport`; that is how a page nobody could scroll looked perfect for a week.
+
+**A sixth one, #66: "verified on preview" was never safe to say.** `deploy.yml`'s own
+"Verify /health reports this commit" step is not one of the five above — it's correct at the
+moment it runs. What's worthless is trusting it a minute later: preview is one shared Worker
+every open PR deploys to, so another session's deploy can land between CI's check and whatever
+you do next. This happened for real verifying #14 — a probe ran 90 seconds after an unrelated
+branch redeployed over it, and would have silently "confirmed" the wrong commit if the endpoint
+under test hadn't 404'd instead. **Before trusting anything you observe on preview — an admin
+endpoint, a page you clicked through, a screenshot — confirm the commit first, and again after**:
+
+```sh
+node tools/ci/verify-preview-commit.mjs https://preview.keepsake.ing <expected-sha>
+# or wrap the whole verification so drift mid-check fails loud instead of silently passing:
+node tools/ci/verify-preview-commit.mjs https://preview.keepsake.ing <expected-sha> -- <your command>
+```
+
+Every deploy's PR comment now includes this reminder with the exact commit filled in. If the
+script fails, preview does not currently hold your build — nothing you observed proves anything
+about your change. See `docs/runbooks/deploy.md#verifying-against-preview` and #66's follow-up
+issue for the real fix (per-PR Workers, or restricting preview deploys to `main` only), both of
+which need a decision and possibly credentials only Kiarash has.
 
 ## Environment gotchas that will cost you an hour
 
