@@ -8,6 +8,7 @@ import { ToastProvider } from "@/ui/Toast";
 import { KraftTable } from "@/ui/KraftTable";
 import { AppHeader } from "@/ui/AppHeader";
 import { AppFooter } from "@/ui/AppFooter";
+import { VersionSkewBanner } from "@/features/versionSkew/VersionSkewBanner";
 
 // expo-router's Stack renders each screen inside a React Navigation `Screen`
 // container whose own background comes from a *navigation* theme — entirely
@@ -25,6 +26,7 @@ function Shell(): React.ReactElement {
     <SafeAreaProvider>
       <View style={{ flex: 1, backgroundColor: "transparent" }}>
         <KraftTable />
+        <VersionSkewBanner />
         <AppHeader />
         <RouterThemeProvider value={TRANSPARENT_ROUTER_THEME}>
           <Stack
