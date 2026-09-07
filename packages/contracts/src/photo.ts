@@ -16,9 +16,17 @@ export const MAX_PHOTOS = 5;
 // is the same trap as a var nobody reads (see the `MAX_PHOTOS` /
 // `IMAGE_TRANSFORMS_ENABLED` note in wrangler.toml): it reads like the limit
 // while the real limit changes elsewhere.
-export const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
-export const AllowedImageTypeSchema = z.enum(ALLOWED_IMAGE_TYPES);
-export type AllowedImageType = z.infer<typeof AllowedImageTypeSchema>;
+// `ALLOWED_IMAGE_TYPES`/`AllowedImageTypeSchema`/`AllowedImageType` were
+// removed here for the same reason `MAX_PHOTO_BYTES` above was: after the
+// upload-pipeline hardening, nothing imported them. The client stopped
+// keeping an allowlist at all — `apps/web/src/lib/images/validateImage.ts`
+// now refuses only what is positively *not* an image and defers everything
+// else to the decode, because a picker reporting `""` or
+// `application/octet-stream` means "I don't know", not "not a photo". That
+// leaves exactly one enforced list, `ALLOWED_SNIFFED_TYPES` in
+// `apps/api/src/lib/imageSniff.ts`, which is checked against the bytes
+// rather than a client's claim — and a one-consumer constant belongs with
+// its consumer.
 
 /** Long edge, in px, that uploads are resized to before storage. */
 export const FULL_EDGE_PX = 2048;
