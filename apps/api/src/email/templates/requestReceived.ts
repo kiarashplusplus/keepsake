@@ -1,5 +1,5 @@
 import { colorsLight } from "@keepsake/tokens/colors";
-import { renderShell, plainLinkLine, footerLine, escapeHtml, type EmailTemplate } from "./shared.js";
+import { renderShell, plainLinkLine, footerLine, escapeHtml, sanitizeSubject, type EmailTemplate } from "./shared.js";
 
 export interface RequestReceivedParams {
   listingTitle: string;
@@ -22,7 +22,7 @@ export function requestReceived(params: RequestReceivedParams): EmailTemplate {
   const title = escapeHtml(params.listingTitle);
 
   return {
-    subject: `We passed your note along for "${params.listingTitle}"`,
+    subject: sanitizeSubject(`We passed your note along for "${params.listingTitle}"`),
     html: renderShell({
       bodyHtml: `<p>We let the giver of <em>${title}</em> know you're interested. There's nothing more to
         do — if they choose you, you'll hear from them directly at this address.</p>

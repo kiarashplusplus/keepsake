@@ -65,8 +65,15 @@ function runSection(section, command, args) {
 // not hide a red API step. `--if-present` on the pnpm filters means a
 // workspace with no `test` script yet (M0 scaffold) is silently a no-op
 // rather than a failure.
+//
+// TOOLS is separate from PACKAGES because `--filter ./packages/*` does not
+// match `tools/*`, even though pnpm-workspace.yaml lists both. Without this
+// step `tools/preflight/preflight.test.mjs` — the suite that proves every
+// preflight check can still fail — had never run in `pnpm test` or in CI. A
+// test file nothing executes is the same as no test at all (#99).
 const STEPS = [
   { section: "PREFLIGHT", command: "node", args: ["tools/preflight/preflight.mjs"] },
+  { section: "TOOLS", command: "pnpm", args: ["--filter", "./tools/*", "--if-present", "test"] },
   { section: "PACKAGES", command: "pnpm", args: ["--filter", "./packages/*", "--if-present", "test"] },
   { section: "API", command: "pnpm", args: ["--filter", "@keepsake/api", "--if-present", "test"] },
   { section: "WEB", command: "pnpm", args: ["--filter", "@keepsake/web", "--if-present", "test"] },

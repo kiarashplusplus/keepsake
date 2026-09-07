@@ -82,6 +82,12 @@ export interface CreateListingOptions {
    * can be handed the same token and find the listing under `/mine`. */
   ownerToken?: string;
   email?: string;
+  /** Issue #36/#39: the aspects a real photo-suggestion call would have
+   * produced. Omit entirely (not `[]`) to exercise the issue #40 zero-aspect
+   * case — `CreateListingInput.aspects` defaults to `[]` server-side either
+   * way, but omitting it here is what a give flow with a suggestion the
+   * giver never applied actually sends. */
+  aspects?: Array<{ name: string; value: string }>;
 }
 
 /**
@@ -125,6 +131,7 @@ export async function createApprovedListing(
       photo_ids: [photo.id],
       date_of_birth: "1990-01-01",
       ...(options.email !== undefined ? { email: options.email } : {}),
+      ...(options.aspects !== undefined ? { aspects: options.aspects } : {}),
     },
   });
   const created = await readData<{ id: string }>(createResponse);

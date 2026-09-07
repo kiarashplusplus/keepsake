@@ -1,0 +1,24 @@
+-- Issue #37 (backfill existing listings' aspects from their cover photos):
+-- bookkeeping column for the backfill job, deliberately separate from
+-- `listing_aspects` itself.
+--
+-- "the suggestion model looked at the cover photo and found nothing worth
+-- naming" and "this listing has never been considered by the backfill at
+-- all" are otherwise indistinguishable — both are zero rows in
+-- `listing_aspects` — and the prompt (`src/suggest/prompts.ts`) explicitly
+-- tells the model to return an empty `aspects` array rather than guess, so
+-- a legitimate zero-aspect result is common, not an edge case. Without this
+-- column, a listing whose honest answer is "no aspects" would look
+-- identical to "never backfilled" and get re-processed — and re-billed
+-- against `SUGGEST_DAILY_BUDGET` — every single time the job runs, which
+-- breaks both the "safe to re-run" and "resumable" requirements the issue
+-- asks for: the job would never converge.
+--
+-- NULL for every row today (nothing has been backfilled yet); set once the
+-- backfill job has attempted a suggestion for a listing's cover, regardless
+-- of whether that attempt produced any aspects, found none, or failed
+-- outright (`src/backfill/aspects.ts`) — an attempt is an attempt, and a
+-- fourth retry of a model that already failed twice belongs to the live
+-- suggestion path's own retry logic (`src/suggest/suggest.ts`), not to this
+-- job re-running it forever.
+ALTER TABLE listings ADD COLUMN aspects_backfilled_at INTEGER;

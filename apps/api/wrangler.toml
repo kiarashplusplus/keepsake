@@ -125,6 +125,16 @@ EMBED_DAILY_BUDGET = "2000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
+# Issue #92: hard per-IP daily ceilings behind the two burst-only write paths
+# that had none. Reports drive the three-report auto-hide, and the handler's
+# per-listing `ip_digest` check only stops repeat reports of the *same*
+# listing — nothing stopped one address reporting many different ones.
+# EMAIL is one shared ceiling for POST /api/recover and POST /api/me/email,
+# since what's rationed is outbound mail, not the path asked for. Both are
+# generous for a person and instant for a script; the same numbers in every
+# environment, since neither scales with traffic the way an AI budget does.
+REPORT_IP_DAILY_BUDGET = "10"
+EMAIL_IP_DAILY_BUDGET = "10"
 # Loose for the same reason as the ceilings above — one giver calls this a
 # handful of times per give flow; this only stops a single retry loop from
 # working through SUGGEST_DAILY_BUDGET alone.
@@ -132,6 +142,11 @@ SUGGEST_IP_DAILY_BUDGET = "30"
 # Three independent reporters is enough signal to pull a listing from public
 # view pending Kiarash's review; it is not a ban, just a hide.
 REPORT_AUTOHIDE_THRESHOLD = "3"
+# Issue #39: the minimum number of approved listings an aspect value needs
+# before `GET /api/feed/shelves` renders it as a shelf — see
+# `shelfMinItems()` in `src/env.ts` for why `3` and why it's the same in
+# every environment below, unlike the traffic-scaled budgets above.
+SHELF_MIN_ITEMS = "3"
 # 5 MiB matches the client-side resize ceiling in apps/web; this is the
 # server-side backstop in case a client is old, broken, or hostile. Read by
 # `src/routes/photos.ts` via `parseIntVar` — unlike the two vars removed
@@ -312,8 +327,11 @@ EMBED_DAILY_BUDGET = "2000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
+REPORT_IP_DAILY_BUDGET = "10"
+EMAIL_IP_DAILY_BUDGET = "10"
 SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
+SHELF_MIN_ITEMS = "3"
 MAX_PHOTO_BYTES = "5242880"
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
@@ -447,8 +465,11 @@ EMBED_DAILY_BUDGET = "2000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
+REPORT_IP_DAILY_BUDGET = "10"
+EMAIL_IP_DAILY_BUDGET = "10"
 SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
+SHELF_MIN_ITEMS = "3"
 MAX_PHOTO_BYTES = "5242880"
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"

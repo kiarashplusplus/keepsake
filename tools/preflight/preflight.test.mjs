@@ -15,7 +15,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { runChecks, parseEnvExample, parseToml } from "./preflight.mjs";
+import { runChecks, parseEnvExample, parseToml, migrationApplyOrder } from "./preflight.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PREFLIGHT_BIN = path.join(HERE, "preflight.mjs");
@@ -136,6 +136,281 @@ test("migrations: skips when the directory is absent", () => {
   assert.equal(result.status, "skip");
 });
 
+test("migrations: accepts the legacy block alongside timestamped migrations", () => {
+  const result = runOne("migrations", {
+    "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
+    "apps/api/migrations/0002_geo.sql": "CREATE TABLE b (id TEXT);\n",
+    "apps/api/migrations/20260907120000_notify_failed.sql": "ALTER TABLE a ADD COLUMN x TEXT;\n",
+  });
+  assert.equal(result.status, "pass");
+  assert.match(result.details.join("\n"), /2 legacy 0001-contiguous, 1 timestamped/);
+});
+
+test("migrations: fails on a name that is neither NNNN_ nor a 14-digit timestamp", () => {
+  const result = runOne("migrations", {
+    "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
+    "apps/api/migrations/add_a_column.sql": "ALTER TABLE a ADD COLUMN x TEXT;\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /YYYYMMDDHHMMSS_slug\.sql/);
+});
+
+test("migrations: fails on a 14-digit prefix that is not a real UTC instant", () => {
+  const result = runOne("migrations", {
+    "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
+    "apps/api/migrations/20261307120000_oops.sql": "ALTER TABLE a ADD COLUMN x TEXT;\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /month 13 is not 01-12/);
+});
+
+test("migrations: a duplicate prefix explains why renaming one is not the fix", () => {
+  const result = runOne("migrations", {
+    "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
+    "apps/api/migrations/0002_mine.sql": "CREATE TABLE b (id TEXT);\n",
+    "apps/api/migrations/0002_theirs.sql": "CREATE TABLE c (id TEXT);\n",
+  });
+  assert.equal(result.status, "fail");
+  const text = result.details.join("\n");
+  assert.match(text, /duplicate migration prefix 0002/);
+  assert.match(text, /d1_migrations/);
+  // The old code also emitted a bogus "gap" line for the duplicate; it should
+  // report the duplicate once and nothing else.
+  assert.doesNotMatch(text, /gap/);
+});
+
+// The order wrangler actually applies migrations in: `parseInt` on the leading
+// segment, not a string sort. `0009` before `20260101000000` is the property
+// the whole two-scheme arrangement rests on.
+test("migrationApplyOrder sorts numerically, legacy before timestamped", () => {
+  const order = migrationApplyOrder([
+    "20260101000000_b.sql",
+    "0010_ten.sql",
+    "0009_nine.sql",
+    "20250101000000_a.sql",
+    "0001_init.sql",
+  ]);
+  assert.deepEqual(order, [
+    "0001_init.sql",
+    "0009_nine.sql",
+    "0010_ten.sql",
+    "20250101000000_a.sql",
+    "20260101000000_b.sql",
+  ]);
+});
+
+// ── migration-drift ────────────────────────────────────────────────────
+//
+// These need real git history, so each builds a throwaway repository with an
+// `origin/main` ref planted by `git update-ref` — no network, no remote.
+
+function git(root, ...args) {
+  execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+}
+
+// Commits `files` as `main`, points `refs/remotes/origin/main` at it, then
+// checks out a branch and applies `branchFiles` (a map of path -> string to
+// write, or `null` to delete) — committing them when `commitBranch` is set.
+function makeGitRepo({ main: mainFiles, branch: branchFiles = {}, commitBranch = false, plantOriginMain = true }) {
+  const root = makeTree(mainFiles);
+  git(root, "init", "-q", "-b", "main");
+  git(root, "config", "user.email", "preflight@example.com");
+  git(root, "config", "user.name", "preflight test");
+  git(root, "add", "-A");
+  git(root, "commit", "-q", "-m", "main");
+  if (plantOriginMain) git(root, "update-ref", "refs/remotes/origin/main", "HEAD");
+  if (Object.keys(branchFiles).length > 0 || commitBranch) {
+    git(root, "checkout", "-q", "-b", "feature");
+    for (const [rel, content] of Object.entries(branchFiles)) {
+      const abs = path.join(root, rel);
+      if (content === null) rmSync(abs, { force: true });
+      else {
+        mkdirSync(path.dirname(abs), { recursive: true });
+        writeFileSync(abs, content);
+      }
+    }
+    if (commitBranch) {
+      git(root, "add", "-A");
+      git(root, "commit", "-q", "-m", "feature");
+    }
+  }
+  return root;
+}
+
+function runDrift(options) {
+  const root = makeGitRepo(options);
+  try {
+    return runChecks(["migration-drift"], root)[0];
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const LANDED = {
+  "apps/api/migrations/0001_init.sql": "CREATE TABLE requests (id TEXT);\n",
+  "apps/api/migrations/0007_admin_request_removal.sql": "ALTER TABLE requests ADD COLUMN removed_at TEXT;\n",
+};
+
+test("migration-drift: passes when nothing that landed on origin/main moved", () => {
+  const result = runDrift({ main: LANDED });
+  assert.equal(result.status, "pass");
+});
+
+test("migration-drift: fails when a landed migration's contents are edited", () => {
+  const result = runDrift({
+    main: LANDED,
+    branch: {
+      "apps/api/migrations/0007_admin_request_removal.sql":
+        "ALTER TABLE requests ADD COLUMN removed_at TEXT;\nALTER TABLE requests ADD COLUMN sneaky TEXT;\n",
+    },
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /edited after landing on origin\/main/);
+});
+
+test("migration-drift: fails when a landed migration is renamed", () => {
+  const result = runDrift({
+    main: LANDED,
+    branch: {
+      "apps/api/migrations/0007_admin_request_removal.sql": null,
+      "apps/api/migrations/0008_admin_request_removal.sql": "ALTER TABLE requests ADD COLUMN removed_at TEXT;\n",
+    },
+    commitBranch: true,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /renamed after landing on origin\/main|deleted after landing on origin\/main/);
+  assert.match(result.details.join("\n"), /d1_migrations/);
+});
+
+test("migration-drift: fails when a landed migration is deleted", () => {
+  const result = runDrift({
+    main: LANDED,
+    branch: { "apps/api/migrations/0007_admin_request_removal.sql": null },
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /deleted after landing on origin\/main/);
+});
+
+test("migration-drift: fails when a new migration uses the legacy sequential form", () => {
+  const result = runDrift({
+    main: LANDED,
+    branch: { "apps/api/migrations/0008_notify_failed.sql": "ALTER TABLE requests ADD COLUMN n TEXT;\n" },
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /must be named YYYYMMDDHHMMSS_slug\.sql/);
+});
+
+test("migration-drift: passes when a new migration is timestamped", () => {
+  const result = runDrift({
+    main: LANDED,
+    branch: { "apps/api/migrations/20260907120000_notify_failed.sql": "ALTER TABLE requests ADD COLUMN n TEXT;\n" },
+  });
+  assert.equal(result.status, "pass");
+  assert.match(result.details.join("\n"), /1 added, all timestamped/);
+});
+
+// The #99 sequence itself: the branch adds a migration, pushes (so the shared
+// preview D1 applies it), then a rebase forces a rename. Nothing on
+// origin/main moved, so only the branch's own history can catch this.
+test("migration-drift: fails when a migration this branch already committed is renamed away", () => {
+  const root = makeGitRepo({
+    main: LANDED,
+    branch: { "apps/api/migrations/20260907120000_notify_failed.sql": "ALTER TABLE requests ADD COLUMN n TEXT;\n" },
+    commitBranch: true,
+  });
+  try {
+    assert.equal(runChecks(["migration-drift"], root)[0].status, "pass");
+    git(root, "mv",
+      "apps/api/migrations/20260907120000_notify_failed.sql",
+      "apps/api/migrations/20260908120000_notify_failed.sql");
+    git(root, "commit", "-q", "-m", "renumber on rebase");
+    const result = runChecks(["migration-drift"], root)[0];
+    assert.equal(result.status, "fail");
+    assert.match(result.details.join("\n"), /committed on this branch and then removed or renamed/);
+    assert.match(result.details.join("\n"), /20260907120000_notify_failed\.sql/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// A check that cannot run must say so, not pass. Locally that is a SKIP;
+// anywhere the baseline is guaranteed fetchable it is a FAIL.
+/**
+ * Run `fn` with specific environment variables forced on or off.
+ *
+ * `migration-drift` escalates its SKIP to a FAIL when it detects CI
+ * (`GITHUB_ACTIONS=true`) or an explicit `PREFLIGHT_REQUIRE_GIT_BASELINE=1`,
+ * so any test asserting *either* outcome has to state which world it is in.
+ * Inheriting the ambient value means a test that passes on a laptop fails on a
+ * runner, which is exactly what happened: two of these went green locally and
+ * red in CI, because GitHub always sets GITHUB_ACTIONS=true.
+ */
+function withEnv(overrides, fn) {
+  const previous = {};
+  for (const [key, value] of Object.entries(overrides)) {
+    previous[key] = process.env[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+/** No baseline required: the world a contributor's laptop is in. */
+const NO_BASELINE_REQUIRED = { GITHUB_ACTIONS: undefined, PREFLIGHT_REQUIRE_GIT_BASELINE: undefined };
+
+test("migration-drift: skips with a reason when origin/main cannot be resolved", () => {
+  const result = withEnv(NO_BASELINE_REQUIRED, () => runDrift({ main: LANDED, plantOriginMain: false }));
+  assert.equal(result.status, "skip");
+  assert.match(result.details.join("\n"), /no origin\/main ref/);
+  assert.match(result.details.join("\n"), /did NOT run/);
+});
+
+test("migration-drift: that skip becomes a failure when a baseline is required", () => {
+  const result = withEnv({ GITHUB_ACTIONS: undefined, PREFLIGHT_REQUIRE_GIT_BASELINE: "1" }, () =>
+    runDrift({ main: LANDED, plantOriginMain: false }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /a baseline is required here/);
+});
+
+// The condition that actually holds on every GitHub runner. Asserted on its
+// own rather than left to the ambient environment, so this suite means the
+// same thing wherever it runs.
+test("migration-drift: GITHUB_ACTIONS alone is enough to require a baseline", () => {
+  const result = withEnv({ GITHUB_ACTIONS: "true", PREFLIGHT_REQUIRE_GIT_BASELINE: undefined }, () =>
+    runDrift({ main: LANDED, plantOriginMain: false }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /a baseline is required here/);
+});
+
+test("migration-drift: skips outside a git work tree rather than passing", () => {
+  const result = withEnv(NO_BASELINE_REQUIRED, () =>
+    runOne("migration-drift", {
+      "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
+    }),
+  );
+  assert.equal(result.status, "skip");
+  assert.match(result.details.join("\n"), /not a git work tree/);
+});
+
+test("migration-drift: outside a git work tree, CI fails rather than skipping", () => {
+  const result = withEnv({ GITHUB_ACTIONS: "true", PREFLIGHT_REQUIRE_GIT_BASELINE: undefined }, () =>
+    runOne("migration-drift", {
+      "apps/api/migrations/0001_init.sql": "CREATE TABLE a (id TEXT);\n",
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /a baseline is required here/);
+});
+
 // ── env-parity ─────────────────────────────────────────────────────────
 
 const ENV_EXAMPLE_GOOD = `
@@ -236,6 +511,83 @@ test("models: ignores test files", () => {
   const result = runOne("models", {
     "apps/api/src/models.ts": 'export const textGuard = "@cf/meta/llama-guard-3-8b";\n',
     "apps/api/src/moderation/pipeline.test.ts": 'const model = "@cf/meta/llama-guard-3-8b";\n',
+  });
+  assert.equal(result.status, "pass");
+});
+
+// ── ip-digest ──────────────────────────────────────────────────────────
+
+// The helper the real `apps/api/src/lib/digest.ts` exports, reduced to what
+// the check reads: an exported `dailyIpDigest` whose body includes the day.
+const DIGEST_GOOD = [
+  'import { todayISO } from "./day.js";',
+  "export async function sha256Hex(input: string): Promise<string> {",
+  '  return input;',
+  "}",
+  "export async function dailyIpDigest(clientIP: string): Promise<string> {",
+  "  return sha256Hex(`${todayISO()}:${clientIP}`);",
+  "}",
+  "",
+].join("\n");
+
+test("ip-digest: passes when every IP digest goes through dailyIpDigest", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD,
+    "apps/api/src/middleware/rateLimit.ts": "const key = await dailyIpDigest(clientIPFrom(c.req.raw));\n",
+    "apps/api/src/routes/recover.ts": "const tokenHash = await sha256Hex(rawToken);\n",
+  });
+  assert.equal(result.status, "pass");
+});
+
+test("ip-digest: fails on a bare sha256Hex of the caller's address (the #87 bug)", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD,
+    "apps/api/src/middleware/rateLimit.ts": "const key = await sha256Hex(clientIPFrom(c.req.raw));\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /rateLimit\.ts:1: hashes a client IP without the day/);
+});
+
+test("ip-digest: fails on a hand-rolled day-salted digest that bypasses the helper", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD,
+    "apps/api/src/routes/listings.ts": "const ipDigest = await sha256Hex(`${todayISO()}:${clientIP}`);\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /listings\.ts:1: hashes a client IP/);
+});
+
+test("ip-digest: fails on sha256Hex(ip) — the two-statement dodge with a telling name", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD,
+    "apps/api/src/middleware/rateLimit.ts": "const ip = clientIPFrom(c.req.raw);\nconst key = await sha256Hex(ip);\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /rateLimit\.ts:2: hashes a client IP/);
+});
+
+test("ip-digest: fails on crypto.subtle.digest outside lib/digest.ts", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD,
+    "apps/api/src/moderation/budget.ts": 'const d = await crypto.subtle.digest("SHA-256", input);\n',
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /budget\.ts:1: crypto\.subtle\.digest\(\) outside/);
+});
+
+test("ip-digest: fails when the helper itself stops including the day", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD.replace("`${todayISO()}:${clientIP}`", "clientIP"),
+    "apps/api/src/middleware/rateLimit.ts": "const key = await dailyIpDigest(clientIPFrom(c.req.raw));\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /does not include todayISO\(\)/);
+});
+
+test("ip-digest: ignores test files", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD,
+    "apps/api/src/middleware/rateLimit.test.ts": "const key = await sha256Hex(clientIPFrom(req));\n",
   });
   assert.equal(result.status, "pass");
 });
@@ -446,4 +798,107 @@ test("CLI --list prints every check name without touching disk", () => {
   assert.match(out, /fonts/);
   assert.match(out, /migrations/);
   assert.match(out, /shell-syntax/);
+});
+
+// ── gh-repo-context ────────────────────────────────────────────────────────
+//
+// The bug these cover shipped for real (#106): uptime.yml's alerting step
+// called `gh issue create` from a job with no checkout, so every call died
+// with "fatal: not a git repository" and no issue was ever filed. It went
+// unnoticed because the step is `if: failure()` — it only runs when something
+// is genuinely wrong, and until the first real failure nothing ever exercised
+// it. A green run history was mistaken for a working alert.
+
+const GH_ALERT_JOB = (env) => `name: Uptime
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check health
+        run: curl -fsS https://example.test/health
+      - name: Open an issue when unhealthy
+        if: \${{ failure() }}
+        env:
+          GH_TOKEN: \${{ github.token }}
+${env}        run: |
+          gh issue create --title "down" --body "see run"
+`;
+
+test("gh-repo-context fails when a gh step has no checkout and no GH_REPO", () => {
+  const result = runOne("gh-repo-context", {
+    ".github/workflows/uptime.yml": GH_ALERT_JOB(""),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details[0], /job "health" runs `gh`/);
+  assert.match(result.details[0], /GH_REPO/);
+});
+
+test("gh-repo-context passes once GH_REPO is set on the step", () => {
+  const result = runOne("gh-repo-context", {
+    ".github/workflows/uptime.yml": GH_ALERT_JOB("          GH_REPO: ${{ github.repository }}\n"),
+  });
+  assert.equal(result.status, "pass");
+});
+
+test("gh-repo-context passes when the job checks the repo out instead", () => {
+  const result = runOne("gh-repo-context", {
+    ".github/workflows/report.yml": `name: Report
+on:
+  schedule:
+    - cron: "0 * * * *"
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: File a finding
+        run: gh issue create --title "x" --body "y"
+`,
+  });
+  assert.equal(result.status, "pass");
+});
+
+test("gh-repo-context only faults the job that lacks context, not its neighbour", () => {
+  const result = runOne("gh-repo-context", {
+    ".github/workflows/two.yml": `name: Two
+on: [push]
+jobs:
+  fine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: gh issue list
+  broken:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh issue create --title "t" --body "b"
+`,
+  });
+  assert.equal(result.status, "fail");
+  assert.equal(result.details.length, 1);
+  assert.match(result.details[0], /job "broken"/);
+});
+
+test("gh-repo-context ignores words merely containing gh, and steps with no gh at all", () => {
+  const result = runOne("gh-repo-context", {
+    ".github/workflows/build.yml": `name: Build
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "highlight the through-put, weigh the light"
+      - run: pnpm run build
+`,
+  });
+  assert.equal(result.status, "pass");
+  assert.match(result.details[0], /0 job\(s\) invoking gh/);
+});
+
+test("gh-repo-context skips a tree with no workflows rather than passing it", () => {
+  const result = runOne("gh-repo-context", { "README.md": "# nothing here\n" });
+  assert.equal(result.status, "skip");
 });

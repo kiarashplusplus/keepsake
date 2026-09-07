@@ -11,8 +11,68 @@ import { config } from "@/lib/config";
 // prevents a flash of the wrong theme on reload. It intentionally does NOT
 // import `src/ui/theme.tsx` (that module isn't loaded yet); it duplicates
 // just the storage key and the three valid values.
-const THEME_PREHYDRATION_SCRIPT = `
+//
+// Issue #44 folds a second, unrelated decision into this same script rather
+// than adding a fourth inline `<script>` tag: every inline script here is a
+// CSP `script-src` hash in `apps/web/public/_headers` AND
+// `apps/api/src/middleware/securityHeaders.ts` (the two must stay byte-for-
+// byte identical — see either file's header comment), so changing one
+// script's shape is a smaller, safer diff than growing the allowlist with a
+// new one. Order matters: the root-redirect block runs FIRST, before the
+// theme read, so a first-time visitor never runs code that assumes it's
+// looking at the feed.
+//
+// ROOT REDIRECT: `keepsake.ing` should show a short explainer to a
+// first-time visitor and the feed to everyone else. The naive fix — branch
+// on visitor state inside the Feed component itself, after mount — was
+// rejected for two reasons: (1) despite `web.output: "static"`, `expo
+// export`'s per-route HTML ships an EMPTY body (a Suspense placeholder, no
+// prerendered markup — confirmed by reading `dist/index.html` after export,
+// not assumed), so the app's real first paint is whatever `index.tsx` renders
+// once React attaches: the Feed's own loading skeleton. A `useEffect` there
+// that redirects a first-time visitor away would still show that skeleton
+// for a frame first — a visible flash of "feed" content for someone who is,
+// by definition, seeing this domain for the first time. (2) Branching
+// server-side instead (a Worker route with `Vary`) needs a cookie, and the
+// one strong signal this app has — the `ks_` owner token — deliberately
+// lives in `localStorage` only, never sent to the server on a plain page
+// load (see docs/design/identity.md). A new cookie mirroring it would be a
+// second copy of identity state that can drift, on the one path (`/`) this
+// repo has explicitly called out as needing to stay cacheable with no
+// `Vary` split.
+//
+// The fix here keeps `/` exactly as cacheable as it is today — identical
+// bytes for every visitor, no `Vary`, nothing server-side — by moving the
+// branch BEFORE hydration instead of into it: this script runs synchronously
+// in `<head>`, before the body is parsed, so `location.replace` fires before
+// the browser ever paints the wrong content. A returning visitor (has `ks_`,
+// or has been here before) is a no-op and sees the feed exactly as before,
+// at zero extra cost.
+//
+// "Returning" = holds a `ks_` token (`OWNER_TOKEN_STORAGE_KEY` in
+// `src/lib/ownerToken.ts`) OR has the `keepsake.visited.v1` flag this script
+// itself sets on every page load. Not a cookie, no expiry, never leaves the
+// device — the same storage tier as the theme preference below and the
+// owner token itself, both already un-gated by the consent banner.
+// `e2e/support/visited.ts` reads this same key back out of this file rather
+// than re-declaring it, for the reason that file's own comment gives.
+const PREHYDRATION_SCRIPT = `
 (function () {
+  try {
+    var OWNER_KEY = "keepsake.ownerToken.v1";
+    var VISITED_KEY = "keepsake.visited.v1";
+    var returning = !!window.localStorage.getItem(OWNER_KEY) || !!window.localStorage.getItem(VISITED_KEY);
+    if (window.location.pathname === "/" && !returning) {
+      window.localStorage.setItem(VISITED_KEY, "1");
+      window.location.replace("/welcome");
+      return;
+    }
+    if (!returning) window.localStorage.setItem(VISITED_KEY, "1");
+  } catch (e) {
+    /* localStorage unavailable (privacy mode, SSR) — fall through to the
+       feed rather than risk a redirect loop we can't persist past. */
+  }
+
   try {
     var STORAGE_KEY = "keepsake.theme.v1";
     var stored = window.localStorage.getItem(STORAGE_KEY);
@@ -152,7 +212,7 @@ export default function Root({ children }: { children: React.ReactNode }): React
         <ScrollViewStyleReset />
 
         <style dangerouslySetInnerHTML={{ __html: ROOT_CSS }} />
-        <script dangerouslySetInnerHTML={{ __html: THEME_PREHYDRATION_SCRIPT }} />
+        <script dangerouslySetInnerHTML={{ __html: PREHYDRATION_SCRIPT }} />
 
         {/* Consent. `/consent.js` (source: `public/consent.js`) is the single
             shared implementation of the store, the banner and every

@@ -18,11 +18,10 @@ import { sendMail } from "../email/sendMail.js";
 import { verifyEmail } from "../email/templates/verifyEmail.js";
 import { newRequest as newRequestTemplate } from "../email/templates/newRequest.js";
 import { requestReceived as requestReceivedTemplate } from "../email/templates/requestReceived.js";
-import { sha256Hex } from "../lib/digest.js";
-import { todayISO } from "../lib/day.js";
+import { dailyIpDigest, sha256Hex } from "../lib/digest.js";
 import { randomTokenRaw } from "../lib/tokens.js";
 import { clientIPFrom } from "../moderation/budget.js";
-import { parseIntVar } from "../env.js";
+import { reportAutohideThreshold } from "../env.js";
 import { moderateListing } from "../moderation/pipeline.js";
 import { purgePhotoCache } from "../lib/photoCache.js";
 import { containsContactInfo } from "../moderation/contactInfo.js";
@@ -36,7 +35,13 @@ export const listingRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 const DEFAULT_LISTING_IP_DAILY_BUDGET = 20;
 const DEFAULT_REQUEST_IP_DAILY_BUDGET = 20;
-const DEFAULT_REPORT_AUTOHIDE_THRESHOLD = 3;
+/** Issue #92. Ten distinct listings reported from one address in one day is
+ * already far more than a person browsing their own area could plausibly
+ * find wrong; a script walking the catalogue passes it in seconds. Loose for
+ * the same reason as every other per-IP number here (an address is not a
+ * person — see `moderation/budget.ts`'s header on CGNAT), but unlike the
+ * burst brake it is a real ceiling. */
+const DEFAULT_REPORT_IP_DAILY_BUDGET = 10;
 
 // ---------------------------------------------------------------------------
 // POST /api/listings
@@ -291,16 +296,29 @@ listingRoutes.delete("/:id", ownerAuth(), async (c) => {
     c.executionCtx.waitUntil(purgePhotoCache(c.env, photo.id));
   }
 
-  // `photos`, `requests`, `reports`, `moderation_events` all have
-  // `ON DELETE CASCADE` back to `listings` (0001_init.sql) — this is the
-  // only DB statement needed once R2 objects are gone. `listing_aspects`
-  // cascades the same way (0006_aspects.sql); the Vectorize row has no such
-  // mechanism (D1 cascades don't reach an external index), so it's deleted
-  // explicitly — otherwise a deleted listing's vector would keep surfacing
-  // in semantic search results indefinitely (`fetchCandidateRows`'s
-  // `status = 'approved'` join condition catches it today since a deleted
-  // row simply isn't there to match, but there's no reason to leave a dead
-  // vector in the index once the listing it represents is gone).
+  // `photos`, `requests`, `reports`, `moderation_events` and
+  // `listing_aspects` all have `ON DELETE CASCADE` back to `listings`
+  // (0001_init.sql, rebuilt for `requests` in 0005, added for
+  // `listing_aspects` in 0006), and `listings_fts` is swept by a trigger
+  // (0003) — so this is the only DB statement needed once R2 objects are
+  // gone.
+  //
+  // Issue #90: that used to be this comment's word against nothing. SQLite
+  // does not enforce foreign keys unless `PRAGMA foreign_keys` is on, and
+  // nothing in this repo sets it — D1 defaults it on, which is external
+  // knowledge this route silently depends on. `test/cascadeDelete.test.ts`
+  // now seeds all five child tables, deletes through this handler, and
+  // asserts by querying that every child row is gone; it also enumerates
+  // the schema's foreign keys so a child table added later without a
+  // cascade fails rather than quietly orphaning a requester's note, email
+  // and phone with no listing left to reach them through.
+  //
+  // The Vectorize row has no such mechanism — D1 cascades don't reach an
+  // external index — so it's deleted explicitly below. Today that is
+  // belt-and-braces rather than load-bearing (`fetchCandidateRows` joins
+  // back to `listings` on `status = 'approved'`, and a deleted row simply
+  // isn't there to match), but there's no reason to leave a dead vector in
+  // the index once the listing it represents is gone.
   await c.env.DB.prepare("DELETE FROM listings WHERE id = ?").bind(id).run();
   c.executionCtx.waitUntil(deleteListingVector(c.env, id));
 
@@ -401,10 +419,31 @@ listingRoutes.get("/:id", burst("RL_READ"), async (c) => {
 // ---------------------------------------------------------------------------
 // POST /api/listings/:id/reports
 // ---------------------------------------------------------------------------
+// Issue #92: `burst("RL_REPORT")` used to be the only limiter on the one
+// endpoint that can pull a listing out of public view (three reports and
+// `REPORT_AUTOHIDE_THRESHOLD` hides it). `burst()` is best-effort by
+// Cloudflare's own documentation and was measured leaking ~2.6x its limit
+// (#8), and the `ip_digest` uniqueness check below only stops one address
+// reporting the *same* listing twice a day — it never stopped one address
+// reporting fifty *different* listings, each toward its own auto-hide. So
+// this route now carries the same hard KV ceiling `listing`/`request`/
+// `upload` do. `turnstile()` stays in front of it, so a failed challenge
+// doesn't spend a real reporter's allowance.
+//
+// What it does not do, said plainly rather than left to be discovered: the
+// ceiling is per address, so a caller with a range of them — a residential
+// IPv6 /64 is 2^64 addresses — gets a fresh ceiling with each one. That is
+// true of every per-IP number in this Worker (`moderation/budget.ts`'s
+// header says so about all of them) and the alternatives both cost more
+// than they're worth today: keying on a prefix refuses whole households and
+// CGNAT ranges at once, and per-install limiting needs a client credential
+// that doesn't exist. This raises the cost of walking the catalogue from
+// free to needing addresses. It does not end it.
 listingRoutes.post(
   "/:id/reports",
   turnstile(),
   burst("RL_REPORT"),
+  dailyBudget({ kind: "report", ipDailyLimitVar: "REPORT_IP_DAILY_BUDGET", fallbackIpDailyLimit: DEFAULT_REPORT_IP_DAILY_BUDGET }),
   validateBody(CreateReportInput),
   async (c) => {
     const id = requireParam(c, "id");
@@ -415,12 +454,12 @@ listingRoutes.post(
       return fail(c, "not_found", "Listing not found.", 404);
     }
 
-    // Rotates daily (sha256(day:ip), the same shape src/moderation/budget.ts
-    // uses for its KV keys) — the same address can report the same listing
-    // again tomorrow; this only blocks a repeat within one day, on purpose,
-    // so `reports.ip_digest` never becomes a long-term per-address
+    // Rotates daily (sha256(day:ip), the one shape `lib/digest.ts` allows
+    // an address to be hashed into) — the same address can report the same
+    // listing again tomorrow; this only blocks a repeat within one day, on
+    // purpose, so `reports.ip_digest` never becomes a long-term per-address
     // identifier.
-    const ipDigest = await sha256Hex(`${todayISO()}:${clientIPFrom(c.req.raw)}`);
+    const ipDigest = await dailyIpDigest(clientIPFrom(c.req.raw));
 
     const existing = await c.env.DB.prepare("SELECT id FROM reports WHERE listing_id = ? AND ip_digest = ?")
       .bind(id, ipDigest)
@@ -439,7 +478,7 @@ listingRoutes.post(
     await c.env.DB.prepare("UPDATE listings SET report_count = report_count + 1 WHERE id = ?").bind(id).run();
 
     const reportCount = row.report_count + 1;
-    const threshold = parseIntVar("REPORT_AUTOHIDE_THRESHOLD", c.env.REPORT_AUTOHIDE_THRESHOLD, DEFAULT_REPORT_AUTOHIDE_THRESHOLD);
+    const threshold = reportAutohideThreshold(c.env);
 
     // Only pulls a listing that's currently public — a report against a
     // listing already `given`/`hidden`/etc. still counts (report_count
@@ -461,7 +500,22 @@ listingRoutes.post(
       // without having to remember to check the queue — the listing id is a
       // public ULID (already in every share link), not PII, so it's safe to
       // put in the message itself.
-      captureMessage(`Listing ${id} auto-hidden after ${reportCount} reports`, "warning");
+      //
+      // Issue #89: this line goes to Workers Logs and nothing reads Workers
+      // Logs on a schedule (no Tail Worker, no Logpush — see
+      // docs/runbooks/incident.md), so on its own it never reached a human.
+      // It is kept, and tagged, because it is still the only record of the
+      // *moment* the hide happened that survives a later admin action: the
+      // durable, actually-polled signal is now
+      // `GET /api/admin/health`'s `report_pressure` (src/routes/admin.ts)
+      // and the hourly `.github/workflows/report-pressure.yml` that reads
+      // the same rows out of D1. `tags.source` makes this filterable in the
+      // Workers Logs UI (`tags.source = "report_autohide"`) instead of
+      // needing a substring match on the message.
+      captureMessage(`Listing ${id} auto-hidden after ${reportCount} reports`, "warning", {
+        tags: { source: "report_autohide" },
+        extra: { listing_id: id, report_count: reportCount, threshold },
+      });
     }
 
     return ok(c, { id: reportId }, 201);
@@ -541,7 +595,7 @@ listingRoutes.post(
     }
 
     const clientIp = clientIPFrom(c.req.raw);
-    const ipDigest = await sha256Hex(`${todayISO()}:${clientIp}`);
+    const ipDigest = await dailyIpDigest(clientIp);
     const now = Date.now();
     const requestId = ulid();
 

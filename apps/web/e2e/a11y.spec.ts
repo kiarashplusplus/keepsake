@@ -71,6 +71,16 @@ test("the give flow has no serious or critical accessibility violations", async 
   expect(await blockingViolations(page)).toEqual([]);
 });
 
+test("the new-visitor explainer has no serious or critical accessibility violations", async ({ page }) => {
+  // Direct navigation, not through `/`: the redirect in `+html.tsx` only
+  // fires for the root path, so this context's seeded "visited" flag (every
+  // other test in this suite relies on it) doesn't need to be unset here.
+  await page.goto("/welcome");
+  await expect(page.getByText("No accounts. No money.")).toBeVisible();
+
+  expect(await blockingViolations(page)).toEqual([]);
+});
+
 test("the about page has no serious or critical accessibility violations", async ({ page }) => {
   // Static HTML from `apps/site`, copied into the export by
   // `scripts/copy-site.mjs` — a different codebase from everything above, and

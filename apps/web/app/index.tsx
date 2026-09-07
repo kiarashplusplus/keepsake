@@ -21,7 +21,9 @@ import { LocationBar } from "@/features/feed/LocationBar";
 import { MasonryGrid } from "@/features/feed/MasonryGrid";
 import { ListingCard } from "@/features/feed/ListingCard";
 import { LoadMoreSentinel } from "@/features/feed/LoadMoreSentinel";
+import { AspectShelves } from "@/features/feed/AspectShelves";
 import { useFeed } from "@/features/feed/useFeed";
+import { useShelves } from "@/features/feed/useShelves";
 import { buildFeedQuery } from "@/features/feed/buildFeedQuery";
 import { feedQueryFromUrlParams, urlParamsFromFeedQuery, type FeedUrlParams } from "@/features/feed/feedUrlParams";
 import { DEFAULT_LOCATION_PREF, loadLocationPref, type LocationPref } from "@/lib/geo";
@@ -103,6 +105,18 @@ export default function Feed(): React.ReactElement {
     enabled: locationHydrated,
     reloadToken,
   });
+
+  // Shelves (issue #39) are computed globally over the whole approved-listing
+  // set, not scoped to the active query — showing them alongside an active
+  // text search or category filter would surface prints that don't match
+  // what the visitor asked to see, so they're only rendered on the
+  // unfiltered browse view. Location stays out of that gate deliberately:
+  // "browse near me" with no other filter is still exactly the browsing
+  // intent shelves serve, and hiding them behind a postcode would make them
+  // invisible for most real visits at today's catalogue size.
+  const shelvesEligible = q.trim() === "" && category === null;
+  const { shelves } = useShelves();
+  const visibleShelves = shelvesEligible ? shelves : [];
 
   React.useEffect(() => {
     // Fires once the first page settles, not on every render — see
@@ -188,6 +202,18 @@ export default function Feed(): React.ReactElement {
           />
         ) : (
           <>
+            {visibleShelves.length > 0 ? (
+              <>
+                <AspectShelves shelves={visibleShelves} />
+                {/* Only labeled once there's something above it to be
+                    distinguished from — on the far more common case today
+                    (no aspect value clears the floor), the grid below is
+                    the only thing on the page and needs no heading of its
+                    own, exactly like before shelves existed. */}
+                <Eyebrow tick>Everything nearby</Eyebrow>
+              </>
+            ) : null}
+
             <MasonryGrid
               items={items}
               keyOf={(listing) => listing.id}

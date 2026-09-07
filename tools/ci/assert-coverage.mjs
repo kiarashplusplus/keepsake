@@ -28,9 +28,13 @@ const REQUIRED = {
   web: ["lint", "typecheck", "test-web", "build-web", "e2e"],
   api: ["lint", "typecheck", "test-api"],
   packages: ["lint", "typecheck", "test-packages", "test-api", "test-web"],
-  tools: ["lint", "typecheck", "test-web"],
+  // `test-tools` runs tools/preflight's own suite. Before it existed nothing
+  // matched `tools/*` — `test-packages` filters on `./packages/*` — so the 55
+  // tests that prove each preflight check can still fail had never run. That
+  // is failure number four of the kind this file exists to catch.
+  tools: ["lint", "typecheck", "test-tools", "test-web"],
   site: ["test-web", "build-web", "e2e"],
-  root: ["lint", "typecheck", "test-packages", "test-api", "test-web"],
+  root: ["lint", "typecheck", "test-packages", "test-tools", "test-api", "test-web"],
   docs: [],
 };
 

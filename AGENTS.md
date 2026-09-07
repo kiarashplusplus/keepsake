@@ -14,17 +14,22 @@ The product is the story. Anything that makes a listing feel like a classified a
 
 ## Where things stand
 
-- **Preview**: <https://preview.keepsake.ing> — the whole product, but **not** stably "live from
-  `main`": it is one shared Worker that redeploys on every push to `main` **and on every open
-  pull request** (`.github/workflows/deploy.yml`). Whichever deploy landed most recently wins,
-  which means the commit preview is serving at any instant belongs to whichever session pushed
-  last — not necessarily yours, and not necessarily `main`. With several sessions working this
-  repo at once (see below), that gap is routine, not an edge case: see #66 and
-  "Verifying against preview" below.
-- **Production**: `keepsake-production` exists, migrated, seeded, secrets set — but **no domain
-  points at it** and that is deliberate. Attaching `keepsake.ing` is Kiarash's call, and
-  production deploys are manual (`workflow_dispatch`) because GitHub's required-reviewer gate is a
-  paid feature on private repos.
+- **Preview**: <https://preview.keepsake.ing> — the whole product, live from `main`. It deploys
+  on every push to `main` and **nowhere else**: pull requests do not deploy
+  (`.github/workflows/deploy.yml`). So preview means exactly one knowable thing, the newest
+  commit on `main`. This is the resolution of #66/#73 — preview used to redeploy on every open
+  pull request too, which made the commit it served at any instant belong to whichever branch
+  pushed last. **Verify a branch locally instead** (`pnpm --filter @keepsake/web e2e`, real
+  `workerd` + local D1/R2/KV); see "Verifying against preview" below for what preview is still
+  good for and what still needs a commit check.
+- **Production**: <https://keepsake.ing> — live. The custom domain is attached to
+  `keepsake-production` and both of that Worker's `workers.dev` hostnames are disabled, so the
+  apex is the only way in (#46, 2026-09-07). Production deploys stay **manual**
+  (`workflow_dispatch` from the Actions tab, choosing `production`) because GitHub's
+  required-reviewer gate is a paid feature on private repos — merging to `main` does **not** ship
+  the public site. Email is `live` there for all recipients (#43), and note what that still
+  rests on: delivery to any address other than Kiarash's has never been observed arriving (#6).
+  The preview Worker's `workers.dev` hostnames, unlike production's, are still enabled (#105).
 - **The UK is geo-blocked on purpose** (`docs/runbooks/uk-block.md`). Not a bug.
 - Work is tracked as GitHub issues across five milestones. Conventions in
   `docs/runbooks/issue-workflow.md`.
@@ -57,7 +62,7 @@ runs on a pull request, so an unmerged branch is also an untested one.
 
 **A passing test is not evidence. Verify the artifact.**
 
-This project has shipped five separate checks that could not fail:
+This project has shipped six separate checks that could not fail:
 
 | What looked fine | What was actually true |
 |---|---|
@@ -66,20 +71,25 @@ This project has shipped five separate checks that could not fail:
 | Accessibility suite green | Three real contrast bugs were inside named exclusions and could never fail it. |
 | End-to-end suite green | The job was gated behind a job that only ran on API changes, so it had never once executed. |
 | A rate limiter declared in every environment | It was called from nowhere. 320 parallel requests, 320 successes. |
+| `tools/preflight/preflight.test.mjs` — 55 tests whose whole job is proving each preflight check can still fail | Nothing ever ran them. `tools/*` are workspace packages, but `pnpm test`'s runner only invoked the preflight *binary* and CI's `test-packages` filtered on `./packages/*`. The tests that guard the guards had never executed once. Found while adding the 56th (#99). |
 
 So: when you add a guard, **break the code and watch the guard fail**, then restore. Say in the
 issue comment which one you broke. When you fix something user-visible, look at it — curl the
 deployed URL, read the actual bytes, take a viewport screenshot. Do not screenshot with
 `captureBeyondViewport`; that is how a page nobody could scroll looked perfect for a week.
 
-**A sixth one, #66: "verified on preview" was never safe to say.** `deploy.yml`'s own
-"Verify /health reports this commit" step is not one of the five above — it's correct at the
-moment it runs. What's worthless is trusting it a minute later: preview is one shared Worker
-every open PR deploys to, so another session's deploy can land between CI's check and whatever
-you do next. This happened for real verifying #14 — a probe ran 90 seconds after an unrelated
-branch redeployed over it, and would have silently "confirmed" the wrong commit if the endpoint
-under test hadn't 404'd instead. **Before trusting anything you observe on preview — an admin
-endpoint, a page you clicked through, a screenshot — confirm the commit first, and again after**:
+**And one more, #66: "verified on preview" was never safe to say.** `deploy.yml`'s own
+"Verify /health reports this commit" step is not one of the six above — it's correct at the
+moment it runs. What was worthless was trusting it a minute later, because preview was one shared
+Worker that every open PR deployed to, so another session's deploy could land between CI's check
+and whatever you did next. This happened for real verifying #14 — a probe ran 90 seconds after an
+unrelated branch redeployed over it, and would have silently "confirmed" the wrong commit if the
+endpoint under test hadn't 404'd instead.
+
+**That trigger is now gone** (#73): preview deploys from `main` only. Verify your branch locally
+with `pnpm --filter @keepsake/web e2e`, which runs the real Worker against local D1/R2/KV. Preview
+is still worth checking *after* a merge, and there the commit check still applies, because "newest
+commit on `main`" stops being your commit as soon as someone else merges:
 
 ```sh
 node tools/ci/verify-preview-commit.mjs https://preview.keepsake.ing <expected-sha>
@@ -87,11 +97,7 @@ node tools/ci/verify-preview-commit.mjs https://preview.keepsake.ing <expected-s
 node tools/ci/verify-preview-commit.mjs https://preview.keepsake.ing <expected-sha> -- <your command>
 ```
 
-Every deploy's PR comment now includes this reminder with the exact commit filled in. If the
-script fails, preview does not currently hold your build — nothing you observed proves anything
-about your change. See `docs/runbooks/deploy.md#verifying-against-preview` and #66's follow-up
-issue for the real fix (per-PR Workers, or restricting preview deploys to `main` only), both of
-which need a decision and possibly credentials only Kiarash has.
+See `docs/runbooks/deploy.md#verifying-against-preview`.
 
 ## Environment gotchas that will cost you an hour
 
@@ -109,6 +115,35 @@ which need a decision and possibly credentials only Kiarash has.
   Reserved domains (`example.com`, `.test`, `.invalid`) are refused everywhere, which is why the
   repo's fixtures cannot bounce the sending domain. `EMAIL_MODE=test` bypasses the guard and a
   config test fails the build if it ever appears in `wrangler.toml`.
+- **Name a new migration `YYYYMMDDHHMMSS_slug.sql`** (UTC — `date -u +%Y%m%d%H%M%S`), never
+  `0009_slug.sql`. D1's `d1_migrations` ledger is keyed on the **filename**, and a sequential
+  number is a shared namespace: two sessions cut from the same `main` both claim `0009`, the one
+  that merges second must renumber on rebase, and renaming a file the shared preview has already
+  applied makes the next deploy re-run its SQL. That broke `deploy (preview)` for every
+  concurrent pull request once already (#99). The existing `0001`–`0008` stay exactly as they
+  are — renaming them would *be* the bug. `node tools/preflight/preflight.mjs --only
+  migrations,migration-drift` enforces both halves; `docs/runbooks/migrations.md` has the detail.
+- **Never edit, rename or delete a migration that has landed on `main`, or that this branch has
+  already pushed.** Add a new migration instead. There is no exception; a deploy cannot undo one.
+- **The e2e suite runs entirely locally — use it, it is the best verification available.**
+  `pnpm --filter @keepsake/web export` then `pnpm --filter @keepsake/web e2e` stands up real
+  `workerd` with local D1/R2/KV via `wrangler dev` (see `apps/web/playwright.config.ts`), which is
+  closer to production than preview ever was and needs no credentials. Baseline is ~80-82 passing.
+  Now that pull requests no longer deploy anywhere, this is *the* way to verify a branch.
+  - If Playwright reports `Executable doesn't exist at .../chromium_headless_shell-<n>/...`, the
+    container's browser build predates the pinned `@playwright/test`. Do not run
+    `playwright install` blindly; point the expected path at the build that is present.
+  - `test/adminAuth.test.ts`'s brute-force case can time out at 30 s when the root runner fans API
+    and web out concurrently on a loaded machine. Measured on both `main` and a feature branch with
+    no difference, so it is load, not a regression — the flake its own comment and #65 describe.
+    Re-run it alone before believing it.
+- **A sandboxed agent may not be able to reach the product at all.** Some environments' egress
+  policy answers `403` to `CONNECT` for `keepsake.ing`, `preview.keepsake.ing` and
+  `workers.cloudflare.com`, and blocks GitHub's Actions-configuration API paths. That is a policy
+  denial, not a broken tool: do not retry it and do not route around it. Say plainly that you could
+  not observe the thing, and use CI's own logs as evidence instead — `uptime.yml` prints the commit
+  each tier is serving every 15 minutes, which is a real observation of the live site that you can
+  read without reaching it.
 - **`wrangler d1 export` refuses any database with FTS5 tables** — ours has one. Migrations own
   the schema; exports only carry rows. See `docs/runbooks/restore.md`.
 - **A lone `7403` from the D1 API is transient.** Retry once before believing it.
@@ -135,7 +170,7 @@ The accessibility specs carry **no exclusions**. If your change fails them, it i
 - `docs/design/moderation.md` — how moderation works and two measured model weaknesses.
 - `docs/runbooks/launch-audit.md` — 18 findings, several still open.
 - `docs/legal-considerations.md` — compliance research, with eight questions marked for a lawyer.
-- `docs/runbooks/` — deploy, restore, admin, geodata, uk-block, issue-workflow.
+- `docs/runbooks/` — deploy, restore, migrations, admin, geodata, uk-block, issue-workflow.
 
 ## Writing for Kiarash
 

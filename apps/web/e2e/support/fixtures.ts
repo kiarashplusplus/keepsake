@@ -13,6 +13,9 @@
  *    the suite runs against the same nothing-loaded document a privacy-minded
  *    visitor gets. `consent.spec.ts` and the banner's a11y scan build their own
  *    contexts precisely so they see the banner.
+ *  - a "has visited before" flag already on file (issue #44), so `/` is the
+ *    feed and not the new-visitor explainer. `welcome.spec.ts` builds its
+ *    own context precisely so it sees the redirect.
  */
 /* eslint-disable react-hooks/rules-of-hooks --
  * `eslint-config-expo`'s React rules see Playwright's fixture callback
@@ -21,6 +24,7 @@
 import { test as base, expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { freshClientIp, OWNER_TOKEN_STORAGE_KEY } from "./api";
 import { seedConsent } from "./consent";
+import { seedVisited } from "./visited";
 import { BASE_URL } from "./constants";
 
 export const test = base.extend<{ clientIp: string }>({
@@ -32,6 +36,7 @@ export const test = base.extend<{ clientIp: string }>({
   context: async ({ context, clientIp }, use) => {
     await context.setExtraHTTPHeaders({ "CF-Connecting-IP": clientIp });
     await seedConsent(context);
+    await seedVisited(context);
     await use(context);
   },
 });
@@ -63,8 +68,9 @@ export async function openFreshContext(browser: Browser): Promise<BrowserContext
     extraHTTPHeaders: { "CF-Connecting-IP": freshClientIp() },
   });
   // Same reason as the `context` fixture above: a second browser is still a
-  // browser that has never answered the banner.
+  // browser that has never answered the banner, or seen the site before.
   await seedConsent(context);
+  await seedVisited(context);
   return context;
 }
 

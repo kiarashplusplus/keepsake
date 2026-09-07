@@ -4,6 +4,7 @@
  * the same building blocks. */
 import { env, SELF } from "cloudflare:test";
 import { ulid } from "../src/lib/ids.js";
+import type { RateLimitBindingName } from "../src/middleware/rateLimit.js";
 
 let tokenCounter = 0;
 let ipCounter = 0;
@@ -413,11 +414,34 @@ export function removeFakeVectorize(): void {
 /** Replaces a `[[ratelimits]]` binding with one that denies every call, and
  * returns a restore function. Same `env`-mutation seam as `installFakeEmail`:
  * `SELF` and this test share one `env` object. */
-export function installDenyingRateLimiter(name: "RL_READ" | "RL_UPLOAD" | "RL_CREATE" | "RL_ADMIN"): () => void {
+export function installDenyingRateLimiter(name: RateLimitBindingName): () => void {
   const bindings = env as unknown as Record<string, unknown>;
   const original = bindings[name];
   bindings[name] = { limit: async () => ({ success: false }) };
   return () => {
     bindings[name] = original;
+  };
+}
+
+/** Replaces a `[[ratelimits]]` binding with one that allows every call and
+ * records the `key` it was handed, so a test can assert on *what* `burst()`
+ * keys the limiter by — not just that it fired. Issue #87: the key used to be
+ * a bare SHA-256 of the caller's address, a never-rotating identifier, and no
+ * test could see it because nothing ever looked at the argument. */
+export function installRecordingRateLimiter(name: RateLimitBindingName): { keys: string[]; restore: () => void } {
+  const bindings = env as unknown as Record<string, unknown>;
+  const original = bindings[name];
+  const keys: string[] = [];
+  bindings[name] = {
+    limit: async ({ key }: { key: string }) => {
+      keys.push(key);
+      return { success: true };
+    },
+  };
+  return {
+    keys,
+    restore: () => {
+      bindings[name] = original;
+    },
   };
 }

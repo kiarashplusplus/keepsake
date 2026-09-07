@@ -139,6 +139,15 @@ jobs:
         if: ${{ failure() && steps.check.outputs.failures != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job deliberately has no `actions/checkout` — it only curls two
+          # URLs, and cloning on every 15-minute run would be waste. But `gh`
+          # works out its repository from the git remote, so without a
+          # checkout it needs telling explicitly. Omitting this doesn't
+          # degrade the alert, it removes it: every `gh` call died with
+          # "failed to run git: fatal: not a git repository" and no issue was
+          # ever filed. Because this whole step is `if: failure()`, that went
+          # unnoticed until the first genuine failure, ~13 runs in (#106).
+          GH_REPO: ${{ github.repository }}
           FAILURES: ${{ steps.check.outputs.failures }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

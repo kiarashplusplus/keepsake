@@ -1,6 +1,6 @@
 # What's blocked on Kiarash
 
-Everything here is now done except the production cutover. Kept as the record of what was set up and how it was verified. Everything else in M0–M4 is built, tested and
+Everything here is now done except the production cutover and one Turnstile hostname (#73). Kept as the record of what was set up and how it was verified. Everything else in M0–M4 is built, tested and
 running on preview. Do them in this order — each one unblocks the next round of verification.
 
 Account: **Leapkg@gmail.com's Account**, id `dc6a87ed4a4269ed74c8f508b275b703`
@@ -46,7 +46,25 @@ sitemap all use the real domain. Verified: `/health` 200, `/`, `/about`, `/give/
   production only from a `workflow_dispatch` run (Actions tab → Deploy → choose `production`).
   Preview deploys itself on every PR and every push to main.
 
-## 5. Production cutover — only when you're ready to be public
+## 5. Turnstile hostname for per-PR previews — one click, only when #73's CI work starts
+
+The `keepsake-pr-preview` Cloudflare token is done and verified (see
+`docs/runbooks/deploy.md#the-per-pr-preview-token-73`): it can create and delete the Worker, D1
+database, R2 bucket and KV namespace each PR preview needs, it is stored as the preview
+environment secret `CLOUDFLARE_PR_PREVIEW_TOKEN`, and it deliberately cannot mint tokens or touch
+DNS. The one thing no token here can do is Turnstile.
+
+Dashboard → Turnstile → widget **Keepsake** → add the hostname **`leapkg.workers.dev`**. Turnstile
+hostnames cover their subdomains, so that one entry covers every future `keepsake-pr-<n>` Worker;
+wildcards are rejected, and the free tier allows 10 hostnames per widget, so adding one per PR is
+not an option. Know what you're accepting: `leapkg.workers.dev` is shared across every Worker on
+this account, so any of them could use the Keepsake site key. Declining is also a real answer — PR
+previews would then run with Turnstile unenforced, which is fine for reading and useless for
+verifying a write path.
+
+Nothing is waiting on this until the per-PR deploy job in #73 is actually built.
+
+## 6. Production cutover — only when you're ready to be public
 
 **Do not do this until 1–4 are done and you've used preview yourself.** Nothing is on
 `keepsake.ing` today.
@@ -84,6 +102,35 @@ bounce rate (safe under 2%, at risk at 5%) and this repo carries 80 `@example.co
 | local + Playwright e2e | `off` | Nothing is ever sent. CI cannot mail anyone. |
 | preview | `allowlist` | Only `EMAIL_ALLOWLIST` addresses (currently just Kiarash). |
 | production | `live` | Real users. |
+
+### Day-one posture: **live immediately** (decided 2026-09-07, issue #43)
+
+The choice was between opening production email to everyone on day one and running an allowlist
+for the first real post before opening up. **Decision: live immediately.** No config change was
+needed — `apps/api/wrangler.toml`'s `[env.production.vars]` block already carries
+`EMAIL_MODE = "live"` with an empty `EMAIL_ALLOWLIST`, which is exactly this posture.
+
+What that accepts, stated plainly so nobody has to reconstruct it later: **delivery to a real
+address that is not Kiarash's has still never been observed** (#6, part 1 — the one test that has
+never been run). The worst case #6 describes is that the Cloudflare binding refuses non-verified
+destinations outright, in which case no giver hears that someone asked for their keepsake and no
+chosen requester hears they were chosen. Going live on day one means the first person to meet that
+failure, if it exists, is a real stranger rather than an allowlisted test address.
+
+Two things make that a smaller bet than it was when #43 was filed, and neither of them is a
+substitute for running the test:
+
+- A failed send is no longer silent. `f44052a` records it on `requests.notify_failed_reason` and
+  renders it on the giver's own dashboard at `/mine/:id`, so a giver sees "we couldn't reach your
+  email address" instead of nothing.
+- `GET /api/admin/stats` returns a 7-day `email_events` breakdown by `ok`/`error`, so a systematic
+  refusal reads as a spike on the admin stats strip within minutes rather than accumulating
+  invisibly.
+
+**Still worth doing first, and it costs one message:** send a request and a choose to
+`leapkg@gmail.com` on preview (allowlisted there for exactly this) and confirm the mail physically
+arrives. That closes #6 and turns this decision from a bet into a checked fact. It is not a
+blocker on the decision itself — it is the evidence the decision is currently missing.
 
 Reserved domains (`example.com/net/org`, `.test`, `.invalid`, `.localhost`, `.local`) are refused
 in **every** environment, production included — they are reserved by standard precisely so they

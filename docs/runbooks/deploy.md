@@ -8,7 +8,7 @@ finding 18 found them describing a workflow that no longer matched `deploy.yml`.
 
 | Environment | Trigger | Worker | Data |
 |---|---|---|---|
-| preview | every PR, and every push to `main` (`.github/workflows/deploy.yml`) | one shared Worker | its own D1/R2/KV — never production's |
+| preview | **every push to `main` only** (`.github/workflows/deploy.yml`) — pull requests deploy nowhere | one Worker, always serving `main` | its own D1/R2/KV — never production's |
 | production | **manual only** — `workflow_dispatch` from the Actions tab, choosing `production` | `keepsake.ing` | production D1/R2/KV |
 
 `deploy.yml`'s trigger logic (`inputs.environment` on `workflow_dispatch`, else always `preview`)
@@ -23,41 +23,46 @@ Cloudflare resources below exist, leave it unset (or `"false"`) so the workflow 
 
 ## Verifying against preview
 
-**"Preview is one shared Worker" (row above) is not a detail — it is the reason "I checked it on
-preview" is not, by itself, evidence of anything (issue #66).** Every open pull request deploys
-to the same Worker as every other open pull request and every push to `main`. Deploys queue
-(`concurrency: { group: deploy-preview, cancel-in-progress: false }`) rather than run in
-parallel, so `deploy.yml`'s own "Verify /health reports this commit" step is never wrong when it
-runs — but it proves nothing about a moment later, because the next queued deploy (someone else's
-PR) can land seconds after yours finishes. This is not hypothetical: verifying #14, a probe ran 90
-seconds after an unrelated branch's deploy landed on top of the one just verified, and got a
-commit belonging to neither.
+**Preview deploys from `main` only.** Pull requests do not deploy anywhere (decided on #73,
+implemented by dropping `pull_request:` from `deploy.yml`'s triggers). So
+`preview.keepsake.ing` means exactly one thing: the newest commit on `main` that has finished
+deploying.
 
-Before trusting anything you observe on preview — a probed endpoint, a page loaded in a browser,
-a screenshot — confirm which commit is actually being served, immediately before and immediately
-after:
+That was not true before. Preview used to redeploy on every open pull request as well, so the
+commit it served at any instant belonged to whichever branch pushed last — which made "I checked
+it on preview" evidence of nothing (#66). Deploys queued rather than ran in parallel
+(`concurrency: { group: deploy-preview, cancel-in-progress: false }`), so `deploy.yml`'s own
+"Verify /health reports this commit" step was never wrong *when it ran* — it just stopped being
+true a minute later. Verifying #14, a probe ran 90 seconds after an unrelated branch's deploy
+landed on top of the one just verified, and got a commit belonging to neither.
+
+**Verifying a branch now happens locally, not on preview.** `pnpm --filter @keepsake/web e2e`
+runs the whole product against real `workerd` with local D1/R2/KV — the same arrangement
+production runs, including the `[assets]` binding, `/item/:id`'s HTMLRewriter OG injection, the
+SPA fallback and the moderation pipeline (`apps/web/playwright.config.ts` explains why this is
+closer to production than `expo start` ever was). CI runs it on every pull request. For a
+one-off manual poke, `wrangler dev --local` from `apps/api/`.
+
+**Checking preview still matters after a merge**, because "the newest commit on `main`" and "the
+commit I just merged" diverge as soon as someone merges again. Before trusting anything you
+observe there:
 
 ```sh
 # One-off check: fails loud (exit 1) if preview isn't on the commit you expect.
 node tools/ci/verify-preview-commit.mjs https://preview.keepsake.ing <expected-sha>
 
 # Wrapping a longer verification: checks before AND after <your command>, and fails
-# even if <your command> itself "succeeded" — because a redeploy mid-check means
-# whatever you just observed may not belong to the commit you thought you tested.
+# even if <your command> itself "succeeded".
 node tools/ci/verify-preview-commit.mjs https://preview.keepsake.ing <expected-sha> -- <your command>
 ```
 
 `<expected-sha>` accepts a full 40-char commit or any non-empty prefix (short shas from
-`git rev-parse --short HEAD` work). Every preview deploy's PR comment (`deploy.yml`'s "Comment
-preview URL" step) now includes the exact command to run, filled in with that deploy's real
-commit, so you don't have to remember the syntax.
+`git rev-parse --short HEAD` work).
 
-This does not close the race — nothing checked after the fact can, on a Worker other sessions can
-redeploy at any time. It converts "silently wrong" into "loudly refuses to proceed," which is the
-bar this repo holds every guard to (`AGENTS.md`, "the one rule that matters"). The actual fix —
-per-PR preview Workers, or restricting preview deploys to `main` only so preview always means one
-knowable thing — needs a decision (and, for per-PR Workers, likely credentials) only Kiarash has;
-tracked in the follow-up filed from #66.
+One consequence of the trigger change, and it removes a real hazard: a pull request's migrations
+are no longer applied to the shared `keepsake-db-preview` D1 before merge. That sharing is what
+let a renumbered migration de-register an already-applied one and break `deploy (preview)` for
+every other concurrent pull request (#99).
 
 ## One-time Cloudflare setup
 
@@ -113,6 +118,59 @@ nothing to provision before it's live. See `docs/design/ops.md#observability`.
 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` are GitHub Environment secrets (Settings →
 Environments → preview/production), used only by `deploy.yml` to run `wrangler` in CI — they are
 not Worker secrets and are never passed to `wrangler secret put`.
+
+## The per-PR preview token (#73)
+
+`deploy.yml` does not use this yet — it exists so the per-PR preview Workers decided in #73 have a
+credential that can actually stand them up. It is a **second, separate** token from
+`keepsake-ci-deploy` (which stays exactly as narrow as it was, and is what
+`CLOUDFLARE_API_TOKEN` still holds): a per-PR job has to *create and delete* resources, not just
+write to two known ones, so its blast radius is genuinely larger and it is kept in its own
+credential rather than widening the everyday deploy token.
+
+- Cloudflare token **`keepsake-pr-preview`** (id `7f49516e…`), account-scoped to the Leapkg
+  account only, permission groups: D1 Write + Read + Metadata Read, Workers R2 Storage Write +
+  Read + Metadata Read, Workers KV Storage Write + Read + Metadata Read, Workers Scripts Write +
+  Read, Account Settings Read.
+- Stored as the GitHub **preview** environment secret **`CLOUDFLARE_PR_PREVIEW_TOKEN`** (rolled
+  and re-stored 2026-09-07, so the secret and the token are known to match — the value predating
+  that was never verified against the token's real scopes).
+
+Every capability below was exercised against the live account with that token on 2026-09-07, then
+cleaned up; none of it is inferred from the permission-group names:
+
+| Operation | Result |
+|---|---|
+| `POST/GET/DELETE /d1/database`, `POST /d1/database/:id/query` | works (created, queried, deleted `keepsake-db-pr-probe`) |
+| `POST/GET/DELETE /r2/buckets` | works (created and deleted `keepsake-photos-pr-probe`) |
+| `POST/DELETE /storage/kv/namespaces` | works |
+| `PUT/DELETE /workers/scripts/:name` + `POST .../subdomain` | works — `keepsake-pr-probe.leapkg.workers.dev` served a live response, then deleted |
+| mint another API token / read or write DNS | **refused** (9109 / 10000), as intended |
+
+Two things that were open questions when #73 was filed, now answered by measurement rather than
+assumption:
+
+- **"D1 Write" already implies read.** Cloudflare's `Write` groups are supersets of their `Read`
+  counterpart, and `keepsake-ci-deploy` — which holds D1 Write and *no* D1 Read — has been running
+  `wrangler d1 migrations apply --remote` (a read of `d1_migrations`) successfully all along. The
+  Read/Metadata Read groups above were added anyway: they cost nothing, and a token whose grants
+  are explicit is one nobody has to re-derive this from CI logs again.
+- **The account is on Workers Paid, not Free.** Probed directly: 12 D1 databases were created in
+  sequence with no refusal, well past the Free plan's ceiling of 10 (paid allows 50,000). One D1
+  database, one R2 bucket, one KV namespace and one Worker per open PR is nowhere near a plan
+  limit; the real cost of per-PR previews is the CI work to provision and tear them down, not the
+  resources themselves.
+
+**Still not solved by this token: Turnstile.** Widget hostnames are not in its scope (it can read
+widgets, not write them), so a `keepsake-pr-<n>.leapkg.workers.dev` origin is not an allowed
+hostname on the `Keepsake` widget and every write path there would fail `turnstile_failed`. That
+is a one-time dashboard action rather than a per-PR one, because Turnstile hostnames cover
+subdomains: adding `leapkg.workers.dev` to the widget covers every future PR Worker at once
+(wildcards are rejected; the free tier allows 10 hostnames per widget). The trade-off to make
+knowingly is that `leapkg.workers.dev` is a *shared* subdomain — every other Worker on this
+account gets to use the Keepsake site key too. The alternative is accepting that PR previews run
+with Turnstile unenforced, which makes them unusable for verifying exactly the write paths most
+worth verifying.
 
 ## What a deploy actually does
 
