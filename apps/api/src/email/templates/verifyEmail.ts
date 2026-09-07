@@ -1,4 +1,4 @@
-import { renderButton, renderShell, plainLinkLine, footerLine, type EmailTemplate } from "./shared.js";
+import { renderButton, renderShell, plainLinkLine, footerLine, sanitizeSubject, type EmailTemplate } from "./shared.js";
 
 export interface VerifyEmailParams {
   link: string;
@@ -12,7 +12,7 @@ export function verifyEmail(params: VerifyEmailParams): EmailTemplate {
   const intro = "One click and you're set. We'll let you know when someone asks about your keepsake, and this address is how you'd find your listings again if you switch devices.";
 
   return {
-    subject: "Confirm your email — Keepsake",
+    subject: sanitizeSubject("Confirm your email — Keepsake"),
     html: renderShell({
       bodyHtml: `<p>${intro}</p>${renderButton(params.link, "Confirm email")}${plainLinkLine(params.link)}`,
       footerReason: reason,

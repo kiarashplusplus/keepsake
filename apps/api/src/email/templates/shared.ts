@@ -36,6 +36,16 @@ export function escapeHtml(input: string): string {
  * straight back out of D1 rows written before that check existed, so this
  * runs at every `subject:` site regardless of whether the title was
  * revalidated.
+ *
+ * "Runs at every `subject:` site" was, until #86, only a claim in this
+ * comment — and a false one: `requestReceived.ts` interpolated the listing
+ * title raw. It is now an *enforced* rule with no exemptions: every
+ * `subject:` in `src/email/templates/` must be `sanitizeSubject(...)`,
+ * including the two static ones, so there is no judgement call about which
+ * subjects "need" it and nothing for the next template to get wrong.
+ * `test/emailSubjects.test.ts` enumerates this directory and fails on any
+ * unwrapped site, so adding a seventh template without the wrapper is a red
+ * test rather than a silent regression.
  */
 export function sanitizeSubject(input: string): string {
   return input.replace(/[\x00-\x1f\x7f]+/g, " ").trim();

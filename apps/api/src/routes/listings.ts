@@ -272,9 +272,22 @@ listingRoutes.delete("/:id", ownerAuth(), async (c) => {
     c.executionCtx.waitUntil(purgePhotoCache(c.env, photo.id));
   }
 
-  // `photos`, `requests`, `reports`, `moderation_events` all have
-  // `ON DELETE CASCADE` back to `listings` (0001_init.sql) — this is the
-  // only DB statement needed once R2 objects are gone.
+  // `photos`, `requests`, `reports`, `moderation_events` and
+  // `listing_aspects` all have `ON DELETE CASCADE` back to `listings`
+  // (0001_init.sql, rebuilt for `requests` in 0005, added for
+  // `listing_aspects` in 0006), and `listings_fts` is swept by a trigger
+  // (0003) — so this is the only DB statement needed once R2 objects are
+  // gone.
+  //
+  // Issue #90: that used to be this comment's word against nothing. SQLite
+  // does not enforce foreign keys unless `PRAGMA foreign_keys` is on, and
+  // nothing in this repo sets it — D1 defaults it on, which is external
+  // knowledge this route silently depends on. `test/cascadeDelete.test.ts`
+  // now seeds all five child tables, deletes through this handler, and
+  // asserts by querying that every child row is gone; it also enumerates
+  // the schema's foreign keys so a child table added later without a
+  // cascade fails rather than quietly orphaning a requester's note, email
+  // and phone with no listing left to reach them through.
   await c.env.DB.prepare("DELETE FROM listings WHERE id = ?").bind(id).run();
 
   return ok(c, { id });
