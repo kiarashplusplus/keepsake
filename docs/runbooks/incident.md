@@ -166,16 +166,33 @@ Cron failures reach Workers Logs: `scheduled` awaits each job and rethrows
 (`apps/api/src/index.ts`), so a failing sweep is both a structured `captureException` log line
 tagged with the cron name and a failed invocation in the Cloudflare dashboard, rather than a
 detached unhandled rejection. `moderationRetry` additionally catches per listing, so one poisoned
-row no longer aborts the batch. `GET /api/admin/health` returns `ok: false` when either
-`cron:last:<name>` heartbeat goes stale (30 minutes for `moderationRetry`, 26 hours for
-`orphanSweep`).
+row no longer aborts the batch. `GET /api/admin/health` returns `ok: false` when any
+`cron:last:<name>` heartbeat goes stale. The names, schedules and thresholds all live in
+`apps/api/src/cron/registry.ts` — 30 minutes for `moderationRetry`, 26 hours for `orphanSweep`
+and `dailyDigest` — and both `/api/admin/health` and the digest read them through the same
+`readCronHeartbeats`, so the two cannot disagree about whether a job has stopped.
 
 Unlike the Sentry setup this replaced (issue #14), none of that depends on a secret being
 provisioned — Workers Logs is enabled by `[observability]` in `wrangler.toml`, not a DSN, so it's
-live on every deploy with nothing left to set up. What it does **not** give you: push
-notification (nobody's phone buzzes — check the dashboard or `wrangler tail`), more than 3 days of
-retention on the Free plan, or issue grouping across repeated occurrences of the same error. A
-Tail Worker or Logpush could add push alerting later; nothing here does that yet.
+live on every deploy with nothing left to set up. What it does **not** give you: more than 3 days of
+retention on the Free plan, or issue grouping across repeated occurrences of the same error.
+
+Two things now read it back, so "check the dashboard or `wrangler tail`" is no longer the only
+option (#150):
+
+- **`GET /api/admin/observatory`** queries the Workers Observability API and returns the error and
+  warning lines, with counts over the window as well as the capped feed — so one stray error and
+  four thousand identical ones are distinguishable, which the feed alone cannot do. It clamps its
+  own window to the 3-day retention above and reports the window it actually used, rather than
+  labelling three days of data as thirty.
+- **The daily digest** (00:07 UTC) mails a summary whether or not anything is wrong. That is the
+  closest thing to push notification here, and it is deliberately unconditional: a digest that
+  only sent on bad news would be silent in the case where the thing that notices is the thing that
+  broke, so **the absence of the email is itself the alarm**.
+
+Neither is a Tail Worker or Logpush — there is still no streaming consumer, so nothing buzzes a
+phone within seconds of an error. The gap this closes is "nobody would ever look", not "nobody
+finds out immediately".
 
 ## Reports / abuse
 
@@ -187,8 +204,9 @@ admin queue (`docs/runbooks/admin.md`). This is not itself an incident — it's 
 **It does need a human, though, and until issue #89 nothing said so.** `GET /health` is a Worker
 liveness check: an auto-hide changes a *listing's* `status`, so `/health` (and therefore
 `uptime.yml`) reported `ok: true` right through the whole event. The auto-hide's
-`captureMessage` writes to Workers Logs, which — see above — has no Tail Worker and no Logpush
-reading it on a schedule. The admin queue knew, but only for someone who opened the admin queue.
+`captureMessage` writes to Workers Logs, which — see above — still has no streaming consumer; at
+the time #89 was filed nothing read it on any schedule at all. The admin queue knew, but only for
+someone who opened the admin queue.
 
 Two things now escalate it, both keyed on the same predicate — a listing that is currently
 `hidden`, has a `report_autohide` moderation event, and has no `kind = 'admin'` event at or after

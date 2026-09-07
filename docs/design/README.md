@@ -21,10 +21,22 @@ is a real site with real visitors possible, not a staging exercise.
   single most important open fact in this file.
 - `PRODUCTION_LIVE=true` is set, so `uptime.yml` now genuinely probes production every 15 minutes
   rather than only checking that it *isn't* answering.
+- **The Observatory is live on preview** (#150, PR #151): `GET /api/admin/observatory` and an
+  `/admin` → Observatory panel, plus a daily digest cron at 00:07 UTC. Its D1 half — funnel, queue
+  ages, per-day series — needs no credential; its Cloudflare half reads edge analytics and the
+  Worker's own log lines through `CF_OBSERVATORY_TOKEN`, a read-only token scoped to exactly
+  `Account Analytics Read` + `Workers Observability Read`. That secret is set on **both** tiers and
+  the panels were verified returning real data on preview at `3534a94`. Production has the secret
+  but not yet the code — it ships on the next manual dispatch.
 
-**In flight** — re-checked against `main` at `97eed3e`.
+**In flight** — re-checked against `main` at `3534a94`.
 - Nothing from the **Labeling & search** milestone. #38 was the last of its six issues and merged
   in #114; the milestone is complete as code. What it still owes is an *operational* step, below.
+- Production is **behind `main` by the whole of this batch** — semantic search (#114), the
+  constants sweep (#143), the raised AI budgets (#146), the labeling milestone note (#148) and the
+  Observatory (#151). That is the manual gate working as designed, not drift, but it means the
+  next `workflow_dispatch` ships all of it at once and deserves reading as one release rather than
+  five.
 
 **Do this on the first deploy that carries `97eed3e`.** Semantic search is on
 (`SEMANTIC_SEARCH = "1"` in all three env blocks) and the `[[vectorize]]` bindings are live. Two

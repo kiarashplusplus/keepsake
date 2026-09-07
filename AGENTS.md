@@ -30,6 +30,13 @@ The product is the story. Anything that makes a listing feel like a classified a
   the public site. Email is `live` there for all recipients (#43), and note what that still
   rests on: delivery to any address other than Kiarash's has never been observed arriving (#6).
   The preview Worker's `workers.dev` hostnames, unlike production's, are still enabled (#105).
+- **Ask the Observatory before guessing** (#150). `GET /api/admin/observatory` — or `/admin` →
+  Observatory — answers "is anything stuck" in one call: the give→get funnel, how long the
+  moderation queue has been waiting (an *age*, not just a depth), the per-day series, edge traffic
+  and error counts from Cloudflare, the Worker's own recent error lines, and today's digest. Its
+  D1-derived half needs no credential and works locally; the two Cloudflare panels need
+  `CF_OBSERVATORY_TOKEN` and say so plainly when it is missing. A daily digest of the same numbers
+  mails at 00:07 UTC, every day including quiet ones. `docs/runbooks/admin.md` has the detail.
 - **The UK is geo-blocked on purpose** (`docs/runbooks/uk-block.md`). Not a bug.
 - Work is tracked as GitHub issues across five milestones. Conventions in
   `docs/runbooks/issue-workflow.md`.
@@ -75,7 +82,11 @@ This project has shipped seven separate checks that could not fail:
 | Three commits merged to `main`, nothing red in the Actions tab | Not a check that could not fail — a check that silently *did not run*. CI's concurrency group was one bucket for `main`, so each merge cancelled the previous merge's run; `cancelled` is neither red nor green, nothing reads it, and `deploy.yml` shipped each of those commits to preview anyway. The merged *combination* — the one thing a PR run never tests — went out untested three times (#103). |
 
 So: when you add a guard, **break the code and watch the guard fail**, then restore. Say in the
-issue comment which one you broke. When you fix something user-visible, look at it — curl the
+issue comment which one you broke. This applies to observability too, and is why
+`GET /api/admin/observatory`'s Cloudflare panels return `ok` / `error` / `unconfigured` rather than
+a nullable payload: a dashboard that cannot tell "I did not look" from "I looked and saw nothing"
+is another check that cannot fail, and an empty chart is the most convincing wrong answer there
+is. If you find yourself guessing why a panel is empty, that is a bug — file it. When you fix something user-visible, look at it — curl the
 deployed URL, read the actual bytes, take a viewport screenshot. Do not screenshot with
 `captureBeyondViewport`; that is how a page nobody could scroll looked perfect for a week.
 
@@ -129,7 +140,7 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
 - **The e2e suite runs entirely locally — use it, it is the best verification available.**
   `pnpm --filter @keepsake/web export` then `pnpm --filter @keepsake/web e2e` stands up real
   `workerd` with local D1/R2/KV via `wrangler dev` (see `apps/web/playwright.config.ts`), which is
-  closer to production than preview ever was and needs no credentials. Baseline is ~80-82 passing.
+  closer to production than preview ever was and needs no credentials. Baseline is 84 passing.
   Now that pull requests no longer deploy anywhere, this is *the* way to verify a branch.
   - If Playwright reports `Executable doesn't exist at .../chromium_headless_shell-<n>/...`, the
     container's browser build predates the pinned `@playwright/test`. Do not run
@@ -155,6 +166,17 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
 - **`wrangler d1 export` refuses any database with FTS5 tables** — ours has one. Migrations own
   the schema; exports only carry rows. See `docs/runbooks/restore.md`.
 - **A lone `7403` from the D1 API is transient.** Retry once before believing it.
+- **A new cron is three edits, and one of them changes an unrelated test.** Name, schedule and
+  staleness threshold live together in `apps/api/src/cron/registry.ts`; `wrangler.toml`'s
+  `[triggers] crons` has to restate the schedule because Cloudflare reads that file, and
+  `index.ts`'s `scheduled()` switch has to match the literal string (preflight's `cron-triggers`
+  check enforces both). The part that surprises people: `GET /api/admin/health` derives `ok` from
+  **every** job in the registry, so adding one turns `ok: true` into `ok: false` in any test that
+  seeds only the heartbeats it knew about. That is the guard working — a job nothing watches is
+  the bug — but budget for updating those tests.
+- **A cron expression inside a `/** */` block comment ends the comment.** `*/5` closes it, and the
+  parse errors that follow point at the code below, not at the comment. Write the schedule in
+  prose or use `//`.
 - If a var changes, update **all three** `wrangler.toml` env blocks and `.env.example`, or
   preflight's parity check fails.
 
@@ -164,7 +186,7 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
 pnpm lint                          # 0 errors; warnings are the zod const+type idiom
 pnpm -r typecheck
 pnpm test                          # preflight, packages, api, web
-pnpm --filter @keepsake/web e2e    # 42+ specs, mobile and desktop
+pnpm --filter @keepsake/web e2e    # 84 specs, mobile and desktop
 node tools/preflight/preflight.mjs
 ```
 
@@ -180,7 +202,8 @@ The accessibility specs carry **no exclusions**. If your change fails them, it i
 - `docs/legal-considerations.md` — compliance research, with eight questions marked for a lawyer.
 - `docs/legal-entity-and-insurance.md` — why Keepsake is a sole proprietorship and not an LLC
   (#108), what has to be bought and filed because of that, and what would reverse it.
-- `docs/runbooks/` — deploy, restore, migrations, admin, geodata, uk-block, issue-workflow.
+- `docs/runbooks/` — deploy, restore, migrations, admin (incl. the Observatory and the daily
+  digest), incident, geodata, uk-block, issue-workflow.
 
 ## Writing for Kiarash
 
