@@ -40,6 +40,20 @@
 #     that pair; a real regression check needs a curl/CSP-report-only pass
 #     against a live deploy, not just a static comparison at the time this
 #     was written.
+# connect-src (issue #132) is the directive this file went to production
+# without. Absent, it falls back to default-src 'self', and the browser drops
+# every cross-origin fetch before it reaches the network — which is what made
+# "Use my location" in the give flow report "Couldn't work out your postcode"
+# for everyone, forever, while the mocked unit tests for that code stayed
+# green. The two origins are the reverse-geocode providers named in
+# apps/web/src/lib/geoReverse.ts's exported REVERSE_GEOCODE_ORIGINS;
+# apps/web/test/guards/reverseGeocodeCsp.test.ts fails if this line or
+# securityHeaders.ts stops covering one of them. The Google Ads and
+# Cloudflare Web Analytics *beacons* are connect-src too and are deliberately
+# NOT listed: neither provider is configured in any environment today, and
+# whoever enables one has to add its endpoint here or ship a tag that reports
+# nothing.
+#
 # https://challenges.cloudflare.com is Turnstile's script (loaded via a
 # dynamically-inserted <script src>, src/ui/Turnstile.web.tsx) and its widget
 # iframe (frame-src). https://www.googletagmanager.com and
@@ -66,7 +80,7 @@
 # only honor the older header) stops the give flow and the admin page from
 # being framed at all — the concrete risk named in the issue.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com 'sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g=' 'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' 'sha256-d6qbtEYff/sB38YyzuzhASbVmmOidU/UFC9mNit47j4='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
+  Content-Security-Policy: default-src 'self'; connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org; script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com 'sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g=' 'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' 'sha256-d6qbtEYff/sB38YyzuzhASbVmmOidU/UFC9mNit47j4='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
   X-Frame-Options: DENY
   Referrer-Policy: strict-origin-when-cross-origin
   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload

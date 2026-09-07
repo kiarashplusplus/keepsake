@@ -101,9 +101,15 @@ export default function GiveDetails(): React.ReactElement {
           .catch(() => setGeoError(MANUAL_ENTRY_MESSAGE))
           .finally(() => setLocating(false));
       },
-      () => {
+      // `geoLocate.ts` has already worked out *which* of the three things
+      // went wrong — permission denied, position unavailable, or a timeout —
+      // and each one has a different fix for the giver. Substituting
+      // `MANUAL_ENTRY_MESSAGE` here (which is what this did before #132)
+      // threw that away and made a blocked permission look identical to a
+      // reverse-geocode failure.
+      (message) => {
         setLocating(false);
-        setGeoError(MANUAL_ENTRY_MESSAGE);
+        setGeoError(message);
       },
     );
   }

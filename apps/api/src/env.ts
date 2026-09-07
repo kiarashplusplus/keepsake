@@ -114,23 +114,26 @@ export function isProduction(env: Env): boolean {
  * Issue #38's kill switch: is semantic search (Vectorize + Workers AI
  * embeddings) allowed to run at all?
  *
- * **Off in every environment**, deliberately, and it must stay that way
- * until someone with a Cloudflare credential does two things:
+ * **On in every environment** as of 2026-09-07, after the two things this
+ * comment used to say it must wait for were actually done with a real
+ * credential (recorded in `docs/runbooks/deploy.md` → "Vectorize / semantic
+ * search"): the three indexes were confirmed to exist at `768 / cosine`, and
+ * `MIN_SCORE` was re-derived against the real embedding model
+ * (`docs/design/min-score-calibration.md`).
  *
- *   1. Confirms the Vectorize indexes actually exist. They may not. The
- *      branch that built this feature claimed to have created all three, but
- *      that claim was never corroborated, and the one account token probed
- *      since had no Vectorize permission. See `docs/runbooks/deploy.md`'s
- *      "Vectorize (issue #38)" section for the exact `wrangler vectorize
- *      create` commands and the token scope needed.
- *   2. Re-derives `MIN_SCORE` (`search/search.ts`) against the real
- *      embedding model, since the calibration behind today's value was
- *      likewise never reproduced.
+ * It stays a kill switch. Setting it back to `"0"` is the first thing to try
+ * if search misbehaves: with it off, `GET /api/feed?q=` behaves exactly as it
+ * does without any of this — FTS5 via `db/fts.ts`, the fallback path the
+ * issue asked to keep rather than replace — and no embedding call, Vectorize
+ * call or AI budget spend happens on either the read or the write path.
+ * `test/search.test.ts` asserts that equivalence against a no-binding control
+ * rather than assuming it.
  *
- * Until both are done this stays `"0"` and `GET /api/feed?q=` behaves
- * exactly as it does on `main`: FTS5 via `db/fts.ts`, which is the fallback
- * path the issue asked to keep rather than replace. `test/search.test.ts`
- * asserts that equivalence directly rather than assuming it.
+ * One thing to know before switching it off: `reembedListing` runs only on
+ * listing create/edit and on the #37 aspects backfill, so any listing created
+ * while this is `"0"` has no vector and is invisible to vector search until
+ * it is next written. See the runbook section above for the backfill that
+ * does not exist.
  *
  * Opt-in on `"1"` only — an unset, empty, malformed or absent var reads as
  * off, so no environment can enable this by accident or by omission. Same
@@ -138,6 +141,25 @@ export function isProduction(env: Env): boolean {
  */
 export function semanticSearchEnabled(env: Env): boolean {
   return (env.SEMANTIC_SEARCH as string | undefined) === "1";
+}
+
+/**
+ * True in the two environments that run as a deployed Worker on Cloudflare —
+ * `preview` and `production` — and false for local `wrangler dev`, `vitest`
+ * and Playwright.
+ *
+ * The distinction `isProduction` draws is "is this the public site"; this one
+ * is "is this configured infrastructure, where a missing binding or secret is
+ * a defect rather than the normal state". Issue #123 needed the second: the
+ * zone cache purge is *expected* to be unconfigured locally and in tests, so
+ * skipping it there is silent, but a skip on a deployed Worker means the
+ * credential is damaged and has to be loud. Kept beside `isProduction` so the
+ * two string comparisons that decide environment live in one place and cannot
+ * drift apart.
+ */
+export function isDeployed(env: Env): boolean {
+  const environment = env.ENVIRONMENT as string;
+  return environment === "production" || environment === "preview";
 }
 
 /**

@@ -30,10 +30,25 @@ import { SUGGEST_RETRY_INSTRUCTION, SUGGEST_SYSTEM_PROMPT, SUGGEST_USER_PROMPT }
 // model isn't back quickly the form is already usable without it, so there
 // is no reason to make anyone wait as long as moderation is willing to.
 const TIMEOUT_MS = 15_000;
-const MAX_TOKENS = 200;
+/**
+ * Raised from 200 in #135. The reply now carries a `markings` field holding
+ * every word printed on the object, and typically three aspects rather than
+ * one — the fishing-line spool that prompted the issue comes back at roughly
+ * 90 tokens, but a densely-labelled object with the full six aspects would
+ * have run into a 200-token ceiling and been truncated into unparseable
+ * JSON. Truncation here is not a soft failure: `tryParseSuggestion` returns
+ * null, the retry spends a second vision call, and the giver gets an empty
+ * form. Cheap insurance.
+ */
+const MAX_TOKENS = 320;
 
 const MOCK_SUGGESTION: PhotoSuggestion = {
   subject: "a ceramic mug",
+  // A mug with a maker's stamp underneath: gives `MOCK_AI=1` runs (the e2e
+  // suite, local dev) a suggestion shaped like the ones the real prompt
+  // returns since #135, aspects read off markings included, rather than one
+  // that pre-dates the field.
+  markings: "HANDMADE · R.T. 1998",
   title: "Blue ceramic mug",
   category: "home_kitchen",
   condition: "small chip near the handle",
@@ -41,6 +56,7 @@ const MOCK_SUGGESTION: PhotoSuggestion = {
     { name: "object", value: "mug" },
     { name: "material", value: "ceramic" },
     { name: "colour", value: "blue" },
+    { name: "maker", value: "R.T." },
   ],
 };
 
