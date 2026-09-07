@@ -271,6 +271,57 @@ async function moderatePhotoVariant(
   return verdict;
 }
 
+/**
+ * The listing's most recent *human* status decision, read across **every
+ * version** rather than the current one — issue #199.
+ *
+ * `PATCH /api/listings/:id` bumps `version`, sets `pending` and schedules
+ * this pipeline afresh. Admin actions and the three-report auto-hide are
+ * recorded against the version that was live when they happened, and
+ * nothing carried them forward, so a listing Kiarash rejected as
+ * `violent_content` came back to the models at version 2 looking exactly
+ * like a listing nobody had ever judged. One character of the title was the
+ * whole cost, and since the pipeline auto-approves anything the models pass,
+ * publication was the likely outcome. No withdraw, no relist, no admin
+ * action — the road #162 closed with `relist`'s own check, reached from a
+ * direction that check cannot see, because it is scoped to
+ * `listings.version` and a new version has no admin event on it.
+ *
+ * The kinds are the same set `POST /api/listings/:id/relist` reads
+ * (`routes/listings.ts`), and for the same reason: every control that pulls
+ * a listing out of public view writes a non-`'decision'` event — `kind =
+ * 'admin'` for reject/hide/restore/approve and the ban sweep, `kind =
+ * 'report_autohide'` for three reports. A `kind = 'decision'` row is
+ * deliberately *not* consulted here: the pipeline's own earlier rejection is
+ * exactly what "fix it and resubmit" is supposed to be able to clear, and
+ * carrying that forward would break the one recovery path an honest giver
+ * has.
+ *
+ * A later admin `approved` or `restored` clears it — that is a human
+ * looking at the listing again and saying yes, and after it edits flow
+ * normally once more.
+ *
+ * `created_at DESC, rowid DESC` matches `relist`'s ordering, for the reason
+ * written out there: ULIDs are only monotonic across milliseconds, and
+ * `rowid` is the insertion order we actually mean.
+ */
+async function standingHumanTakedown(env: Env, listingId: string): Promise<{ verdict: string; version: number } | null> {
+  const last = await env.DB.prepare(
+    `SELECT kind, verdict, listing_version FROM moderation_events
+     WHERE listing_id = ?
+       AND (kind = 'report_autohide'
+            OR (kind = 'admin' AND verdict IN ('approved', 'restored', 'hidden', 'rejected')))
+     ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+  )
+    .bind(listingId)
+    .first<{ kind: string; verdict: string; listing_version: number }>();
+
+  if (!last) return null;
+  if (last.kind === "report_autohide") return { verdict: "report_autohide", version: last.listing_version };
+  if (last.verdict === "hidden" || last.verdict === "rejected") return { verdict: last.verdict, version: last.listing_version };
+  return null;
+}
+
 export async function moderateListing(env: Env, listingId: string, version: number, clientIP?: string): Promise<void> {
   const listing = await env.DB.prepare("SELECT id, title, story, version FROM listings WHERE id = ?")
     .bind(listingId)
@@ -466,6 +517,40 @@ export async function moderateListing(env: Env, listingId: string, version: numb
 
   if (decision.status === "needs_review") {
     await logEvent(env, { listingId, listingVersion: version, kind: "decision", verdict: "needs_review", reason: "held_for_review", attempt });
+    await setStatus(env, listingId, version, { status: "needs_review", moderationReason: "held_for_review", publishIfUnset: false });
+    return;
+  }
+
+  // The models passed it — but a human may already have said no to this
+  // listing at an earlier version (issue #199). `needs_review`, not
+  // `approved`: the person who rejected it sees it again, and the honest
+  // "fix it and resubmit" edit still reaches them, which is the whole reason
+  // this is a downgrade of the *approval* rather than a refusal of the edit.
+  // The malicious and the honest edit are byte-identical at the API, so the
+  // only place they can be told apart is in front of the human who made the
+  // original call.
+  //
+  // Deliberately here, after the model passes, rather than short-circuiting
+  // before them: this way the new version still carries its own text and
+  // image verdicts for the reviewer to read, and a rejected listing edited
+  // into something *clearly* illegal is still auto-`rejected` above instead
+  // of landing in a human queue. The cost is that each edit spends its
+  // moderation budget — bounded by `LISTING_IP_DAILY_BUDGET` and the
+  // router-level write brake, both already in front of `PATCH`.
+  const takedown = await standingHumanTakedown(env, listingId);
+  if (takedown) {
+    await logEvent(env, {
+      listingId,
+      listingVersion: version,
+      kind: "decision",
+      verdict: "needs_review",
+      reason: "held_for_review",
+      attempt,
+      // What the owner sees is the ordinary `held_for_review` copy; this is
+      // for the reviewer and the audit trail, which would otherwise show a
+      // `needs_review` the models never asked for and no reason why.
+      flagsJson: JSON.stringify({ downgraded_from: "approved", prior_takedown: takedown.verdict, prior_version: takedown.version }),
+    });
     await setStatus(env, listingId, version, { status: "needs_review", moderationReason: "held_for_review", publishIfUnset: false });
     return;
   }
