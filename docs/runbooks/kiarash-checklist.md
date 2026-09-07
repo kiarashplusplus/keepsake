@@ -90,6 +90,19 @@ When you say go, I will:
    was fully indexable until 2026-09-06 (launch audit finding 2); this is the one-command check
    that it still is not.
 
+## 7. ~~Cache-purge token for global photo purge (#94)~~ ✅ DONE 2026-09-07
+
+Nothing for you here — recorded because #94 was `blocked-on-kiarash` on exactly this. Minted
+**`keepsake-cache-purge`** (id `1dc0212c…`), one permission — `Zone → Cache Purge` — on the
+`keepsake.ing` zone and nothing else, and stored it as the Worker secret `CF_CACHE_PURGE_TOKEN` on
+both `keepsake-preview` and `keepsake-production`. `CF_ZONE_ID` was already in `wrangler.toml` for
+both tiers, so #117's purge code went from an inert no-op to live the moment the secret landed.
+
+Proven live rather than assumed: it purges `keepsake.ing`, it is refused against another zone on
+this account and against a DNS read of its own zone, and one purge call cleared a photo cached at
+two different colos at once. Full measurements — including the two ways this is easy to false-pass
+and the one link still unverified — in `docs/runbooks/deploy.md#the-cache-purge-token-94`.
+
 ---
 
 ## Guardrails already in place (so you do not have to worry about this)
