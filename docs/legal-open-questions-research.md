@@ -441,3 +441,30 @@ other substantive requirements, and says nothing about how to determine that som
 Write-up in `runbooks/admin.md`, "What 'the rebuttable presumption' in the statute's section heading
 actually is." **The other two marks stand** — PIPEDA breach mechanics, and the absence of an Ofcom
 exemption, which remains a negative established from summaries and the weakest claim here.
+
+---
+
+## Status note, 2026-09-07 (later the same day) — Q8's second half is decided
+
+**#108 is closed, and not by a lawyer.** The issue asked for an hour with a Texas business lawyer or
+accountant and did not get one; Kiarash decided on the research instead and asked for a conservative
+posture. **The decision is sole proprietorship — no LLC — with general-liability insurance as the
+protection an entity would otherwise have provided.** The record is
+[`legal-entity-and-insurance.md`](legal-entity-and-insurance.md): reasoning, costs on both sides,
+what to ask an insurance broker and in what order, the assumed-name filing the choice implies, the
+compensating commitments, and the triggers that reverse it.
+
+**What that document adds to §Q8(c) above, and it changes the shape of the argument.** §Q8(c) frames
+the LLC as the substantive protection and the indemnity clause as the cheap belt to its suspenders.
+The missing piece is that **a Texas LLC does not shield a member from liability for his own
+conduct** — the shield is against the company's obligations and the acts of its people, and here
+there is one person who performs every act. So against the claim this fact pattern actually produces
+— an injured stranger arguing the platform was negligent to introduce two people — the LLC and the
+sole proprietorship end in the same place, and what differs is defence cost, which is an insurance
+question rather than an entity one. That claim is **[summary-sourced]** like most of this document,
+and it is flagged there as the first thing to check if an hour of professional time is ever bought.
+
+**Egress was blocked again, the same way.** `statutes.capitol.texas.gov`, `comptroller.texas.gov`
+and `law.justia.com` were all refused by the proxy, so Tax Code §171.0002, Bus. & Com. Code §71.201
+and the Comptroller's franchise-tax guidance are cited there from search summaries. The method limit
+in this document's opening note applies to that document in full.
