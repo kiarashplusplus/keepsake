@@ -543,14 +543,27 @@ export default function AdminPage(): React.ReactElement {
           initializer above) and everything below it is unchanged from before
           this panel existed; "Observatory" only mounts `<Observatory>` once
           picked, so the default view never pays for the extra fetch. */}
-      <View accessibilityRole="tablist" style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+      {/* Both tablists on this page carry an explicit name. Two unnamed
+          `tablist`s in one document are ambiguous to a screen reader — "which
+          set of tabs?" has no answer — and they were also indistinguishable
+          to Playwright, which is how adding this one broke four e2e specs
+          that had only ever needed to find "the" tablist. */}
+      <View
+        accessibilityRole="tablist"
+        aria-label="Admin sections"
+        style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}
+      >
         <Chip role="tab" label="Queue" selected={activeSection === "queue"} onPress={() => setActiveSection("queue")} />
         <Chip role="tab" label="Observatory" selected={activeSection === "observatory"} onPress={() => setActiveSection("observatory")} />
       </View>
 
       {activeSection === "queue" ? (
         <>
-          <View accessibilityRole="tablist" style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+          <View
+            accessibilityRole="tablist"
+            aria-label="Queue status"
+            style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}
+          >
             {ADMIN_QUEUE_STATUSES.map((status) => (
               <Chip key={status} role="tab" label={TAB_LABELS[status]} selected={activeTab === status} onPress={() => setActiveTab(status)} />
             ))}

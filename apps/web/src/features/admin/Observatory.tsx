@@ -461,7 +461,11 @@ function LogEventRow({ event, nowMs }: { event: ObservatoryLogEvent; nowMs: numb
 
 function WindowSelector({ value, onChange }: { value: ObservatoryWindow; onChange: (next: ObservatoryWindow) => void }): React.ReactElement {
   return (
-    <View accessibilityRole="tablist" style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+    <View
+      accessibilityRole="tablist"
+      aria-label="Observatory window"
+      style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}
+    >
       {OBSERVATORY_WINDOWS.map((n) => (
         <Chip key={n} role="tab" label={n === 1 ? "1 day" : `${n} days`} selected={value === n} onPress={() => onChange(n)} />
       ))}
