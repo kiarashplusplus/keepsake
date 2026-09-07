@@ -71,6 +71,7 @@ const EXPECTED_SECTIONS = [
   "Location",
   "Screening",
   "Autofill from your photo",
+  "Search by meaning",
   "Rate limiting",
   "Your choice, before anything loads",
   "Changing your mind",
