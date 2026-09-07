@@ -39,6 +39,8 @@ jobs:
       api: ${{ steps.filter.outputs.api }}
       packages: ${{ steps.filter.outputs.packages }}
       tools: ${{ steps.filter.outputs.tools }}
+      site: ${{ steps.filter.outputs.site }}
+      root: ${{ steps.filter.outputs.root }}
       docs: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +57,21 @@ jobs:
             tools:
               - "tools/**"
               - ".github/workflows/**"
+            # The marketing pages are not a separate deployable: copy-site.mjs
+            # copies apps/site/public/* into the web bundle, and consent.spec
+            # and a11y.spec drive those exact pages. Before this filter existed
+            # `apps/site/**` matched nothing, so a pull request touching only
+            # privacy.html ran no job at all and still reported green.
+            site:
+              - "apps/site/**"
+            # A lockfile or workspace change can break a package the diff never
+            # mentions, so it has to run everything.
+            root:
+              - "package.json"
+              - "pnpm-lock.yaml"
+              - "pnpm-workspace.yaml"
+              - "tsconfig.base.json"
+              - ".npmrc"
             docs:
               - "docs/**"
               - "README.md"
@@ -85,7 +102,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [preflight, changes]
     # Skip when the change is docs-only — nothing lint checks changed.
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.root == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -100,7 +117,7 @@ jobs:
     name: typecheck
     runs-on: ubuntu-latest
     needs: [preflight, changes]
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.root == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -115,7 +132,7 @@ jobs:
     name: test-packages
     runs-on: ubuntu-latest
     needs: [lint, typecheck, changes]
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.packages == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.root == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -132,7 +149,7 @@ jobs:
     needs: [lint, typecheck, changes]
     # A change to a shared package (contracts/observability) can break the
     # API even though apps/api itself didn't change.
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.root == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -147,7 +164,7 @@ jobs:
     name: test-web
     runs-on: ubuntu-latest
     needs: [lint, typecheck, changes]
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true'
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.site == 'true' || needs.changes.outputs.root == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -219,3 +236,38 @@ jobs:
           name: playwright-report
           path: apps/web/playwright-report
           retention-days: 7
+
+  # The one job that always runs. Everything above is gated on `changes`, and
+  # GitHub reports a skipped job as a green check — so a mistake in the filters
+  # produces a pull request that looks fully tested and ran nothing. That has
+  # happened three times here (see tools/ci/assert-coverage.mjs). This asserts
+  # the invariant rather than trusting the gating: if a filter says an area
+  # changed, the jobs covering that area must actually have run.
+  ci-complete:
+    name: ci-complete
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [changes, preflight, lint, typecheck, test-packages, test-api, test-web, build-web, e2e]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert CI ran what the diff required
+        env:
+          # Built from the filter outputs, not from a ternary. GitHub's
+          # `cond && 'a' || 'b'` idiom is unsafe when the true-branch is an
+          # empty string, because '' is falsy and the expression falls through
+          # to the false-branch. On `workflow_dispatch` every job runs
+          # unconditionally, so whatever this evaluates to is satisfied anyway.
+          # A trailing comma is harmless; the script drops empty entries.
+          CHANGED: >-
+            ${{ format('{0}{1}{2}{3}{4}{5}',
+                 needs.changes.outputs.web == 'true' && 'web,' || '',
+                 needs.changes.outputs.api == 'true' && 'api,' || '',
+                 needs.changes.outputs.packages == 'true' && 'packages,' || '',
+                 needs.changes.outputs.tools == 'true' && 'tools,' || '',
+                 needs.changes.outputs.site == 'true' && 'site,' || '',
+                 needs.changes.outputs.root == 'true' && 'root' || '') }}
+          # Index syntax rather than `needs.test-web.result`: unambiguous for
+          # job ids containing a hyphen.
+          JOBS: >-
+            changes=${{ needs.changes.result }},preflight=${{ needs.preflight.result }},lint=${{ needs.lint.result }},typecheck=${{ needs.typecheck.result }},test-packages=${{ needs['test-packages'].result }},test-api=${{ needs['test-api'].result }},test-web=${{ needs['test-web'].result }},build-web=${{ needs['build-web'].result }},e2e=${{ needs.e2e.result }}
+        run: node tools/ci/assert-coverage.mjs
