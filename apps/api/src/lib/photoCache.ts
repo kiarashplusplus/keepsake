@@ -73,7 +73,7 @@
  * saw them and `images.ts` never put them in the cache in the first place.
  */
 import { captureException, captureMessage } from "@keepsake/observability/capture";
-import type { Env } from "../env.js";
+import { isDeployed, type Env } from "../env.js";
 
 const PHOTO_VARIANTS = ["full", "thumb"] as const;
 
@@ -112,12 +112,44 @@ async function purgeZoneCache(env: Env, urls: string[], photoId: string): Promis
   const zoneId = (env.CF_ZONE_ID as string | undefined)?.trim();
   const token = env.CF_CACHE_PURGE_TOKEN?.trim();
 
-  // The no-op. Deliberately silent: local dev, `vitest`, Playwright and any
-  // preview deployed without the secret all land here on every single
-  // delete, and a log line on each would be noise that trains people to
-  // ignore this module's logs — which are what a *real* purge failure has
-  // to be seen through.
-  if (!zoneId || !token) return;
+  if (!zoneId || !token) {
+    // Still silent for local dev, `vitest`, Playwright and any preview
+    // deployed without the secret: they land here on every single delete,
+    // and a log line on each would be noise that trains people to ignore
+    // this module's logs — which are what a *real* purge failure has to be
+    // seen through.
+    //
+    // Issue #123: but in a *deployed* environment these credentials are
+    // supposed to exist, so arriving here means the configuration is
+    // damaged — and staying silent about that is exactly what made a broken
+    // `CF_CACHE_PURGE_TOKEN` indistinguishable from a working one. The
+    // per-colo `cache.delete()` above still succeeds, so the delete a
+    // person is waiting on looks completely normal either way, and nothing
+    // anywhere says the every-colo half never ran.
+    //
+    // With this warning, silence in preview/production finally *means*
+    // something: a missing or empty credential warns here, a present but
+    // damaged one fails the API call and warns below, and success is the
+    // only remaining path that logs nothing.
+    //
+    // Booleans, never the values: which half is missing is the whole
+    // diagnostic, and neither the credential nor the zone id belongs in a
+    // log.
+    //
+    // `credentialPresent`, not `tokenPresent`, and do not "fix" that back:
+    // `SENSITIVE_KEY_RE` in @keepsake/observability/redact matches any key
+    // containing `token`, so `redactDeep` would replace the boolean with
+    // `"[REDACTED]"` and silently destroy the one field that says which
+    // half to go and look at. The redactor is right to be blunt about key
+    // names; this call site is what has to accommodate it.
+    if (isDeployed(env)) {
+      captureMessage(`Cloudflare zone cache purge skipped for photo ${photoId}: credentials missing`, "warning", {
+        tags: { component: "photoCache", environment: env.ENVIRONMENT as string },
+        extra: { zoneIdPresent: Boolean(zoneId), credentialPresent: Boolean(token) },
+      });
+    }
+    return;
+  }
 
   try {
     const response = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/purge_cache`, {
