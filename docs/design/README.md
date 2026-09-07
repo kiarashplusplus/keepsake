@@ -130,8 +130,6 @@ not this file, as the count; what this file is for is which of them matter and w
   they actually happen.
 - **#156** — revoke `keepsake-pr-preview` or build the job it was minted for. #73 was reversed and
   the create-and-delete token it produced is still live and used by nothing.
-- **#157** — create `keepsake-photos-production-backup`. Production photos have never been backed
-  up, and until 2026-09-07 the nightly job reported success anyway.
 
 *The 2026-09-07 adversarial audit — #161–#191.* Filed against the data, moderation, auth, ops
 and CI layers hours after this file's previous sweep. Roughly half have since been fixed and the
@@ -204,7 +202,11 @@ already describe in the fixed tense.
   `backup-tables` check compares that list against the tables the migrations create, so the next
   migration that adds a table fails the build instead of the backup. #178 (**fixed** — `orphanSweep` refuses
   to delete a photo the backup bucket does not have, so the ordering no longer rests on two
-  independent schedulers; still unguarded in production until #157 creates the bucket).
+  independent schedulers). **#157** (this PR): `keepsake-photos-production-backup` now exists
+  with the same 400-day expiry preview has, production's 4 referenced keys are in it (one
+  verified byte-identical by SHA-256 out of both buckets), and `PHOTO_BACKUP_BUCKET` is bound
+  on production — so the sweep's guard is live there rather than degrading to an unguarded
+  delete with a warn.
 
 *Workable by anyone (pre-audit):*
 - **#104** — `wrangler dev` dies mid-e2e with no diagnostic and `serve.mjs`'s restart hides it.

@@ -32,8 +32,9 @@
  * (`PHOTO_BACKUP_BUCKET`) and refuse to delete a photo whose keys are not
  * already copied there, so the ordering between this job and the nightly
  * backup workflow is enforced here rather than by two independent schedulers.
- * When that binding is absent — production has no backup bucket yet, #157 —
- * deletion proceeds as before and says so loudly. See `isBackedUp`.
+ * When that binding is absent, deletion proceeds as before and says so
+ * loudly. Every tier binds it as of #157, so on a deployed Worker that path
+ * should now be unreachable rather than merely tolerated. See `isBackedUp`.
  *
  * Every condition is purely time-based, so re-running this twice in a row
  * (a retried cron invocation, a manual trigger) is a no-op the second time:
@@ -152,13 +153,18 @@ interface OrphanPhotoRow {
  * a keepsake.
  *
  * **When the binding is absent this returns `true` and the sweep proceeds.**
- * That is deliberate and it is the important half. `keepsake-photos-
- * production-backup` does not exist yet (#157, blocked on a credential), so a
- * guard that refused every deletion without it would convert one missing
- * bucket into unbounded R2 growth and a `photos` table nothing ever prunes —
- * a worse failure, and a silent one. Instead the skip is loud on a deployed
- * Worker, the same `isDeployed` gate #123 introduced for the cache purge that
- * is *expected* to be unconfigured locally and in tests.
+ * That is deliberate. A guard that refused every deletion without a backup
+ * bucket would convert one missing bucket into unbounded R2 growth and a
+ * `photos` table nothing ever prunes — a worse failure, and a silent one.
+ * Instead the skip is loud on a deployed Worker, the same `isDeployed` gate
+ * #123 introduced for the cache purge that is *expected* to be unconfigured
+ * locally and in tests.
+ *
+ * As of #157 every deployed tier binds it — `keepsake-photos-production-backup`
+ * was the last one missing and now exists — so this fallback is a safety net
+ * for a misconfiguration, not the standing state of production it was written
+ * for. If the warn below appears on a deployed Worker now, a binding was
+ * dropped from `wrangler.toml` or a deploy did not carry it.
  *
  * `head()`, never `get()`: this only asks whether the key exists, and the
  * binding is used for nothing else, so a bug here cannot write to or delete

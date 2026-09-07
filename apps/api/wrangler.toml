@@ -738,23 +738,27 @@ migrations_dir = "migrations"
 binding = "BUCKET"
 bucket_name = "keepsake-photos-production"
 
-# No `PHOTO_BACKUP_BUCKET` here yet, and the omission is deliberate rather
-# than forgotten: `keepsake-photos-production-backup` **does not exist**
-# (#157, blocked-on-kiarash — creating it needs a production-write approval no
-# agent session has had). A binding naming a bucket that does not exist is not
-# a risk worth taking on the live site.
+# `keepsake-photos-production-backup` exists as of 2026-09-07 21:59 UTC (#157)
+# — `eeur` location hint to match the primary above, and the same
+# `expire-after-400d` lifecycle rule preview carries. It is not empty: the 4
+# keys production's `photos` rows referenced at creation were copied into it,
+# and one was checked byte-identical out of both buckets by SHA-256.
 #
-# `orphanSweep` degrades on purpose when the binding is absent: it deletes as
-# it did before and logs a warn saying deletion ran unguarded, rather than
-# refusing to delete anything forever. Blocking every deletion on a bucket
-# nobody has created would turn one missing resource into unbounded R2 growth
-# and an unswept `photos` table.
+# So this binding is now live, which is the second half of #157 and the thing
+# that turns `orphanSweep`'s guard on for the production site. Until this
+# deploys, the sweep still takes its documented degraded path there: it
+# deletes as it did before and logs a warn saying deletion ran unguarded,
+# rather than refusing to delete anything forever. That fallback stays in the
+# code on purpose — blocking every deletion for want of a bucket would turn
+# one missing resource into unbounded R2 growth and an unswept `photos` table
+# — but it should no longer be reached on production once this is deployed.
 #
-# When #157 lands, this is the second half of it — uncomment and deploy:
-#
-#   [[env.production.r2_buckets]]
-#   binding = "PHOTO_BACKUP_BUCKET"
-#   bucket_name = "keepsake-photos-production-backup"
+# `head()`-only from the Worker's side, same as the other tiers: nothing here
+# can write to or delete from the bucket whose whole value is that nothing
+# deletes from it.
+[[env.production.r2_buckets]]
+binding = "PHOTO_BACKUP_BUCKET"
+bucket_name = "keepsake-photos-production-backup"
 
 [[env.production.kv_namespaces]]
 binding = "KV"
