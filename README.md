@@ -19,9 +19,13 @@ wax seal while a listing is under review.
   [`docs/platform-differences.md`](./docs/platform-differences.md)).
 - **API**: Cloudflare Workers (Hono) + D1 + R2 + KV + Workers AI (moderation) + Cloudflare Email
   Service + Turnstile + rate-limit bindings.
-- **Data**: Postcode + radius search over US/Canada/UK, backed by a GeoNames postal-code table
-  bundled straight into D1 — no geocoding API (see
-  [`docs/runbooks/geodata.md`](./docs/runbooks/geodata.md)).
+- **Data**: Postcode + radius search over US/Canada, backed by a GeoNames postal-code table
+  bundled straight into D1 — no geocoding API on the server (see
+  [`docs/runbooks/geodata.md`](./docs/runbooks/geodata.md)). The UK is deliberately geo-blocked
+  and `GB` is not an accepted country (`docs/runbooks/uk-block.md`); the seed's GB rows are left
+  in place, inert, so re-adding it later is additive. "Use my location" in the give flow is the
+  one exception to "no geocoding API" — it reverse-geocodes in the *browser*, and the
+  coordinates never reach the Worker (see `apps/web/src/lib/geoReverse.ts`).
 - **Tooling**: pnpm workspaces, TypeScript 5.9 strict, ESLint 9 flat config with a barrel-import
   ban (see [`docs/design/README.md#barrel-ban`](./docs/design/README.md#barrel-ban)).
 

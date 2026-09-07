@@ -39,6 +39,8 @@ const PRIVACY_HTML = fs.readFileSync(path.join(SITE_PUBLIC, "privacy.html"), "ut
  * assertions below read the page the way a person does, without the source
  * having to be reformatted around a test. */
 const PRIVACY_TEXT = PRIVACY_HTML.replace(/\s+/g, " ");
+const TERMS_HTML = fs.readFileSync(path.join(SITE_PUBLIC, "terms.html"), "utf8");
+const TERMS_TEXT = TERMS_HTML.replace(/\s+/g, " ");
 
 const STATIC_PAGES = ["about.html", "privacy.html", "terms.html"];
 
@@ -547,5 +549,48 @@ describe("privacy policy vs. the Google Ads conversions", () => {
     // new disclosure — the conversions are bare signals, and the page has to
     // go on saying what does not accompany them.
     expect(PRIVACY_TEXT).toContain("we never send your photos");
+  });
+});
+
+/**
+ * The terms get the same treatment as the policy, for the same reason.
+ *
+ * `privacy.html` has carried a day-precise date and a hand-kept "What
+ * changed" record since #60, and the assertion above pins the two to each
+ * other. `terms.html` had neither: a month ("September 2026") and no record
+ * at all — while its content changed materially that month (the date-of-birth
+ * gate replaced the 18+ checkbox, the prohibited-items table arrived, and the
+ * one-way indemnification clause was added in ea2329e). A reader who wanted
+ * to know whether the deal had changed since they last posted something had
+ * nothing to read. `docs/legal-considerations.md` recommendation 11 asked for
+ * exactly this.
+ */
+describe("terms page structure", () => {
+  it("carries a dated record of what changed, dated the same day as the header", () => {
+    expect(TERMS_HTML).toContain('<section id="changes">');
+    const updated = /Last updated (\d{1,2} [A-Z][a-z]+ \d{4})/.exec(TERMS_TEXT)?.[1];
+    // Month-only ("September 2026") does not match, which is the point — the
+    // page used to carry exactly that.
+    expect(updated).toBeDefined();
+    const entries = [...TERMS_TEXT.matchAll(/<strong>(\d{1,2} [A-Z][a-z]+ \d{4})\.<\/strong>/g)].map((m) => m[1] ?? "");
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries[0]).toBe(updated);
+  });
+
+  it("does not pass its copy-edit date off as a legal review", () => {
+    // Nobody has reviewed these terms as a lawyer — `legal-considerations.md`
+    // is explicit that its own research is not legal advice and that #34's
+    // eight questions closed unanswered. A "last updated" date next to a
+    // legal document invites the opposite reading unless it says otherwise.
+    expect(TERMS_TEXT).toContain("Nobody has reviewed these terms as a lawyer");
+  });
+
+  it("still carries the clause the give flow now points at", () => {
+    // `LegalAssent` tells a giver they "cover Keepsake for what happens
+    // between you and the person you give it to". If the clause behind that
+    // sentence is ever removed, the give form starts describing an
+    // obligation that no longer exists — so the two are pinned together.
+    expect(TERMS_TEXT).toContain("you agree to cover Keepsake for it");
+    expect(TERMS_TEXT).toContain("it only runs one way");
   });
 });

@@ -164,6 +164,49 @@ stays an honest record of what was found and when:**
     entry near the top of this list already says. The Montana fact pattern is unchanged in substance
     — a self-declared gate plus a working takedown path on both sides now, rather than one.
 
+- **The Google Ads tag has never been live, and two entries above assume it is — correction,
+  2026-09-07.** The #31 entry below says "the live site now runs a consent-gated Google Ads tag
+  (`privacy.html`'s 'Advertising' consent group, `www.googletagmanager.com`, off until the visitor
+  opts in)", and rests the Rhode Island "commercial website" fact pattern on it. **That premise is
+  false.** The consent group, the loader and the kill switch are all real
+  (`apps/web/public/consent.js`), but `.github/workflows/deploy.yml`'s export step never passed
+  `EXPO_PUBLIC_GOOGLE_ADS_ID` — so `meta()` saw an unsubstituted `%EXPO_PUBLIC_GOOGLE_ADS_ID%`
+  placeholder on every deployed build and nothing third-party ever loaded. No tag has run on
+  `keepsake.ing` or `preview.keepsake.ing`, ever. The variable is now plumbed through, and
+  deliberately left unset, so enabling ads is one explicit act rather than an impossibility.
+
+  What that changes, and what it does not:
+  - **Rhode Island (#31, #34 Q3).** The pass below reasoned that "ad infrastructure that didn't
+    exist when the original research called this 'genuinely unsettled'" tipped the fact pattern
+    toward "commercial". It didn't tip anything: there was no ad infrastructure serving traffic,
+    only unreached code. Today Keepsake is a zero-revenue site with **no advertising running at
+    all** — which is a *weaker* "commercial website" case than that entry describes, not a
+    stronger one. The applicability question is still for a lawyer; the facts under it are just
+    less adverse than recorded.
+  - **PIPEDA (#34 Q2).** The question is framed as "does PIPEDA's 'commercial activity' gate apply
+    **once Google Ads goes live** on a still-free product". It has not gone live, so the trigger
+    the question turns on has not happened. Q2 is not yet ripe rather than unanswered — but the
+    honest posture from #59/#60 stands regardless: assume PIPEDA applies, and the work it implies
+    is already done.
+  - **What does not change:** nothing about the consent banner, the GPC handling, or the
+    "we don't sell or share" language, all of which are accurate today and would stay accurate
+    the day a tag is switched on.
+
+  Two things a future reader should check rather than assume, because this correction exists
+  precisely because they were assumed: whether the GitHub Environment variable is still unset, and
+  — before enabling anything — whether the conversion endpoints in `apps/web/public/_headers`'s
+  `connect-src` are the real ones. Those hosts were taken from Google's documentation and have
+  **never been observed against a running tag**, because there has never been one.
+
+- **`privacy.html` under-disclosed the ads conversions — fixed 2026-09-07.** The Advertising
+  section described the tag as telling us which advert brought a visitor here.
+  `apps/web/src/lib/adsEvents.ts` also reports a conversion when a listing goes live and when a
+  request is sent. No listing content accompanies either (neither call site passes `params`), so
+  the page's "we never send it your photos, your story text, your email" was true — but two of the
+  visitor's own actions were undisclosed, the same omission as #88 one provider over. Both are now
+  named on the page, and `apps/web/test/guards/privacyPolicy.test.ts` fails if a third conversion
+  is added without a disclosure.
+
 ---
 
 ## What I would do before launch (or before turning ads on)

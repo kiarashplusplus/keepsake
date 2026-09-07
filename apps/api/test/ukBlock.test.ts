@@ -111,3 +111,41 @@ describe("OSA re-entry gate (issue #30)", () => {
     }
   });
 });
+
+/**
+ * Issue: the block answered a data-rights request with a 451.
+ *
+ * `privacy.html` promises every request-confirmation email carries a link
+ * that erases the requester's note, email and phone number. Keepsake served
+ * the UK until 2026-09-06, so UK requesters can hold live withdraw links —
+ * and every one of them hit the geo-block, which is a promise the policy
+ * makes that the person cannot act on because of where they live.
+ *
+ * The carve-out is deliberately the withdraw page and the endpoint behind it
+ * and nothing else, so these tests assert both halves: the erase path works
+ * from a blocked country, and nothing else about the block moved.
+ */
+describe("the UK block does not stand between a UK visitor and erasing their data", () => {
+  it.each([...UK_BLOCKED_COUNTRIES])("POST /api/requests/withdraw is reachable from %s", async (country) => {
+    const res = await fetchAs("/api/requests/withdraw", country, { "content-type": "application/json" });
+    // Any answer from the route itself is the point — a bad/absent token is
+    // a 4xx from the handler, not the block's 451. What must never come back
+    // is the geo-block.
+    expect(res.status).not.toBe(451);
+  });
+
+  it.each([...UK_BLOCKED_COUNTRIES])("the /withdraw/:token page loads from %s", async (country) => {
+    const res = await fetchAs("/withdraw/some-token", country);
+    expect(res.status).not.toBe(451);
+  });
+
+  it("still blocks everything else from a blocked country", async () => {
+    // The carve-out must not have widened into a general hole: browsing,
+    // posting and requesting stay blocked, which is the whole point of the
+    // decision in docs/runbooks/uk-block.md.
+    for (const path of ["/api/feed", "/api/listings", "/", "/give", "/withdrawal-not-a-real-path"]) {
+      const res = await fetchAs(path, "GB");
+      expect(res.status).toBe(451);
+    }
+  });
+});

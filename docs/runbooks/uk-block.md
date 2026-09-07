@@ -46,6 +46,27 @@ Two independent things, both required — removing only one would leave a real g
    `/version.json` are exempted so an uptime monitor or the post-deploy commit check never trips on
    wherever the checking machine happens to be.
 
+### The one carve-out: withdrawing a request (2026-09-07)
+
+`/withdraw/:token` and the `POST /api/requests/withdraw` behind it are **not** blocked, from any
+of the four countries.
+
+`privacy.html` promises that every request-confirmation email carries a link that erases the
+requester's note, email and phone number. Keepsake served the UK until 2026-09-06, so UK
+requesters can be holding live withdraw links right now — and every one of them hit the 451.
+Answering "please erase my data" with a geo-block turns a promise the policy makes into one the
+person cannot act on *because of where they live*, which is a worse outcome than the one the block
+exists to avoid. It is also not what the block is for: the Online Safety Act duties are about
+hosting user-to-user content, and this path only ever removes it.
+
+Deliberately narrow, and it must stay that way: the withdraw page and the single endpoint behind
+it, both gated on an unguessable single-use token. No browsing, no posting, no requesting.
+`DATA_RIGHTS_EXEMPT_PREFIXES` in `ukBlock.ts` is the list, and `apps/api/test/ukBlock.test.ts`
+asserts both halves — that the erase path answers from all four blocked countries, and that
+everything else (`/api/feed`, `/api/listings`, `/`, `/give`, and a path that merely *starts* like
+"withdraw") still 451s. Removing the carve-out fails eight of those tests; widening it fails the
+ninth.
+
 Blocked countries: `GB`, plus the three Crown Dependencies (`JE` Jersey, `GG` Guernsey, `IM` Isle
 of Man) — they share the UK's postal system and are the most likely to be swept up by a
 UK-market-facing block like this, even though the Online Safety Act itself names Great Britain and

@@ -48,6 +48,33 @@ export const UK_BLOCK_REASON =
  * UK visitor would use the product through. */
 const EXEMPT_PATHS = new Set(["/health", "/version.json"]);
 
+/**
+ * Withdrawing a request is a data-rights path, and it is NOT blocked.
+ *
+ * `privacy.html` promises that "every request-confirmation email includes a
+ * link to withdraw that request", and following it "deletes your note, email,
+ * and phone number from our records". Keepsake served the UK until
+ * 2026-09-06, so real UK requesters can be holding live withdraw links today.
+ * Blocking those links would answer someone asking us to erase their data
+ * with a 451 — turning a promise the policy makes into one they cannot act
+ * on, precisely because of where they live. That is a worse outcome than the
+ * one the block exists to avoid, and it is not what the block is for: the
+ * Online Safety Act duties are about hosting user-to-user content, and this
+ * path only ever removes it.
+ *
+ * Deliberately narrow. It is the withdraw page and the single endpoint behind
+ * it, both of which require an unguessable single-use token — no browsing, no
+ * posting, no requesting. Everything else about the UK block is unchanged.
+ *
+ * `/withdraw/:token` is a prefix rather than an exact path, which is why this
+ * is separate from `EXEMPT_PATHS` above.
+ */
+const DATA_RIGHTS_EXEMPT_PREFIXES = ["/withdraw/", "/api/requests/withdraw"];
+
+function isDataRightsPath(pathname: string): boolean {
+  return DATA_RIGHTS_EXEMPT_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+}
+
 function countryOf(request: Request): string | undefined {
   // `Request.cf`'s ambient type is `IncomingRequestCfProperties |
   // RequestInitCfProperties` (the outbound-`fetch`-options shape too) —
@@ -85,6 +112,12 @@ function explanationHtml(): string {
       This isn't personal, and it isn't permanent by design — it's a deliberate choice to wait
       until it can be done right. If that changes, this page will too.
     </p>
+    <p>
+      If you posted a keepsake or asked for one before this block went up and you want your
+      data removed, that still works: the withdraw link in your confirmation email is not
+      blocked, and you can write to
+      <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a> for anything else.
+    </p>
     <p>Questions? Write to <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a>.</p>
   </body>
 </html>`;
@@ -99,7 +132,7 @@ function explanationHtml(): string {
  */
 export function ukBlock() {
   return async (c: Context<{ Bindings: Env }>, next: Next) => {
-    if (EXEMPT_PATHS.has(c.req.path)) {
+    if (EXEMPT_PATHS.has(c.req.path) || isDataRightsPath(c.req.path)) {
       await next();
       return;
     }
