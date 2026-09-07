@@ -156,6 +156,14 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
     and web out concurrently on a loaded machine. Measured on both `main` and a feature branch with
     no difference, so it is load, not a regression — the flake its own comment and #65 describe.
     Re-run it alone before believing it.
+- **Credentials live outside this repo, and where depends on where you are running.** A local
+  session sources `~/Documents/.env`; a claude.ai session cannot see that file and reads the same
+  variable names from Claude Code environment secrets. The admin API needs
+  `KEEPSAKE_PREVIEW_ADMIN_TOKEN` or `KEEPSAKE_PRODUCTION_ADMIN_TOKEN` — the tiers do not share one,
+  and a mismatched token is an ordinary `401`, indistinguishable from a typo. If they are unset,
+  say so rather than guessing: `/api/admin/*` answers `401` identically for wrong, missing and
+  never-configured, so a failed call proves nothing about which. Full detail, and why this token
+  deserves more care than the others, in `docs/runbooks/admin.md#where-a-session-gets-the-token`.
 - **A sandboxed agent may not be able to reach the product at all.** Some environments' egress
   policy answers `403` to `CONNECT` for `keepsake.ing`, `preview.keepsake.ing` and
   `workers.cloudflare.com`, and blocks GitHub's Actions-configuration API paths. That is a policy
