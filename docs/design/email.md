@@ -13,6 +13,71 @@ Cloudflare Email Service `send_email` binding is the primary transport, sending 
 `EMAIL_PROVIDER` (`cf` | `resend`). `EMAIL_PROVIDER`/`EMAIL_FROM` live in `wrangler.toml [vars]`;
 `RESEND_API_KEY` is a secret, never a var (enforced by `tools/preflight`'s `env-parity` check).
 
+## Zone records: sending and inbound
+
+Two different Cloudflare products sit on `keepsake.ing`. They use different record names, which is
+why neither disturbs the other:
+
+| Record | Purpose |
+|---|---|
+| `TXT cf-bounce.keepsake.ing` — `v=spf1 include:_spf.mx.cloudflare.net ~all` | SPF for the **sending** envelope |
+| `TXT cf-bounce._domainkey.keepsake.ing` | the DKIM key Email Sending signs with |
+| `MX cf-bounce.keepsake.ing` → `route{1,2,3}.mx.cloudflare.net` | bounce handling for sent mail |
+| `MX keepsake.ing` → `route{1,2,3}.mx.cloudflare.net` | **inbound**; added 2026-09-07 |
+| `TXT keepsake.ing` — `v=spf1 include:_spf.mx.cloudflare.net ~all` | added by Email Routing |
+| `TXT cf2024-1._domainkey.keepsake.ing` | added by Email Routing; same public key as `cf-bounce._domainkey` |
+| `TXT _dmarc.keepsake.ing` — `v=DMARC1; p=reject; rua=mailto:dmarc@keepsake.ing` | policy + reporting |
+
+Outbound mail passes DMARC by **relaxed alignment**, not by anything at the apex: the envelope
+sender is `@cf-bounce.keepsake.ing`, whose organizational domain matches the `hello@keepsake.ing`
+in `EMAIL_FROM`, and DKIM signs with `d=keepsake.ing`. The apex SPF record above is Email
+Routing's, and authenticates nothing we send. Don't "fix" a sending problem by editing the
+`cf-bounce` records — they are the only reason mail passes today.
+
+### Inbound (2026-09-07)
+
+Until this date the apex had **no MX at all**, so every reply to `hello@keepsake.ing` bounced. That
+was a real gap rather than a cosmetic one: `hello@keepsake.ing` is the `From` on all six templates,
+and `chosen` is the only one that sets reply-to elsewhere (the giver). A requester hitting reply on
+any *other* message — including the request confirmation that asks them to wait to hear back — got
+a bounce from the domain that had just written to them.
+
+Email Routing is now enabled on the zone with a single **catch-all → `leapkg@gmail.com`** rule.
+Two consequences worth holding onto:
+
+- Every address at the domain is live now, including ones nobody chose, so unsolicited mail to
+  `*@keepsake.ing` lands in a personal inbox. If that gets noisy, replace the catch-all with
+  explicit rules for `hello@` and `dmarc@` and set the catch-all to drop — the `rua=` below needs
+  `dmarc@` to stay deliverable either way.
+- Email Routing marks its own records **Locked** in the dashboard, but the DNS API still reports
+  `locked: null` on them. Don't read that field as proof a record is editable.
+
+Verified so far: all records above resolve publicly (`dig @1.1.1.1`), and a production
+`POST /api/admin/test-email` to `dmarc@keepsake.ing` returned `sent: true, provider: cf`. As
+everywhere else in this doc, that is provider acceptance, not delivery — the catch-all is only
+proven once a message is seen in the destination inbox.
+
+### DMARC reporting
+
+`rua=mailto:dmarc@keepsake.ing` was added 2026-09-07, and is same-domain on purpose. A `rua=`
+pointing anywhere else (`gmail.com`, `alum.mit.edu`) needs an RFC 7489 §7.1 external-destination
+record — a `keepsake.ing._report._dmarc.<that domain>` TXT on *their* zone, which we can't create —
+and without it receivers silently send nothing at all. That constraint, plus the missing apex MX
+that ruled out the same-domain escape, is why `p=reject` ran with no reporting until now
+(issue #127); it was never a decision that reporting didn't matter.
+
+What this buys is a trail, not an alarm. Aggregate reports are gzipped XML, arrive up to a day
+late, and nothing parses them yet, so a DMARC break is still effectively invisible in real time —
+which is exactly the failure mode the `EMAIL_PROVIDER` note in `wrangler.toml` warns about.
+
+### Operational note
+
+The account-wide Cloudflare token in `~/Documents/.env` can read and write DNS on this zone but
+has **no Email Routing scope**: `GET /zones/{zone}/email/routing` and `.../email/routing/rules`
+both return `10000 Authentication error` while DNS and zone-settings reads succeed. Routing rules
+and destination-address verification are dashboard-only unless a token with Email Routing Rules
+Edit is minted.
+
 ## Why a provider switch exists at all
 
 Email Service account enablement and `keepsake.ing` sender-domain onboarding are **unverified**
