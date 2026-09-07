@@ -105,6 +105,14 @@ that flips both directions open: the response to `choose` reveals the requester'
 the requester's notification email carries the giver's (via reply-to). No other code path
 reveals either party's contact info.
 
+**And it can only fire once per listing** (#185, 2026-09-07). `POST /api/me/listings/:id/choose`
+used to be three separate unbatched D1 writes whose only concurrency check was a request status
+read several awaits earlier, so an interrupted or concurrent choose could leave two requests
+`chosen` and mail two strangers the giver's address for one object. The three writes are one
+`env.DB.batch()` now — the Worker's first — opening with a conditional claim on the listing
+(`... WHERE id = ? AND chosen_request_id IS NULL`) that the other two are gated on. `meta.changes`
+on that claim is checked **before** `sendMail`, so a lost race answers 409 and sends nothing.
+
 ## Templates
 
 Rendered with `@keepsake/tokens` (colors/typography) so transactional email doesn't visually
@@ -152,8 +160,9 @@ conditional, the requester-side confirmation is not), `POST /api/me/listings/:id
 `chosen`, reply-to the giver when verified), `POST /api/me/email` + `POST /api/listings` with an
 `email` field (→ `verifyEmail`, the same path — M1's stub link now actually resolves via
 `GET /api/me/email/verify`), `POST /api/recover` (→ `recover`, only for a verified match, but
-always 200 either way), `POST /api/requests/withdraw` (consumes the `requestReceived` link's token;
-sends nothing itself — it's the destination, not another trigger), `POST /api/admin/test-email`
+always 200 either way; the link it mails is exchanged at `POST /api/recover/exchange` with the
+token in the body, sending nothing itself), `POST /api/requests/withdraw` (consumes the
+`requestReceived` link's token; sends nothing itself — it's the destination, not another trigger), `POST /api/admin/test-email`
 (→ `adminTest`, to whatever address the admin gives).
 
 Tests: `apps/api/test/requests.test.ts` (notified + `email_events` row when verified, requester

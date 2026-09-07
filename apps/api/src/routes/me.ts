@@ -191,12 +191,66 @@ meRoutes.post("/listings/:id/choose", ownerAuth(), validateBody(ChooseRequestInp
   }
   const requestEmail = request.email;
 
+  // Issue #185. This was three separate `.run()` calls with no transaction
+  // and no guard at the listing level — the only concurrency check was
+  // `request.status !== "open"`, read several awaits above. If the first
+  // write landed and a later one did not (a D1 7403, an isolate eviction, a
+  // timeout), the listing was left with `chosen_request_id = NULL` while one
+  // request was already `chosen`. The giver retries, picks someone else,
+  // every guard passes — and the "mark the rest not_chosen" statement only
+  // touched rows `WHERE status = 'open'`, so it could not un-choose the
+  // first one. Two strangers then hold a "you've been chosen, here is the
+  // giver's email" message for one object, and one of them travels to meet
+  // someone who is expecting the other. Two concurrent chooses reach the
+  // same end state, both having passed the stale `status = 'open'` read.
+  //
+  // `env.DB.batch()` is a single atomic transaction — these commit together
+  // or not at all. This is the Worker's first use of it; `grep -rn "\.batch("
+  // apps/api/src` found none before.
+  //
+  // Claim first, then act. The listing row is the thing being competed for,
+  // so the batch opens by claiming it (`AND chosen_request_id IS NULL`) and
+  // the two request writes are each conditional on that claim having been
+  // won by *this* request. Statements in a batch run in order inside the one
+  // transaction, so they see the claim; a caller that lost the race changes
+  // zero rows in all three rather than leaving a request marked `chosen` for
+  // a listing that went to someone else. That distinction matters because a
+  // batch whose statements merely match nothing still commits — atomicity
+  // alone would not have been enough here.
+  //
+  // The `not_chosen` sweep now also takes `chosen` rows, not just `open`
+  // ones. That is what un-sticks a listing left inconsistent by the old code
+  // (or by any future partial write): a listing has exactly one chosen
+  // request by definition, so every *other* request that reads as live must
+  // be closed. `withdrawn`, `removed` and already-`not_chosen` rows are left
+  // alone — those carry a requester's or an admin's decision, not this one.
   const now = Date.now();
-  await c.env.DB.prepare("UPDATE requests SET status = 'chosen', chosen_at = ? WHERE id = ?").bind(now, request.id).run();
-  await c.env.DB.prepare("UPDATE requests SET status = 'not_chosen' WHERE listing_id = ? AND id != ? AND status = 'open'")
-    .bind(id, request.id)
-    .run();
-  await c.env.DB.prepare("UPDATE listings SET chosen_request_id = ?, updated_at = ? WHERE id = ?").bind(request.id, now, id).run();
+  const writes = await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE listings SET chosen_request_id = ?, updated_at = ? WHERE id = ? AND chosen_request_id IS NULL").bind(
+      request.id,
+      now,
+      id,
+    ),
+    c.env.DB.prepare(
+      `UPDATE requests SET status = 'chosen', chosen_at = ?
+       WHERE id = ? AND (SELECT chosen_request_id FROM listings WHERE id = ?) = ?`,
+    ).bind(now, request.id, id, request.id),
+    c.env.DB.prepare(
+      `UPDATE requests SET status = 'not_chosen'
+       WHERE listing_id = ? AND id != ? AND status IN ('open', 'chosen')
+         AND (SELECT chosen_request_id FROM listings WHERE id = ?) = ?`,
+    ).bind(id, request.id, id, request.id),
+  ]);
+
+  // Checked before anything is mailed, which is the whole point: a lost race
+  // must send nothing rather than mail a second stranger the giver's
+  // address. Zero rows changed on the claim means the listing already had a
+  // chosen request — either a concurrent call won, or an earlier attempt
+  // did — and the two writes behind it are no-ops too, so this request is
+  // exactly as it was.
+  if ((writes[0]?.meta.changes ?? 0) === 0) {
+    return fail(c, "conflict", "This listing already has a chosen request.", 409);
+  }
 
   const giverVerified = owner.email !== null && owner.email_verified_at !== null;
   const itemLink = `${c.env.SITE_URL}/item/${id}`;
