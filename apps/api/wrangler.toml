@@ -56,6 +56,43 @@ name = "EMAIL"
 # doesn't strand a listing in `pending` forever. `orphanSweep` runs once a day,
 # off-peak, to delete photos uploaded but never attached to a listing —
 # abandoned `give` flows and abuse probes both leave these behind.
+#
+# **Not restated under `[env.preview]`/`[env.production]`, and that is
+# deliberate — verified, not assumed.** Every other block in this file is
+# repeated per environment because Wrangler genuinely does not inherit
+# `[vars]` or any `[[binding]]`; `[triggers]` sitting only at the top level
+# therefore looks exactly like the bug that would leave both crons unattached
+# in production. It is not. Checked two ways against the pinned wrangler
+# 4.129.0, 2026-09-07:
+#
+#   1. Wrangler's config normalizer registers `triggers` through its
+#      `inheritable(...)` helper — the same one `main`, `compatibility_date`
+#      and `routes` use — and it sits *above* that function's literal
+#      `// Not inherited fields` comment, under which `vars`, `secrets` and
+#      every binding are registered via `notInheritable(...)`
+#      (`node_modules/wrangler/wrangler-dist/cli.js`).
+#   2. Resolved this actual file through wrangler's own public API rather
+#      than by reading its source:
+#        node -e 'const {unstable_readConfig}=require("wrangler");
+#          for (const env of [undefined,"preview","production"])
+#            console.log(env, unstable_readConfig({config:"wrangler.toml",env}).triggers)'
+#      prints `{"crons":["*/5 * * * *","17 3 * * *"]}` for all three.
+#
+# Note `wrangler deploy --env production --dry-run` is *not* evidence here:
+# it prints bindings and vars but says nothing about triggers, in either the
+# top-level or the named-environment form. It was the first thing tried.
+#
+# Restating the list under each env block would work too, but it would mean
+# three places to keep in step for no gain. What keeps this honest instead is
+# preflight's `cron-triggers` check (`tools/preflight/preflight.mjs`): it
+# asserts every deployed tier still resolves a non-empty, syntactically valid
+# cron list — including the one override that would silently switch a tier's
+# crons off, `[env.<name>.triggers] crons = []` — and that every schedule
+# below matches a `case` in `scheduled()` (`src/index.ts`), which dispatches
+# on the literal string. Editing a schedule here without editing that switch
+# leaves the job registered with Cloudflare, firing on time, and falling
+# through to `default:`: a `console.warn` and no work, on an invocation the
+# platform records as successful.
 [triggers]
 crons = ["*/5 * * * *", "17 3 * * *"]
 

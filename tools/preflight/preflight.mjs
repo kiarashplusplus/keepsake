@@ -555,6 +555,280 @@ function checkEnvParity(ctx) {
   return { status: "pass", details: [`${backendVarNames.size} var(s) consistent across .env.example and wrangler.toml (${envSectionNames.length} env block(s))`] };
 }
 
+// ── cron-triggers ─────────────────────────────────────────────────────────
+//
+// Two scheduled jobs carry real work: `moderationRetry` (every 5 minutes,
+// un-strands a listing whose moderation call died mid-`waitUntil`) and
+// `orphanSweep` (nightly, deletes never-attached photos and sweeps terminal
+// listings' R2 bytes). Both are invisible when they stop: nothing user-facing
+// changes the day a cron detaches, listings just quietly stay `pending` and
+// photos quietly accumulate. That is precisely the shape of guard this repo
+// keeps finding dead, so it gets a check.
+//
+// **Is `[triggers]` inherited into a named environment?** Yes — established,
+// not assumed. Every other block in `wrangler.toml` is restated per
+// environment because Wrangler genuinely does not inherit `[vars]` or any
+// `[[binding]]`, and `[triggers]` is declared only at the top level, which
+// looked like the same bug. It is not:
+//
+//   - `wrangler`'s own config normalizer registers `triggers` through its
+//     `inheritable(...)` helper — the same one `main`, `compatibility_date`
+//     and `routes` use — above the file's literal `// Not inherited fields`
+//     comment, under which `vars`, `secrets` and the bindings sit
+//     (`node_modules/wrangler/wrangler-dist/cli.js`, wrangler 4.129.0).
+//   - Confirmed by resolving the real file through wrangler's own API rather
+//     than by reading source: `unstable_readConfig({ config: "wrangler.toml",
+//     env })` returns `{"crons":["*/5 * * * *","17 3 * * *"]}` for `undefined`,
+//     `"preview"` and `"production"` alike.
+//
+// So the absence of `[env.*.triggers]` is correct, and this check exists to
+// keep it true rather than to fix a bug: it asserts every deployed tier still
+// resolves a non-empty, syntactically valid cron list, and — the half that
+// catches the more likely mistake — that every declared schedule matches a
+// `case` in `scheduled()` and vice versa. `scheduled()` dispatches on the
+// literal cron string (`apps/api/src/index.ts`), so editing a schedule in
+// `wrangler.toml` without editing the switch leaves the job registered with
+// Cloudflare, firing on time, and falling straight through to `default:` — a
+// `console.warn` and no work done, on a handler that reports success.
+const API_INDEX_PATH = "apps/api/src/index.ts";
+
+/** Drop a `#` comment, but only one that starts outside a quoted string. */
+function stripTomlComment(line) {
+  let inQuote = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') inQuote = !inQuote;
+    else if (ch === "#" && !inQuote) return line.slice(0, i);
+  }
+  return line;
+}
+
+/**
+ * Every `crons = [...]` in the file, keyed by the section that holds it
+ * (`triggers`, `env.preview.triggers`, …). Values may span lines.
+ *
+ * A section present with an empty list is kept as `[]` and is *not* the same
+ * as an absent section: `[env.production.triggers]\ncrons = []` is an
+ * override that switches the tier's crons off, which inheritance would
+ * otherwise have supplied — exactly the difference this check has to see.
+ */
+export function parseCronTriggers(text) {
+  const sections = {};
+  const quoted = (chunk) => [...chunk.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
+  let current = null;
+  let pending = null;
+  for (const rawLine of text.split("\n")) {
+    const line = stripTomlComment(rawLine).trim();
+    if (pending) {
+      pending.chunk += ` ${line}`;
+      if (line.includes("]")) {
+        sections[pending.section] = quoted(pending.chunk);
+        pending = null;
+      }
+      continue;
+    }
+    if (!line) continue;
+    if (/^\[\[[^\]]+\]\]$/.test(line)) {
+      current = null;
+      continue;
+    }
+    const header = line.match(/^\[([^\]]+)\]$/);
+    if (header) {
+      current = header[1].trim();
+      continue;
+    }
+    if (!current || !/(^|\.)triggers$/.test(current)) continue;
+    const kv = line.match(/^crons\s*=\s*(.*)$/);
+    if (!kv) continue;
+    if (kv[1].includes("]")) sections[current] = quoted(kv[1]);
+    else pending = { section: current, chunk: kv[1] };
+  }
+  return sections;
+}
+
+const MONTH_NAMES = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+const DAY_NAMES = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+// `max` is the inclusive ceiling of the plain-numeric form. Day-of-week goes
+// to 7 because both 0 and 7 mean Sunday in standard cron.
+const CRON_FIELDS = [
+  { label: "minute", min: 0, max: 59 },
+  { label: "hour", min: 0, max: 23 },
+  { label: "day-of-month", min: 1, max: 31, special: /^(\?|L|LW|\d{1,2}W)$/ },
+  { label: "month", min: 1, max: 12, names: MONTH_NAMES, offset: 1 },
+  { label: "day-of-week", min: 0, max: 7, names: DAY_NAMES, offset: 0, special: /^(\?|L|\d#\d|\dL)$/ },
+];
+
+function cronEndpointValue(token, spec) {
+  if (spec.names) {
+    const index = spec.names.indexOf(token.toUpperCase());
+    if (index !== -1) return index + spec.offset;
+  }
+  if (!/^\d{1,2}$/.test(token)) return null;
+  return Number(token);
+}
+
+function cronFieldProblem(field, spec) {
+  if (field === "") return `${spec.label} is empty`;
+  if (spec.special?.test(field)) return null;
+  for (const part of field.split(",")) {
+    if (part === "") return `${spec.label} "${field}" has an empty list entry`;
+    const [rangePart, stepPart, ...rest] = part.split("/");
+    if (rest.length > 0) return `${spec.label} "${part}" has more than one "/"`;
+    if (stepPart !== undefined) {
+      if (!/^\d{1,2}$/.test(stepPart) || Number(stepPart) < 1) {
+        return `${spec.label} "${part}" has step "${stepPart}", which must be an integer >= 1`;
+      }
+    }
+    if (rangePart === "*") continue;
+    const endpoints = rangePart.split("-");
+    if (endpoints.length > 2) return `${spec.label} "${part}" has more than one "-"`;
+    const values = [];
+    for (const endpoint of endpoints) {
+      const value = cronEndpointValue(endpoint, spec);
+      if (value === null) return `${spec.label} "${endpoint}" is not a number${spec.names ? " or name" : ""}`;
+      if (value < spec.min || value > spec.max) {
+        return `${spec.label} "${endpoint}" is outside ${spec.min}-${spec.max}`;
+      }
+      values.push(value);
+    }
+    if (values.length === 2 && values[0] > values[1]) {
+      return `${spec.label} "${part}" is a reversed range`;
+    }
+  }
+  return null;
+}
+
+/** `null` if `expr` is a schedule Cloudflare would accept, else why not. */
+export function cronExpressionProblem(expr) {
+  const fields = expr.trim().split(/\s+/).filter(Boolean);
+  if (expr.trim() === "") return "is empty";
+  if (fields.length !== 5) {
+    return `has ${fields.length} field(s), not 5 (minute hour day-of-month month day-of-week)`;
+  }
+  for (let i = 0; i < CRON_FIELDS.length; i += 1) {
+    const problem = cronFieldProblem(fields[i], CRON_FIELDS[i]);
+    if (problem) return problem;
+  }
+  return null;
+}
+
+/**
+ * The cron strings `scheduled()` actually dispatches on, read out of its
+ * `switch (controller.cron)`. Bounded to that function's body so an unrelated
+ * `case "..."` elsewhere in the file is not mistaken for a cron.
+ */
+export function scheduledCronCases(text) {
+  const start = text.search(/function\s+scheduled\s*\(/);
+  if (start === -1) return null;
+  const rest = text.slice(start);
+  const end = rest.search(/\n\}/);
+  const body = end === -1 ? rest : rest.slice(0, end);
+  return [...body.matchAll(/case\s+"([^"]*)"/g)].map((m) => m[1]);
+}
+
+function checkCronTriggers(ctx) {
+  const wranglerText = ctx.readText(WRANGLER_PATH);
+  if (wranglerText === null) return { status: "skip", details: [`${WRANGLER_PATH} not present`] };
+
+  const triggerSections = parseCronTriggers(wranglerText);
+  const indexText = ctx.readText(API_INDEX_PATH);
+  const handled = indexText === null ? null : scheduledCronCases(indexText);
+  const declared = Object.keys(triggerSections).length > 0;
+
+  if (!declared) {
+    if (handled && handled.length > 0) {
+      return {
+        status: "fail",
+        details: [
+          `${API_INDEX_PATH}: scheduled() handles ${handled.map((c) => `"${c}"`).join(", ")} but ${WRANGLER_PATH} declares no [triggers] crons — nothing will ever invoke it`,
+        ],
+      };
+    }
+    return { status: "skip", details: [`${WRANGLER_PATH} declares no [triggers] crons`] };
+  }
+
+  const details = [];
+  const topLevel = triggerSections.triggers;
+  const envNames = Object.keys(parseToml(wranglerText))
+    .map((s) => s.match(/^env\.([^.]+)\.vars$/))
+    .filter(Boolean)
+    .map((m) => m[1]);
+
+  // Each deployed tier must end up with crons, whether by inheriting the
+  // top-level list (verified above) or by restating its own.
+  const tiers = [{ label: "[triggers] (top level)", crons: topLevel, own: topLevel !== undefined }];
+  for (const envName of envNames) {
+    const own = triggerSections[`env.${envName}.triggers`];
+    tiers.push({
+      label: `env.${envName}`,
+      crons: own ?? topLevel,
+      own: own !== undefined,
+      envName,
+    });
+  }
+
+  const resolved = new Set();
+  for (const tier of tiers) {
+    if (tier.crons === undefined) {
+      details.push(
+        `${tier.label}: no crons resolve — neither a top-level [triggers] nor [env.${tier.envName}.triggers] declares any, so this tier deploys with no scheduled jobs`,
+      );
+      continue;
+    }
+    if (tier.crons.length === 0) {
+      details.push(
+        tier.own
+          ? `${tier.label}: crons = [] — an empty list in an env block overrides the inherited [triggers], so ${tier.envName ?? "this tier"} deploys with no scheduled jobs at all`
+          : `${tier.label}: crons = [] — no scheduled jobs are registered anywhere`,
+      );
+      continue;
+    }
+    for (const cron of tier.crons) resolved.add(cron);
+  }
+
+  for (const cron of [...resolved].sort()) {
+    const problem = cronExpressionProblem(cron);
+    if (problem) details.push(`crons entry "${cron}": ${problem}`);
+  }
+
+  // The half that catches the likelier mistake: `scheduled()` switches on the
+  // literal cron string, so a schedule edited in one place and not the other
+  // keeps firing and does nothing.
+  if (indexText === null) {
+    details.push(`${API_INDEX_PATH} not present, so nothing was checked against the declared crons`);
+  } else if (handled === null) {
+    details.push(
+      `${API_INDEX_PATH}: no scheduled() handler, but ${WRANGLER_PATH} declares ${resolved.size} cron(s) — Cloudflare would invoke a handler that does not exist`,
+    );
+  } else {
+    for (const cron of [...resolved].sort()) {
+      if (!handled.includes(cron)) {
+        details.push(
+          `cron "${cron}" is declared in ${WRANGLER_PATH} but no case in ${API_INDEX_PATH}'s scheduled() matches it — it would fire on schedule and fall through to default:, warning and doing nothing`,
+        );
+      }
+    }
+    for (const cron of handled) {
+      if (!resolved.has(cron)) {
+        details.push(
+          `${API_INDEX_PATH}: scheduled() handles "${cron}", which ${WRANGLER_PATH} does not declare — that job never runs`,
+        );
+      }
+    }
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+  const inherited = tiers.filter((t) => t.envName && !t.own).map((t) => t.envName);
+  return {
+    status: "pass",
+    details: [
+      `${resolved.size} cron(s) valid and handled by scheduled(): ${[...resolved].sort().map((c) => `"${c}"`).join(", ")}` +
+        (inherited.length > 0 ? `; inherited by ${inherited.join(", ")}` : ""),
+    ],
+  };
+}
+
 const MODELS_PATH = "apps/api/src/models.ts";
 const API_SRC_DIR = "apps/api/src";
 
@@ -776,7 +1050,35 @@ function checkConflictMarkers(ctx) {
 const SEEDS_DIR = "apps/api/seeds";
 const LFS_POINTER_PREFIX = "version https://git-lfs.github.com/spec/v1";
 
-function checkLfsPointers(ctx) {
+/** Is `git lfs` usable from here at all? */
+export function gitLfsInstalled() {
+  return spawnSync("git", ["lfs", "version"], { encoding: "utf8" }).status === 0;
+}
+
+/**
+ * A pointer file means one of two very different things, and the old message
+ * ("unfetched LFS pointer — run: git lfs install && git lfs pull") read like
+ * the seed itself was corrupt in both.
+ *
+ * In an agent container git-lfs is simply not installed, so `git clone` wrote
+ * the 130-byte pointer and there was never a moment at which the real file
+ * could have arrived. Nothing is wrong with the repository, and the suggested
+ * command cannot work — `git lfs install` is not a git subcommand here.
+ *
+ * In CI the checkout is `lfs: true` (`.github/workflows/ci.yml`'s preflight
+ * job) and git-lfs is on the runner, so a pointer at this point is a real
+ * defect: the smudge filter was skipped or the fetch failed, and preflight is
+ * reading 130 bytes where 2.8 MB of postal codes should be. Both stay a
+ * FAIL — a seed file that is not the seed file is not a passing state
+ * anywhere — but they are told apart so nobody debugs the wrong one.
+ */
+export function lfsPointerDetail(file, lfsInstalled) {
+  return lfsInstalled
+    ? `${file}: unfetched LFS pointer — git-lfs IS installed here, so the object was never pulled (a skipped smudge filter, a shallow/partial clone, or a failed fetch). Run: git lfs install && git lfs pull`
+    : `${file}: unfetched LFS pointer, and git-lfs is NOT installed here (\`git lfs version\` fails) — the file in the repository is fine, this environment simply cannot materialize it. Install git-lfs first, then run: git lfs install && git lfs pull`;
+}
+
+export function checkLfsPointers(ctx, lfsInstalled = gitLfsInstalled()) {
   if (!ctx.exists(SEEDS_DIR)) return { status: "skip", details: [`${SEEDS_DIR} not present`] };
   const files = ctx.walk(SEEDS_DIR).filter((f) => f.endsWith(".sql"));
   if (files.length === 0) return { status: "skip", details: [`${SEEDS_DIR} has no *.sql files yet`] };
@@ -785,7 +1087,7 @@ function checkLfsPointers(ctx) {
   for (const file of files) {
     const text = ctx.readText(file) ?? "";
     if (text.startsWith(LFS_POINTER_PREFIX)) {
-      details.push(`${file}: unfetched LFS pointer — run: git lfs install && git lfs pull`);
+      details.push(lfsPointerDetail(file, lfsInstalled));
     }
   }
   if (details.length > 0) return { status: "fail", details };
@@ -950,6 +1252,7 @@ export const CHECKS = {
   migrations: { description: "apps/api/migrations/*.sql naming, apply order and terminators", run: checkMigrations },
   "migration-drift": { description: "no landed migration is renamed/edited/deleted (git)", run: checkMigrationDrift },
   "env-parity": { description: ".env.example vs wrangler.toml [vars] / [env.*.vars]", run: checkEnvParity },
+  "cron-triggers": { description: "every tier resolves valid crons, all handled by scheduled()", run: checkCronTriggers },
   models: { description: '"@cf/" model ids confined to apps/api/src/models.ts', run: checkModels },
   "ip-digest": { description: "client-IP hashes rotate daily via lib/digest.ts's dailyIpDigest", run: checkIpDigest },
   exports: { description: "packages/*/package.json subpath exports (no \".\")", run: checkExports },
