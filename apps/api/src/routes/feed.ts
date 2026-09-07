@@ -16,8 +16,10 @@
 import { Hono } from "hono";
 import { FeedQuery, type FeedPage } from "@keepsake/contracts/feed";
 import type { PublicListing } from "@keepsake/contracts/listing";
+import type { AspectShelf, ShelvesResponse } from "@keepsake/contracts/shelves";
 import { boundingBox, haversineMiles, type LatLng } from "@keepsake/contracts/geo";
 import type { Env } from "../env.js";
+import { shelfMinItems } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { validateQuery } from "../middleware/validate.js";
 import { burst } from "../middleware/rateLimit.js";
@@ -234,4 +236,99 @@ feedRoutes.get("/", burst("RL_READ"), validateQuery(FeedQuery), async (c) => {
     return ok(c, await buildSearchFeed(c.env, query, ftsQuery));
   }
   return ok(c, await buildDefaultFeed(c.env, query));
+});
+
+// --- Issue #39: browse-page shelves ---
+//
+// A shelf groups the current approved-listing set by a common aspect
+// `name`/`value` pair. This is deliberately its own route rather than a
+// parameter on `GET /api/feed` above: shelves are read from the same
+// `status = 'approved'` universe but never subtract from it — the default
+// feed handler above never joins `listing_aspects` and is untouched by
+// anything below, which is what keeps issue #40's guarantee (a zero-aspect
+// listing always surfaces) a structural fact about this file rather than a
+// convention a later change to the default feed's WHERE clause could
+// quietly break.
+//
+// Cost: naively, "the most common aspect values in the feed right now"
+// means an aggregate GROUP BY over every approved listing's aspects on
+// every browse-page load — cheap today at a few dozen listings, but a cost
+// that scales with total catalogue size on every anonymous page view,
+// unlike the default feed's indexed keyset scan. Rather than accept that
+// silently or precompute on a cron this project has no scheduler slot free
+// for, the aggregate is cached in KV (the same binding the moderation
+// budgets and idempotency middleware already use) for
+// `SHELF_CACHE_TTL_SECONDS`: at most one D1 aggregation per TTL window
+// regardless of traffic, and a shelf lagging behind the newest listing by
+// up to that long is an acceptable staleness for "common values" (unlike
+// the default feed itself, which must be immediately consistent — a giver
+// who just posted expects to see their own listing right away, which is
+// exactly why shelves are never the only route to one). No active
+// invalidation on listing create/approve: the TTL is short enough that
+// wiring a KV delete into every status-changing route for a decorative,
+// eventually-consistent grouping isn't worth the extra coupling.
+const SHELF_CACHE_KEY_PREFIX = "feed:shelves:v1";
+const SHELF_CACHE_TTL_SECONDS = 90;
+/** Cap on how many distinct aspect values become shelves at all, so a
+ * catalogue with many equally-common aspects doesn't turn the browse page
+ * into an endless rail of shelves. */
+const SHELF_MAX_COUNT = 6;
+/** Preview slice per shelf — not pagination, just "enough to read as a
+ * collection without loading the whole matching set on every page view." */
+const SHELF_ITEMS_PER_SHELF = 12;
+
+type ShelfAggregateRow = { name: string; value: string; count: number };
+
+async function computeShelves(env: Env, minItems: number): Promise<ShelvesResponse> {
+  const { results: aggregates } = await env.DB.prepare(
+    `SELECT la.name AS name, la.value AS value, COUNT(*) AS count
+     FROM listing_aspects la
+     JOIN listings l ON l.id = la.listing_id
+     WHERE l.status = 'approved'
+     GROUP BY la.name, la.value
+     HAVING COUNT(*) >= ?
+     ORDER BY count DESC, la.name ASC, la.value ASC
+     LIMIT ?`,
+  )
+    .bind(minItems, SHELF_MAX_COUNT)
+    .all<ShelfAggregateRow>();
+
+  const shelves: AspectShelf[] = await Promise.all(
+    aggregates.map(async (aggregate): Promise<AspectShelf> => {
+      const { results: rows } = await env.DB.prepare(
+        `SELECT ${FEED_COLUMNS_L}
+         FROM listing_aspects la
+         JOIN listings l ON l.id = la.listing_id
+         WHERE la.name = ? AND la.value = ? AND l.status = 'approved'
+         ORDER BY l.published_at DESC, l.id DESC
+         LIMIT ?`,
+      )
+        .bind(aggregate.name, aggregate.value, SHELF_ITEMS_PER_SHELF)
+        .all<FeedListingRow>();
+
+      const items = await serializePage(env, rows);
+      return { name: aggregate.name, value: aggregate.value, count: aggregate.count, items };
+    }),
+  );
+
+  return { shelves, min_items: minItems };
+}
+
+async function getShelvesCached(env: Env, minItems: number): Promise<ShelvesResponse> {
+  // `minItems` in the cache key: a config change (a redeploy with a
+  // different `SHELF_MIN_ITEMS`) takes effect on the next cache miss
+  // instead of serving a response computed under the old floor for up to
+  // `SHELF_CACHE_TTL_SECONDS` after the new value is already live.
+  const cacheKey = `${SHELF_CACHE_KEY_PREFIX}:${minItems}`;
+  const cached = await env.KV.get<ShelvesResponse>(cacheKey, "json");
+  if (cached) return cached;
+
+  const fresh = await computeShelves(env, minItems);
+  await env.KV.put(cacheKey, JSON.stringify(fresh), { expirationTtl: SHELF_CACHE_TTL_SECONDS });
+  return fresh;
+}
+
+feedRoutes.get("/shelves", burst("RL_READ"), async (c) => {
+  const minItems = shelfMinItems(c.env);
+  return ok(c, await getShelvesCached(c.env, minItems));
 });

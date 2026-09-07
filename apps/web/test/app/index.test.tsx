@@ -1,7 +1,9 @@
 import * as React from "react";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import type { PublicListing } from "@keepsake/contracts/listing";
+import type { AspectShelf } from "@keepsake/contracts/shelves";
 import { getFeed } from "@/api/feed";
+import { getShelves } from "@/api/shelves";
 import Feed from "../../app/index";
 
 // `jest.mock` calls are hoisted above these imports by babel-plugin-jest-hoist,
@@ -18,8 +20,12 @@ jest.mock("expo-router", () => {
 });
 
 jest.mock("@/api/feed", () => ({ getFeed: jest.fn() }));
+// Shelves (issue #39) are additive: every existing test in this file
+// exercises the plain feed and should see no shelves at all, same as a
+// catalogue where nothing clears the floor.
+jest.mock("@/api/shelves", () => ({ getShelves: jest.fn().mockResolvedValue({ shelves: [], min_items: 3 }) }));
 
-function makeListing(id: string, title: string): PublicListing {
+function makeListing(id: string, title: string, aspects: PublicListing["aspects"] = []): PublicListing {
   return {
     id,
     title,
@@ -39,7 +45,7 @@ function makeListing(id: string, title: string): PublicListing {
         url_thumb: "https://example.com/thumb.jpg",
       },
     ],
-    aspects: [],
+    aspects,
     published_at: Date.now(),
   };
 }
@@ -54,6 +60,7 @@ describe("Feed", () => {
   beforeEach(() => {
     window.localStorage.clear();
     jest.mocked(getFeed).mockReset();
+    jest.mocked(getShelves).mockReset().mockResolvedValue({ shelves: [], min_items: 3 });
   });
 
   it("renders the first page from a mocked fetch and appends the next page on More", async () => {
@@ -93,5 +100,33 @@ describe("Feed", () => {
     });
 
     expect(JSON.stringify(toJSON())).toContain("Nothing here yet. Be the first to give something.");
+  });
+
+  // Issue #40's guarantee, exercised at the point it's actually at risk: once
+  // shelves (#39) exist on this same page, does a listing with zero aspects
+  // — which by construction can never qualify for any shelf — still surface
+  // in the plain grid underneath? A regression here would look exactly like
+  // "shelves work great" in isolation while quietly turning the grid into a
+  // shelf-only view for anyone who scrolls past the shelves.
+  it("issue #40: a zero-aspect listing still renders in the main grid even when shelves exist and don't include it", async () => {
+    const copperListing = makeListing("listing-copper", "Copper kettle", [{ name: "material", value: "copper" }]);
+    const plainListing = makeListing("listing-plain", "A plain wooden spoon", []);
+
+    jest.mocked(getFeed).mockResolvedValueOnce({ items: [copperListing, plainListing], next_cursor: null });
+    const shelf: AspectShelf = { name: "material", value: "copper", count: 3, items: [copperListing] };
+    jest.mocked(getShelves).mockReset().mockResolvedValueOnce({ shelves: [shelf], min_items: 3 });
+
+    const { toJSON } = render(<Feed />);
+
+    await act(async () => {
+      await flush();
+    });
+
+    const tree = JSON.stringify(toJSON());
+    // The shelf rendered...
+    expect(tree).toContain("Copper kettle");
+    // ...but the zero-aspect listing is not hidden because it has no shelf
+    // to belong to — it's still in the full grid below.
+    expect(tree).toContain("A plain wooden spoon");
   });
 });

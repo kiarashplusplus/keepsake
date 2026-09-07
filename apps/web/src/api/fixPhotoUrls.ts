@@ -37,10 +37,14 @@ function withResolvedPhotoUrls(photo: Record<string, unknown>): Record<string, u
 
 /**
  * Walks an API response of unknown shape and resolves any `url_full`/
- * `url_thumb` it finds, at any of the three places they can appear in this
- * API's responses: a bare `PublicPhoto`, a listing's `photos` array, or a
+ * `url_thumb` it finds, at any of the four places they can appear in this
+ * API's responses: a bare `PublicPhoto`, a listing's `photos` array, a
  * feed page's `items` array of listings (or a plain array of listings, as
- * from `GET /api/me/listings`). Called on the raw JSON *before* the
+ * from `GET /api/me/listings`), or `GET /api/feed/shelves`'s `shelves`
+ * array, each entry of which is itself an object with its own `items` array
+ * of listings — handled by recursing into `shelves` the same way `items`
+ * recurses into a plain array, so the `items` branch below does the actual
+ * per-listing work either way. Called on the raw JSON *before* the
  * contracts' zod schema validates it.
  */
 export function fixPhotoUrls(data: unknown): unknown {
@@ -57,6 +61,9 @@ export function fixPhotoUrls(data: unknown): unknown {
   }
   if (Array.isArray(obj.items)) {
     return { ...obj, items: obj.items.map(fixPhotoUrls) };
+  }
+  if (Array.isArray(obj.shelves)) {
+    return { ...obj, shelves: obj.shelves.map(fixPhotoUrls) };
   }
   return data;
 }
