@@ -156,3 +156,34 @@ anything.
 
 The identity is **v3 "Polaroids on a table"** (`design-system.md`); v1 and v2 were rejected as
 generic. Do not drift back toward cream-and-serif cards.
+
+### 2026-09-07 — aspects persistence, category picker removed, neutral age gate
+
+Three issues from the "Labeling & search" and "Legal & compliance" GitHub milestones, landed as
+two PRs off `main`:
+
+- **#36 (merged, #77)** — the suggestion endpoint's eBay-style aspects (`object`, `material`,
+  `era`, …) are now persisted per listing into a new `listing_aspects` table (migration 0006) and
+  returned on every listing-shaped response. #40's zero-aspect-visibility guarantee is a test now
+  (`apps/api/test/aspects.test.ts`), not deferred to whenever #40 itself lands — a listing with no
+  aspects still appears in the default feed and a broad FTS search.
+- **#35** — the give flow's category-picker step (`app/give/details.tsx`'s `Chip` row) is gone.
+  `category` now follows the cover photo's AI suggestion alone, defaulting to `"other"` if none
+  ever lands (`giveDraft.ts`'s `GIVE_DRAFT_INITIAL`/`set_suggestion`). The `category` **column
+  stays** on `listings` — the feed's category filter/chips, admin queue, and item page all still
+  read it — this only removes the give-flow's own picker UI, per the issue's explicit instruction
+  not to drop the column yet.
+- **#64** — the "I'm 18 or older" checkbox (in both the give flow and the request sheet) is
+  replaced by one shared `AgeGateField` (`src/features/ageGate/AgeGateField.tsx`): a neutral "what
+  is your date of birth?" prompt, validated against `MINIMUM_AGE` by the identical
+  `DateOfBirthSchema` client- and server-side, and never persisted — only the resulting
+  `age_attested_at` timestamp is recorded, exactly as the checkbox recorded when checked. Decision
+  rationale: COPPA doesn't require this for a general-audience service, but a self-selected date is
+  better evidence than a checkbox that states its own passing answer for Montana's
+  willful-disregard standard (#61) — the middle path the issue itself proposed.
+
+All three verified against the real (not just mocked) UI: the full Playwright suite (70 specs,
+mobile+desktop) passed against `MOCK_AI=1`, including `give.spec.ts` walking all five steps with no
+category-chip click and a filled date-of-birth field, and `request.spec.ts`'s two-context
+stranger/giver flow with the same field. Not verified against a live (non-mocked) Workers AI call —
+neither issue touches the suggestion endpoint's own model-facing behavior.

@@ -57,7 +57,6 @@ describe("giveDraftReducer", () => {
   it("sets every simple field", () => {
     let state = giveDraftReducer(GIVE_DRAFT_INITIAL, { type: "set_title", title: "A mug" });
     state = giveDraftReducer(state, { type: "set_story", story: "A".repeat(30) });
-    state = giveDraftReducer(state, { type: "set_category", category: "home_kitchen" });
     state = giveDraftReducer(state, { type: "set_country", country: "CA" });
     state = giveDraftReducer(state, { type: "set_postal_code", postalCode: "M5V" });
     state = giveDraftReducer(state, { type: "set_email", email: "a@b.com" });
@@ -66,7 +65,6 @@ describe("giveDraftReducer", () => {
     expect(state).toMatchObject({
       title: "A mug",
       story: "A".repeat(30),
-      category: "home_kitchen",
       country: "CA",
       postalCode: "M5V",
       email: "a@b.com",
@@ -108,7 +106,7 @@ describe("set_suggestion", () => {
     return giveDraftReducer(GIVE_DRAFT_INITIAL, { type: "add_photo", photo: photo("cover", { status: "done", id: "01PHOTOCOVER" }) });
   }
 
-  it("fills title and category from the cover's suggestion when neither has been set", () => {
+  it("fills title from the cover's suggestion when untouched, and always takes its category (issue #35: no picker to defer to)", () => {
     const state = giveDraftReducer(draftWithCover(), { type: "set_suggestion", photoId: "01PHOTOCOVER", suggestion: SUGGESTION });
 
     expect(state.title).toBe(SUGGESTION.title);
@@ -117,22 +115,24 @@ describe("set_suggestion", () => {
     expect(state.suggestions["01PHOTOCOVER"]).toEqual(SUGGESTION);
   });
 
-  it("never overwrites a title the giver already typed (titleDirty), even an empty one", () => {
+  it("never overwrites a title the giver already typed (titleDirty), even an empty one — but still takes the suggested category", () => {
     let state = draftWithCover();
     state = giveDraftReducer(state, { type: "set_title", title: "" });
     state = giveDraftReducer(state, { type: "set_suggestion", photoId: "01PHOTOCOVER", suggestion: SUGGESTION });
 
     expect(state.title).toBe("");
-    // Category is still unset, and unlike title there's no "dirty" flag for
-    // it — `category === null` is already unambiguous — so it still fills.
+    // Unlike title, category has no "the giver already set it" case to
+    // defer to — issue #35 removed the only UI that could ever set it.
     expect(state.category).toBe(SUGGESTION.category);
   });
 
-  it("never overwrites a category the giver already picked", () => {
+  it("a later suggestion for the same cover overwrites an earlier suggestion's category too", () => {
     let state = draftWithCover();
-    state = giveDraftReducer(state, { type: "set_category", category: "books_letters" });
     state = giveDraftReducer(state, { type: "set_suggestion", photoId: "01PHOTOCOVER", suggestion: SUGGESTION });
+    expect(state.category).toBe("home_kitchen");
 
+    const reSuggested: PhotoSuggestion = { ...SUGGESTION, category: "books_letters" };
+    state = giveDraftReducer(state, { type: "set_suggestion", photoId: "01PHOTOCOVER", suggestion: reSuggested });
     expect(state.category).toBe("books_letters");
   });
 
@@ -144,7 +144,7 @@ describe("set_suggestion", () => {
     state = giveDraftReducer(state, { type: "set_suggestion", photoId: "01PHOTOSECOND", suggestion: SUGGESTION });
 
     expect(state.title).toBe("");
-    expect(state.category).toBeNull();
+    expect(state.category).toBe("other"); // GIVE_DRAFT_INITIAL's default — untouched
     expect(state.appliedSuggestionPhotoId).toBeNull();
     expect(state.suggestions["01PHOTOSECOND"]).toEqual(SUGGESTION);
   });
@@ -200,5 +200,23 @@ describe("give draft serialization", () => {
     // Nothing else about the photo is lost — only the blob URL, which is
     // the one field that genuinely can't survive a reload.
     expect(rehydrated?.photos[0]).toMatchObject({ clientId: "a", id: "01PHOTO", status: "done" });
+  });
+
+  // Guard validated by breaking it: removing the `isCategory` narrowing in
+  // `deserializeGiveDraft` (i.e. spreading `...parsed` over
+  // `GIVE_DRAFT_INITIAL` unconditionally, the way every other field works)
+  // made this test fail — `rehydrated?.category` came back `null`, not
+  // `"other"` — since `JSON.parse` preserves a legacy draft's literal
+  // `null`. Restored afterward.
+  it("GUARD: normalizes a pre-#35 draft's category:null to the current default rather than letting it ride through", () => {
+    const legacyRaw = JSON.stringify({ ...GIVE_DRAFT_INITIAL, category: null });
+    const rehydrated = deserializeGiveDraft(legacyRaw);
+    expect(rehydrated?.category).toBe("other");
+  });
+
+  it("keeps a valid persisted category as-is", () => {
+    const raw = JSON.stringify({ ...GIVE_DRAFT_INITIAL, category: "jewelry_watches" });
+    const rehydrated = deserializeGiveDraft(raw);
+    expect(rehydrated?.category).toBe("jewelry_watches");
   });
 });

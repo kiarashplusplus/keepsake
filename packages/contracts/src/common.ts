@@ -111,25 +111,85 @@ export const MailableEmailSchema = EmailSchema.refine((email) => !isReservedEmai
   message: RESERVED_EMAIL_DOMAIN_MESSAGE,
 });
 
-/**
- * A self-declared 18+ attestation, required on `CreateListingInput` and
- * `CreateRequestInput` (see docs/legal-considerations.md "Minimum age").
- * `z.literal(true)` rather than a plain boolean: the field must be
- * affirmatively checked, not merely present-and-false, so a client that
- * forgets to render the checkbox fails closed instead of silently posting
- * `age_attested: false` as if it meant something. This can't verify anyone's
- * age — the point is a documented basis for banning a token the moment
- * there's actual knowledge a user is a minor, and an honest signal that this
- * product (in-person handoffs with strangers) isn't built or screened for
- * minors.
- */
-export const AgeAttestationSchema = z.literal(true, "You must confirm you're 18 or older to continue.");
-
 /** The minimum age Keepsake asks givers and requesters to self-attest to.
  * Higher than COPPA's 13: the product arranges in-person meetings between
  * strangers, a different calculus than an ordinary content site. See
  * docs/legal-considerations.md "Minimum age" and apps/site/public/terms.html. */
 export const MINIMUM_AGE = 18;
+
+/**
+ * Issue #64: the age gate used to be an "I confirm I'm 18 or older" checkbox
+ * — a prompt that states its own passing answer, which is fine as a term of
+ * service and weak as evidence. This is the middle path the issue landed
+ * on: a neutral "What is your date of birth?" prompt, validated against
+ * `MINIMUM_AGE` on both the client (immediate feedback) and the server
+ * (this schema, run again in `validateBody` — a client can't just skip the
+ * client-side check), but the date of birth itself is **never persisted**.
+ * `apps/api/src/routes/listings.ts`/`requests` still write only
+ * `age_attested_at` (a timestamp, exactly as before) the moment this schema
+ * accepts a value — the DOB in the request body is read once for its
+ * pass/fail verdict and then discarded, never reaching a DB column. See
+ * `calculateAge` below, which both this schema and
+ * `apps/web/src/features/ageGate/AgeGateField.tsx` call, so the client's
+ * live validation and the server's authoritative one can never disagree
+ * about what "18" means (leap years, exact-birthday edge cases).
+ *
+ * Deliberately a plain `YYYY-MM-DD` string, not `z.date()`/an ISO
+ * timestamp: a date of birth has no time-of-day or timezone component, and
+ * accepting one would invite a client to send `new Date().toISOString()`
+ * output that silently carries the browser's local offset.
+ */
+const DOB_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Whole years between `dateOfBirth` (a `YYYY-MM-DD` string already known to
+ * match `DOB_PATTERN`) and `now`, accounting for whether this year's
+ * birthday has happened yet — a naive `now.year - birth.year` overcounts by
+ * one for anyone whose birthday hasn't occurred yet this year. Pure and
+ * shared (see `DateOfBirthSchema` above) rather than duplicated between the
+ * client's live validation and the server's. */
+export function calculateAge(dateOfBirth: string, now: Date = new Date()): number {
+  const parts = dateOfBirth.split("-").map(Number);
+  const year = parts[0] ?? 0;
+  const month = parts[1] ?? 1;
+  const day = parts[2] ?? 1;
+  let age = now.getUTCFullYear() - year;
+  const birthdayHasOccurredThisYear =
+    now.getUTCMonth() + 1 > month || (now.getUTCMonth() + 1 === month && now.getUTCDate() >= day);
+  if (!birthdayHasOccurredThisYear) age -= 1;
+  return age;
+}
+
+/**
+ * `Date.parse`/`new Date(string)` silently rolls an out-of-range day or
+ * month over into the next one instead of rejecting it — confirmed
+ * directly: `Date.parse("2024-02-30")` parses to March 1st, not `NaN` — so
+ * it cannot be trusted alone to catch a fat-fingered "the 30th of February".
+ * This reconstructs the date from its own parsed parts and checks they
+ * round-trip, which is what actually catches a rollover.
+ */
+function isRealCalendarDate(dateOfBirth: string): boolean {
+  const parts = dateOfBirth.split("-").map(Number);
+  const year = parts[0];
+  const month = parts[1];
+  const day = parts[2];
+  if (year === undefined || month === undefined || day === undefined) return false;
+  const asDate = new Date(Date.UTC(year, month - 1, day));
+  return asDate.getUTCFullYear() === year && asDate.getUTCMonth() === month - 1 && asDate.getUTCDate() === day;
+}
+
+/** Implausibly old rather than tied to any real-world record, purely so a
+ * fat-fingered year (`1900` meant as `1990`) fails with "enter a real date"
+ * instead of silently passing the minimum-age check by a wide margin. */
+const MAX_PLAUSIBLE_AGE = 130;
+
+export const DateOfBirthSchema = z
+  .string()
+  .trim()
+  .regex(DOB_PATTERN, "Enter your date of birth as YYYY-MM-DD.")
+  .refine(isRealCalendarDate, "That's not a real date.")
+  .refine((value) => Date.parse(value) <= Date.now(), "Date of birth can't be in the future.")
+  .refine((value) => calculateAge(value) <= MAX_PLAUSIBLE_AGE, "Enter a real date of birth.")
+  .refine((value) => calculateAge(value) >= MINIMUM_AGE, `You must be ${MINIMUM_AGE} or older to continue.`);
 
 /** Unix epoch milliseconds. */
 export const TimestampMs = z.number().int().nonnegative();

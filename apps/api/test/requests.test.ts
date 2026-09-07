@@ -22,7 +22,7 @@ async function requestListing(listingId: string, body: Record<string, unknown>, 
 const VALID_REQUEST_BODY = {
   note: "This would mean so much to my family, thank you for considering us.",
   email: "requester@keepsake.ing",
-  age_attested: true,
+  date_of_birth: "1990-01-01",
 };
 
 describe("POST /api/listings/:id/requests", () => {
@@ -146,10 +146,10 @@ describe("POST /api/listings/:id/requests", () => {
     expect(res.status).toBe(400);
   });
 
-  it("400s when age_attested is missing (docs/legal-considerations.md Minimum age)", async () => {
+  it("400s when date_of_birth is missing (docs/legal-considerations.md Minimum age, issue #64)", async () => {
     const ownerId = await insertOwner();
     const listingId = await insertApprovedListing({ ownerId });
-    const { age_attested: _omit, ...withoutAttestation } = VALID_REQUEST_BODY;
+    const { date_of_birth: _omit, ...withoutAttestation } = VALID_REQUEST_BODY;
 
     const res = await requestListing(listingId, withoutAttestation);
     expect(res.status).toBe(400);
@@ -157,11 +157,11 @@ describe("POST /api/listings/:id/requests", () => {
     expect(error.code).toBe("bad_request");
   });
 
-  it("400s when age_attested is false, not just missing", async () => {
+  it("400s when date_of_birth implies under the minimum age, not just when it's missing", async () => {
     const ownerId = await insertOwner();
     const listingId = await insertApprovedListing({ ownerId });
 
-    const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, age_attested: false });
+    const res = await requestListing(listingId, { ...VALID_REQUEST_BODY, date_of_birth: "2020-01-01" });
     expect(res.status).toBe(400);
   });
 

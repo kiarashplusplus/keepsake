@@ -99,12 +99,15 @@ listingRoutes.post(
         place.lng,
         now,
         now,
-        // `CreateListingInput.age_attested` is a `z.literal(true)` — always
-        // `true` by the time validation lets a request through — but we
-        // record *when* the attestation happened, not just that it did, the
-        // same way `email_verified_at`/`chosen_at` record a moment rather
-        // than a boolean elsewhere in this schema.
-        input.age_attested ? now : null,
+        // Issue #64: `CreateListingInput.date_of_birth` is validated by
+        // `DateOfBirthSchema` — a request only reaches this handler at all
+        // once it's already confirmed the birth date implies `MINIMUM_AGE`
+        // or older, so its mere presence here means the gate passed. Same
+        // "record the moment, not just the fact" convention as
+        // `email_verified_at`/`chosen_at` elsewhere in this schema — and
+        // the date of birth itself is deliberately never bound into this
+        // query or stored anywhere; only this timestamp is.
+        input.date_of_birth ? now : null,
       )
       .run();
 
@@ -534,9 +537,10 @@ listingRoutes.post(
         input.phone ?? null,
         ipDigest,
         now,
-        // Same "record the moment, not just the fact" convention as the
-        // listing insert above.
-        input.age_attested ? now : null,
+        // Same convention as the listing insert above: `input.date_of_birth`
+        // is only reachable here already validated against `MINIMUM_AGE`,
+        // and is never itself bound into this query.
+        input.date_of_birth ? now : null,
         withdrawTokenHash,
       )
       .run();

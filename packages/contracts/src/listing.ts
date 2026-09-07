@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AgeAttestationSchema, MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
+import { DateOfBirthSchema, MailableEmailSchema, TimestampMs, UlidSchema } from "./common";
 import { CountrySchema } from "./geo";
 import { AspectSchema, MAX_ASPECTS, PublicPhoto } from "./photo";
 // Re-exported below so nothing outside the package needs to know these live
@@ -54,11 +54,15 @@ export const CreateListingInput = z.object({
   postal_code: PostalCodeSchema,
   photo_ids: z.array(UlidSchema).min(1).max(5),
   email: MailableEmailSchema.optional(),
-  // Minimum age (docs/legal-considerations.md): required only on create, not
-  // on `UpdateListingInput` below (`.partial()` makes it optional there) —
-  // attesting once at posting time is the point, not re-attesting on every
-  // edit.
-  age_attested: AgeAttestationSchema,
+  // Minimum age (docs/legal-considerations.md, issue #64): a neutral
+  // "what is your date of birth?" prompt rather than an "I'm 18+" checkbox
+  // — see `DateOfBirthSchema`'s own comment in `./common` for the reasoning
+  // and for why the date itself is never persisted. Required only on
+  // create; `UpdateListingInput` below needs no special override the way
+  // `aspects` does, since this field carries no `.default()` for
+  // `.partial()` to apply against a missing key — attesting once at
+  // posting time is the point, not re-attesting on every edit.
+  date_of_birth: DateOfBirthSchema,
   // eBay-style name/value attributes read off the cover photo by
   // `POST /api/photos/:id/suggest` (issue #36) — the give flow forwards
   // whatever suggestion it applied verbatim; there's no separate

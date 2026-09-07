@@ -24,7 +24,7 @@ describe("CreateRequestInput", () => {
     const result = CreateRequestInput.safeParse({
       note: "I would love to give this a new home.",
       email: "friend@keepsake.ing",
-      age_attested: true,
+      date_of_birth: "1990-01-01",
     });
     expect(result.success).toBe(true);
   });
@@ -40,7 +40,7 @@ describe("CreateRequestInput", () => {
       note: "I would love to give this a new home.",
       email: "friend@keepsake.ing",
       phone: "call-me-maybe",
-      age_attested: true,
+      date_of_birth: "1990-01-01",
     });
     expect(result.success).toBe(false);
   });
@@ -49,7 +49,7 @@ describe("CreateRequestInput", () => {
     const result = CreateRequestInput.safeParse({
       note: "I would love to give this a new home.",
       email,
-      age_attested: true,
+      date_of_birth: "1990-01-01",
     });
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -57,7 +57,7 @@ describe("CreateRequestInput", () => {
     }
   });
 
-  it("rejects a missing age attestation (docs/legal-considerations.md Minimum age)", () => {
+  it("rejects a missing date of birth (docs/legal-considerations.md Minimum age, issue #64)", () => {
     const result = CreateRequestInput.safeParse({
       note: "I would love to give this a new home.",
       email: "friend@keepsake.ing",
@@ -65,11 +65,11 @@ describe("CreateRequestInput", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects age_attested: false — must be affirmatively true, not merely present", () => {
+  it("rejects a date of birth under the minimum age", () => {
     const result = CreateRequestInput.safeParse({
       note: "I would love to give this a new home.",
       email: "friend@keepsake.ing",
-      age_attested: false,
+      date_of_birth: "2020-01-01",
     });
     expect(result.success).toBe(false);
   });

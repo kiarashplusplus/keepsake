@@ -5,11 +5,11 @@
 // one, which is what makes the rejected-state "Edit" button below actually
 // resubmit the same listing rather than spawning a duplicate.
 import * as React from "react";
-import { Pressable, View } from "react-native";
+import { View } from "react-native";
 import { useRouter } from "expo-router";
 import { Image as ExpoImage } from "expo-image";
 import type { CreateListingInput, OwnerListing as OwnerListingT } from "@keepsake/contracts/listing";
-import { CATEGORY_LABELS, MODERATION_REASONS } from "@keepsake/contracts/listing";
+import { MODERATION_REASONS } from "@keepsake/contracts/listing";
 import { COUNTRY_LABELS } from "@keepsake/contracts/geo";
 import { space } from "@keepsake/tokens/spacing";
 import { Text } from "@/ui/Text";
@@ -21,6 +21,7 @@ import { Stamp, type StampState } from "@/ui/Stamp";
 import { Turnstile, type TurnstileHandle, type TurnstileStatus } from "@/ui/Turnstile";
 import { Page } from "@/ui/Page";
 import { useColors } from "@/ui/theme";
+import { AgeGateField, isAgeGateValid } from "@/features/ageGate/AgeGateField";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { coverPhoto, makeClientId } from "@/features/give/giveDraft";
 import { editStepForReason, resolveReviewOutcome } from "@/features/give/reviewOutcome";
@@ -39,38 +40,6 @@ const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS = 2 * 60 * 1000;
 
 type Phase = "review" | "submitting" | "polling";
-
-/**
- * Self-declared 18+ attestation — `CreateListingInput.age_attested` is a
- * `z.literal(true)` (see `@keepsake/contracts/common`'s `AgeAttestationSchema`),
- * required so a client can't accidentally post `age_attested: false`/omit it
- * and have that silently count. No shared checkbox primitive exists yet in
- * `src/ui`, so this mirrors `ReportSheet.tsx`'s own inline `ReasonRow`
- * rather than inventing one for a single call site.
- */
-function AgeAttestationCheckbox({ checked, onToggle }: { checked: boolean; onToggle: () => void }): React.ReactElement {
-  const colors = useColors();
-  return (
-    <Pressable
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked }}
-      accessibilityLabel="I'm 18 or older"
-      onPress={onToggle}
-      style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 44 }}
-    >
-      <View
-        style={{
-          width: 18,
-          height: 18,
-          borderWidth: 2,
-          borderColor: checked ? colors.accent : colors.rule,
-          backgroundColor: checked ? colors.accent : "transparent",
-        }}
-      />
-      <Text variant="body">{"I confirm I'm 18 or older."}</Text>
-    </Pressable>
-  );
-}
 
 function coverImageSource(photo: ReturnType<typeof coverPhoto>): { uri: string; headers?: Record<string, string> } | null {
   if (photo === null || photo.id === null) return null;
@@ -92,7 +61,9 @@ export default function GiveReview(): React.ReactElement {
   const [turnstileStatus, setTurnstileStatus] = React.useState<TurnstileStatus>({ status: "pending" });
   const turnstileRef = React.useRef<TurnstileHandle>(null);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
-  const [ageAttested, setAgeAttested] = React.useState(false);
+  const [dateOfBirth, setDateOfBirth] = React.useState("");
+  const [dobTouched, setDobTouched] = React.useState(false);
+  const ageGateValid = isAgeGateValid(dateOfBirth);
   const [listing, setListing] = React.useState<OwnerListingT | null>(null);
   const [timedOut, setTimedOut] = React.useState(false);
   const idempotencyKeyRef = React.useRef(makeClientId());
@@ -140,22 +111,23 @@ export default function GiveReview(): React.ReactElement {
   }, [listing]);
 
   async function handleSubmit(): Promise<void> {
-    if (draft.category === null || photoIds.length === 0 || !ageAttested) return;
+    setDobTouched(true);
+    if (photoIds.length === 0 || !ageGateValid) return;
     setSubmitError(null);
     setPhase("submitting");
 
     // Issue #36: forward whatever the cover photo's suggestion actually
-    // read off the photo, straight through — unlike `title`/`category`
-    // (which the reducer only ever applies if the giver hasn't already set
-    // them, see `giveDraft.ts`'s `set_suggestion` case), aspects aren't a
-    // form field the giver can edit, so there's no "already set" to defer
-    // to. Cache-keyed by photo id, not gated on `appliedSuggestionPhotoId`
-    // (which only tracks whether title/category were ever overwritten) —
-    // if the cover has a cached suggestion at all, its aspects apply.
-    // `?? []` covers every other case identically: no suggestion fetched
-    // yet, the fetch failed, or MOCK_AI/the model returned none — a
-    // listing with zero aspects is always a valid, fully-visible listing
-    // (see apps/api/test/aspects.test.ts).
+    // read off the photo, straight through — unlike `title` (which the
+    // reducer only ever applies if the giver hasn't already typed one, see
+    // `giveDraft.ts`'s `set_suggestion` case), aspects aren't a form field
+    // the giver can edit at all, so there's no "already set" to defer to.
+    // Cache-keyed by photo id, not gated on `appliedSuggestionPhotoId`
+    // (which only tracks whether `title` was ever overwritten) — if the
+    // cover has a cached suggestion at all, its aspects apply. `?? []`
+    // covers every other case identically: no suggestion fetched yet, the
+    // fetch failed, or MOCK_AI/the model returned none — a listing with
+    // zero aspects is always a valid, fully-visible listing (see
+    // apps/api/test/aspects.test.ts).
     const coverAspects = cover !== null && cover.id !== null ? (draft.suggestions[cover.id]?.aspects ?? []) : [];
 
     const input: CreateListingInput = {
@@ -165,11 +137,10 @@ export default function GiveReview(): React.ReactElement {
       country: draft.country,
       postal_code: draft.postalCode,
       photo_ids: photoIds,
-      // Literal `true`, not the `ageAttested` state variable: the guard
-      // above already proved it, and the contract's `AgeAttestationSchema`
-      // is `z.literal(true)` specifically so a value can't be threaded
-      // through as a plain (possibly-false) boolean.
-      age_attested: true,
+      // Issue #64: sent once, validated again server-side by the identical
+      // `DateOfBirthSchema`, and never persisted beyond the resulting
+      // `age_attested_at` timestamp — see `AgeGateField`'s doc comment.
+      date_of_birth: dateOfBirth,
       aspects: coverAspects,
       ...(draft.email.trim() !== "" ? { email: draft.email.trim() } : {}),
     };
@@ -353,8 +324,11 @@ export default function GiveReview(): React.ReactElement {
             </Text>
             <Text variant="title">{draft.title || "Untitled"}</Text>
             <View style={{ paddingTop: space.sm, gap: space.xxs }}>
+              {/* Issue #35: no category shown here anymore — the giver
+                  never picked one, so surfacing the AI-assigned value would
+                  read as an unexplained surprise rather than a summary. */}
               <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
-                {draft.category !== null ? CATEGORY_LABELS[draft.category] : ""} · {COUNTRY_LABELS[draft.country]} {draft.postalCode}
+                {COUNTRY_LABELS[draft.country]} {draft.postalCode}
               </Text>
               <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
                 {photoIds.length} photo{photoIds.length === 1 ? "" : "s"}
@@ -363,7 +337,7 @@ export default function GiveReview(): React.ReactElement {
           </View>
         </Print>
 
-        <AgeAttestationCheckbox checked={ageAttested} onToggle={() => setAgeAttested((current) => !current)} />
+        <AgeGateField value={dateOfBirth} onChangeText={setDateOfBirth} touched={dobTouched} onBlur={() => setDobTouched(true)} />
 
         <Turnstile ref={turnstileRef} onStatus={setTurnstileStatus} />
 
@@ -377,7 +351,7 @@ export default function GiveReview(): React.ReactElement {
           <Button
             label="Give it"
             loading={phase === "submitting"}
-            disabled={phase === "submitting" || !turnstileReady || photoIds.length === 0 || !ageAttested}
+            disabled={phase === "submitting" || !turnstileReady || photoIds.length === 0 || !ageGateValid}
             onPress={() => void handleSubmit()}
           />
         </View>

@@ -19,7 +19,7 @@ const VALID_LISTING_BODY = {
   category: "home_kitchen",
   country: "US",
   postal_code: "02144",
-  age_attested: true,
+  date_of_birth: "1990-01-01",
 };
 
 async function createListing(token: string, photoIds: string[], overrides: Record<string, unknown> = {}): Promise<Response> {
@@ -83,21 +83,21 @@ describe("POST /api/listings", () => {
     expect(row?.age_attested_at).not.toBeNull();
   });
 
-  it("400s bad_request when age_attested is missing", async () => {
+  it("400s bad_request when date_of_birth is missing", async () => {
     await seedStandardPostalCodes();
     const token = freshOwnerToken();
     const photoId = await givenOnePhoto(token);
-    const res = await createListing(token, [photoId], { age_attested: undefined });
+    const res = await createListing(token, [photoId], { date_of_birth: undefined });
     expect(res.status).toBe(400);
     const error = await readErr(res);
     expect(error.code).toBe("bad_request");
   });
 
-  it("400s bad_request when age_attested is false, not just missing", async () => {
+  it("400s bad_request when date_of_birth implies under the minimum age, not just when it's missing", async () => {
     await seedStandardPostalCodes();
     const token = freshOwnerToken();
     const photoId = await givenOnePhoto(token);
-    const res = await createListing(token, [photoId], { age_attested: false });
+    const res = await createListing(token, [photoId], { date_of_birth: "2020-01-01" });
     expect(res.status).toBe(400);
   });
 

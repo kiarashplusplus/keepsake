@@ -27,8 +27,14 @@ stays an honest record of what was found and when:**
   line above should be read as historical context for why the research covered UK law at all, not
   as the current product surface.
 - **Minimum age (recommendation 1): done.** 18+, self-attested, required on both create-listing and
-  create-request (`@keepsake/contracts/common`'s `AgeAttestationSchema`/`MINIMUM_AGE`), recorded
-  server-side (`age_attested_at`), and stated in `terms.html`.
+  create-request. As of issue #64 (2026-09-07) the gate is a neutral "what is your date of birth?"
+  prompt rather than an "I'm 18 or older" checkbox (`@keepsake/contracts/common`'s
+  `DateOfBirthSchema`/`MINIMUM_AGE`/`calculateAge` — the checkbox's `AgeAttestationSchema` is gone),
+  since a checkbox whose label states its own passing answer is weaker evidence for the
+  willful-disregard analysis below than a self-selected date a person has to get right. The date of
+  birth itself is validated (client- and server-side, against the identical schema) and then
+  discarded — never persisted; only the resulting `age_attested_at` timestamp is recorded
+  server-side, exactly as the checkbox recorded when it was checked. Stated in `terms.html`.
 - **Prohibited items (recommendation 6): done.** The table below is now in `terms.html`, with the
   statute-vs-hazard-only column preserved.
 - **Privacy page overclaims (recommendations 4-5): done** — see `apps/site/public/privacy.html`'s
@@ -83,10 +89,10 @@ stays an honest record of what was found and when:**
   one-click operational step, only a manual DB edit. That gap, plus the written moderator-facing
   runbook procedure for recognizing "actual knowledge" in the first place, is `docs/runbooks/**` /
   admin-UI territory and is left for whoever owns those.
-- **18+ checkbox wording (issue #64): out of scope for this pass.** The control
-  (`AgeAttestationCheckbox`) lives in `apps/web` (`app/give/review.tsx`,
-  `src/features/request/RequestSheet.tsx`), not `apps/site`. Left un-implemented; see the issue
-  comment for proposed neutral wording.
+- **18+ checkbox wording (issue #64): done, 2026-09-07** — superseding the "out of scope for this
+  pass" note this line used to carry. The checkbox is gone from both call sites
+  (`app/give/review.tsx`, `src/features/request/RequestSheet.tsx`); see the "Minimum age" bullet
+  above for what replaced it.
 - **Montana minors / Rhode Island commercial-website provisions (issue #31): checked against the
   live site, still advisory, unresolved on purpose.** Neither statute's applicability is something
   to resolve by inference, per the research's own instruction that "a lawyer's five-minute read is

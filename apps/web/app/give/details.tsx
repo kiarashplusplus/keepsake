@@ -1,11 +1,14 @@
-// Give flow — step 3 of 5: title, category, country + postcode. The
-// postcode field debounces into a live `GET /api/geo/lookup` so the giver
-// sees the resolved place ("Somerville, MA") before ever submitting.
+// Give flow — step 3 of 5: title, country + postcode. No category picker —
+// issue #35 removed it; `draft.category` now follows the cover photo's AI
+// suggestion alone (`giveDraft.ts`'s `set_suggestion`), defaulting to
+// "other" until one lands. The postcode field debounces into a live
+// `GET /api/geo/lookup` so the giver sees the resolved place ("Somerville,
+// MA") before ever submitting.
 import * as React from "react";
 import { View } from "react-native";
 import { useRouter } from "expo-router";
 import { z } from "zod";
-import { CATEGORIES, CATEGORY_LABELS, TITLE_MAX, TITLE_MIN } from "@keepsake/contracts/listing";
+import { TITLE_MAX, TITLE_MIN } from "@keepsake/contracts/listing";
 import { COUNTRIES, COUNTRY_LABELS, COUNTRY_POSTCODE_HINTS, normalizePostalCode, type Country, type PostalLookup } from "@keepsake/contracts/geo";
 import { space } from "@keepsake/tokens/spacing";
 import { Text } from "@/ui/Text";
@@ -69,7 +72,7 @@ export default function GiveDetails(): React.ReactElement {
   const titleValidation = TitleFieldSchema.safeParse(draft.title);
   const titleError = titleTouched && !titleValidation.success ? titleValidation.error.issues[0]?.message : undefined;
 
-  const canContinue = titleValidation.success && draft.category !== null && isResolvedForCurrent && lookupResult !== null;
+  const canContinue = titleValidation.success && isResolvedForCurrent && lookupResult !== null;
 
   function handleContinue(): void {
     setTitleTouched(true);
@@ -140,22 +143,6 @@ export default function GiveDetails(): React.ReactElement {
               Filled in from your photo. Change anything.
             </Text>
           ) : null}
-        </View>
-
-        <View style={{ gap: space.sm }}>
-          <Text variant="eyebrow" color="accent2Text">
-            Category
-          </Text>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
-            {CATEGORIES.map((category) => (
-              <Chip
-                key={category}
-                label={CATEGORY_LABELS[category]}
-                selected={draft.category === category}
-                onPress={() => dispatch({ type: "set_category", category })}
-              />
-            ))}
-          </View>
         </View>
 
         <View style={{ gap: space.sm }}>

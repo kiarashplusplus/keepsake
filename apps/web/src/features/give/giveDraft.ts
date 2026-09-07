@@ -6,9 +6,13 @@
  * (`GiveDraftContext.tsx`) so the state transitions are unit-testable
  * without rendering anything.
  */
-import type { Category } from "@keepsake/contracts/listing";
+import { CATEGORIES, type Category } from "@keepsake/contracts/listing";
 import type { Country } from "@keepsake/contracts/geo";
 import type { PhotoSuggestion } from "@keepsake/contracts/photo";
+
+function isCategory(value: unknown): value is Category {
+  return typeof value === "string" && (CATEGORIES as readonly string[]).includes(value);
+}
 
 export type GiveDraftPhotoStatus = "uploading" | "done" | "error";
 
@@ -41,7 +45,18 @@ export type GiveDraft = {
    * allowed to overwrite `title`; `details.tsx`'s `titleTouched` is a
    * *validation* flag (true on blur) and can't answer that question. */
   titleDirty: boolean;
-  category: Category | null;
+  /**
+   * Issue #35: there's no picker for this anymore — the give flow no longer
+   * asks the giver to choose one. Always a real `Category`, never `null`:
+   * it starts at `"other"` (`GIVE_DRAFT_INITIAL` below) and is overwritten
+   * wholesale by whatever the cover photo's suggestion says the moment one
+   * lands (`set_suggestion`, below — unlike `title`, there's no "the giver
+   * already set it" case to defer to, since nothing in the UI can set it
+   * anymore). The column itself stays on `listings` for one more deploy
+   * cycle per the issue; this only removes the picker and its dependency
+   * on the giver making a choice.
+   */
+  category: Category;
   country: Country;
   postalCode: string;
   email: string;
@@ -69,7 +84,7 @@ export const GIVE_DRAFT_INITIAL: GiveDraft = {
   story: "",
   title: "",
   titleDirty: false,
-  category: null,
+  category: "other",
   country: "US",
   postalCode: "",
   email: "",
@@ -103,7 +118,6 @@ export type GiveDraftAction =
   | { type: "move_photo"; clientId: string; direction: -1 | 1 }
   | { type: "set_story"; story: string }
   | { type: "set_title"; title: string }
-  | { type: "set_category"; category: Category }
   | { type: "set_country"; country: Country }
   | { type: "set_postal_code"; postalCode: string }
   | { type: "set_email"; email: string }
@@ -140,8 +154,6 @@ export function giveDraftReducer(state: GiveDraft, action: GiveDraftAction): Giv
       return { ...state, story: action.story };
     case "set_title":
       return { ...state, title: action.title, titleDirty: true };
-    case "set_category":
-      return { ...state, category: action.category };
     case "set_country":
       return { ...state, country: action.country };
     case "set_postal_code":
@@ -164,7 +176,15 @@ export function giveDraftReducer(state: GiveDraft, action: GiveDraftAction): Giv
         // that, by design (so a *later*, fresher suggestion — e.g. after a
         // cover change back and forth — can still fill it in).
         title: state.titleDirty ? state.title : action.suggestion.title,
-        category: state.category === null ? action.suggestion.category : state.category,
+        // Unconditional, unlike `title`: issue #35 removed the picker that
+        // used to let a giver "already set" this, so there's no dirty state
+        // to preserve — the latest cover's suggestion always wins. Falls
+        // back to whatever `state.category` already was (`"other"` by
+        // default) if this particular suggestion never named one — not
+        // possible today (the schema requires `category`), but cheap
+        // insurance against a future suggestion shape that makes it
+        // optional.
+        category: action.suggestion.category ?? state.category,
         appliedSuggestionPhotoId: action.photoId,
       };
     }
@@ -199,6 +219,15 @@ export function deserializeGiveDraft(raw: string): GiveDraft | null {
       // nothing tries to render a revoked/nonexistent object URL; the
       // review step's cover-photo source ladder falls back to `/i/:id/thumb`.
       photos: Array.isArray(parsed.photos) ? (parsed.photos as GiveDraftPhoto[]).map((photo) => ({ ...photo, objectUrl: null })) : [],
+      // Issue #35: a draft written to `sessionStorage` by a tab still
+      // running the pre-#35 build (or simply reloaded mid-migration) can
+      // hold `category: null`, the old sentinel for "nothing picked yet" —
+      // no longer a valid `Category` now that the type dropped the `null`
+      // arm. `isCategory` narrows it back to a known enum member, falling
+      // back to the same `"other"` default a brand-new draft starts at
+      // rather than letting an invalid value ride through to `POST
+      // /api/listings`, which validates against the real enum anyway.
+      category: isCategory(parsed.category) ? parsed.category : GIVE_DRAFT_INITIAL.category,
     };
   } catch {
     return null;
