@@ -45,6 +45,25 @@ type SecurityHeadersCtx = Context<{ Bindings: Env }>;
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
+  // Issue #132: there was no `connect-src` at all, so it fell back to
+  // `default-src 'self'` and the browser dropped every cross-origin `fetch`
+  // before it left the page. The two origins here are the reverse-geocode
+  // providers `apps/web/src/lib/geoReverse.ts` calls to turn "Use my
+  // location" into a postcode — without them that button could not work on
+  // a deployed site, in any browser, and reported the "type it in" fallback
+  // as though both providers were down. They are named once, in that
+  // module's exported `REVERSE_GEOCODE_ORIGINS`, and
+  // `apps/web/test/guards/reverseGeocodeCsp.test.ts` fails if this string
+  // or `_headers` stops covering one.
+  //
+  // Note for whoever turns analytics on: `script-src` already permits the
+  // Google Ads and Cloudflare Web Analytics *scripts*, but their beacons are
+  // `connect-src` and are NOT permitted here. Neither is configured in any
+  // environment today (no `ks-google-ads-id` / `ks-cf-beacon-token` meta is
+  // served), so nothing is broken right now — but enabling one without
+  // adding its endpoint here would load a tag that silently reports nothing,
+  // which is exactly the drift `launch-audit.md` §7 already caught once.
+  "connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org",
   "script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com " +
     "'sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g=' " +
     "'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' " +
