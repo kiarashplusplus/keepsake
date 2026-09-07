@@ -19,6 +19,7 @@ import { Stamp } from "@/ui/Stamp";
 import { useColors } from "@/ui/theme";
 import { useToast } from "@/ui/Toast";
 import { PhotoCarousel } from "@/features/item/PhotoCarousel";
+import { AspectList } from "@/features/item/AspectList";
 import { RequestSheet } from "@/features/request/RequestSheet";
 import { ReportSheet } from "@/features/report/ReportSheet";
 import { getListing } from "@/api/listings";
@@ -160,6 +161,11 @@ export default function Item(): React.ReactElement {
         <Text variant="bodyLg" color="inkSoft">
           {listing.story}
         </Text>
+
+        {/* Below the story, never above it: the story is the product, and
+            what the model read off the photo is an annotation on it (#135).
+            Renders nothing when the listing has no aspects. */}
+        <AspectList aspects={listing.aspects} />
 
         <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
           {metaLine(listing)}
