@@ -127,6 +127,42 @@ stays an honest record of what was found and when:**
   decision) is in `terms.html` too — see the "In-person safety" section below for detail. Everything
   else — the Article 27 representative question and the remaining lawyer questions — is **still
   open**, unchanged from the original research except where noted above.
+- **Where issue #34 (the eight lawyer questions) actually landed — status as of 2026-09-07.**
+  **#34 is closed, and no lawyer answered any of it.** The research pass in #58 wrote
+  [`legal-open-questions-research.md`](legal-open-questions-research.md) and said in its own PR
+  body, its own commit message, and a comment on the issue that it does **not** close #34 and that
+  the checkboxes stay unticked — they are all eight still unticked in the issue body today. The
+  issue was nonetheless closed as "completed" one second after #58 merged, and GitHub now shows it
+  as closed by that PR. Recorded here so a future reader does not mistake a closed issue for
+  answered questions. Where the eight stand:
+  - **Seven dispositioned by research, not by counsel** — Q1 (UK Art. 27), Q4 (AADC) and Q6 (Ofcom
+    record-keeping) are moot while the UK geo-block holds and revive if it is lifted (see
+    [`runbooks/uk-reentry-checklist.md`](runbooks/uk-reentry-checklist.md) §§4–6); Q2 (PIPEDA)
+    resolves to "assume it applies," with the resulting work done in #59/#60; Q3 (Rhode Island /
+    Montana) resolves to "comply cheaply rather than buy an answer," done in #60/#61/#62, with #31
+    left open and advisory for the applicability question underneath; Q5 (COPPA) resolves on a
+    definition; Q7 (CPSA) resolves on the facts, favourably but untested.
+  - **Q8 is the one that was never answered**, and it is now tracked on its own at **#108**. The
+    clause half is finished — #63 chose the one-directional shape and ea2329e shipped it, closing
+    #32 — but the substantive question underneath is LLC vs. sole proprietor plus the cost of
+    general-liability insurance, which matters precisely because `privacy.html` and `terms.html`
+    now say in public that Keepsake is operated by an individual and not a company.
+  - **The hedge travels with the conclusions.** All of the above rests on that document's
+    search-summary sourcing rather than primary text read end to end, and three of its findings were
+    marked `[unverified text]` there. **One of the three has since come off:** MCA §30-14-2811's
+    "rebuttable presumption," read directly at `mca.legmt.gov` during #61, is a procedural defense in
+    an AG enforcement action under §30-14-2817 — not an age-determination safe harbour — so it
+    neither softens nor changes the minor-takedown rule (write-up in
+    [`runbooks/admin.md`](runbooks/admin.md)). The other two stand. Dispositioned is not the same as
+    answered.
+  - **Two facts in the #61 and #31 entries above are now out of date, corrected here rather than
+    edited into them.** The requester-side takedown gap those entries describe — no admin visibility
+    into a request, no way to remove one — was filed as #70 and closed by PR #81:
+    `POST /api/admin/requests/:id/remove` exists today and redacts `note`/`email`/`phone`. And the
+    18+ gate they cite as `AgeAttestationSchema` is gone; #64 replaced it with
+    `DateOfBirthSchema`/`MINIMUM_AGE`, still recording only `age_attested_at`, as the Minimum age
+    entry near the top of this list already says. The Montana fact pattern is unchanged in substance
+    — a self-declared gate plus a working takedown path on both sides now, rather than one.
 
 ---
 
@@ -476,6 +512,13 @@ A second research pass over these eight — what search can settle without couns
 cannot — is in [`legal-open-questions-research.md`](legal-open-questions-research.md). Short
 version: three are moot under the UK block, four resolve well enough to act on, and question 8 is
 the one worth paying for. That document does not replace a lawyer's answer on any of them.
+
+**Status, 2026-09-07:** the tracking issue for these eight (#34) is **closed, with all eight
+checkboxes still unticked and no lawyer engaged** — see the 2026-09-07 entry in the status update
+near the top of this file for how that happened and what it does and does not mean. Question 8 —
+the only one the research could not dispose of — now has its own issue, **#108** (LLC vs. sole
+proprietor, and the cost of general-liability insurance). The list below is left exactly as written
+so it stays a record of what was asked.
 
 1. Is a UK GDPR Article 27 representative actually required here, given ongoing (not occasional)
    UK-facing processing at negligible volume and no special-category data by design? What does a
