@@ -14,17 +14,20 @@ import {
   AdminHideInput,
   AdminQueueQuery,
   AdminRejectInput,
+  AdminRemoveRequestInput,
   AdminTestEmailInput,
   AdminTestErrorInput,
   type AdminHealth,
   type AdminQueueItem,
+  type AdminRequestRemoveResult,
+  type AdminRequestView,
   type AdminStats,
   type AdminTestEmailResult,
   type AdminTestErrorResult,
 } from "@keepsake/contracts/admin";
 import { LISTING_STATUSES, type ListingStatus, type OwnerListing } from "@keepsake/contracts/listing";
 import type { FeedPage } from "@keepsake/contracts/feed";
-import { maskEmail } from "@keepsake/contracts/request";
+import { maskEmail, type RequestStatus } from "@keepsake/contracts/request";
 import type { ReportReason } from "@keepsake/contracts/report";
 import { captureException, captureMessage } from "@keepsake/observability/capture";
 import type { Env } from "../env.js";
@@ -68,13 +71,22 @@ function safeParseJson(text: string | null): unknown {
 
 async function logAdminEvent(
   env: Env,
-  fields: { listingId: string; listingVersion: number; verdict: string; reason?: string | undefined },
+  fields: {
+    listingId: string;
+    listingVersion: number;
+    verdict: string;
+    reason?: string | undefined;
+    // Set only for an event about one request within the listing (currently
+    // just `request_removed` — #70), mirroring how `photo_id` marks an event
+    // as being about one photo rather than the listing as a whole.
+    requestId?: string | undefined;
+  },
 ): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO moderation_events (id, listing_id, listing_version, kind, verdict, reason, attempt, created_at)
-     VALUES (?, ?, ?, 'admin', ?, ?, 1, ?)`,
+    `INSERT INTO moderation_events (id, listing_id, listing_version, request_id, kind, verdict, reason, attempt, created_at)
+     VALUES (?, ?, ?, ?, 'admin', ?, ?, 1, ?)`,
   )
-    .bind(ulid(), fields.listingId, fields.listingVersion, fields.verdict, fields.reason ?? null, Date.now())
+    .bind(ulid(), fields.listingId, fields.listingVersion, fields.requestId ?? null, fields.verdict, fields.reason ?? null, Date.now())
     .run();
 }
 
@@ -342,6 +354,125 @@ adminRoutes.post("/owners/:id/unban", async (c) => {
   // trustworthy again."
   await c.env.DB.prepare("UPDATE owners SET banned_at = NULL, ban_reason = NULL WHERE id = ?").bind(id).run();
   return ok(c, { id, banned: false });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/admin/requests/:id, POST /api/admin/requests/:id/remove
+//
+// #70: the minor-takedown rule (docs/runbooks/admin.md) was executable on
+// the giver side (hide + ban) but not the requester side — no admin view of
+// a request's note, and no way to remove one request without hiding or
+// rejecting the whole listing, which would punish the giver for a
+// requester's status. Deliberately a look-up-by-id pair, not a field added
+// to `GET /api/admin/queue`: a request's note is written by a stranger to
+// the giver, and streaming every note into a browsable queue by default
+// would be a real privacy change for a product that holds very little. A
+// moderator who has been told about a specific request (e.g. by the giver
+// forwarding it) looks it up directly.
+// ---------------------------------------------------------------------------
+interface AdminRequestRow {
+  id: string;
+  listing_id: string;
+  note: string | null;
+  email: string | null;
+  phone: string | null;
+  status: string;
+  created_at: number;
+  chosen_at: number | null;
+  age_attested_at: number | null;
+  withdrawn_at: number | null;
+  removed_at: number | null;
+  removed_reason: string | null;
+}
+
+interface RequestListingRow {
+  title: string;
+  status: string;
+}
+
+adminRoutes.get("/requests/:id", async (c) => {
+  const id = requireParam(c, "id");
+  const row = await c.env.DB.prepare(
+    `SELECT id, listing_id, note, email, phone, status, created_at, chosen_at, age_attested_at,
+            withdrawn_at, removed_at, removed_reason
+     FROM requests WHERE id = ?`,
+  )
+    .bind(id)
+    .first<AdminRequestRow>();
+  if (!row) return fail(c, "not_found", "Request not found.", 404);
+
+  const listing = await c.env.DB.prepare("SELECT title, status FROM listings WHERE id = ?")
+    .bind(row.listing_id)
+    .first<RequestListingRow>();
+  if (!listing) return fail(c, "internal", "This request's listing is missing.", 500);
+
+  const data: AdminRequestView = {
+    id: row.id,
+    listing_id: row.listing_id,
+    listing_title: listing.title,
+    listing_status: listing.status as ListingStatus,
+    status: row.status as RequestStatus,
+    note: row.note,
+    email: row.email,
+    phone: row.phone,
+    age_attested_at: row.age_attested_at,
+    created_at: row.created_at,
+    chosen_at: row.chosen_at,
+    withdrawn_at: row.withdrawn_at,
+    removed_at: row.removed_at,
+    removed_reason: row.removed_reason,
+  };
+  return ok(c, data);
+});
+
+// Statuses that already mean "nothing left to redact" — `note`/`email`/
+// `phone` are already NULL. Removing again would be a silent no-op that
+// looks identical to a real removal from the response alone, exactly the
+// class of bug `docs/runbooks/admin.md`'s five-checks table warns about, so
+// this is a hard 409 rather than an idempotent 200.
+const ALREADY_REDACTED_STATUSES = new Set(["withdrawn", "removed"]);
+
+adminRoutes.post("/requests/:id/remove", validateBody(AdminRemoveRequestInput), async (c) => {
+  const id = requireParam(c, "id");
+  const input = c.get("validatedBody") as AdminRemoveRequestInput;
+
+  const row = await c.env.DB.prepare("SELECT id, listing_id, status FROM requests WHERE id = ?")
+    .bind(id)
+    .first<{ id: string; listing_id: string; status: string }>();
+  if (!row) return fail(c, "not_found", "Request not found.", 404);
+  if (ALREADY_REDACTED_STATUSES.has(row.status)) {
+    return fail(c, "conflict", "This request's contact info has already been removed.", 409);
+  }
+
+  const now = Date.now();
+  await c.env.DB.prepare(
+    `UPDATE requests SET status = 'removed', removed_at = ?, removed_reason = ?, note = NULL, email = NULL, phone = NULL
+     WHERE id = ?`,
+  )
+    .bind(now, input.reason ?? null, id)
+    .run();
+
+  // Same reasoning as `POST /api/requests/withdraw`: a removed request is no
+  // longer a live ask, and the floor costs nothing.
+  await c.env.DB.prepare("UPDATE listings SET request_count = MAX(request_count - 1, 0) WHERE id = ?")
+    .bind(row.listing_id)
+    .run();
+
+  const listing = await c.env.DB.prepare("SELECT version FROM listings WHERE id = ?")
+    .bind(row.listing_id)
+    .first<{ version: number }>();
+  if (listing) {
+    await logAdminEvent(c.env, {
+      listingId: row.listing_id,
+      listingVersion: listing.version,
+      verdict: "request_removed",
+      reason: input.reason,
+      requestId: id,
+    });
+  }
+
+  const result: AdminRequestRemoveResult = { id, listing_id: row.listing_id, removed: true, removed_at: now };
+  return ok(c, result);
 });
 
 // ---------------------------------------------------------------------------

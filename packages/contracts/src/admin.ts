@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { CursorSchema, MailableEmailSchema, PaginationLimitSchema, TimestampMs, UlidSchema } from "./common";
-import { LISTING_STATUSES, MODERATION_REASON_CODES, OwnerListing } from "./listing";
+import { LISTING_STATUSES, ListingStatusSchema, MODERATION_REASON_CODES, OwnerListing } from "./listing";
 import { ReportReasonSchema } from "./report";
+import { RequestStatusSchema } from "./request";
 
 /**
  * Shape returned by the vision model for each photo. Deliberately not
@@ -210,4 +211,68 @@ export type AdminHealth = {
   ok: boolean;
   postal_codes_count: number;
   cron_last_run: Record<string, number | null>;
+};
+
+// ---------------------------------------------------------------------------
+// #70: GET /api/admin/requests/:id and POST /api/admin/requests/:id/remove.
+//
+// The minor-takedown rule (docs/runbooks/admin.md) was executable on the
+// giver side (hide the listing, ban the owner) but not the requester side:
+// there was no admin-facing view of a request's note, and no way to remove
+// a single request without hiding/rejecting the whole listing — which would
+// punish the giver for a requester's status. This is a targeted,
+// look-up-by-id pair, not a queue: a request's note is written by a
+// stranger to the giver, and streaming every note into a browsable admin
+// list by default would be a real privacy change for a product that
+// deliberately holds very little. A moderator who has been told about a
+// specific request (e.g. a giver forwarding one) looks it up directly.
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /api/admin/requests/:id` — deliberately not masked, unlike
+ * `AdminOwnerSummary.email_masked`: the whole point of this endpoint is that
+ * an admin cannot currently see a request's content at all, and a masked
+ * email is often genuinely ambiguous (two different local parts sharing a
+ * first letter and domain render identically). The giver already sees this
+ * same raw email/phone once they choose a request — showing it here to the
+ * one admin who already has direct D1 access is not a new class of
+ * exposure, just a better-audited path than a manual `wrangler d1 execute`.
+ * `note` is the field this endpoint exists for: the only place a request's
+ * free-text note was visible before this was the giver's own dashboard.
+ */
+export const AdminRequestView = z.object({
+  id: UlidSchema,
+  listing_id: UlidSchema,
+  listing_title: z.string(),
+  listing_status: ListingStatusSchema,
+  status: RequestStatusSchema,
+  note: z.string().nullable(),
+  email: z.string().nullable(),
+  phone: z.string().nullable(),
+  age_attested_at: TimestampMs.nullable(),
+  created_at: TimestampMs,
+  chosen_at: TimestampMs.nullable(),
+  withdrawn_at: TimestampMs.nullable(),
+  removed_at: TimestampMs.nullable(),
+  removed_reason: z.string().nullable(),
+});
+export type AdminRequestView = z.infer<typeof AdminRequestView>;
+
+/**
+ * `POST /api/admin/requests/:id/remove` — mirrors `AdminHideInput`'s shape
+ * (an optional free-text reason for the audit trail), not
+ * `AdminRejectInput`'s enum: this reason is for `moderation_events` and
+ * `requests.removed_reason`, both internal, never shown to the giver or the
+ * requester the way a listing rejection reason is shown to the giver.
+ */
+export const AdminRemoveRequestInput = z.object({
+  reason: z.string().trim().max(500).optional(),
+});
+export type AdminRemoveRequestInput = z.infer<typeof AdminRemoveRequestInput>;
+
+export type AdminRequestRemoveResult = {
+  id: string;
+  listing_id: string;
+  removed: true;
+  removed_at: number;
 };

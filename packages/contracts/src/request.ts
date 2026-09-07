@@ -33,7 +33,13 @@ export const CreateRequestResult = z.object({
 });
 export type CreateRequestResult = z.infer<typeof CreateRequestResult>;
 
-export const REQUEST_STATUSES = ["open", "chosen", "not_chosen", "withdrawn"] as const;
+// `removed` is distinct from `withdrawn`: both erase note/email/phone, but
+// `withdrawn` is the requester's own action via POST /api/requests/withdraw
+// and `removed` is an admin action via POST /api/admin/requests/:id/remove
+// (see docs/runbooks/admin.md's minor-takedown rule) — the owner dashboard
+// must not attribute an admin's removal to the requester, so the two need
+// separate statuses rather than collapsing into one.
+export const REQUEST_STATUSES = ["open", "chosen", "not_chosen", "withdrawn", "removed"] as const;
 export const RequestStatusSchema = z.enum(REQUEST_STATUSES);
 export type RequestStatus = z.infer<typeof RequestStatusSchema>;
 
@@ -88,6 +94,13 @@ export function maskPhone(phone: string): string {
  * withdrawal" section. Distinguishes "withdrawn, PII erased" from "chosen"
  * or "open" in the owner dashboard without exposing what used to be there. */
 export const WITHDRAWN_REQUEST_PLACEHOLDER = "(withdrawn — removed by the requester)";
+
+/** Same idea as `WITHDRAWN_REQUEST_PLACEHOLDER`, for the admin-initiated
+ * counterpart (`POST /api/admin/requests/:id/remove`). Kept as an honest,
+ * distinct message rather than reusing the requester-attributed one above —
+ * see `REQUEST_STATUSES`'s doc comment for why the two statuses don't
+ * collapse into one. */
+export const ADMIN_REMOVED_REQUEST_PLACEHOLDER = "(removed by Keepsake)";
 
 /**
  * `POST /api/requests/withdraw` — the no-account path for a requester to pull

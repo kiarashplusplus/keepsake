@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { SetEmailInput, type OwnerMe } from "@keepsake/contracts/owner";
 import type { ModerationReasonCode } from "@keepsake/contracts/listing";
 import {
+  ADMIN_REMOVED_REQUEST_PLACEHOLDER,
   ChooseRequestInput,
   maskEmail,
   maskPhone,
@@ -41,16 +42,21 @@ interface RequestRow {
 }
 
 function serializeOwnerViewRequest(row: RequestRow): OwnerViewRequest {
-  if (row.status === "withdrawn" || row.email === null) {
-    // Withdrawn: the requester exercised their own erasure link, and there
-    // is nothing left to mask — showing an empty `email_masked` would read
-    // as a bug, not a choice, so this says plainly what happened instead.
+  if (row.status === "withdrawn" || row.status === "removed" || row.email === null) {
+    // Withdrawn: the requester exercised their own erasure link. Removed: an
+    // admin redacted this request (POST /api/admin/requests/:id/remove, see
+    // docs/runbooks/admin.md's minor-takedown rule) — the two must not
+    // collapse into one message, since attributing an admin's action to the
+    // requester would be a false statement to the giver, not a UI nicety.
+    // Either way there is nothing left to mask — an empty `email_masked`
+    // would read as a bug, not a choice, so this says plainly what happened.
+    const isAdminRemoved = row.status === "removed";
     return {
       id: row.id,
-      note: WITHDRAWN_REQUEST_PLACEHOLDER,
+      note: isAdminRemoved ? ADMIN_REMOVED_REQUEST_PLACEHOLDER : WITHDRAWN_REQUEST_PLACEHOLDER,
       created_at: row.created_at,
-      status: "withdrawn",
-      email_masked: WITHDRAWN_REQUEST_PLACEHOLDER,
+      status: isAdminRemoved ? "removed" : "withdrawn",
+      email_masked: isAdminRemoved ? ADMIN_REMOVED_REQUEST_PLACEHOLDER : WITHDRAWN_REQUEST_PLACEHOLDER,
     };
   }
 

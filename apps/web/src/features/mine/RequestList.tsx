@@ -16,6 +16,10 @@ const STATUS_LABELS: Record<RequestStatus, { label: string; color: TextColor }> 
   chosen: { label: "Chosen", color: "accent2Text" },
   not_chosen: { label: "Not chosen", color: "textTertiary" },
   withdrawn: { label: "Withdrawn", color: "textTertiary" },
+  // Set by POST /api/admin/requests/:id/remove — distinct from a requester's
+  // own `withdrawn`, since it wasn't their action. `request.note` already
+  // reads `ADMIN_REMOVED_REQUEST_PLACEHOLDER` in this state.
+  removed: { label: "Removed", color: "textTertiary" },
 };
 
 async function copyToClipboard(value: string): Promise<boolean> {

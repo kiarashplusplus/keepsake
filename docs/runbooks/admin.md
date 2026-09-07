@@ -61,6 +61,8 @@ last changed. Each item is every `OwnerListing` field (title, story, photos, sta
 | `POST /api/admin/listings/:id/reject` | any status except `given` → `rejected`; body `{ reason }` must be one of `ADMIN_REJECT_REASONS` (`@keepsake/contracts/admin`) — the giver-facing subset of `MODERATION_REASON_CODES`, excluding the internal-only `budget`/`held_for_review` |
 | `POST /api/admin/owners/:id/ban` | sets `banned_at`/`ban_reason`; hides every one of the owner's listings that isn't already `given`; every owner-route request from that owner 403s from then on |
 | `POST /api/admin/owners/:id/unban` | clears `banned_at`/`ban_reason` only — listings the ban hid stay hidden until individually restored |
+| `GET /api/admin/requests/:id` | one request's `note`/`email`/`phone`/`status`/`age_attested_at` plus its parent listing's `id`/`title`/`status` — a targeted, on-demand lookup, not a queue field (see "Minors" section below) |
+| `POST /api/admin/requests/:id/remove` | redacts that request's `note`/`email`/`phone` (`status` → `removed`), decrements the listing's `request_count`; doesn't touch the listing itself; optional `{ reason }` in the body; 409s if already `withdrawn`/`removed` |
 | `GET /api/admin/stats` | listing counts by status, requests today, email failures today, today's `mod_text`/`mod_image` AI budget usage (KV `budget:<kind>:<day>`) |
 | `GET /api/admin/health` | `postal_codes` row count (warns if 0) and `cron_last_run` timestamps (`cron:last:moderationRetry`, `cron:last:orphanSweep`, from KV) |
 | `POST /api/admin/test-email` | sends a real message through the real `sendMail()` path to `{ to }` and reports back `{ sent, reason, provider }` — see below |
@@ -104,7 +106,7 @@ requirements (targeted-advertising/data-sale/profiling consent and precise-geolo
 known minors) — it says nothing about how to determine whether someone is a minor in the first
 place, and does not change or soften the takedown rule above.
 
-### Is this actually executable today? Checked against the live admin API — partially
+### Is this actually executable today? Checked against the live admin API — yes, both sides
 
 **Giver side (listings + the owner who posted them): yes, in one call each.**
 `POST /api/admin/listings/:id/hide` (or `/reject` if still pre-`given`) removes the content;
@@ -112,28 +114,59 @@ place, and does not change or soften the takedown rule above.
 other listing of theirs that isn't already `given`. Both are real, tested endpoints (see Actions
 above) — no manual DB work needed.
 
-**Requester side: no.** Checked the schema and the admin routes directly, not just the design docs:
+**Requester side: yes, as of #70, in two calls.** The gap this section originally described — no
+admin visibility into a request's note, and no way to remove a single request without hiding or
+rejecting the whole listing — is closed:
 
-- The `requests` table (`apps/api/migrations/0001_init.sql`, `0005_compliance.sql`) has no
-  `owner_id` and no device-token concept at all — a request is identified only by
-  `email`/`phone`/`ip_digest`, none of which is a bearer secret you can revoke the way a device
-  token is. **"Ban the device token" has no meaning for a requester** — there isn't one. The action
-  that exists for givers doesn't have a requester-side equivalent to reach for.
-- `AdminQueueItem` (`packages/contracts/src/admin.ts`) carries `reports` and `events` for a listing
-  but **no `requests` array at all** — a moderator working the queue cannot see a request's note or
-  contact info there. The only place request notes are visible today is `GET /api/me/listings/:id`
-  (`apps/api/src/routes/me.ts`), i.e. to the **giver**, not to Kiarash directly.
-- There is no admin endpoint to hide, redact, or delete a single request. The only existing removal
-  path is `POST /api/requests/withdraw`, which requires the requester's own emailed token — not
-  something a moderator can trigger on someone else's behalf.
+1. `GET /api/admin/requests/:id` — looks up one request by id: its `note`, `email`, `phone`,
+   `status`, `age_attested_at`, and the parent listing's `id`/`title`/`status` for context. Not
+   masked (see `packages/contracts/src/admin.ts`'s `AdminRequestView` doc comment for why): the
+   giver already sees the same raw email/phone once they choose a request, so showing it to the one
+   admin who already has D1 access isn't a new class of exposure, just a better-audited path than a
+   manual query.
+2. `POST /api/admin/requests/:id/remove` — redacts that one request's `note`/`email`/`phone`
+   (`status` → `removed`), decrements the listing's `request_count`, and logs a `moderation_events`
+   row (`kind='admin'`, `verdict='request_removed'`, the new `request_id` column pointing at the
+   request). Distinct from `withdrawn` (the requester's own action via
+   `POST /api/requests/withdraw`) so the owner's dashboard doesn't misattribute an admin's removal
+   to the requester — it shows "(removed by Keepsake)" instead of "(withdrawn — removed by the
+   requester)". 409s (not an idempotent 200) if the request was already `withdrawn` or `removed` —
+   there's nothing left to redact, and a silent success there is exactly the "removal endpoint
+   no-ops on a bad id" bug class this file's five-checks table warns about.
 
-So today, if actual knowledge arrives via a request note, the only available action is a manual D1
-edit (`UPDATE requests SET ... WHERE id = ?` to null out `note`/`email`/`phone`, mirroring what the
-withdrawal migration already does structurally) — not a rule the admin tooling can carry out on its
-own. **Filed as a separate ops issue** (see below) rather than writing a rule here the tooling can't
-execute; per the issue's own instruction, a written rule that assumes a button that doesn't exist is
-worse than one that says so.
+Both routes sit on `adminRoutes`, so they inherit the same `burst("RL_ADMIN")` + `adminAuth()`
+mount as every other `/api/admin/*` route — no separate wiring needed.
 
+**Deliberately not built: a device-token ban for requesters.** The written rule says "ban that
+person's device token," but a requester never has one to ban. `POST /api/listings/:id/requests`
+(`apps/api/src/routes/listings.ts`) has no `ownerAuth()` and never touches a Bearer token — a
+requester is identified only by `email`/`phone`/`ip_digest`, confirmed by reading the route, not
+assumed from the schema. Minting a new persistent device-bound secret for the anonymous request
+flow, purely so it could later be revoked, would be inventing tracking infrastructure for a product
+whose whole posture is minimal collection and no accounts — a bigger privacy cost than the gap it
+would close. For a requester, "remove the content" (endpoint 2 above) is the entire action the rule
+can mean; there is no device-side half missing, because there was never a device-side identity to
+begin with. If a specific email turns out to need blocking from *future* requests (repeat abuse,
+not a one-off), that's a separate, larger change (touching the duplicate-request check in
+`listings.ts`) and hasn't been built — no case has needed it yet.
+
+**Moderator workflow, given a specific request (e.g. a giver forwards one to Kiarash) or an id from
+a report:**
+
+```sh
+# See the note and contact info before acting
+curl -s "$SITE_URL/api/admin/requests/$REQUEST_ID" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+
+# Remove it — redacts note/email/phone, does not touch the listing
+curl -s -X POST "$SITE_URL/api/admin/requests/$REQUEST_ID/remove" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"reason":"actual knowledge of minor age"}'
+```
+
+This is deliberately a look-up-by-id pair, not a `requests` array added to `GET /api/admin/queue`:
+a request's note is written by a stranger to the giver, and streaming every note into a browsable
+queue by default would be a real privacy change for a product that deliberately holds very little.
+A moderator who has been given a specific request looks it up on demand instead.
 
 
 ## Proving email actually works
@@ -214,6 +247,15 @@ curl -s -X POST "$SITE_URL/api/admin/owners/$OWNER_ID/ban" \
   -d '{"reason":"repeated spam listings"}'
 curl -s -X POST "$SITE_URL/api/admin/owners/$OWNER_ID/unban" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# Look up one request's note/contact info (e.g. a giver forwarded it, or a
+# report references it) before acting on it
+curl -s "$SITE_URL/api/admin/requests/$REQUEST_ID" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
+
+# Remove that one request — redacts note/email/phone, leaves the listing alone
+curl -s -X POST "$SITE_URL/api/admin/requests/$REQUEST_ID/remove" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"reason":"actual knowledge of minor age"}'
 
 # Dashboard counters / operational health
 curl -s "$SITE_URL/api/admin/stats" -H "Authorization: Bearer $ADMIN_TOKEN" | jq
