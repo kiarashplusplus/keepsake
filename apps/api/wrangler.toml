@@ -131,10 +131,22 @@ MOD_IMAGE_DAILY_BUDGET = "3000"
 # moderating. ~15 neurons/call, ~$0.17 per 1000 listings — this is runaway
 # protection, not a real usage ceiling.
 SUGGEST_DAILY_BUDGET = "1000"
-# Per-IP daily ceilings for the write endpoints. An address is not a person —
-# a household or a mobile carrier's CGNAT range sits behind one IP — so these
-# are set loose on purpose; they catch a runaway script, not a family posting
-# a few keepsakes in a day.
+# Per-IP daily ceilings for the write endpoints — all six of them: listing
+# create, request, photo upload, report, outbound email, and AI autofill,
+# each named below. An address is not a person — a household or a mobile
+# carrier's CGNAT range sits behind one IP — so these are set loose on
+# purpose; they catch a runaway script, not a family posting a few keepsakes
+# in a day.
+#
+# Issue #128: this comment used to introduce three of them as though that
+# were the set, which is how an audit came to report the report and email
+# ceilings as undeclared when they had been added an hour earlier. A comment
+# claiming completeness is not a guarantee of it, so the guarantee now lives
+# somewhere that can fail: preflight's `var-usage` check reads what
+# `apps/api/src` actually reads and requires it to be declared here (and
+# every name here to be read by something, and every code fallback to equal
+# the value declared here). Add a per-IP ceiling to the code without adding
+# it below and CI says so.
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"

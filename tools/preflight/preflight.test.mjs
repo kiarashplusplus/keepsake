@@ -26,6 +26,8 @@ import {
   scheduledCronCases,
   checkLfsPointers,
   lfsPointerDetail,
+  resolveNumericExpr,
+  callArguments,
 } from "./preflight.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -497,6 +499,173 @@ test("parseToml reads [vars] and [env.x.vars] but not [[array]] tables", () => {
   const toml = parseToml(wranglerToml());
   assert.equal(toml.vars.SITE_URL, "http://localhost:8787");
   assert.equal(toml["env.preview.vars"].SITE_URL, "http://preview.example.com");
+});
+
+// ── var-usage ──────────────────────────────────────────────────────────
+//
+// The check exists because `env-parity` above passes on a tree where the
+// code and the config disagree — every fixture here starts from a good pair
+// and breaks one thing, and the first test asserts the *other* check still
+// passes on the broken tree, since "nothing else would have caught this" is
+// the whole claim (#128).
+
+const VAR_USAGE_ENV_EXAMPLE = `
+REPORT_IP_DAILY_BUDGET=10
+SHELF_MIN_ITEMS=3
+SITE_URL=http://localhost:8787
+
+# secrets:
+ADMIN_TOKEN=
+`;
+
+// All three var blocks, like the real file — `env-parity` needs the named
+// environments to have something to compare, and the point of the
+// declared-nowhere fixture is that dropping a name from *every* copy leaves
+// that check with nothing to notice.
+function varUsageToml({ dropReport = false, extraVar = "" } = {}) {
+  const vars = (site) => `
+${dropReport ? "" : 'REPORT_IP_DAILY_BUDGET = "10"'}
+SHELF_MIN_ITEMS = "3"
+SITE_URL = "${site}"
+${extraVar}`;
+  return `
+[vars]${vars("http://localhost:8787")}
+
+[[kv_namespaces]]
+binding = "KV"
+id = "local"
+
+[[ratelimits]]
+name = "RL_REPORT"
+namespace_id = "1006"
+
+[env.preview.vars]${vars("https://preview.keepsake.ing")}
+
+[env.production.vars]${vars("https://keepsake.ing")}
+`;
+}
+
+// Mirrors the real shapes: a direct `env.X`, a `parseIntVar("X", …)` with a
+// named fallback, a secret read the same way a var is, and — the one that
+// makes this check necessary — a name that only ever reaches `env[…]`
+// through a `…Var` union and its call site.
+function varUsageSource({ fallback = "10", computedKey = "options.ipDailyLimitVar" } = {}) {
+  return `
+import { parseIntVar } from "./env.js";
+
+export type IpDailyLimitVar = "REPORT_IP_DAILY_BUDGET";
+
+const DEFAULT_REPORT_IP_DAILY_BUDGET = ${fallback};
+
+export function siteUrl(env) {
+  return env.SITE_URL;
+}
+
+export function admin(env) {
+  return env.ADMIN_TOKEN;
+}
+
+export function shelfMinItems(env) {
+  return parseIntVar("SHELF_MIN_ITEMS", env.SHELF_MIN_ITEMS, 3);
+}
+
+export function dailyBudget(options) {
+  return (c) => parseIntVar(options.ipDailyLimitVar, c.env[${computedKey}], options.fallbackIpDailyLimit);
+}
+
+export const reportBudget = dailyBudget({
+  ipDailyLimitVar: "REPORT_IP_DAILY_BUDGET",
+  fallbackIpDailyLimit: DEFAULT_REPORT_IP_DAILY_BUDGET,
+});
+`;
+}
+
+function varUsageTree(overrides = {}) {
+  return {
+    ".env.example": VAR_USAGE_ENV_EXAMPLE,
+    "apps/api/wrangler.toml": varUsageToml(),
+    "apps/api/src/budgets.ts": varUsageSource(),
+    ...overrides,
+  };
+}
+
+test("var-usage: passes when every var is declared, read and matched by its fallback", () => {
+  const result = runOne("var-usage", varUsageTree());
+  assert.equal(result.status, "pass");
+  // The indirect name is the point: REPORT_IP_DAILY_BUDGET appears as
+  // `env.X` nowhere in the fixture, only in the union and the call site.
+  assert.match(result.details.join("\n"), /3 var\(s\)/);
+});
+
+test("var-usage: fails when a var the code reads is declared in no [vars] block", () => {
+  const files = varUsageTree({ "apps/api/wrangler.toml": varUsageToml({ dropReport: true }) });
+  files[".env.example"] = VAR_USAGE_ENV_EXAMPLE.replace("REPORT_IP_DAILY_BUDGET=10\n", "");
+  const result = runOne("var-usage", files);
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /REPORT_IP_DAILY_BUDGET: read at/);
+
+  // The reason this check has to exist: with the name gone from all four
+  // copies of the list, env-parity is perfectly happy.
+  assert.equal(runOne("env-parity", files).status, "pass");
+});
+
+test("var-usage: fails when a declared var is read nowhere (the MAX_PHOTOS shape)", () => {
+  const result = runOne("var-usage", {
+    ...varUsageTree({ "apps/api/wrangler.toml": varUsageToml({ extraVar: 'IMAGE_TRANSFORMS_ENABLED = "1"' }) }),
+    ".env.example": `${VAR_USAGE_ENV_EXAMPLE}\nIMAGE_TRANSFORMS_ENABLED=1\n`,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /IMAGE_TRANSFORMS_ENABLED: declared in .* but read nowhere/);
+});
+
+test("var-usage: a var named only in a comment is not a read", () => {
+  const result = runOne("var-usage", {
+    ...varUsageTree({ "apps/api/wrangler.toml": varUsageToml({ extraVar: 'IMAGE_TRANSFORMS_ENABLED = "1"' }) }),
+    ".env.example": `${VAR_USAGE_ENV_EXAMPLE}\nIMAGE_TRANSFORMS_ENABLED=1\n`,
+    "apps/api/src/notes.ts": "// env.IMAGE_TRANSFORMS_ENABLED is described here and read by nothing.\nexport const x = 1;\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /IMAGE_TRANSFORMS_ENABLED: declared in .* but read nowhere/);
+});
+
+test("var-usage: fails when a code fallback disagrees with the declared value", () => {
+  const result = runOne("var-usage", varUsageTree({ "apps/api/src/budgets.ts": varUsageSource({ fallback: "5" }) }));
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /REPORT_IP_DAILY_BUDGET: .*declares 10 but .* falls back to 5/);
+});
+
+test("var-usage: fails on a computed env[...] whose key it cannot resolve", () => {
+  const result = runOne("var-usage", varUsageTree({ "apps/api/src/budgets.ts": varUsageSource({ computedKey: "key" }) }));
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /computed env\[key\]/);
+});
+
+test("var-usage: a computed env[...] naming a binding is not a var read", () => {
+  const result = runOne("var-usage", {
+    ...varUsageTree(),
+    "apps/api/src/burst.ts": "export function burst(c, bindingName) {\n  return c.env[bindingName];\n}\n",
+  });
+  assert.equal(result.status, "pass");
+});
+
+test("var-usage: skips when wrangler.toml is not present", () => {
+  const result = runOne("var-usage", { "apps/api/src/budgets.ts": varUsageSource() });
+  assert.equal(result.status, "skip");
+});
+
+test("resolveNumericExpr reads literals, products and identifier chains", () => {
+  const globals = new Map([["DEFAULT_MAX", "OTHER"], ["OTHER", "5 * 1024 * 1024"], ["LOOP", "LOOP"]]);
+  assert.equal(resolveNumericExpr("10", null, globals), 10);
+  assert.equal(resolveNumericExpr("5 * 1024 * 1024", null, globals), 5242880);
+  assert.equal(resolveNumericExpr("DEFAULT_MAX", null, globals), 5242880);
+  assert.equal(resolveNumericExpr("options.fallbackIpDailyLimit", null, globals), undefined);
+  assert.equal(resolveNumericExpr("LOOP", null, globals), undefined);
+});
+
+test("callArguments splits a call written across lines", () => {
+  const text = 'parseIntVar(\n  "SHELF_MIN_ITEMS",\n  env.SHELF_MIN_ITEMS as string | undefined,\n  DEFAULT_SHELF,\n)';
+  const args = callArguments(text, text.indexOf("("));
+  assert.deepEqual(args, ['"SHELF_MIN_ITEMS"', "env.SHELF_MIN_ITEMS as string | undefined", "DEFAULT_SHELF", ""]);
 });
 
 // ── cron-triggers ──────────────────────────────────────────────────────
