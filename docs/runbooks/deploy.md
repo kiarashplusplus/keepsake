@@ -305,11 +305,20 @@ worth verifying.
 ## What a deploy actually does
 
 1. `pnpm install --frozen-lockfile`
-2. `pnpm --filter @keepsake/web export` with the four `EXPO_PUBLIC_*` values `deploy.yml`'s
-   export step actually passes (`SITE_URL`, `TURNSTILE_SITE_KEY`, `CF_WEB_ANALYTICS_TOKEN`,
-   `ENV`) baked in — **not** every `EXPO_PUBLIC_*` the app reads: `config.ts` also reads
-   `EXPO_PUBLIC_GOOGLE_ADS_ID`, `_GIVE_LABEL` and `_REQUEST_LABEL`, which that env block never
-   sets, so all three bake as `""` in every deployed bundle (#175)
+2. `pnpm --filter @keepsake/web export` with every `EXPO_PUBLIC_*` value `.env.example` declares
+   baked in. The export step used to pass four of the seven (`SITE_URL`,
+   `TURNSTILE_SITE_KEY`, `CF_WEB_ANALYTICS_TOKEN`, `ENV`) while `config.ts` read all seven, so
+   `EXPO_PUBLIC_GOOGLE_ADS_ID`, `_GIVE_LABEL` and `_REQUEST_LABEL` baked as `""` in every
+   deployed bundle with nothing failing — the guard meant to catch that built its expectations
+   from `process.env`, i.e. from the very environment that was missing them. Both halves are
+   fixed: `deploy.yml` now names all seven, `verify-public-env.mjs` derives its expected set from
+   `.env.example` and fails a deployed export when a declared name is unset, and preflight's
+   `public-env-passthrough` compares the two lists on every pull request.
+   **This step fails today**, deliberately: the three Google Ads variables are listed in the
+   workflow but are not set in either GitHub Environment, so no ads tag has ever loaded. Setting
+   them (or removing the three names from `.env.example` and `config.ts`) is the open decision —
+   leaving them declared, read, described in `docs/legal-considerations.md`, and passed by
+   nothing is the state that produced #175.
 3. `wrangler d1 migrations apply keepsake-db-<env> --env <env> --remote` — the database is named
    per tier (`keepsake-db-preview` / `keepsake-db-production`); plain `keepsake-db` is the
    top-level dev name only and matches neither deploy env

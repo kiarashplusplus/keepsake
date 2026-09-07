@@ -148,14 +148,21 @@ is the lock.
   with no rule for the only PII Keepsake holds, IP hashes kept forever against a privacy page that
   promises 48-hour expiry twice, a recovery token logged verbatim because it travels as a path
   segment, and a request endpoint that is an oracle for the giver's address.
-- **More checks that could not fail:** #166 (preflight's shell-syntax check has never examined a
-  byte of shell), #173 (the consent banner is never scanned by axe), #175, #176, #181, #191. Six
-  more instances of `AGENTS.md`'s table, found in a single pass — the table is at seven rows and
-  should be read as a pattern, not a closed list.
+- **More checks that could not fail:** #173 (the consent banner is never scanned by axe), #181,
+  #191 — plus **#166, #175 and #176, fixed** (PR #198): preflight's `shell-syntax` now parses the
+  workflow `run:` blocks that hold all this repo's shell and fails rather than skips when it finds
+  none; `cron-triggers` reads `cron/registry.ts` and asserts the three-way agreement two documents
+  already claimed; and `verify-public-env` derives its expectations from `.env.example` instead of
+  from the environment that forgot the variable. Six instances of `AGENTS.md`'s table found in a
+  single pass — the table is now at eleven rows and should be read as a pattern, not a closed
+  list.
 - **Moderation and abuse surface:** #168, #171, #179, #183.
 - **Correctness:** #163, #172, #174, #180, #184, #185, #186, #187.
-- **Ops and backup:** #164 (the documented D1 backup omits `listing_aspects`, and
-  `aspects_backfilled_at` makes the loss unrecoverable), #178.
+- **Ops and backup:** #178 — plus **#164, fixed** (PR #198): the documented D1 backup omitted
+  `listing_aspects`, and because `aspects_backfilled_at` *is* in the export the loss was
+  unrecoverable. `restore.md`'s `--table` list now includes it, and preflight's new
+  `backup-tables` check compares that list against the tables the migrations create, so the next
+  migration that adds a table fails the build instead of the backup.
 
 *Workable by anyone (pre-audit):*
 - **#104** — `wrangler dev` dies mid-e2e with no diagnostic and `serve.mjs`'s restart hides it.
