@@ -47,6 +47,36 @@ export interface AssertBindingsResult {
  * sender domain onboarding are unverified as of the plan (Risks #1), and a
  * Worker that can serve the feed and take listings shouldn't report itself
  * down just because notification email isn't wired up yet.
+ *
+ * **This is presence only, and presence is not health.** `/health` does a
+ * real read past this check for `DB`, `BUCKET`, `KV` (issue #15) and, since
+ * #191, `ASSETS` — a binding can exist and still be unreachable, and for
+ * `ASSETS` a binding that exists over a broken or partial `dist/` is exactly
+ * the state `deploy.yml`'s "does /health report this commit" step verifies
+ * across without noticing.
+ *
+ * `AI` and `EMAIL` deliberately stay presence-only, and the reason is
+ * written here so the next audit does not re-file them (#191 considered it
+ * and left them):
+ *
+ *  - A real `AI` read is an inference. It costs money on every health poll
+ *    and draws down the same per-day moderation budget #18 flags as
+ *    exhaustible, so a monitor hitting `/health` on a loop could spend the
+ *    budget that keeps listings moving through the queue. The failure mode
+ *    that would catch — the binding present but Workers AI refusing — is
+ *    already visible where it matters, because `moderation/pipeline.ts`
+ *    captures its own errors and `orphanSweep`/`moderationRetry` heartbeats
+ *    go stale if the queue stops draining.
+ *  - A real `EMAIL` read is a delivered message. There is no no-op probe: a
+ *    send goes to a real inbox and spends deliverability reputation on a
+ *    `p=reject` domain. `POST /api/admin/test-email` is the on-demand,
+ *    authenticated version of that check, and `email_events` plus the daily
+ *    digest's `email_failures_today` are the standing one.
+ *
+ * `VECTORIZE` is not in this list at all because it is optional by
+ * construction (see the type above) — its absence is a supported state, not
+ * a missing binding — so `/health` grades it separately against
+ * `SEMANTIC_SEARCH` rather than folding it in here.
  */
 export function assertBindings(env: Env): AssertBindingsResult {
   const checks = {

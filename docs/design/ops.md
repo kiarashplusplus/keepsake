@@ -112,11 +112,25 @@ implied.
 ## Health checks
 
 `/health` performs a real operation per binding, not a presence check: `SELECT 1` on D1, a
-`head()` on R2, a `get()` on KV. A `null` result from either of the last two still grades `ok` —
-an absent key proves the service answered, and only a thrown error is a failure. `AI` stays
-presence-only on purpose: a real inference on every health poll would draw down the same daily
-moderation budget #18 flags as exhaustible. `EMAIL` stays presence-only and grades `degraded`
-rather than failing the whole check.
+`head()` on R2, a `get()` on KV, and — since #191 — a real `fetch()` of the SPA shell through
+`ASSETS`. A `null` result from the R2/KV probes still grades `ok` — an absent key proves the
+service answered, and only a thrown error is a failure; the assets probe grades on the response
+status, because `deploy.yml`'s only post-deploy verification is that `/health` reports the right
+commit, and `/health` is answered by Worker code rather than by the assets binding. A deploy over
+a broken or partial `dist/` used to verify green while the site served nothing usable.
+
+`vectorize` is a fourth field with **three** states rather than two, for the same reason the
+Observatory's Cloudflare panels have three: `ok` (binding present), `error` (`SEMANTIC_SEARCH` is
+on and the binding is absent — search has silently reverted to FTS while the var and the privacy
+page both still say it is running; this fails `ok`), and `off` (the kill switch is off and there
+is no binding, a supported configuration and not a fault). It is presence rather than a query
+because a real Vectorize read costs an embedding call.
+
+`AI` stays presence-only on purpose: a real inference on every health poll would draw down the
+same daily moderation budget #18 flags as exhaustible. `EMAIL` stays presence-only and grades
+`degraded` rather than failing the whole check — a real read there is a delivered message, and
+`POST /api/admin/test-email` is the on-demand version. Both reasons are written down beside
+`assertBindings` in `src/env.ts` so the next audit does not re-file them.
 
 `GET /api/admin/health` is the separate, authenticated signal: it grades each cron's
 `cron:last:<name>` heartbeat against the `staleAfterMs` recorded per job in
