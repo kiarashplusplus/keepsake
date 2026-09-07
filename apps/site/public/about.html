@@ -163,6 +163,15 @@
               </div>
             </li>
           </ol>
+          <!-- Inline rather than a new class in the shared stylesheet: this is the only bare
+               paragraph on the marketing pages that sits directly on the table ground, so it
+               needs a reading measure and the section's own top rhythm, nothing more. Colour is
+               left at the inherited `--ink` on purpose — `--text2` is only contrast-verified on
+               the paper surfaces (`.why-grid p`), not on the ground. -->
+          <p style="max-width: var(--measure-prose); margin: var(--space-xl) 0 0;">
+            Keepsake serves the United States and Canada today. It isn't available in the UK or the
+            Crown Dependencies — the <a href="/terms">Terms</a> explain why.
+          </p>
         </div>
       </section>
 
@@ -283,7 +292,9 @@
               <h3>No accounts to maintain</h3>
               <p>
                 There's no password to lose and no profile to keep up. Your browser holds a
-                private key that proves the listings are yours — that's the whole login.
+                private key that proves the listings are yours — that's the whole login. Add an
+                email while you're giving and we can mail you a new key if that browser ever
+                forgets; skip it and clearing your storage means starting over.
               </p>
             </div>
             <div>
@@ -295,7 +306,8 @@
               </svg>
               <h3>Every listing is screened</h3>
               <p>
-                Photos and stories are checked automatically before they go live, and anyone can
+                Photos and stories go through automated screening before they appear at all, and
+                anything borderline waits, unpublished, for a person to look at it. Anyone can
                 report a listing that shouldn't be there.
               </p>
             </div>
