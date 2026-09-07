@@ -136,6 +136,23 @@ const LOCKED_PASSAGES: { name: string; phrases: string[] }[] = [
       "banning the device key that posted it",
     ],
   },
+  {
+    // #108: the entity question behind this section was decided, and decided
+    // as "no entity" — a sole proprietorship, so every disclaimer on this
+    // site protects a person rather than a company. The accountability point
+    // that PIPEDA Sched. 1 cl. 4.8 and RIDTPPA §6-48.1-3(a) both want is
+    // served by naming that person in full, and the decision to keep his home
+    // address off a public page (docs/legal-entity-and-insurance.md, "Where
+    // the address goes") is only defensible while the page still says how to
+    // get one for a legal notice. Dropping either half is a substantive
+    // change to a compliance posture, not a copy edit.
+    name: "the named individual controller and the address on request (#108)",
+    phrases: [
+      "Kiarash Adl, operating as an individual",
+      "not through a company or any other entity",
+      "If you need a postal address for a legal notice",
+    ],
+  },
 ];
 
 /** `<h2>` text in source order, whitespace-collapsed the same way
