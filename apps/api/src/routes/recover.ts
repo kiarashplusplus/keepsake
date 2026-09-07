@@ -21,12 +21,26 @@ import { recover as recoverTemplate } from "../email/templates/recover.js";
 type Vars = { validatedBody: RecoverInput };
 export const recoverRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
-/** Short-lived on purpose: this token is only useful for the few minutes
- * between requesting it and clicking the emailed link. Exported because the
- * recovery email states this lifetime to the reader in words — it is handed
- * to the template rather than restated there, and `test/email.test.ts` holds
- * the two together. */
-export const RECOVER_TTL_MS = 30 * 60 * 1000;
+/** Short-lived on purpose: this token is only useful for the stretch between
+ * requesting it and clicking the emailed link. Exported because the recovery
+ * email states this lifetime to the reader in words — it is handed to the
+ * template rather than restated there, and `test/email.test.ts` holds the
+ * two together.
+ *
+ * Raised from 30 to 60 minutes on 2026-09-07 (Kiarash's call). The clock
+ * starts when `sendMail` returns, not when the mail lands, and everything
+ * between those two moments is someone else's: greylisting alone routinely
+ * costs 15 minutes on a first send from a young domain, and this domain is
+ * young. Half an hour of that budget spent in a queue leaves a person
+ * clicking a dead link through no fault of their own, on the one path that
+ * exists *because* they already lost access. The extra half hour costs
+ * little: the token is single-use, hashed at rest, and exchanging it rotates
+ * the owner token immediately, so a stolen mailbox's window widens by 30
+ * minutes on an attack that already requires the mailbox. Delivery outside
+ * Kiarash's own address has still never been observed arriving (#6), which
+ * is the other reason not to be tight here — the failure it would produce is
+ * indistinguishable from the one #6 describes. */
+export const RECOVER_TTL_MS = 60 * 60 * 1000;
 
 // Issue #92: this route puts a real message in a real inbox, and until now
 // the only thing in front of it was the best-effort burst brake (~2.6x
