@@ -28,10 +28,15 @@ import {
   lfsPointerDetail,
   resolveNumericExpr,
   callArguments,
+  extractWorkflowRunBlocks,
 } from "./preflight.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PREFLIGHT_BIN = path.join(HERE, "preflight.mjs");
+// Some checks are only meaningful against the real tree — a fixture can prove
+// the logic works and still leave the repository's own bytes unexamined,
+// which is exactly what #166 found.
+const REPO_ROOT = path.resolve(HERE, "../..");
 
 function makeTree(files) {
   const root = mkdtempSync(path.join(tmpdir(), "keepsake-preflight-"));
@@ -1174,9 +1179,141 @@ test("shell-syntax: fails for a syntax error", () => {
   assert.equal(result.status, "fail");
 });
 
-test("shell-syntax: skips when there are no shell scripts", () => {
+test("shell-syntax: skips only a tree with neither shell scripts nor workflows", () => {
   const result = runOne("shell-syntax", {});
   assert.equal(result.status, "skip");
+});
+
+// #166: the tests above are the shape the audit called out — they can only
+// fail against an invented `.sh` file, which this repository has never
+// contained. Everything below runs against **this repository's own bytes**.
+
+test("shell-syntax: this repo really does contain no .sh files, so the .sh glob alone guards nothing", () => {
+  const shellFiles = [
+    ...createContext(REPO_ROOT).walk("tools"),
+    ...createContext(REPO_ROOT).walk(".github"),
+  ].filter((f) => f.endsWith(".sh"));
+  assert.deepEqual(shellFiles, [], "if a .sh file ever lands, this assertion is the place to notice");
+});
+
+test("shell-syntax: parses this repository's actual workflow run: blocks, and there are some", () => {
+  const result = runChecks(["shell-syntax"], REPO_ROOT)[0];
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  const blocks = Number(/and (\d+) workflow/.exec(result.details[0])?.[1]);
+  assert.ok(blocks > 0, `expected real run: blocks to be parsed, got: ${result.details[0]}`);
+});
+
+test("shell-syntax: extracts every run: key the real workflows contain", () => {
+  const ctx = createContext(REPO_ROOT);
+  const files = ctx.walk(".github/workflows").filter((f) => /\.ya?ml$/.test(f));
+  let runKeys = 0;
+  let extracted = 0;
+  for (const file of files) {
+    const text = ctx.readText(file);
+    runKeys += (text.match(/^\s*(?:-\s+)?run:/gm) ?? []).length;
+    extracted += extractWorkflowRunBlocks(text).length;
+  }
+  assert.ok(runKeys > 0, "no run: keys in .github/workflows — has the layout changed?");
+  assert.equal(extracted, runKeys, "the extractor silently dropped a run: block");
+});
+
+test("shell-syntax: goes red when a `fi` is removed from the real uptime.yml", () => {
+  // The audit's own break-the-guard experiment, as a test. Uses the shipped
+  // file's bytes rather than an invented script, so it cannot drift into
+  // proving something about a fixture only.
+  const real = createContext(REPO_ROOT).readText(".github/workflows/uptime.yml");
+  assert.ok(real, ".github/workflows/uptime.yml is missing");
+  const lines = real.split("\n");
+  const fiAt = lines.findIndex((l) => l.trim() === "fi");
+  assert.ok(fiAt > 0, "uptime.yml no longer contains a bare `fi` to remove");
+  lines.splice(fiAt, 1);
+
+  const good = runOne("shell-syntax", { ".github/workflows/uptime.yml": real });
+  assert.equal(good.status, "pass", good.details.join("\n"));
+
+  const broken = runOne("shell-syntax", { ".github/workflows/uptime.yml": lines.join("\n") });
+  assert.equal(broken.status, "fail");
+  assert.match(broken.details.join("\n"), /uptime\.yml:\d+: line \d+:/);
+});
+
+test("shell-syntax: fails rather than skips when workflows have run: blocks it cannot parse", () => {
+  const result = runOne("shell-syntax", {
+    ".github/workflows/py.yml": `name: Py
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - shell: python
+        run: |
+          print("not bash")
+`,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /extracted none|no shell found at all/);
+});
+
+test("shell-syntax: fails rather than skips for a workflow tree containing no shell at all", () => {
+  const result = runOne("shell-syntax", {
+    ".github/workflows/uses-only.yml": `name: Uses
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+`,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /no shell found at all/);
+});
+
+test("shell-syntax: \${{ }} expressions are substituted, not parsed as shell", () => {
+  const result = runOne("shell-syntax", {
+    ".github/workflows/expr.yml": `name: Expr
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          url="\${{ vars.SITE_URL }}/health"
+          echo "$url"
+`,
+  });
+  assert.equal(result.status, "pass", result.details.join("\n"));
+});
+
+test("extractWorkflowRunBlocks: dedents block scalars, keeps inline runs, and reads shell:", () => {
+  const blocks = extractWorkflowRunBlocks(`name: X
+on: [push]
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pnpm install --frozen-lockfile
+      - name: Multi
+        run: |
+          set -euo pipefail
+          if [ -n "$X" ]; then
+            echo yes
+          fi
+      - name: Node
+        shell: node
+        run: console.log(1)
+`);
+  assert.equal(blocks.length, 3);
+  assert.equal(blocks[0].script, "pnpm install --frozen-lockfile");
+  assert.equal(blocks[0].shell, null);
+  assert.equal(
+    blocks[1].script,
+    'set -euo pipefail\nif [ -n "$X" ]; then\n  echo yes\nfi',
+    "the block scalar must be dedented to column 0 and keep its relative indentation",
+  );
+  assert.equal(blocks[1].shell, null);
+  assert.equal(blocks[2].shell, "node");
+  // Line mapping: bash's "line 1" is the first line of the script body.
+  assert.equal(blocks[1].firstScriptLine, 10);
 });
 
 // ── CLI: --only and --json ────────────────────────────────────────────

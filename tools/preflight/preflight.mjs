@@ -1383,20 +1383,247 @@ function checkPublicEnv(ctx) {
   return { status: "pass", details: [`${seen.size} EXPO_PUBLIC_* name(s) across ${scanFiles.length} file(s), none look like secrets`] };
 }
 
-function checkShellSyntax(ctx) {
-  const scripts = [...ctx.walk("tools"), ...ctx.walk(".github")].filter((f) => f.endsWith(".sh"));
-  if (scripts.length === 0) return { status: "skip", details: ["no *.sh files under tools/ or .github/"] };
+// ── shell-syntax ───────────────────────────────────────────────────────────
+//
+// Issue #166. This check used to glob `tools/**` and `.github/**` for `*.sh`
+// and skip when there were none. There has never been a `.sh` file in this
+// repository — not in the working tree, not anywhere in git history — so the
+// check had skipped every time it had ever run, and it is named for catching
+// exactly the failure that #106 was: a shell parse error in `uptime.yml` kills
+// the only monitor of the live site, and because its alerting step is
+// `if: failure() && steps.check.outputs.failures != ''` and `failures` is
+// never written when the script dies at parse time, **no issue is filed**.
+//
+// All of this repo's shell is inline in workflow `run:` blocks — uptime's
+// probe and `gh issue` alerting, deploy's commit verification,
+// report-pressure's dedupe. So the check now extracts those blocks and runs
+// `bash -n` on each, and keeps the `*.sh` glob for whenever one appears.
+//
+// Two deliberate choices:
+//
+//   1. **"Nothing to check" is a failure, not a skip**, whenever the workflows
+//      do contain `run:` blocks. A check whose "nothing to do" state is
+//      indistinguishable from "I am misconfigured" is what let this sit for
+//      the whole life of the repository. The only remaining skip is the
+//      honest one: no `.sh` files *and* no `.github/workflows` at all, which
+//      is a fixture tree or a monorepo path that has not landed yet.
+//   2. `${{ … }}` is replaced with a placeholder word rather than left in
+//      place. GitHub substitutes those before the shell ever sees them, so
+//      parsing them literally would report syntax errors that do not exist at
+//      run time. The placeholder is a bare word, which is what an
+//      unquoted expression expands to in practice.
+//
+// Known gap, stated rather than papered over: `bash -n` is a *parse*, so it
+// catches an unbalanced `fi`/`done`/quote and nothing else. A step whose
+// `shell:` is not bash/sh (python, pwsh, node) is listed as not-parsed rather
+// than silently ignored.
 
-  const details = [];
-  for (const script of scripts) {
-    const result = spawnSync("bash", ["-n", path.join(ctx.root, script)], { encoding: "utf8" });
-    if (result.status !== 0) {
-      const lastLine = (result.stderr || "").trim().split("\n").pop();
-      details.push(`${script}: ${lastLine || "bash -n failed"}`);
+// GitHub expressions are substituted before the shell runs; parse a
+// placeholder in their place.
+const GHA_EXPRESSION_RE = /\$\{\{[\s\S]*?\}\}/g;
+const GHA_EXPRESSION_PLACEHOLDER = "GHA_EXPR";
+// `bash`, `sh`, and the `bash -e {0}`/`bash --noprofile … {0}` custom forms.
+const PARSEABLE_SHELL_RE = /^(?:\/usr\/bin\/env\s+)?(?:bash|sh)(?:\s|$)/;
+
+function indentWidth(line) {
+  return line.length - line.trimStart().length;
+}
+
+/**
+ * Every `run:` block in a workflow file, without a YAML parser.
+ *
+ * This module imports node builtins only, on purpose (see `splitWorkflowJobs`
+ * below for why `yaml` is not available to lean on), so this walks the same
+ * indentation shape that function already trusts.
+ *
+ * Returns `[{ line, firstScriptLine, shell, script }]` — `line` is the
+ * 1-based line of the `run:` key, `firstScriptLine` the 1-based line the
+ * returned script's first line came from (so `bash -n`'s "line N" can be
+ * mapped back onto the workflow file), and `shell` the step's `shell:` value
+ * or `null` when it takes the runner default.
+ */
+export function extractWorkflowRunBlocks(text) {
+  const lines = text.split("\n");
+  const blocks = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = /^(\s*)(-\s+)?run:(.*)$/.exec(lines[i]);
+    if (!match) continue;
+    const keyIndent = match[1].length + (match[2]?.length ?? 0);
+    const rest = (match[3] ?? "").trim();
+
+    let script;
+    let firstScriptLine;
+    let endLine = i;
+
+    const blockScalar = /^([|>])([+-]?)(\d*)$|^([|>])(\d*)([+-]?)$/.exec(rest);
+    if (blockScalar) {
+      const folded = rest.startsWith(">");
+      const body = [];
+      let j = i + 1;
+      for (; j < lines.length; j += 1) {
+        if (lines[j].trim() === "") {
+          body.push("");
+          continue;
+        }
+        if (indentWidth(lines[j]) <= keyIndent) break;
+        body.push(lines[j]);
+      }
+      endLine = j - 1;
+      // Trailing blank lines belong to the next key, not to this script.
+      while (body.length > 0 && body[body.length - 1] === "") body.pop();
+      const contentIndents = body.filter((l) => l !== "").map(indentWidth);
+      const strip = contentIndents.length > 0 ? Math.min(...contentIndents) : 0;
+      const dedented = body.map((l) => (l === "" ? "" : l.slice(strip)));
+      script = folded ? foldYamlScalar(dedented) : dedented.join("\n");
+      firstScriptLine = i + 2;
+    } else if (rest === "") {
+      continue; // `run:` with nothing after it — not shell, and YAML wouldn't accept it either.
+    } else {
+      script = unquoteYamlScalar(rest);
+      firstScriptLine = i + 1;
+    }
+
+    blocks.push({
+      line: i + 1,
+      firstScriptLine,
+      shell: stepShell(lines, i, endLine, keyIndent),
+      script,
+    });
+    i = endLine;
+  }
+
+  return blocks;
+}
+
+/** YAML folded (`>`) scalars join consecutive non-blank lines with a space. */
+function foldYamlScalar(bodyLines) {
+  const out = [];
+  let buffer = [];
+  for (const line of bodyLines) {
+    if (line === "") {
+      if (buffer.length > 0) out.push(buffer.join(" "));
+      buffer = [];
+      out.push("");
+    } else {
+      buffer.push(line);
     }
   }
-  if (details.length > 0) return { status: "fail", details };
-  return { status: "pass", details: [`${scripts.length} shell script(s) parse`] };
+  if (buffer.length > 0) out.push(buffer.join(" "));
+  return out.join("\n");
+}
+
+function unquoteYamlScalar(value) {
+  const double = /^"([\s\S]*)"$/.exec(value);
+  if (double) return double[1].replace(/\\"/g, '"');
+  const single = /^'([\s\S]*)'$/.exec(value);
+  if (single) return single[1].replace(/''/g, "'");
+  return value;
+}
+
+/**
+ * The `shell:` a step declares, or `null` for the runner default (bash on
+ * ubuntu). Sibling keys of `run:` sit at the same indentation; the step's own
+ * list marker sits two columns left of them.
+ */
+function stepShell(lines, runLine, runEndLine, keyIndent) {
+  const readShell = (line) => {
+    const m = /^(?:-\s+)?shell:\s*(.+?)\s*$/.exec(line.trim());
+    return m ? unquoteYamlScalar(m[1]) : null;
+  };
+
+  const scan = (from, to, step) => {
+    for (let i = from; step > 0 ? i <= to : i >= to; i += step) {
+      const line = lines[i];
+      if (line === undefined || line.trim() === "") continue;
+      const indent = indentWidth(line);
+      if (indent > keyIndent) continue; // nested under a sibling key (an `env:` map, say)
+      if (indent === keyIndent) {
+        const shell = readShell(line);
+        if (shell) return shell;
+        continue;
+      }
+      // Left of the sibling keys: the step's own `- ` marker ends the step.
+      if (line.trim().startsWith("- ") && indent + 2 === keyIndent) return readShell(line);
+      return null;
+    }
+    return null;
+  };
+
+  return scan(runLine - 1, 0, -1) ?? scan(runEndLine + 1, lines.length - 1, 1);
+}
+
+function checkShellSyntax(ctx) {
+  const scripts = [...ctx.walk("tools"), ...ctx.walk(".github")].filter((f) => f.endsWith(".sh"));
+  const workflowFiles = ctx.exists(WORKFLOWS_DIR)
+    ? ctx.walk(WORKFLOWS_DIR).filter((f) => /\.ya?ml$/.test(f))
+    : [];
+
+  const units = [];
+  for (const script of scripts) {
+    units.push({ label: script, script: ctx.readText(script) ?? "", firstScriptLine: 1 });
+  }
+
+  let filesWithRunText = 0;
+  let runBlocks = 0;
+  const notParsed = [];
+  for (const file of workflowFiles) {
+    const text = ctx.readText(file) ?? "";
+    if (/^\s*(?:-\s+)?run:/m.test(text)) filesWithRunText += 1;
+    for (const block of extractWorkflowRunBlocks(text)) {
+      runBlocks += 1;
+      if (block.shell !== null && !PARSEABLE_SHELL_RE.test(block.shell)) {
+        notParsed.push(`${file}:${block.line}: shell: ${block.shell} — not parsed by bash -n`);
+        continue;
+      }
+      units.push({
+        label: `${file}:${block.line}`,
+        script: block.script.replace(GHA_EXPRESSION_RE, GHA_EXPRESSION_PLACEHOLDER),
+        firstScriptLine: block.firstScriptLine,
+      });
+    }
+  }
+
+  // The whole point of #166: "found nothing" must be loud. The one honest
+  // skip is a tree with neither shell scripts nor workflows.
+  if (scripts.length === 0 && workflowFiles.length === 0) {
+    return { status: "skip", details: [`no *.sh files under tools/ or .github/, and no ${WORKFLOWS_DIR}`] };
+  }
+  if (units.length === 0) {
+    return {
+      status: "fail",
+      details: [
+        filesWithRunText > 0
+          ? `${filesWithRunText} workflow file(s) under ${WORKFLOWS_DIR} contain \`run:\` blocks but this check extracted none — the extractor is broken, so it has been parsing nothing. It must not report "nothing to do" while the shell that alerts us the site is down goes unchecked (#166).`
+          : `no shell found at all: 0 *.sh files under tools/ or .github/ and 0 \`run:\` blocks across ${workflowFiles.length} workflow file(s). If that is genuinely true, this check has nothing to guard and should be removed rather than left skipping (#166).`,
+      ],
+    };
+  }
+
+  const details = [];
+  for (const unit of units) {
+    const result = spawnSync("bash", ["-n"], { input: unit.script, encoding: "utf8" });
+    if (result.status === 0) continue;
+    const stderr = (result.stderr || "").trim();
+    const message = (stderr.split("\n").pop() || "bash -n failed")
+      // bash counts lines from the start of what it was handed; say where that
+      // is in the workflow file instead.
+      .replace(/^bash: line (\d+):/, (_, n) => `line ${unit.firstScriptLine + Number(n) - 1}:`);
+    details.push(`${unit.label}: ${message}`);
+  }
+
+  if (details.length > 0) {
+    details.push(
+      "A workflow whose shell does not parse dies on its first run — and uptime.yml's alerting step " +
+        "is gated on an output the dead script never writes, so nobody is told (#106, #166).",
+    );
+    return { status: "fail", details };
+  }
+  const summary = [
+    `${scripts.length} shell script(s) and ${runBlocks - notParsed.length} workflow \`run:\` block(s) parse (bash -n), across ${workflowFiles.length} workflow file(s)`,
+  ];
+  for (const skipped of notParsed) summary.push(skipped);
+  return { status: "pass", details: summary };
 }
 
 // ── gh-repo-context ────────────────────────────────────────────────────────
@@ -1511,7 +1738,7 @@ export const CHECKS = {
   "lfs-pointers": { description: "apps/api/seeds/*.sql are not unfetched LFS pointers", run: checkLfsPointers },
   "public-env": { description: "EXPO_PUBLIC_* names are never secrets", run: checkPublicEnv },
   "gh-repo-context": { description: "workflow steps running `gh` can resolve the repo", run: checkGhRepoContext },
-  "shell-syntax": { description: "bash -n on every *.sh under tools/ and .github/", run: checkShellSyntax },
+  "shell-syntax": { description: "bash -n on every workflow `run:` block and every *.sh under tools/ and .github/", run: checkShellSyntax },
 };
 
 // ── CLI ────────────────────────────────────────────────────────────────
