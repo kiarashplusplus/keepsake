@@ -199,8 +199,18 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
     marker files (`INSTALLATION_COMPLETE`, `DEPENDENCIES_VALIDATED`) is enough — note the
     directory *and binary* also get renamed between builds
     (`chrome-linux/headless_shell` → `chrome-headless-shell-linux64/chrome-headless-shell`), so
-    linking the folder alone still fails. All 82 specs pass on the older build; nothing about the
-    suite needs the newer one.
+    linking the folder alone still fails. All 84 specs pass on the older build (Chromium
+    141.0.7390.37); nothing about the suite needs the newer one. Re-confirmed 2026-09-07 with a
+    `-1194` build linked under the expected `-1243` name.
+  - **`e2e/versionSkew.spec.ts` fails if `dist/` is older than `HEAD`, and says nothing about
+    why.** It reads `dist/version.json` and compares against the commit hash baked into the
+    bundle, so exporting at one commit and then moving `HEAD` (a merge, a rebase, a new commit)
+    before running makes two specs fail with `expect(locator).not.toBeVisible()` and the banner
+    text "A new version of Keepsake is ready." — which reads like a real version-skew regression
+    and is not one. That is the guard working: the bundle genuinely was built against a different
+    commit. **Re-export before believing it** (`pnpm --filter @keepsake/web export`), then re-run;
+    it cost one diagnosis cycle on 2026-09-07 doing exactly this, merging `main` in between the
+    export and the run.
   - `test/adminAuth.test.ts`'s brute-force case can time out at 30 s when the root runner fans API
     and web out concurrently on a loaded machine. Measured on both `main` and a feature branch with
     no difference, so it is load, not a regression — the flake its own comment and #65 describe.
