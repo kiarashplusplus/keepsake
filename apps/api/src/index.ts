@@ -7,6 +7,7 @@ import { apiErr } from "@keepsake/contracts/common";
 import { assertBindings, type Env } from "./env.js";
 import { moderationRetry } from "./cron/moderationRetry.js";
 import { orphanSweep } from "./cron/orphanSweep.js";
+import { securityHeaders } from "./middleware/securityHeaders.js";
 import { geoRoutes } from "./routes/geo.js";
 import { photoRoutes } from "./routes/photos.js";
 import { listingRoutes } from "./routes/listings.js";
@@ -33,6 +34,12 @@ app.use("*", async (c, next) => {
   await next();
   c.header("X-Request-Id", requestId);
 });
+
+// Issue #10 — see src/middleware/securityHeaders.ts for what this sets and
+// why. Mounted globally so it covers `/item/:id`'s OG-injected HTML and
+// every `/api/*` JSON response, neither of which `apps/web/public/_headers`
+// (applied only by the Cloudflare assets binding) ever touches.
+app.use("*", securityHeaders());
 
 app.onError((err, c) => {
   const status: ContentfulStatusCode = err instanceof HTTPException ? err.status : 500;
@@ -71,6 +78,32 @@ app.get("/health", async (c) => {
     d1 = "error";
   }
 
+  // Same idea as the D1 check above, for R2: `assertBindings`' `BUCKET`
+  // check only proves the binding exists, not that R2 will actually answer a
+  // request (wrong bucket name, R2 refusing reads). `head()` on a sentinel
+  // key that almost certainly doesn't exist is the cheapest real operation
+  // available — a `null` result still means R2 itself answered and is
+  // exactly the expected outcome, so only a thrown error grades `"error"`.
+  let r2: "ok" | "error";
+  try {
+    await c.env.BUCKET.head("__health/sentinel");
+    r2 = "ok";
+  } catch (err) {
+    console.error("health: R2 check failed", { error: err instanceof Error ? err.message : String(err) });
+    r2 = "error";
+  }
+
+  // Same idea again, for KV: a `get()` returning `null` (key absent) still
+  // proves KV answered; only a thrown error grades `"error"`.
+  let kv: "ok" | "error";
+  try {
+    await c.env.KV.get("health:sentinel");
+    kv = "ok";
+  } catch (err) {
+    console.error("health: KV check failed", { error: err instanceof Error ? err.message : String(err) });
+    kv = "error";
+  }
+
   // Neither secret's presence nor absence is ever put in the response body
   // by name — only this rolled-up "ok"/"degraded" verdict — and only in
   // `production`. Local dev and preview routinely run without Turnstile/
@@ -80,8 +113,8 @@ app.get("/health", async (c) => {
   const secretsConfigured = Boolean(c.env.TURNSTILE_SECRET) && Boolean(c.env.ADMIN_TOKEN);
   const secrets: "ok" | "degraded" = !isProduction || secretsConfigured ? "ok" : "degraded";
 
-  const checks = { ...bindingChecks, d1, secrets };
-  const ok = bindingsOk && d1 === "ok";
+  const checks = { ...bindingChecks, d1, r2, kv, secrets };
+  const ok = bindingsOk && d1 === "ok" && r2 === "ok" && kv === "ok";
   const degraded = secrets === "degraded";
   const commit = c.env.COMMIT_SHA ?? "dev";
 

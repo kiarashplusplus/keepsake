@@ -6,3 +6,58 @@
   Cache-Control: public, max-age=31536000, immutable
 /site.css
   Cache-Control: public, max-age=3600
+
+# Issue #10: no security headers on any response. This file is applied by
+# the Cloudflare assets binding, so it only covers what that binding serves
+# directly — the SPA shell (every route under apps/web, plus apps/site's
+# /about, /privacy, /terms, copied into the same `dist/` by
+# scripts/copy-site.mjs) and static files. Hono-generated responses
+# (`/item/:id`'s OG-injected HTML, every `/api/*` JSON response) are NOT
+# covered by this file at all — see apps/api/src/middleware/securityHeaders.ts
+# for those, wired in apps/api/src/index.ts.
+#
+# script-src is hash-based, not 'unsafe-inline', for the three inline
+# `<script>` tags that actually ship in the exported HTML (confirmed by
+# running `expo export` twice and diffing the hashes — both matched a
+# byte-for-byte second run, so these are stable, not export-run-dependent):
+#   - sha256-AkwQgpToGV6ZVFH02Kxg9hDSbEU98DbN9h+GJM0BMPk= is
+#     apps/web/app/+html.tsx's THEME_PREHYDRATION_SCRIPT (the no-flash
+#     dark-mode script that must run before hydration).
+#   - sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8= is
+#     `globalThis.__EXPO_ROUTER_HYDRATE__=true;`, injected by Expo Router's
+#     own static-rendering output, not by any file in this app.
+#   - sha256-d6qbtEYff/sB38YyzuzhASbVmmOidU/UFC9mNit47j4= is the equivalent
+#     no-flash script inline in apps/site/public/{about,privacy,terms}.html
+#     (a different app, not owned by this file's issue, but served from the
+#     same dist/ under this same _headers — breaking it would be exactly the
+#     "silently breaks theming" failure mode this comment is trying to avoid
+#     on the app side). If that script's text ever changes, this hash goes
+#     stale silently — nothing in this repo's test suite currently protects
+#     that pair; a real regression check needs a curl/CSP-report-only pass
+#     against a live deploy, not just a static comparison at the time this
+#     was written.
+# https://challenges.cloudflare.com is Turnstile's script (loaded via a
+# dynamically-inserted <script src>, src/ui/Turnstile.web.tsx) and its widget
+# iframe (frame-src).
+#
+# style-src keeps 'unsafe-inline': react-native-web renders virtually all
+# layout as inline `style="..."` attributes on DOM nodes, which CSP's
+# style-src (not just style-src-elem) governs — hashing every element's
+# style attribute across the whole app isn't practical, and inline CSS is a
+# materially smaller injection risk than inline script. The one inline
+# `<style>` *block* (+html.tsx's ROOT_CSS) rides on the same allowance.
+#
+# img-src allows data:/blob: for the give flow's client-side photo previews
+# (src/lib/images/pickImages.web.ts sets `photo.objectUrl` from
+# `URL.createObjectURL`, rendered as an <ExpoImage source={{uri: ...}}>) and
+# expo-image's blurhash placeholder rendering.
+#
+# frame-ancestors 'none' (plus X-Frame-Options: DENY below, for browsers that
+# only honor the older header) stops the give flow and the admin page from
+# being framed at all — the concrete risk named in the issue.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://challenges.cloudflare.com 'sha256-AkwQgpToGV6ZVFH02Kxg9hDSbEU98DbN9h+GJM0BMPk=' 'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' 'sha256-d6qbtEYff/sB38YyzuzhASbVmmOidU/UFC9mNit47j4='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  X-Content-Type-Options: nosniff
