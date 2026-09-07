@@ -34,6 +34,126 @@ The one thing to know before you get there: **photo bytes in R2 are not recovera
 versioning, no lifecycle rule, and `orphanSweep` deletes unconditionally. Time Travel brings back
 the `photos` rows; `/i/:id/:variant` still 404s for every one of them.
 
+## Data breach (PIPEDA) — a suspected exposure of personal data
+
+Canada is a live market (the geo-block covers `GB`/`JE`/`GG`/`IM` only, not `CA` — see
+`docs/runbooks/uk-block.md`), and PIPEDA's commercial-activity trigger has no revenue threshold or
+employee-count exemption — the OPC has found free-to-user, ad-carrying sites in scope before
+(*Globe24h*, PIPEDA Report of Findings #2015-002, upheld in *A.T. v. Globe24h.com*, 2017 FC 114).
+Treat Keepsake as in scope. This section is what to do the moment you suspect a breach of security
+safeguards involving personal data — a leaked `ADMIN_TOKEN`, a bug that exposed raw emails/phone
+numbers/IPs, an R2 bucket made briefly public, a stolen or misdirected export, etc. It applies
+**regardless of cause** — a bug, an attacker, or your own mistake all count.
+
+Every citation below was fetched and read directly against the primary text — the statute itself
+(`laws-lois.justice.gc.ca`, PIPEDA s.10.1) and its regulation (Canada Gazette, *Breach of Security
+Safeguards Regulations*, SOR/2018-64) — not inherited from `docs/legal-open-questions-research.md`,
+which flagged these two specifics as unverified when it was written.
+
+### Step 1 — figure out what happened, in writing
+
+Before anything else, write down (a text file, a private issue, whatever is fastest under stress):
+what data, how many people, when it happened vs. when you noticed, and how you know. You will reuse
+every word of this in step 3 no matter which branch you take.
+
+### Step 2 — assess "real risk of significant harm" (PIPEDA s.10.1)
+
+The statute names two factors, plus a catch-all:
+
+- **(a) Sensitivity of the information involved.** A device token or `ADMIN_TOKEN` leak is high
+  sensitivity — it's a bearer secret. A leaked hashed/salted value is lower. A requester's raw email
+  or phone number is moderate. A listing photo of a household object is low, unless the story text
+  itself contains something sensitive (health, a child's name, an address).
+- **(b) Probability the information has been, is being, or will be misused.** Was it actually
+  accessed by someone (server logs, an attacker's own claim), or only theoretically exposed for a
+  window with no evidence anyone looked? A public S3/R2 bucket sitting open for an hour with no logged
+  access is different from a `curl` transcript proving a stranger pulled every row.
+- **(c) any other prescribed factor** — none have been prescribed by regulation as of this writing;
+  don't invent one, and don't let its existence talk you out of (a) and (b).
+
+The statutory bar for harm is concrete, not vibes: **"bodily harm, humiliation, damage to reputation
+or relationships, loss of employment, business or professional opportunities, financial loss,
+identity theft, negative effects on the credit record and damage to or loss of property."** A leaked
+device token that lets someone hide or delete another person's listings, or a leaked email that lets
+someone identify a giver from their public listing and show up at a "meeting point" they described,
+both plausibly reach "real risk of significant harm" under this list. A leaked hashed IP with no
+plausible reversal path plausibly does not — but write down why, don't just assert it.
+
+**If in real doubt, treat it as met.** The record-keeping step below is mandatory either way, so the
+only thing "met" costs you that "not met" doesn't is the report — and under-reporting is the
+regulator-facing mistake, not over-reporting.
+
+### Step 3 — if the threshold is met, report to both the OPC and affected individuals
+
+Do both. Neither substitutes for the other. **Timing: "as soon as feasible after the organization
+determines that the breach has occurred"** — PIPEDA's own words, not a fixed number of days. That
+means step 1's timestamp starts the clock; don't sit on a confirmed breach while still deciding on
+step 2 for a different data set from the same incident.
+
+**Report to the Office of the Privacy Commissioner of Canada.** Per the *Breach of Security
+Safeguards Regulations* (SOR/2018-64) s.2(1), the report must contain:
+
+1. A description of the circumstances of the breach and, if known, the cause.
+2. The day or period the breach occurred (or the closest approximation).
+3. A description of the personal information involved, to the extent known.
+4. The number of individuals affected, or the closest approximation.
+5. Steps taken to reduce the risk of harm to affected individuals, or to mitigate it.
+6. Steps taken or intended to notify affected individuals.
+7. Name and contact information of someone who can answer the OPC's questions about the breach —
+   for a one-person operation, that's Kiarash directly.
+
+File it through the OPC's own breach-report channel: <https://www.priv.gc.ca/en/report-a-concern/report-a-breach-of-security-safeguards/> —
+**unverified**: I confirmed the seven required content fields above directly against the regulation
+text, but did not complete an actual submission through that page in this pass, so its current exact
+form fields/format are not independently confirmed here. Re-check the page before your first real
+filing rather than assuming it matches this list field-for-field.
+
+**Notify affected individuals directly.** Per the same regulation, s.3, the notification must
+contain:
+
+1. A description of the circumstances of the breach.
+2. The day or period it occurred.
+3. A description of the personal information involved, to the extent known.
+4. Steps you've taken to reduce the risk of harm.
+5. Steps *the individual* can take to reduce or mitigate their own risk (e.g., "if you reused this
+   email/password elsewhere, change it there too").
+6. Contact information for the individual to ask questions.
+
+Direct notification (email is explicitly listed as acceptable, s.4) is the default. Indirect
+notification — a public posting, e.g. on the site itself — is only for when direct notification
+would cause further harm, create undue hardship, or you don't have contact info for the person
+(s.5); with device-token-only givers who never verified an email, indirect notification may be the
+only option that exists, and that's worth stating plainly in the notice rather than pretending it
+was targeted.
+
+### Step 4 — record the breach, regardless of whether the threshold was met
+
+**This step is not optional and does not depend on step 2's answer.** PIPEDA requires a record of
+*every* breach of security safeguards, met-threshold or not. Per the regulation (SOR/2018-64 s.6),
+confirmed directly against the Canada Gazette's published text:
+
+> An organization must maintain a record of every breach of security safeguards for **24 months**
+> after the day on which the organization determines that the breach has occurred.
+
+The record must contain enough detail for the OPC to verify compliance with the reporting and
+notification duties — in practice, everything from step 1 plus your step 2 reasoning (even a
+"threshold not met, because..." conclusion needs to be on that record, not just an internal
+judgment call that leaves no trail).
+
+**Where the record lives for Keepsake:** a dated file under `docs/incidents/` in this repo (create
+the directory on first use), named `YYYY-MM-DD-short-description.md`, containing the step 1 facts,
+the step 2 assessment, and — if triggered — what was reported/notified and when. A private repo
+issue is the acceptable alternative if the incident needs discussion before the facts are settled,
+but the durable record belongs in the repo, not only in an issue that could be closed and forgotten.
+Do not put unredacted personal data (raw emails, tokens) *into* the record itself — describe what
+was exposed, don't re-expose it in the retention artifact.
+
+**What was not independently re-verified**: the OPC's online submission form's exact current fields
+(noted above), and whether any Canadian province with its own breach-notification law (several do)
+imposes an additional or different duty on top of PIPEDA's — that question was out of scope for this
+pass and isn't answered here. Both are candidates for `docs/legal-considerations.md`'s lawyer list if
+this ever needs to be exercised for real, rather than being written into this runbook as settled.
+
 ## Alerting
 
 `.github/workflows/uptime.yml` checks `/health` on preview (and on production once the repo

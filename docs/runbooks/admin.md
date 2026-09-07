@@ -69,6 +69,73 @@ last changed. Each item is every `OwnerListing` field (title, story, photos, sta
 Every listing action writes a `moderation_events` row with `kind='admin'` — the admin queue's own
 history is itself an audit log, not just a UI convenience.
 
+## Minors: actual-knowledge takedown rule
+
+**The rule:** the moment you have actual knowledge that a specific user is under 18 — from a
+report, a listing's own story text, a request note, or anything else — remove the content and ban
+that person's device token. Do not wait for a second signal, and do not treat the 18+ attestation on
+file for that listing/request as reason to doubt what you were just told; the attestation is
+evidence the platform had no *prior* knowledge, not a reason to disregard *new* knowledge.
+
+This exists because Montana's Consumer Data Privacy Act (MCA §30-14-2811) imposes a duty of care
+on any controller as to a consumer "whom the controller actually knows or willfully disregards is a
+minor," with **no volume threshold** gating that duty (unlike the rest of the MTCDPA) — confirmed
+directly against the statute text at `mca.legmt.gov`, not inherited from search-summary text.
+**Willful disregard is having the signal and not acting on it** — which is what "no written rule"
+meant before this section existed. The 18+ attestation (`AgeAttestationSchema`/`MINIMUM_AGE`,
+recorded as `age_attested_at` on both listings and requests) is what keeps Keepsake out of "actual
+knowledge" *by default*; this rule is what to do the moment that default is overridden by a
+specific fact.
+
+**A separate, unrelated project (#64) is changing the age-gate checkbox to a neutral date-of-birth
+field in the give/request flow.** That's an evidentiary improvement on the *no prior knowledge*
+side and has nothing to do with this rule — don't touch the give flow for this issue.
+
+### What "the rebuttable presumption" in the statute's section heading actually is
+
+The original research flagged MCA §30-14-2811's section heading — "Duties of controllers — duty of
+care — **rebuttable presumption**" — as unresolved, and speculated it might be an age-determination
+safe harbour. **Checked directly against the statute text at `mca.legmt.gov`: it is not.** The
+presumption is procedural and applies only in an attorney-general enforcement action under
+§30-14-2817: *"there is a rebuttable presumption that a controller used reasonable care as required
+under this section if the controller complied with this section."* It presumes **compliance with
+the reasonable-care standard**, contingent on complying with the section's other substantive
+requirements (targeted-advertising/data-sale/profiling consent and precise-geolocation limits for
+known minors) — it says nothing about how to determine whether someone is a minor in the first
+place, and does not change or soften the takedown rule above.
+
+### Is this actually executable today? Checked against the live admin API — partially
+
+**Giver side (listings + the owner who posted them): yes, in one call each.**
+`POST /api/admin/listings/:id/hide` (or `/reject` if still pre-`given`) removes the content;
+`POST /api/admin/owners/:id/ban` bans the owner's device token (`owners.token_hash`) and hides every
+other listing of theirs that isn't already `given`. Both are real, tested endpoints (see Actions
+above) — no manual DB work needed.
+
+**Requester side: no.** Checked the schema and the admin routes directly, not just the design docs:
+
+- The `requests` table (`apps/api/migrations/0001_init.sql`, `0005_compliance.sql`) has no
+  `owner_id` and no device-token concept at all — a request is identified only by
+  `email`/`phone`/`ip_digest`, none of which is a bearer secret you can revoke the way a device
+  token is. **"Ban the device token" has no meaning for a requester** — there isn't one. The action
+  that exists for givers doesn't have a requester-side equivalent to reach for.
+- `AdminQueueItem` (`packages/contracts/src/admin.ts`) carries `reports` and `events` for a listing
+  but **no `requests` array at all** — a moderator working the queue cannot see a request's note or
+  contact info there. The only place request notes are visible today is `GET /api/me/listings/:id`
+  (`apps/api/src/routes/me.ts`), i.e. to the **giver**, not to Kiarash directly.
+- There is no admin endpoint to hide, redact, or delete a single request. The only existing removal
+  path is `POST /api/requests/withdraw`, which requires the requester's own emailed token — not
+  something a moderator can trigger on someone else's behalf.
+
+So today, if actual knowledge arrives via a request note, the only available action is a manual D1
+edit (`UPDATE requests SET ... WHERE id = ?` to null out `note`/`email`/`phone`, mirroring what the
+withdrawal migration already does structurally) — not a rule the admin tooling can carry out on its
+own. **Filed as a separate ops issue** (see below) rather than writing a rule here the tooling can't
+execute; per the issue's own instruction, a written rule that assumes a button that doesn't exist is
+worse than one that says so.
+
+
+
 ## Proving email actually works
 
 Launch-audit finding: production had never delivered mail to anyone but Kiarash, and every failure
