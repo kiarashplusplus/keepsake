@@ -55,6 +55,42 @@ app.use("*", async (c, next) => {
   }
 });
 
+// Issue #24. `wrangler.toml` checks in `COMMIT_SHA = "dev"` as the value
+// every environment falls back to if nothing overrides it — correct for
+// local `wrangler dev`, where there is no real commit to stamp, but a lie by
+// omission in `production`: `deploy.yml`'s automated path always passes
+// `--var COMMIT_SHA:${{ github.sha }}` so this never fires through CI, but a
+// hand-run `wrangler deploy --env production` — exactly the thing reached
+// for when CI itself is broken, the moment an accurate commit matters most —
+// silently ships `"dev"` if the operator forgets the flag, and `/health`
+// would report it as fact. `.github/workflows/uptime.yml` already catches
+// this from the outside within ~15 minutes, but that is a monitor watching a
+// symptom, not a guard on the thing that produces it, and it does nothing
+// for whoever is staring at their terminal right after running the bad
+// command. This is the guard: mounted as the very first middleware (ahead of
+// every route, including `/health` and `/version.json` themselves) so
+// *every* response in `production` refuses outright the instant this
+// misconfiguration exists, rather than quietly serving traffic under a false
+// commit until the next monitor tick. `isProduction` keeps `preview` and
+// local dev exempt on purpose — `"dev"` is the correct, expected value
+// everywhere except the one environment real users and incident response
+// depend on. See docs/runbooks/deploy.md#manual-deploys-and-commit_sha-issue-24.
+app.use("*", async (c, next) => {
+  if (isProduction(c.env) && c.env.COMMIT_SHA === "dev") {
+    console.error('commit-sha guard: refusing to serve production traffic with COMMIT_SHA="dev"');
+    return c.json(
+      apiErr(
+        "unavailable",
+        'Production refuses to serve traffic: COMMIT_SHA is still "dev". This means ' +
+          "`wrangler deploy --env production` ran without `--var COMMIT_SHA:$(git rev-parse HEAD)`. " +
+          "Redeploy with that flag — see docs/runbooks/deploy.md#manual-deploys-and-commit_sha-issue-24.",
+      ),
+      503,
+    );
+  }
+  await next();
+});
+
 // Issue #10 — see src/middleware/securityHeaders.ts for what this sets and
 // why. Mounted globally, and *before* the UK block below, so the headers it
 // sets after `next()` land on every response family this Worker can produce

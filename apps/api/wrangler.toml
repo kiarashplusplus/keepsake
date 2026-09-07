@@ -363,12 +363,17 @@ ENVIRONMENT = "production"
 # `--var COMMIT_SHA:$(git rev-parse HEAD)` — deploy.yml's automated path
 # always overrides it (see below), so it never ships through CI. See
 # docs/runbooks/deploy.md#manual-deploys-and-commit_sha-issue-24 for the
-# required flag. Left as a real fallback rather than removed or made to
-# crash `/health`, because doing the latter needs code in apps/api/src
-# (out of scope here); .github/workflows/uptime.yml's scheduled `/health`
-# probe now fails loudly — distinct from "down" — if it ever sees this value
-# on this tier, so a forgotten flag is caught within 15 minutes instead of
-# silently misreporting the running commit forever.
+# required flag. Left as a real fallback (never removed) because
+# `wrangler dev` needs *some* default and this is what every other
+# environment block also falls back to. What changed: `src/index.ts`'s
+# very first middleware now refuses every request in `production` — not
+# just `/health` — the instant it sees `ENVIRONMENT === "production"` with
+# this value still unset, so a hand-run deploy that forgets the flag fails
+# loudly the moment anyone (or anything) hits the site, rather than serving
+# real traffic under a false commit. `.github/workflows/uptime.yml`'s
+# scheduled `/health` probe still also checks for this independently
+# (belt-and-braces, and it fires even if nobody happens to hit the site in
+# the interim) — same failure, two layers, neither able to skip the other.
 COMMIT_SHA = "dev"
 # Estimated for real launch-day traffic (issue #18), not measured — there is
 # no production traffic yet to size against, which is the same gap the
