@@ -60,6 +60,36 @@ interface OrphanOrOwnedPhotoRow {
 // `burst` keys on the caller's IP digest, not on identity. The daily KV budget
 // stays behind `ownerAuth` — it is a write, and there is no reason to spend it
 // before the token is even syntactically valid.
+//
+// ---------------------------------------------------------------------------
+// There is deliberately no `turnstile()` here, and #183 is open about it.
+//
+// The obvious fix to #183 is to add `turnstile()` after `ownerAuth`, and the
+// issue itself suggests it on the grounds that "the give flow already holds a
+// Turnstile token at that point in the wizard". **It does not.** Checked
+// 2026-09-07:
+//
+//   - `apps/web/app/give/index.tsx` is step 1 of 5 (photos) and uploads
+//     immediately on pick, not at submit — `processFile` -> `uploadPhoto`.
+//   - The only `<Turnstile>` widgets in the web app are on `give/review.tsx`
+//     (step 5), `mine/email.tsx` and `recover/index.tsx`.
+//   - `uploadPhoto` (`apps/web/src/api/photos.ts`) passes no `turnstileToken`,
+//     so `apiFetch` sends no `cf-turnstile-response` header.
+//
+// `TURNSTILE_SECRET` *is* set on preview and production, where the middleware
+// then enforces unconditionally — so mounting it here would 403 the first
+// photo every real giver picks. A parallel session found the identical trap on
+// `PATCH` (the web edit step mints no token either). Mounting this without
+// changing the client is the more expensive mistake of the two available.
+//
+// Closing #183 needs a client change first, and a design decision with it: a
+// Turnstile token is single-use and expires after 300s, while this step
+// uploads up to 5 photos one at a time, so one widget on the photos step means
+// either a challenge per photo, or a short-lived server-side upload grant
+// (one challenge per give flow, exchanged for a token this route accepts N
+// times). `apps/api/test/photoUploadTurnstile.test.ts` pins both halves so
+// whoever mounts it here finds out that the client is still silent.
+// ---------------------------------------------------------------------------
 photoRoutes.put(
   "/",
   burst("RL_UPLOAD"),

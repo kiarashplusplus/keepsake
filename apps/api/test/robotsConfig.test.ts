@@ -34,8 +34,12 @@
  */
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { productionRunWorkerFirst, readRunWorkerFirst } from "./wranglerConfig";
 
 const wrangler = (env as unknown as { WRANGLER_TOML_TEXT: string }).WRANGLER_TOML_TEXT;
+const fixture = JSON.parse(
+  (env as unknown as { TEST_RUN_WORKER_FIRST: string }).TEST_RUN_WORKER_FIRST,
+) as string[];
 
 function runWorkerFirstBooleans(): string[] {
   return [...wrangler.matchAll(/^run_worker_first\s*=\s*(true)\s*$/gm)].map((m) => m[1] ?? "");
@@ -62,5 +66,57 @@ describe("run_worker_first configuration", () => {
     expect(list).toContain('"/robots.txt"');
     expect(list).toContain('"/sitemap.xml"');
     expect(list).toContain('"/admin"');
+  });
+});
+
+/**
+ * Issue #195. The fixture list in `vitest.config.ts` exists so a path that
+ * must beat the static-assets SPA fallback is exercised in tests under the
+ * same rule the deployed Worker uses. Two copies of one truth drift, and this
+ * one had: `/admin` was added to `[env.production.assets]` (issue #84) and
+ * the mirror was never updated, so nothing about `/admin` reaching the Worker
+ * ahead of the asset system was actually being exercised — and the suite was
+ * green either way.
+ *
+ * The fixture is now *derived* from the same `wrangler.toml`, so it cannot
+ * drift by omission. Note what that does and does not buy: measured while
+ * fixing #195, this pool's miniflare ignores `runWorkerFirst` entirely (a
+ * fixture asset at `/admin` was served after the Worker ran, identically with
+ * the path listed, filtered out, and with the list emptied), so correcting the
+ * list changes no test's behaviour today — the same emulation gap this file
+ * already records for `/robots.txt`. What it buys is one copy of the truth
+ * instead of two. This block is the guard against someone restating it
+ * again: it compares the array the running fixture actually booted with
+ * (`TEST_RUN_WORKER_FIRST`, injected by `vitest.config.ts` from the very
+ * value it passed to `miniflare.assets.runWorkerFirst`) against the list
+ * parsed out of the deployed production config.
+ */
+describe("the vitest run_worker_first fixture mirrors production", () => {
+  it("boots with exactly the deployed production list, in order", () => {
+    expect(fixture).toEqual(productionRunWorkerFirst(wrangler));
+  });
+
+  it("includes /admin", () => {
+    // Named separately because this is the path that was missing, and
+    // because it is the one whose absence is invisible at runtime:
+    // miniflare's local assets emulation does not reproduce the precedence
+    // rule, so no other test in this suite can see it.
+    expect(fixture).toContain("/admin");
+  });
+
+  it("reads the boolean and list forms, and refuses to guess", () => {
+    // The derivation is only a guard if its failure modes are loud. A silent
+    // `undefined` here would hand miniflare `runWorkerFirst: undefined` —
+    // every path falling through to the assets system, no test able to see
+    // it. Synthetic input, so this stays true regardless of what
+    // wrangler.toml says today.
+    const toml = ['[assets]', 'run_worker_first = true', '', '[env.production.assets]', 'run_worker_first = ["/api/*", "/admin"]'].join("\n");
+    expect(readRunWorkerFirst(toml, "assets")).toBe(true);
+    expect(productionRunWorkerFirst(toml)).toEqual(["/api/*", "/admin"]);
+    expect(() => readRunWorkerFirst(toml, "env.staging.assets")).toThrow(/no \[env\.staging\.assets\]/);
+    expect(() => productionRunWorkerFirst('[env.production.assets]\nrun_worker_first = true')).toThrow(
+      /explicit path list/,
+    );
+    expect(readRunWorkerFirst('[env.production.assets]\ndirectory = "../web/dist"', "env.production.assets")).toBeUndefined();
   });
 });

@@ -149,14 +149,17 @@ behaviour.
   sends a takedown to `needs_review` rather than back to `approved`. **#165** — `dailyDigest`
   never writes its heartbeat, so `/api/admin/health` is permanently `ok: false` and the crons
   alarm is stuck on.
-- **Personal data and email:** #167, #169, #170, #182, #188, #189, #190. Between them: a redactor
-  with no rule for the only PII Keepsake holds, IP hashes kept forever against a privacy page that
-  promises 48-hour expiry twice, a recovery token logged verbatim because it travels as a path
-  segment, and a request endpoint that was an oracle for the giver's address (#189 — the server
-  half is **fixed in PR #197**: both the self-request `400` and the duplicate `409` now return
-  the same `201` the success path returns, having written and sent nothing. The client half — the
-  helpful "that's your own keepsake" message, checked in `apps/web` against the owner address the
-  device already knows — is still to do).
+- **Personal data and email:** #169, #170, #188, #189, #190. Between them: a redactor with no rule
+  for the only PII Keepsake holds, IP hashes kept forever against a privacy page that promises
+  48-hour expiry twice, and a request endpoint that was an oracle for the giver's address.
+  **#167 and #182 are fixed** (2026-09-07): a `verify_email` token is now bound to the address it
+  was mailed to rather than to the owner row, and the recovery token travels in a POST body
+  instead of a URL path segment — see `docs/design/identity.md`. #170 still owns the redactor's
+  own missing path-segment and PII rules. **#189's server half is fixed in PR #197**: both the
+  self-request `400` and the duplicate `409` now return the same `201` the success path returns,
+  having written and sent nothing. Its client half — the helpful "that's your own keepsake"
+  message, checked in `apps/web` against the owner address the device already knows — is still to
+  do.
 - **More checks that could not fail:** #166 (preflight's shell-syntax check has never examined a
   byte of shell), #173 (the consent banner is never scanned by axe), #175, #176, #181, #191. Six
   more instances of `AGENTS.md`'s table, found in a single pass — the table is at seven rows and
@@ -166,9 +169,13 @@ behaviour.
   and `PATCH` charges the same daily budget create does, and listing aspects run through
   `containsContactInfo` and reach Llama Guard. #168's siblings in `routes/photos.ts` and
   `routes/me.ts` are untouched and still unmetered.
-- **Correctness:** #163, #172, #174, #180, #184, #185, #186, #187. **#184 is fixed in PR #197** —
-  the report auto-hide now decides on the count returned by its own `UPDATE … RETURNING`, so
-  concurrent reports trip the threshold instead of each reading zero.
+- **Correctness:** #163, #172, #174, #180, #184, #186, #187. **#185 is fixed** (2026-09-07):
+  choosing a recipient is one `env.DB.batch()` with a conditional claim on the listing, checked
+  before any mail goes out — see `docs/design/email.md`'s "Contact reveal rule". It is also the
+  Worker's first use of `batch()`; the other multi-write sequences that issue named
+  (create-listing + photos + aspects, `replaceListingAspects`) are still unbatched.
+  **#184 is fixed in PR #197** — the report auto-hide now decides on the count returned by its
+  own `UPDATE … RETURNING`, so concurrent reports trip the threshold instead of each reading zero.
 - **Ops and backup:** #164 (the documented D1 backup omits `listing_aspects`, and
   `aspects_backfilled_at` makes the loss unrecoverable), #178.
 

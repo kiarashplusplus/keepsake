@@ -12,13 +12,14 @@
  * caller has the same simple contract.
  */
 import { captureMessage } from "@keepsake/observability/capture";
+import type { ImageVerdict } from "@keepsake/contracts/admin";
 import type { Env } from "../env.js";
 import { MODELS } from "../models.js";
 import { ulid } from "../lib/ids.js";
 import { checkAndBump, todayISO } from "./budget.js";
 import { parseIntVar } from "../env.js";
 import { moderateText } from "./text.js";
-import { isImageError, moderateImage } from "./image.js";
+import { MODERATED_PHOTO_VARIANTS, isImageError, moderateImage, type ModeratedPhotoVariant } from "./image.js";
 import { decide, decideImage, decideText } from "./decide.js";
 import { containsContactInfo } from "./contactInfo.js";
 
@@ -83,7 +84,12 @@ interface ListingRow {
 
 interface PhotoRow {
   id: string;
+  r2_key_full: string;
   r2_key_thumb: string;
+}
+
+function r2KeyFor(photo: PhotoRow, variant: ModeratedPhotoVariant): string {
+  return variant === "full" ? photo.r2_key_full : photo.r2_key_thumb;
 }
 
 interface LogEventFields {
@@ -164,6 +170,58 @@ async function setStatus(
   }
 }
 
+/**
+ * Moderates one stored variant of one photo and logs its own
+ * `moderation_events` row. Split out of `moderateListing` only because
+ * there are now two calls per photo instead of one and the loop body no
+ * longer fits inside the orchestrator readably.
+ *
+ * A missing R2 object is an `error`, not a silent skip: fail-closed is the
+ * rule everywhere else in this pipeline, and a variant that cannot be read
+ * is a variant nothing has looked at.
+ */
+async function moderatePhotoVariant(
+  env: Env,
+  ctx: { listingId: string; version: number; attempt: number },
+  photo: PhotoRow,
+  variant: ModeratedPhotoVariant,
+): Promise<ImageVerdict | "error"> {
+  const key = r2KeyFor(photo, variant);
+  const object = await env.BUCKET.get(key);
+  if (!object) {
+    await logEvent(env, {
+      listingId: ctx.listingId,
+      listingVersion: ctx.version,
+      photoId: photo.id,
+      kind: "image",
+      model: MODELS.imageVision,
+      verdict: "error",
+      reason: `${variant}_missing`,
+      attempt: ctx.attempt,
+    });
+    return "error";
+  }
+
+  const imageStart = Date.now();
+  const base64 = arrayBufferToBase64(await object.arrayBuffer());
+  const contentType = object.httpMetadata?.contentType ?? "image/jpeg";
+  const outcome = await moderateImage(env, base64, contentType);
+  const verdict = isImageError(outcome) ? ("error" as const) : outcome;
+  await logEvent(env, {
+    listingId: ctx.listingId,
+    listingVersion: ctx.version,
+    photoId: photo.id,
+    kind: "image",
+    model: MODELS.imageVision,
+    verdict: decideImage(verdict),
+    reason: isImageError(outcome) ? outcome.error : undefined,
+    flagsJson: isImageError(outcome) ? undefined : JSON.stringify({ variant, ...outcome }),
+    attempt: ctx.attempt,
+    latencyMs: Date.now() - imageStart,
+  });
+  return verdict;
+}
+
 export async function moderateListing(env: Env, listingId: string, version: number, clientIP?: string): Promise<void> {
   const listing = await env.DB.prepare("SELECT id, title, story, version FROM listings WHERE id = ?")
     .bind(listingId)
@@ -232,7 +290,9 @@ export async function moderateListing(env: Env, listingId: string, version: numb
     return;
   }
 
-  const { results: photos } = await env.DB.prepare("SELECT id, r2_key_thumb FROM photos WHERE listing_id = ? ORDER BY position")
+  const { results: photos } = await env.DB.prepare(
+    "SELECT id, r2_key_full, r2_key_thumb FROM photos WHERE listing_id = ? ORDER BY position",
+  )
     .bind(listingId)
     .all<PhotoRow>();
 
@@ -264,7 +324,13 @@ export async function moderateListing(env: Env, listingId: string, version: numb
     const imageBudget = await checkAndBump(env.KV, {
       kind: "mod_image",
       dailyLimit: imageDailyLimit,
-      cost: photos.length,
+      // One vision call per *variant* per photo since #161, not one per
+      // photo — `MODERATED_PHOTO_VARIANTS` is the multiplier and it is 2
+      // today (thumb + full). Charging the true number is the point: this
+      // counter is what `GET /api/admin/observatory` and the daily digest
+      // report, and a ceiling that lies about how many calls a listing
+      // costs is how #18 got the real ceiling wrong by 5x.
+      cost: photos.length * MODERATED_PHOTO_VARIANTS.length,
       ...(clientIP !== undefined ? { clientIP } : {}),
       reservedFloor: Math.floor(imageDailyLimit * RESERVED_FLOOR_RATIO),
       freshCallerCeiling: FRESH_CALLER_CEILING,
@@ -291,44 +357,30 @@ export async function moderateListing(env: Env, listingId: string, version: numb
     latencyMs: Date.now() - textStart,
   });
 
-  // Step 4: images, one Workers AI call per photo, in parallel.
-  const imageVerdicts = await Promise.all(
-    photos.map(async (photo) => {
-      const object = await env.BUCKET.get(photo.r2_key_thumb);
-      if (!object) {
-        await logEvent(env, {
-          listingId,
-          listingVersion: version,
-          photoId: photo.id,
-          kind: "image",
-          model: MODELS.imageVision,
-          verdict: "error",
-          reason: "thumb_missing",
-          attempt,
-        });
-        return "error" as const;
-      }
-
-      const imageStart = Date.now();
-      const base64 = arrayBufferToBase64(await object.arrayBuffer());
-      const contentType = object.httpMetadata?.contentType ?? "image/jpeg";
-      const outcome = await moderateImage(env, base64, contentType);
-      const verdict = isImageError(outcome) ? ("error" as const) : outcome;
-      await logEvent(env, {
-        listingId,
-        listingVersion: version,
-        photoId: photo.id,
-        kind: "image",
-        model: MODELS.imageVision,
-        verdict: decideImage(verdict),
-        reason: isImageError(outcome) ? outcome.error : undefined,
-        flagsJson: isImageError(outcome) ? undefined : JSON.stringify(outcome),
-        attempt,
-        latencyMs: Date.now() - imageStart,
-      });
-      return verdict;
-    }),
-  );
+  // Step 4: images. One Workers AI call per stored variant of each photo —
+  // both `thumb` and `full`, because `PUT /api/photos` takes them as two
+  // independent client-supplied files and `GET /i/:id/:variant` publishes
+  // both. Moderating only the thumb meant the bytes the public actually
+  // downloaded from `/i/:id/full` had never been looked at by any model,
+  // while `moderation_events` recorded a `pass` for that photo (#161).
+  //
+  // Photos run in parallel; the variants of one photo run sequentially, so
+  // the vision calls for a photo keep a stable, readable order (thumb, then
+  // full) in the logs and in tests that stub `env.AI.run` by call index.
+  // Every variant is logged as its own `moderation_events` row, tagged with
+  // the variant in `flags_json`, so the audit trail says which bytes were
+  // seen rather than implying all of them were.
+  const imageVerdicts = (
+    await Promise.all(
+      photos.map(async (photo) => {
+        const verdicts: (ImageVerdict | "error")[] = [];
+        for (const variant of MODERATED_PHOTO_VARIANTS) {
+          verdicts.push(await moderatePhotoVariant(env, { listingId, version, attempt }, photo, variant));
+        }
+        return verdicts;
+      }),
+    )
+  ).flat();
 
   // Step 5: decide.
   const decision = decide(textVerdict, imageVerdicts);

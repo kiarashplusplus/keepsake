@@ -117,11 +117,46 @@ app.use("*", securityHeaders());
 // shell alike — nothing behind this line should ever see a UK visitor.
 app.use("*", ukBlock());
 
+/**
+ * What may go into a log field describing where a request was headed.
+ *
+ * Issue #182: `path: c.req.path` wrote the concrete URL path into a bare
+ * `console.error` (no redaction at all) and into a `captureException` tag
+ * (where `redactDeep` leaves it alone, because the key is `path`). The
+ * recovery token used to be a path segment, so a giver clicking their
+ * emailed link during any request that threw put a live account-takeover
+ * credential into Workers Logs, which keeps every line
+ * (`head_sampling_rate = 1` in all three env blocks).
+ *
+ * The route shape is fixed — the token is in the POST body now, matching
+ * `POST /api/requests/withdraw` — but the log field is the half that has to
+ * stay safe when someone adds the *next* token-bearing route. So log the
+ * matched route **pattern** (`/api/listings/:id`) rather than the value:
+ * a pattern is a string we wrote, so it cannot carry a caller's secret, and
+ * it is the more useful thing to group errors by anyway. Hono only knows the
+ * pattern once routing has picked a handler; a request that threw in a `*`
+ * middleware, or matched nothing, gets `"(unrouted)"` rather than a fallback
+ * to the raw path — the fallback would be the leak, and `requestId` is
+ * already logged beside this for tying a report back to one request.
+ *
+ * The complementary fix — teaching `redactString` about secrets in path
+ * segments generally — is #170, and lives in
+ * `packages/observability/src/redact.ts`. Deliberately not duplicated here.
+ */
+function logRoutePattern(c: { req: { routePath?: string } }): string {
+  const pattern = c.req.routePath;
+  if (typeof pattern !== "string" || pattern === "" || pattern === "*" || pattern === "/*") {
+    return "(unrouted)";
+  }
+  return pattern;
+}
+
 app.onError((err, c) => {
   const status: ContentfulStatusCode = err instanceof HTTPException ? err.status : 500;
+  const route = logRoutePattern(c);
   console.error("unhandled error", {
     requestId: c.get("requestId"),
-    path: c.req.path,
+    route,
     status,
     error: err instanceof Error ? err.message : String(err),
   });
@@ -132,7 +167,7 @@ app.onError((err, c) => {
   // explicit call is what gets the error into the same structured capture
   // shape as every other `captureException` call, tagged with the request id
   // above so it can be matched back to whatever the giver saw.
-  captureException(err, { tags: { requestId: c.get("requestId"), path: c.req.path } });
+  captureException(err, { tags: { requestId: c.get("requestId"), route } });
   // Every code here must be one of `@keepsake/contracts/common`'s
   // `ERROR_CODES` — this is the catch-all for anything a route didn't
   // already turn into a proper `fail(...)` response via `src/lib/respond.ts`,
