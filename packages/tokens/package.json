@@ -10,6 +10,7 @@
     "./radii": "./src/radii.ts",
     "./typography": "./src/typography.ts",
     "./motion": "./src/motion.ts",
+    "./tilt": "./src/tilt.ts",
     "./contrast": "./src/contrast.ts"
   },
   "scripts": {
