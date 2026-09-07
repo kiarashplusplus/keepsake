@@ -22,15 +22,24 @@ is a real site with real visitors possible, not a staging exercise.
 - `PRODUCTION_LIVE=true` is set, so `uptime.yml` now genuinely probes production every 15 minutes
   rather than only checking that it *isn't* answering.
 
-**In flight**
-- **PR #107** — ten issues (#43, #66, #73, #86, #87, #88, #89, #90, #91, #92, #99, #106).
-  **Must not merge before #100**: #100 carries a sequential `0009_aspects_backfill.sql` that
-  preview D1 has already applied, and #99's new rule requires timestamped names — renaming it to
-  comply would be exactly the drift #99 exists to prevent. Merge #100, then #107.
-- **PR #100** (aspect backfill, #37) — CI green, review not completed.
-- **PR #101** (semantic search, #38) — CI red on one preflight rule: a `@cf/` id in a *doc
-  comment* in `search/search.ts`. The id itself is correctly declared in `models.ts`. Because
-  preflight fails, every other job skipped, so the rest of that PR has never been tested.
+**In flight** — re-checked against `main` at `7307f06` while refreshing #51.
+- **PR #114** (semantic search, #38) — open and out of draft; it **supersedes #101**, which stays
+  draft. It is the only remaining item of the Labeling & search milestone. Its own latest comment
+  reports the three Vectorize indexes exist, the `REAL_AI=1` block ran against real Workers AI,
+  and the flag is on — so it is no longer the inert PR the entry below described. Its base is
+  `cc868c8`, three merges behind `main`.
+- **PR #139** (#135, #136) — the vision prompt never asks the model to *read* the object, and no
+  view renders an aspect. This is the whole distance between "aspects are persisted and indexed"
+  (true on `main`) and "a visitor sees anything other than `OTHER`" (not true on `main`). The
+  milestone's plumbing shipped; its visible half is in this PR.
+
+**Landed since the list above was last written** (kept per rule 7 rather than deleted):
+- **PR #100** (aspect backfill, #37) merged as `de75c67`; **PR #107** merged as `6412c7f`. The
+  ordering constraint that entry carried was honoured — `0009_aspects_backfill.sql` kept its
+  sequential name, and preflight's `migrations` rule reads the tree as "9 legacy 0001-contiguous,
+  1 timestamped", so nothing was renamed under a database that had already applied it.
+- **PR #101**'s red preflight (`models`, a `@cf/` id in a doc comment) was fixed inside #114 by
+  naming `MODELS.embedding` instead of pasting the literal.
 
 **Open and genuinely blocked on a human**: #6 (read an inbox), #31 (a lawyer), #42 (walk it on a
 phone), #47 (`/health` on the apex plus the first real listing), #94 (a zone cache-purge token),
@@ -230,3 +239,34 @@ mobile+desktop) passed against `MOCK_AI=1`, including `give.spec.ts` walking all
 category-chip click and a filled date-of-birth field, and `request.spec.ts`'s two-context
 stranger/giver flow with the same field. Not verified against a live (non-mocked) Workers AI call —
 neither issue touches the suggestion endpoint's own model-facing behavior.
+
+### 2026-09-07 — Labeling & search (#51): five of six items landed, checked as a combination
+
+The milestone's six issues merged as five separate pull requests over one day, each verified on its
+own branch. Nobody had run the combination since, so this is that run, against `main` at `7307f06`
+with no local changes:
+
+| | Landed as | Where it lives on `main` |
+|---|---|---|
+| #35 give-flow category picker dropped | #93 | `app/give/details.tsx` has no `Chip` row; `category` column deliberately kept |
+| #36 aspects persisted and indexed | #77 (`0006_aspects.sql`) | `listing_aspects` + `listing_aspects_name_value`, `apps/api/test/aspects.test.ts` |
+| #37 backfill from cover photos | #100 (`0009_aspects_backfill.sql`) | `src/backfill/aspects.ts`, `aspects_backfilled_at` distinguishes "no aspects" from "never tried" |
+| #39 shelves with a floor | #98 | `routes/feed.ts` `/shelves` + `shelfMinItems(env)`, `features/feed/AspectShelves.tsx` |
+| #40 zero-aspect listings still surface | #98 | asserted on **both** sides: `apps/api/test/aspects.test.ts` (default feed + broad FTS) and `apps/web/test/app/index.test.tsx` (renders in the grid while a shelf it can't join is on screen) |
+| #38 semantic search | **not landed** | PR #114, open |
+
+Result: `pnpm lint` 0 errors · `pnpm -r typecheck` clean · API 376/376 · web 304/304 ·
+`pnpm --filter @keepsake/web e2e` **82/82**, mobile and desktop · preflight all pass except
+`lfs-pointers`, which is this sandbox having no `git-lfs`, not a repository fault.
+
+Two things worth carrying, neither of them a regression:
+
+- **The milestone's plumbing is green and its visible half is not shipped.** Aspects are persisted,
+  indexed, backfillable and reachable through `PublicListing.aspects`, and no view renders one
+  (#135, in PR #139). A tracking issue that reads "5 of 6 done" is true about the code and
+  misleading about what a visitor gets, which is why the table above says where each item lives
+  rather than only that it closed.
+- **Shelves (#39) have no browser-level coverage.** They are tested at the API (`shelves.test.ts`,
+  including the floor and the cache TTL) and in jsdom (`test/app/index.test.tsx`), but no
+  `e2e/*.spec.ts` mentions a shelf — `browse.spec.ts` predates them. The 82 green e2e specs
+  therefore say nothing about a shelf rendering in a real browser.
