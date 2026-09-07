@@ -284,13 +284,36 @@ export function StatsStrip({ stats, health, healthAsOf }: StatsStripProps): Reac
 }
 
 /**
+ * A domain whose sends are failing *entirely* is not a bounce, it is a
+ * policy: the Cloudflare binding refusing every unverified destination looks
+ * exactly like a healthy system from the inside (issue #6). One failure in
+ * forty is noise; forty in forty is the launch blocker. This is the line
+ * between them, and the only reason `attempted` is shown at all.
+ *
+ * `attempted >= 2` keeps a single isolated failure — which is 1-of-1, and so
+ * technically "all of them" — from borrowing the same red as a systematic
+ * refusal. The per-reason list above already accounts for that one.
+ */
+export function isSystematicDomainFailure(entry: { attempted: number; failed: number }): boolean {
+  return entry.attempted >= 2 && entry.failed === entry.attempted;
+}
+
+/**
  * `email_events` grouped by outcome, `window_days` wide — issue #6: there is
  * no bounce webhook or complaint feedback loop, so this is the only place a
  * real delivery problem would ever surface rather than silently
  * accumulating. Same stamped-badge language as the rest of the strip for the
- * ok/failed counts; the per-reason breakdown underneath is plain text rather
- * than another row of badges, since the number of distinct reasons varies
- * and a bad week could otherwise produce an unbounded row of boxes.
+ * ok/failed counts; the two breakdowns underneath are plain text rather than
+ * more rows of badges, since the number of distinct reasons and domains
+ * varies and a bad week could otherwise produce an unbounded row of boxes.
+ *
+ * Two breakdowns, not one, because either alone hides the failure this issue
+ * is about. By reason: "3 × send_failed" reads the same whether three
+ * strangers mistyped their address or the binding is refusing everything it
+ * is handed. By domain, with `attempted` next to `failed`: "1/40 gmail.com"
+ * and "40/40 gmail.com" finally look different — and the second one turns
+ * red, the same ink/danger switch a stale cron and an unreviewed auto-hide
+ * already use. No new color meaning, no new component vocabulary.
  */
 function EmailEventsSection({ stats }: { stats: AdminStats["email_events_7d"] }): React.ReactElement {
   return (
@@ -312,6 +335,31 @@ function EmailEventsSection({ stats }: { stats: AdminStats["email_events_7d"] })
               </Text>
             </View>
           ))}
+        </View>
+      ) : null}
+      {stats.failures_by_domain.length > 0 ? (
+        <View style={{ gap: space.xxs }}>
+          <Eyebrow>Failing recipients, by domain</Eyebrow>
+          {stats.failures_by_domain.map((entry) => {
+            const systematic = isSystematicDomainFailure(entry);
+            return (
+              <View
+                key={entry.domain}
+                accessibilityRole="text"
+                accessibilityLabel={`${entry.domain}: ${entry.failed} of ${entry.attempted} failed, ${entry.top_reason}${
+                  systematic ? ", every send refused, needs attention" : ""
+                }`}
+                style={{ flexDirection: "row", gap: space.sm }}
+              >
+                <Text variant="caption" color="dangerText">
+                  {`${entry.failed}/${entry.attempted}`}
+                </Text>
+                <Text variant="caption" color={systematic ? "dangerText" : "textSecondary"}>
+                  {`${entry.domain} · ${entry.top_reason}`}
+                </Text>
+              </View>
+            );
+          })}
         </View>
       ) : null}
     </View>

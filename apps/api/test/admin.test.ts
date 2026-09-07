@@ -32,6 +32,21 @@ function adminHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" };
 }
 
+/**
+ * `installFakeEmail`'s opposite number: a binding whose `.send()` rejects the
+ * way a real one does when it refuses a destination. Local to this file
+ * rather than in `helpers.ts` because only the admin test-email route needs
+ * to see a provider failure surface all the way back through the response —
+ * `removeFakeEmail()` clears it like any other fake.
+ */
+function installThrowingFakeEmail(errorMessage: string): void {
+  (env as unknown as Record<string, unknown>).EMAIL = {
+    send: async (): Promise<never> => {
+      throw new Error(errorMessage);
+    },
+  };
+}
+
 async function setListingStatus(listingId: string, status: string): Promise<void> {
   await env.DB.prepare("UPDATE listings SET status = ? WHERE id = ?").bind(status, listingId).run();
 }
@@ -368,6 +383,81 @@ describe("admin routes", () => {
       const bounced = stats.email_events_7d.by_error.find((e) => e.error === "send_failed: 550 mailbox unavailable");
       expect(bounced?.count).toBeGreaterThanOrEqual(1);
     });
+
+    // Issue #6's worst case: the Cloudflare binding refuses every
+    // non-verified destination outright, so no giver ever hears about an ask
+    // and no chosen requester ever hears they were chosen — while every
+    // screen reports success. Grouped by reason alone that is indentical to a
+    // handful of ordinary bounces. The denominator is the whole signal: this
+    // proves one refused send out of many at a domain and *every* send at a
+    // domain being refused come back as different numbers, not the same one.
+    it("groups failures by recipient domain with the attempt count, so a blanket refusal is not a bounce", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      const now = Date.now();
+
+      async function insertDomainEvent(fields: { ok: 0 | 1; error: string | null; domain: string | null }): Promise<void> {
+        await env.DB.prepare(
+          `INSERT INTO email_events (id, kind, to_hash, to_domain, provider, ok, error, created_at)
+           VALUES (?, 'new_request', ?, ?, 'cf', ?, ?, ?)`,
+        )
+          .bind(ulid(), `hash-${ulid()}`, fields.domain, fields.ok, fields.error, now)
+          .run();
+      }
+
+      // A provider that mostly works and bounced once — an address problem.
+      for (let i = 0; i < 4; i += 1) {
+        await insertDomainEvent({ ok: 1, error: null, domain: "mostly-fine.test-domain" });
+      }
+      await insertDomainEvent({ ok: 0, error: "send_failed", domain: "mostly-fine.test-domain" });
+
+      // A provider where nothing at all gets through — the binding refusing
+      // a whole destination class.
+      for (let i = 0; i < 3; i += 1) {
+        await insertDomainEvent({ ok: 0, error: "send_failed", domain: "refused-everywhere.test-domain" });
+      }
+
+      const res = await SELF.fetch("http://x/api/admin/stats", { headers: adminHeaders() });
+      const stats = await readOk<AdminStats>(res);
+
+      const bouncing = stats.email_events_7d.failures_by_domain.find((d) => d.domain === "mostly-fine.test-domain");
+      expect(bouncing).toEqual({ domain: "mostly-fine.test-domain", attempted: 5, failed: 1, top_reason: "send_failed" });
+
+      const refused = stats.email_events_7d.failures_by_domain.find((d) => d.domain === "refused-everywhere.test-domain");
+      expect(refused).toEqual({
+        domain: "refused-everywhere.test-domain",
+        attempted: 3,
+        failed: 3,
+        top_reason: "send_failed",
+      });
+
+      // The two are the same reason code and would be one indistinguishable
+      // `by_error` line; only the domain axis separates them.
+      expect(refused?.failed).toBe(refused?.attempted);
+      expect(bouncing?.failed).not.toBe(bouncing?.attempted);
+
+      // A domain that never failed is not listed at all — this section is
+      // about what needs attention, not a census of every provider.
+      expect(stats.email_events_7d.failures_by_domain.map((d) => d.domain)).not.toContain("all-good.test-domain");
+    });
+
+    // Rows written before `20260907083648_email_event_diagnostics.sql` have no domain.
+    // Dropping them would understate the failure total on the very page whose
+    // job is to not understate failures.
+    it("keeps pre-migration rows with no domain under an explicit (unknown) bucket", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      await env.DB.prepare(
+        `INSERT INTO email_events (id, kind, to_hash, to_domain, provider, ok, error, created_at)
+         VALUES (?, 'new_request', ?, NULL, 'cf', 0, 'legacy_row_reason', ?)`,
+      )
+        .bind(ulid(), `hash-${ulid()}`, Date.now())
+        .run();
+
+      const res = await SELF.fetch("http://x/api/admin/stats", { headers: adminHeaders() });
+      const stats = await readOk<AdminStats>(res);
+
+      const unknown = stats.email_events_7d.failures_by_domain.find((d) => d.domain === "(unknown)");
+      expect(unknown?.failed).toBeGreaterThanOrEqual(1);
+    });
   });
 
   describe("GET /api/admin/health", () => {
@@ -492,9 +582,10 @@ describe("admin routes", () => {
       removeFakeEmail();
       // Every other test file in this suite relies on `EMAIL_MODE: "test"`
       // (set in vitest.config.ts) short-circuiting `guardRecipient` entirely
-      // — restore it after the one test below that deliberately overrides
-      // it to exercise the real reserved-domain guard.
+      // — restore it after the tests below that deliberately override it to
+      // exercise the real guard.
       setTestEnvVar("EMAIL_MODE", "test");
+      setTestEnvVar("EMAIL_ALLOWLIST", "");
     });
 
     it("sends a real message and reports sent:true", async () => {
@@ -547,6 +638,100 @@ describe("admin routes", () => {
       ).first<{ ok: number; error: string | null }>();
       expect(emailEvent?.ok).toBe(0);
       expect(emailEvent?.error).toBe("blocked_email_mode_off");
+    });
+
+    // Issue #6, the finding this whole issue turns on: "the binding refuses
+    // this destination" and "that address was a typo" are the same event from
+    // the inside unless the provider's own words survive. They used to be
+    // folded into the reason string itself, which both destroyed the reason
+    // as a grouping key and truncated the message at 160 chars — right where
+    // Cloudflare's rejections put the actionable half.
+    it("preserves the provider's raw error text as `detail`, separate from a stable reason code", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      const providerError =
+        "destination address not verified: leapkg@gmail.com is not a verified destination address for this Email Routing zone";
+      installThrowingFakeEmail(providerError);
+
+      const res = await SELF.fetch("http://x/api/admin/test-email", {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ to: "leapkg@gmail.com" }),
+      });
+      const result = await readOk<AdminTestEmailResult>(res);
+
+      expect(result.sent).toBe(false);
+      // Stable code — this is what the 7-day rollup groups on, so it must not
+      // vary with the provider's wording or the recipient's address.
+      expect(result.reason).toBe("send_failed");
+      // ...and the provider's actual words, whole, is the diagnosis.
+      expect(result.detail).toBe(providerError);
+      expect(result.detail).toContain("not a verified destination address");
+
+      const emailEvent = await env.DB.prepare(
+        "SELECT id, ok, error, error_detail, to_domain FROM email_events WHERE kind = 'admin_test' ORDER BY created_at DESC LIMIT 1",
+      ).first<{ id: string; ok: number; error: string | null; error_detail: string | null; to_domain: string | null }>();
+      expect(emailEvent?.ok).toBe(0);
+      expect(emailEvent?.error).toBe("send_failed");
+      expect(emailEvent?.error_detail).toBe(providerError);
+      expect(emailEvent?.to_domain).toBe("gmail.com");
+      // The row id comes back so a human proving delivery has an exact row to
+      // paste, not a guess about which of today's rows was theirs.
+      expect(result.event_id).toBe(emailEvent?.id);
+    });
+
+    // A `blocked_*` reason is meaningless without the mode that produced it:
+    // "blocked" on preview (allowlist) and "blocked" in production (live)
+    // mean completely different things, and the person reading this response
+    // has no shell on the Worker to go check which was in force.
+    it("reports the mode, provider and domain that decided the outcome", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      setTestEnvVar("EMAIL_MODE", "allowlist");
+      setTestEnvVar("EMAIL_ALLOWLIST", "someone-else@keepsake.ing");
+      installFakeEmail();
+
+      const res = await SELF.fetch("http://x/api/admin/test-email", {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ to: "leapkg@gmail.com" }),
+      });
+      const result = await readOk<AdminTestEmailResult>(res);
+
+      expect(result.sent).toBe(false);
+      expect(result.reason).toBe("blocked_not_allowlisted");
+      expect(result.email_mode).toBe("allowlist");
+      expect(result.to_domain).toBe("gmail.com");
+      expect(result.provider).toBe("cf");
+      expect(result.event_id).not.toBeNull();
+      // Nothing reached a provider, so there is no provider text to report —
+      // `detail` is null rather than a manufactured explanation.
+      expect(result.detail).toBeNull();
+      expect(result.at).toBeGreaterThan(0);
+    });
+
+    // The point of this route is aiming a real send at a real external inbox
+    // on demand; pinning it to a fixed test address would make it useless for
+    // exactly the test issue #6 says has never been run.
+    it("sends to whatever external address it is given, not a hardcoded one", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      const sent = installFakeEmail();
+
+      const res = await SELF.fetch("http://x/api/admin/test-email", {
+        method: "POST",
+        headers: adminHeaders(),
+        body: JSON.stringify({ to: "a.stranger+tag@fastmail.com" }),
+      });
+      const result = await readOk<AdminTestEmailResult>(res);
+
+      expect(result.sent).toBe(true);
+      expect(sent.at(-1)?.to).toBe("a.stranger+tag@fastmail.com");
+      expect(result.to_domain).toBe("fastmail.com");
+
+      const emailEvent = await env.DB.prepare(
+        "SELECT to_domain FROM email_events WHERE id = ?",
+      )
+        .bind(result.event_id)
+        .first<{ to_domain: string | null }>();
+      expect(emailEvent?.to_domain).toBe("fastmail.com");
     });
 
     it("401s without a valid admin token, same as every other /api/admin/* route", async () => {

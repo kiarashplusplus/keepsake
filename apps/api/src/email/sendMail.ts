@@ -18,6 +18,13 @@
  * Every attempt, successful or not, is recorded in `email_events`
  * (`0004_email_events.sql`) keyed by `sha256(lowercased address)` — never
  * the raw address — so "did this actually send" is answerable from the DB.
+ * `20260907083648_email_event_diagnostics.sql` adds the two columns that make a
+ * *failure* answerable too: `error_detail` (the provider's own words, kept
+ * whole and kept apart from the stable `error` code) and `to_domain` (the
+ * recipient's provider, not the recipient), which together are what separate
+ * "one address bounced" from "this binding refuses every unverified
+ * destination" — issue #6's worst case, and until now indistinguishable from
+ * working.
  */
 import { isReservedEmailDomain } from "@keepsake/contracts/common";
 import type { Env } from "../env.js";
@@ -110,18 +117,90 @@ export interface MailMessage {
 
 export interface SendMailResult {
   sent: boolean;
+  /**
+   * A *stable* short code — `blocked_reserved_domain`, `send_failed`,
+   * `email_binding_missing`, … — never the provider's message. Stable
+   * matters twice over: it is what `email_events.error` groups by (a reason
+   * that varied per recipient made a systematic refusal fragment into one
+   * single-count group per address, hiding the pattern behind noise), and it
+   * is the vocabulary `requests.notify_failed_reason` speaks, which sits one
+   * boolean away from a giver's screen.
+   */
   reason?: string;
+  /**
+   * The provider's own words, kept whole and kept separate. This is the only
+   * thing that distinguishes "the binding refuses unverified destinations"
+   * from "that address was a typo" — from the inside those two failures are
+   * otherwise identical, which is exactly issue #6. Diagnostic surfaces
+   * only: the `email_events` row, `POST /api/admin/test-email`, and the
+   * `console.error` line. Never returned to an ordinary end user.
+   */
+  detail?: string;
+  /**
+   * The `email_events` row this attempt wrote, so a human running the one
+   * test that has never been run (a real send to a real external inbox) has
+   * an exact row id to look up and paste back rather than guessing which of
+   * today's rows was theirs.
+   */
+  eventId?: string;
+}
+
+/**
+ * Longer than any error code and shorter than a runaway provider payload.
+ * The old 160-char truncation lost the tail of Cloudflare's rejection
+ * messages, which is where the actionable half ("... destination address not
+ * verified") tends to live.
+ */
+const MAX_ERROR_DETAIL_CHARS = 1000;
+
+function truncateDetail(text: string): string {
+  return text.length > MAX_ERROR_DETAIL_CHARS ? `${text.slice(0, MAX_ERROR_DETAIL_CHARS)}…` : text;
+}
+
+/**
+ * The domain half of an address, lowercased — `null` if there isn't one.
+ * `to_hash` remains the only column that identifies *who* was mailed; a bare
+ * domain names a mail provider, not a person, and it is the whole difference
+ * between "one address bounced" and "every send to this provider is
+ * refused".
+ */
+export function recipientDomain(to: string): string | null {
+  const at = to.lastIndexOf("@");
+  if (at < 0) return null;
+  const domain = to.slice(at + 1).trim().toLowerCase();
+  return domain.length > 0 ? domain : null;
 }
 
 async function recordEmailEvent(
   env: Env,
-  fields: { kind: EmailKind; toHash: string; provider: string; ok: boolean; error?: string },
-): Promise<void> {
+  fields: {
+    kind: EmailKind;
+    toHash: string;
+    toDomain: string | null;
+    provider: string;
+    ok: boolean;
+    error?: string;
+    errorDetail?: string;
+  },
+): Promise<string> {
+  const id = ulid();
   await env.DB.prepare(
-    `INSERT INTO email_events (id, kind, to_hash, provider, ok, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO email_events (id, kind, to_hash, to_domain, provider, ok, error, error_detail, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
-    .bind(ulid(), fields.kind, fields.toHash, fields.provider, fields.ok ? 1 : 0, fields.error ?? null, Date.now())
+    .bind(
+      id,
+      fields.kind,
+      fields.toHash,
+      fields.toDomain,
+      fields.provider,
+      fields.ok ? 1 : 0,
+      fields.error ?? null,
+      fields.errorDetail ?? null,
+      Date.now(),
+    )
     .run();
+  return id;
 }
 
 async function sendViaCloudflare(env: Env, message: MailMessage): Promise<SendMailResult> {
@@ -137,10 +216,12 @@ async function sendViaCloudflare(env: Env, message: MailMessage): Promise<SendMa
     return { sent: true };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    console.error("sendMail: EMAIL.send failed", { error: errorMessage });
-    // Keep the provider's words: "send_failed" alone told us nothing when the
-    // sender domain was not yet onboarded.
-    return { sent: false, reason: `send_failed: ${errorMessage.slice(0, 160)}` };
+    // The provider's words are the diagnosis and must survive; the reason
+    // code stays stable so the rollup can group on it. Folding the two
+    // together (as this did before issue #6's second pass) is what made a
+    // binding-level refusal indistinguishable from a bad address.
+    console.error("sendMail: EMAIL.send failed", { domain: recipientDomain(message.to), error: errorMessage });
+    return { sent: false, reason: "send_failed", detail: truncateDetail(errorMessage) };
   }
 }
 
@@ -162,20 +243,28 @@ async function sendViaResend(env: Env, message: MailMessage): Promise<SendMailRe
       }),
     });
     if (!response.ok) {
-      const body = (await response.text().catch(() => "")).slice(0, 120);
-      console.error("sendMail: resend request failed", { status: response.status, body });
-      return { sent: false, reason: `send_failed: resend ${response.status} ${body}` };
+      const body = await response.text().catch(() => "");
+      console.error("sendMail: resend request failed", { status: response.status, body: body.slice(0, 200) });
+      // The HTTP status is stable enough to group on and is itself a
+      // diagnosis (401 = key, 403 = domain, 422 = recipient); the body is
+      // detail.
+      return {
+        sent: false,
+        reason: `send_failed_http_${response.status}`,
+        detail: truncateDetail(`resend ${response.status}: ${body}`),
+      };
     }
     return { sent: true };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     console.error("sendMail: resend request threw", { error: errorMessage });
-    return { sent: false, reason: `send_failed: ${errorMessage.slice(0, 160)}` };
+    return { sent: false, reason: "send_failed", detail: truncateDetail(errorMessage) };
   }
 }
 
 export async function sendMail(env: Env, message: MailMessage): Promise<SendMailResult> {
   const toHash = await sha256Hex(message.to.toLowerCase());
+  const toDomain = recipientDomain(message.to);
   const provider = emailProviderName(env);
 
   let result: SendMailResult;
@@ -186,15 +275,16 @@ export async function sendMail(env: Env, message: MailMessage): Promise<SendMail
     // Recorded, not thrown: the give/request/choose flow it belongs to must
     // still succeed, and `email_events` is where "why did nothing arrive"
     // gets answered.
-    console.log("[email:blocked]", { subject: message.subject, reason: guard.reason });
-    await recordEmailEvent(env, {
+    console.log("[email:blocked]", { subject: message.subject, domain: toDomain, reason: guard.reason });
+    const eventId = await recordEmailEvent(env, {
       kind: message.kind,
       toHash,
+      toDomain,
       provider: "blocked",
       ok: false,
       error: guard.reason,
     });
-    return { sent: false, reason: guard.reason };
+    return { sent: false, reason: guard.reason, eventId };
   }
 
   if (provider === "cf" && env.EMAIL) {
@@ -210,13 +300,15 @@ export async function sendMail(env: Env, message: MailMessage): Promise<SendMail
     result = { sent: false, reason };
   }
 
-  await recordEmailEvent(env, {
+  const eventId = await recordEmailEvent(env, {
     kind: message.kind,
     toHash,
+    toDomain,
     provider: providerLabel,
     ok: result.sent,
     ...(result.reason !== undefined ? { error: result.reason } : {}),
+    ...(result.detail !== undefined ? { errorDetail: result.detail } : {}),
   });
 
-  return result;
+  return { ...result, eventId };
 }
