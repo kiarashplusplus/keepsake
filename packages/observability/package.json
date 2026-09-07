@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Redaction and Workers Logs capture helpers shared by the Worker and web app. Dependency-free; subpath exports only.",
   "exports": {
+    "./patterns": "./src/patterns.ts",
     "./redact": "./src/redact.ts",
     "./capture": "./src/capture.ts"
   },

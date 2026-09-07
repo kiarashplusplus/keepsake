@@ -14,6 +14,18 @@
  * No lookbehind and no named groups anywhere in this file: it must run on
  * React Native Hermes later, which supports neither.
  *
+ * The credential rules below are this file's own. The PII rules — email,
+ * phone, and secrets carried in a URL *path* — are built from `./patterns`,
+ * which `apps/api/src/moderation/contactInfo.ts` also reads, so the answer to
+ * "what does an address look like" is written down once (#170).
+ */
+import {
+  EMAIL_LOCAL_PART_PATTERN,
+  PHONE_REDACTION_PATTERN,
+  SECRET_PATH_SEGMENT_PATTERN,
+} from "./patterns";
+
+/**
  * Kept as a bare, flagless non-capturing group (no `g`/`i` baked in, no outer
  * capturing parens) because its `.source` is composed directly into the JSON
  * regexes below.
@@ -39,13 +51,43 @@ const JSON_NONSTRING_SECRET_RE = new RegExp(
 const KEY_VALUE_NAMES =
   "access_token|refresh_token|id_token|token|api_key|key|secret|password|owner_token";
 
+/**
+ * The three PII/secret rules added by #170, built from the shared sources in
+ * `./patterns` so there is exactly one definition of "what an address looks
+ * like" in the repo — the moderation check in
+ * `apps/api/src/moderation/contactInfo.ts` reads the same constants.
+ *
+ * Built once at module load rather than per call, and never used with
+ * `.test()` or `.exec()`: a `g` regex carries `lastIndex` between calls, but
+ * `String.prototype.replace` resets it, so reusing these instances is safe
+ * where reusing them for `.test()` would not be.
+ */
+const SECRET_PATH_SEGMENT_RE = new RegExp(SECRET_PATH_SEGMENT_PATTERN, "gi");
+const EMAIL_LOCAL_PART_RE = new RegExp(EMAIL_LOCAL_PART_PATTERN, "g");
+const PHONE_RE = new RegExp(PHONE_REDACTION_PATTERN, "g");
+
+/**
+ * Order matters in two places:
+ *
+ *  - the secret-path rule runs before the phone rule, so a token that happens
+ *    to contain a phone-shaped digit run is already `[REDACTED]` by the time
+ *    the phone rule looks;
+ *  - the email rule runs after the credential rules, so `?token=a@b.com`
+ *    still comes out as a redacted *token* rather than a redacted address.
+ */
 export function redactString(value: string): string {
   return value
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [REDACTED]")
     .replace(new RegExp(`([?&](?:${KEY_VALUE_NAMES})=)[^&\\s]+`, "gi"), "$1[REDACTED]")
     .replace(JSON_STRING_SECRET_RE, '$1"[REDACTED]"')
     .replace(JSON_NONSTRING_SECRET_RE, "$1[REDACTED]")
-    .replace(new RegExp(`((?:${KEY_VALUE_NAMES})\\s*[:=]\\s*)[^\\s,;&]+`, "gi"), "$1[REDACTED]");
+    .replace(new RegExp(`((?:${KEY_VALUE_NAMES})\\s*[:=]\\s*)[^\\s,;&]+`, "gi"), "$1[REDACTED]")
+    .replace(SECRET_PATH_SEGMENT_RE, "/$1/[REDACTED]")
+    // Only the local part: the domain is not personal data and is the whole
+    // difference between "one address bounced" and "this provider refuses
+    // everything" — the same trade `email_events.to_domain` already makes.
+    .replace(EMAIL_LOCAL_PART_RE, "[REDACTED]")
+    .replace(PHONE_RE, "[REDACTED]");
 }
 
 /**
@@ -54,6 +96,20 @@ export function redactString(value: string): string {
  * visited — see the Finderly source comment this was ported from. A shared
  * reference used twice (e.g. the same tags object nested in two places) is
  * not a cycle and must not come back as `[Circular]`.
+ *
+ * Two kinds of redaction meet here, and #170 was filed because only the first
+ * existed:
+ *
+ *  - **by key name** — `SENSITIVE_KEY_RE.test(key)` blanks credentials
+ *    whatever they look like, because a token is just an opaque string;
+ *  - **by value shape** — every string leaf goes through `redactString`, so
+ *    `{ to: "alice@gmail.com" }` is caught on the strength of the value
+ *    alone. There is deliberately no second address pattern here: adding one
+ *    would recreate the two-definitions problem #170 is about.
+ *
+ * Object *keys* run through `redactString` too, for the map-keyed-by-address
+ * case (`{ "alice@gmail.com": 3 }`), where the PII is the key and there is no
+ * value to blank.
  */
 export function redactDeep(
   value: unknown,
@@ -79,7 +135,7 @@ export function redactDeep(
     const entries = Object.entries(value as Record<string, unknown>).slice(0, 500);
 
     for (const [key, childValue] of entries) {
-      output[key] = SENSITIVE_KEY_RE.test(key)
+      output[redactString(key)] = SENSITIVE_KEY_RE.test(key)
         ? "[REDACTED]"
         : redactDeep(childValue, depth + 1, ancestors);
     }

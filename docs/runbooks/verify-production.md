@@ -34,8 +34,8 @@ curl -s https://keepsake.ing/health | jq
   "commit": "6412c7f3…40 hex chars…",
   "env": "production",
   "version": { "commit": "6412c7f3…", "environment": "production" },
-  "checks": { "DB": "ok", "BUCKET": "ok", "KV": "ok", "AI": "ok", "EMAIL": "ok",
-              "d1": "ok", "r2": "ok", "kv": "ok", "secrets": "ok" }
+  "checks": { "DB": "ok", "BUCKET": "ok", "KV": "ok", "AI": "ok", "ASSETS": "ok",
+              "EMAIL": "ok", "d1": "ok", "r2": "ok", "kv": "ok", "secrets": "ok" }
 }
 ```
 

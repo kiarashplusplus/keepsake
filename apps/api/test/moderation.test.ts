@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Capture from "@keepsake/observability/capture";
 import { decide, decideImage, decideText } from "../src/moderation/decide.js";
 import { moderateListing } from "../src/moderation/pipeline.js";
+import { MODERATED_PHOTO_VARIANTS } from "../src/moderation/image.js";
 import { todayISO } from "../src/moderation/budget.js";
 import { moderationRetry } from "../src/cron/moderationRetry.js";
 import { MODELS } from "../src/models.js";
@@ -256,11 +257,19 @@ describe("moderateListing: image outcomes", () => {
     const row = await waitForListingStatus(listing.id, (s) => s === "approved");
     expect(row.published_at).not.toBeNull();
 
-    const imageEvents = await env.DB.prepare("SELECT verdict FROM moderation_events WHERE listing_id = ? AND kind = 'image' ORDER BY created_at")
+    const imageEvents = await env.DB.prepare(
+      "SELECT verdict, flags_json FROM moderation_events WHERE listing_id = ? AND kind = 'image' ORDER BY created_at",
+    )
       .bind(listing.id)
-      .all<{ verdict: string }>();
-    expect(imageEvents.results).toHaveLength(1); // one photo -> one logged image verdict, after the internal retry
-    expect(imageEvents.results[0]?.verdict).toBe("pass");
+      .all<{ verdict: string; flags_json: string | null }>();
+    // One photo -> one logged image verdict *per moderated variant* (#161),
+    // each after its own internal retry. This assertion read `toHaveLength(1)`
+    // while the pipeline looked at the thumb alone.
+    expect(imageEvents.results).toHaveLength(MODERATED_PHOTO_VARIANTS.length);
+    expect(imageEvents.results.map((e) => e.verdict)).toEqual(MODERATED_PHOTO_VARIANTS.map(() => "pass"));
+    expect(imageEvents.results.map((e) => (JSON.parse(e.flags_json ?? "{}") as { variant?: string }).variant)).toEqual([
+      ...MODERATED_PHOTO_VARIANTS,
+    ]);
   });
 
   it("malformed JSON twice -> stays pending with an error event, no approval", async () => {

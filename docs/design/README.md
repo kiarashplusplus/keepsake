@@ -103,10 +103,14 @@ reach the apex.** Run them in this order:
   ages badly next to a flag; that is row six of `AGENTS.md`'s table wearing a different hat, and
   it is now the third time it has been written down on this feature.
 
-**Open issues — re-read against GitHub on 2026-09-07, because the two lists that used to sit here
-had gone stale in the direction that flatters the project.** Four of the six "blocked on a human"
-issues (#6, #31, #94) and one of the two "workable by anyone" (#103) had been closed; four open
-issues nothing in `docs/` mentioned at all were missing.
+**Open issues — re-read against GitHub on 2026-09-07 evening. There are 46 open.** These lists
+have now gone stale in the direction that flatters the project twice in one day. The morning
+re-read found four "blocked on a human" issues (#6, #31, #94) and one "workable by anyone" (#103)
+already closed, and four open issues nothing in `docs/` mentioned. This re-read found worse:
+**30 open issues nothing in `docs/` mentioned at all** — the adversarial audit wave #161–#191,
+filed after the last docs commit — and **#158 sitting in the list below as an open blocker when
+it had been deleted outright** (`GET /issues/158` → `410 This issue was deleted`). Treat GitHub,
+not this file, as the count; what this file is for is which of them matter and why.
 
 *Blocked on a human:*
 - **#6** — **reopened 2026-09-07 evening** (it is back in this list, having been closed out of it
@@ -128,10 +132,39 @@ issues nothing in `docs/` mentioned at all were missing.
   the create-and-delete token it produced is still live and used by nothing.
 - **#157** — create `keepsake-photos-production-backup`. Production photos have never been backed
   up, and until 2026-09-07 the nightly job reported success anyway.
-- **#158** — check whether anything was indexed while preview was crawlable (replaces the deleted
-  #85).
 
-*Workable by anyone:*
+*The 2026-09-07 adversarial audit — #161–#191, 30 open, 14 of them already
+`status: in progress`.* Filed against the data, moderation, auth, ops and CI layers hours after
+this file's previous sweep. **Read the labels on GitHub before starting any of these**; roughly
+half are claimed by another session already, and per "Picking up work" in `AGENTS.md` that label
+is the lock.
+
+- **Launch blockers:** **#161** — moderation only ever sees the client-uploaded thumbnail, and
+  `/i/:id/full` serves the never-inspected full-resolution file to the public. **#162** —
+  `withdraw`+`relist` undoes an admin rejection, a hide, a ban sweep or a three-report auto-hide.
+  **#165** — `dailyDigest` never writes its heartbeat, so `/api/admin/health` is permanently
+  `ok: false` and the crons alarm is stuck on.
+- **Personal data and email:** #169, #170, #188, #189, #190. Between them: a redactor with no rule
+  for the only PII Keepsake holds, IP hashes kept forever against a privacy page that promises
+  48-hour expiry twice, and a request endpoint that is an oracle for the giver's address.
+  **#167 and #182 are fixed** (2026-09-07): a `verify_email` token is now bound to the address it
+  was mailed to rather than to the owner row, and the recovery token travels in a POST body
+  instead of a URL path segment — see `docs/design/identity.md`. #170 still owns the redactor's
+  own missing path-segment and PII rules.
+- **More checks that could not fail:** #166 (preflight's shell-syntax check has never examined a
+  byte of shell), #173 (the consent banner is never scanned by axe), #175, #176, #181, #191. Six
+  more instances of `AGENTS.md`'s table, found in a single pass — the table is at seven rows and
+  should be read as a pattern, not a closed list.
+- **Moderation and abuse surface:** #168, #171, #179, #183.
+- **Correctness:** #163, #172, #174, #180, #184, #186, #187. **#185 is fixed** (2026-09-07):
+  choosing a recipient is one `env.DB.batch()` with a conditional claim on the listing, checked
+  before any mail goes out — see `docs/design/email.md`'s "Contact reveal rule". It is also the
+  Worker's first use of `batch()`; the other multi-write sequences that issue named
+  (create-listing + photos + aspects, `replaceListingAspects`) are still unbatched.
+- **Ops and backup:** #164 (the documented D1 backup omits `listing_aspects`, and
+  `aspects_backfilled_at` makes the loss unrecoverable), #178.
+
+*Workable by anyone (pre-audit):*
 - **#104** — `wrangler dev` dies mid-e2e with no diagnostic and `serve.mjs`'s restart hides it.
 - **#116** — the `adminAuth` brute-force test is flaky again on unmodified `main`. **Note the
   supersession**: `AGENTS.md` and several docs still explain this flake by pointing at #65, which
@@ -195,7 +228,7 @@ condensed to what actually earns its keep on a solo-agent-driven repo:
 | M1 Give + moderation | `[DONE]` | Migrations 0001–0003, geodata seed loaded on preview, owner token middleware, photo upload, create listing, moderation pipeline + cron retry + budgets, web give flow (5 steps), breathing seal, reviewing states, read-only dashboard. |
 | M2 Browse + share | `[DONE]` | Feed (keyset/category/FTS/geo), item page, `/i/:id/:variant` edge cache, `/item/:id` OG injection, masonry feed, location bar, share, `+not-found`. |
 | M3 Requests, email, recovery | `[DONE]` | Turnstile, requests, giver email add/verify, `sendMail()` (cf + resend fallback), choose flow + contact reveal, given/withdraw/relist/edit/delete, recovery. |
-| M4 Trust and operations | `[DONE]`, version skew guard excepted (`[TODO]` on the client — issue #23) | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Workers Logs observability (issue #14, replaced a never-configured Sentry), Web Analytics, Playwright in CI, runbooks. Version skew: server half (`/version.json`, `no-store`) is done and tested; nothing in `apps/web` polls it yet — see `docs/design/ops.md#version-skew`. |
+| M4 Trust and operations | `[DONE]` | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Workers Logs observability (issue #14, replaced a never-configured Sentry), Web Analytics, Playwright in CI, runbooks. Version skew: **both halves shipped** — the server's `/version.json` (`no-store`) and the client's `useVersionSkewGuard`/`VersionSkewBanner`, closed by #23 via PR #78 and covered by `e2e/versionSkew.spec.ts`. This row read "`[TODO]` on the client — nothing in `apps/web` polls it yet" until 2026-09-07, three commits after that stopped being true; `docs/design/ops.md#version-skew` had the correct account the whole time. |
 | M5 Polish and launch | `[QA]` — cutover done, apex unverified | About/Privacy/Terms, empty states, motion + reduce-motion pass, keyboard/focus audit, robots/sitemap, cache-header audit, production secrets, `keepsake.ing` cutover. |
 
 Definition of done per milestone lives with the plan (`M0`–`M5` DoD bullets); the short version:
