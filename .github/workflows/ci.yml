@@ -295,6 +295,30 @@ jobs:
         with:
           name: web-dist
           path: apps/web/dist
+      # `playwright install` downloads ~170MB of Chromium into
+      # ~/.cache/ms-playwright on every run, and that download is the widest
+      # variance in this whole workflow: 23s on a good day, **12m36s** on
+      # 2026-09-07 (run 34132870851, job 101778171822, 14:30:04 -> 14:42:40),
+      # which alone turned an 8-minute `main` run into a 20-minute one. It is
+      # also on the critical path — nothing else is running by the time e2e
+      # starts.
+      #
+      # Keyed on the lockfile, which is what pins @playwright/test, with a
+      # prefix restore-key so a lockfile bump that does *not* move Playwright
+      # still hits the previous cache. On a genuine version bump the restore
+      # is stale, `playwright install` downloads the new browser as it always
+      # did, and the new key saves it — a miss costs exactly today's
+      # behaviour, never more.
+      #
+      # The command below is unchanged: `playwright install` is a no-op for a
+      # browser already present in the cache directory, so a hit leaves only
+      # the `--with-deps` apt step. That also means a partial or corrupt cache
+      # self-heals rather than producing a missing-browser failure.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ms-playwright-${{ runner.os }}-
       - run: pnpm --filter @keepsake/web e2e:install
       # `wrangler dev --local` keeps every binding local (D1/R2/KV in a
       # throwaway --persist-to directory, no remote AI), so this needs no
