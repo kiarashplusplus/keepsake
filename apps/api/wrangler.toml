@@ -176,6 +176,21 @@ MAX_PHOTO_BYTES = "5242880"
 # `cf` uses the `[[send_email]]` binding; `resend` is the fallback behind the
 # same `sendMail()` interface if Email Service enablement or domain
 # onboarding (see plan Risks #1) doesn't land in time.
+#
+# Issue #127: `resend` is NOT a hot switch. Do not reach for it mid-incident
+# without doing DNS work first. `_dmarc.keepsake.ing` is `p=reject`, and the
+# only SPF/DKIM records in this zone belong to Cloudflare's
+# `cf-bounce.keepsake.ing` — which relaxed-aligns with the
+# `hello@keepsake.ing` in `EMAIL_FROM` below, and is the whole reason mail
+# passes DMARC today. Resend's bounce domain is not under keepsake.ing and
+# the zone carries none of its records, so flipping this var on its own
+# produces mail that fails DMARC against a *reject* policy: receivers
+# discard it outright rather than spam-foldering it, `sendMail()` still
+# returns success, and the policy has no `rua=` for anyone to find out from.
+# The failover meant to rescue a partial email outage would quietly convert
+# it into a total one. Add Resend's SPF/DKIM to the zone, verify alignment,
+# *then* flip this. Same rule as the `MAX_PHOTOS` note above: a control that
+# cannot do what it appears to do is worse than no control.
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 # Local and e2e never send. The bindings exist so the code path is exercised;
