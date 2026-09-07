@@ -220,15 +220,54 @@ export type AdminTestErrorResult = {
   kind: "exception" | "message";
 };
 
+/**
+ * Issue #89: `REPORT_AUTOHIDE_THRESHOLD` reports flip a live listing to
+ * `hidden` on their own, and nothing told a human it happened —
+ * `GET /health` is about the Worker, so it stayed `ok: true` throughout, and
+ * the `captureMessage` the auto-hide fires only writes a line to Workers
+ * Logs that nothing reads on a schedule. This is the same shape as
+ * `cron_last_run` above it: the raw signal in the payload, so the admin
+ * strip can render it and `AdminHealth.ok` can refuse to be green while it
+ * is non-empty.
+ *
+ * - `autohidden_awaiting_review`: listings currently `hidden` whose most
+ *   recent moderation event is a `report_autohide` — i.e. three strangers
+ *   took a keepsake down and no admin has looked since. Clears itself the
+ *   moment any admin action lands on the listing (restore, reject, hide),
+ *   because that writes a newer `kind = 'admin'` event. This is the entry
+ *   that flips `ok`, and it covers both directions of the risk: a genuinely
+ *   harmful listing that needs confirming, and a legitimate one taken down
+ *   by three coordinated reporters that needs restoring.
+ * - `near_threshold`: still-`approved` listings one report away from the
+ *   same fate (`report_count >= threshold - 1`). A heads-up, not a fault,
+ *   so it deliberately does *not* affect `ok`.
+ *
+ * Listing ids only, never titles or reasons: a ULID is already in every
+ * share link, and this payload is read by an admin who can look the rest up.
+ */
+export type AdminReportPressure = {
+  threshold: number;
+  autohidden_awaiting_review: { listing_id: string; report_count: number; autohidden_at: number }[];
+  near_threshold: { listing_id: string; report_count: number }[];
+};
+
 /** `GET /api/admin/health` — same "plain data, not client input" rule as
  * `AdminStats` above. `cron_last_run` keys are cron job names
  * (`moderationRetry`, `orphanSweep`); a `null` value means that cron hasn't
  * run since this KV namespace was created (never observed in practice past
- * the first deploy, but honest for a fresh preview environment). */
+ * the first deploy, but honest for a fresh preview environment).
+ *
+ * `ok` is the one verdict for "does this backend need Kiarash right now",
+ * and it is deliberately an AND of three unrelated things — seeded postal
+ * codes, live cron heartbeats, and (issue #89) no unreviewed report
+ * auto-hide. Launch audit finding 12 was `ok` ignoring a value that was
+ * sitting right next to it; adding a field without folding it into the
+ * verdict would repeat exactly that. */
 export type AdminHealth = {
   ok: boolean;
   postal_codes_count: number;
   cron_last_run: Record<string, number | null>;
+  report_pressure: AdminReportPressure;
 };
 
 // ---------------------------------------------------------------------------

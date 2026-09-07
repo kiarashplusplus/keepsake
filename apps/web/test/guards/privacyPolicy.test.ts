@@ -13,6 +13,18 @@
  * the load, and this test refuses a provider the policy does not name, a host
  * the policy does not name, and any third-party URL in that file that is not
  * in the registry at all. Adding a tracker without a policy edit fails here.
+ *
+ * Issue #88 extends the same idea to the Worker's AI calls, because the same
+ * drift had happened again quietly: `apps/api/src/suggest/suggest.ts` is a
+ * vision call that reads an uploaded photo and hands back a title, a
+ * category, tags and a description of the object, and the policy's only AI
+ * paragraph described safety screening. A reader was told their photo goes
+ * to a model to keep the marketplace safe and not told it also goes to a
+ * model to be described back as listing content. Purpose is the thing a
+ * privacy notice exists to state, so the second block below enumerates every
+ * `AI.run(...)` site under `apps/api/src` and fails for one the policy does
+ * not disclose — and, for the suggestion call, for any *field* the model
+ * produces that the policy does not account for.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -29,6 +41,89 @@ const PRIVACY_HTML = fs.readFileSync(path.join(SITE_PUBLIC, "privacy.html"), "ut
 const PRIVACY_TEXT = PRIVACY_HTML.replace(/\s+/g, " ");
 
 const STATIC_PAGES = ["about.html", "privacy.html", "terms.html"];
+
+const API_SRC = path.resolve(WEB_ROOT, "../api/src");
+const SUGGESTION_CONTRACT = path.resolve(WEB_ROOT, "../../packages/contracts/src/photo.ts");
+
+interface AiCallSite {
+  /** Path under `apps/api/src`, the same string the walk below produces. */
+  file: string;
+  /** What this model is asked to do — the thing a reader needs told. */
+  purpose: string;
+  /** Substrings that must survive in privacy.html for the purpose to count
+   * as disclosed. Prose, not markup: `PRIVACY_TEXT` is whitespace-collapsed
+   * so a hard-wrapped sentence still matches. */
+  discloses: string[];
+}
+
+const AI_CALL_SITES: AiCallSite[] = [
+  {
+    file: "moderation/text.ts",
+    purpose: "safety screening of a listing's words",
+    discloses: ["Every listing's text", "checked automatically by AI models"],
+  },
+  {
+    file: "moderation/image.ts",
+    purpose: "safety screening of an uploaded photo",
+    discloses: ["photos are checked automatically by AI models", "to keep the marketplace safe"],
+  },
+  {
+    file: "suggest/suggest.ts",
+    purpose: "autofill: reading a photo to fill in the give form",
+    discloses: [
+      "read by an AI vision model",
+      // The disclosure has to say this is *not* the safety pipeline. Two
+      // calls with two purposes, and one paragraph covering both would be
+      // the same omission in a different shape.
+      "a separate call from the safety screening",
+    ],
+  },
+];
+
+/** Which sentence in the policy accounts for each field the suggestion model
+ * produces (`PhotoSuggestionSchema`). A new field — "estimated value", say —
+ * fails the build until the policy says what it is and whether it's kept. */
+const SUGGESTION_FIELD_DISCLOSURES: Record<string, string> = {
+  subject: "a plain description of what it sees",
+  title: "proposes a title",
+  category: "picks a category",
+  condition: "one line about visible wear",
+  aspects: "suggests a handful of short tags",
+};
+
+/** Every file under `apps/api/src` that calls Workers AI, relative to that
+ * directory. Deliberately a filesystem walk and not a hand-maintained list:
+ * a hand-maintained list is what `AI_CALL_SITES` is, and the whole point is
+ * to catch the day the two disagree. */
+function aiCallSiteFiles(): string[] {
+  const found: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const child = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(child);
+      } else if (/\.ts$/.test(entry.name) && !/\.(test|spec)\.ts$/.test(entry.name)) {
+        if (/\bAI\.run\s*\(/.test(fs.readFileSync(child, "utf8"))) {
+          found.push(path.relative(API_SRC, child).split(path.sep).join("/"));
+        }
+      }
+    }
+  };
+  walk(API_SRC);
+  return found.sort();
+}
+
+/** Top-level field names of `PhotoSuggestionSchema` — what the vision model
+ * is actually asked to produce. */
+function suggestionFields(): string[] {
+  const source = fs.readFileSync(SUGGESTION_CONTRACT, "utf8");
+  const block = /export const PhotoSuggestionSchema = z\.object\(\{([\s\S]*?)\n\}\);/.exec(source);
+  if (!block?.[1]) throw new Error("could not find PhotoSuggestionSchema in packages/contracts/src/photo.ts");
+  // Two-space indent is what makes a key top-level inside the object
+  // literal; nested schemas (`AspectSchema`'s own fields) sit deeper. Not
+  // anchored to `z.` because `category` is `CategorySchema`, imported.
+  return [...block[1].matchAll(/^ {2}(\w+):\s*\S/gm)].map((m) => m[1] ?? "").sort();
+}
 
 interface Provider {
   category: string;
@@ -113,5 +208,47 @@ describe("privacy policy vs. the code", () => {
       walk(root);
     }
     expect(copies).toEqual(["public/consent.js"]);
+  });
+});
+
+describe("privacy policy vs. the Worker's AI calls (#88)", () => {
+  const found = aiCallSiteFiles();
+
+  it("finds the AI call sites (positive control)", () => {
+    // If this walk ever returns nothing, every assertion below would pass
+    // vacuously — which is precisely how the five checks in AGENTS.md's
+    // table came to be worthless.
+    expect(found.length).toBeGreaterThan(0);
+  });
+
+  it("has a disclosure registered for every AI call in apps/api/src", () => {
+    expect(found).toEqual(AI_CALL_SITES.map((site) => site.file).sort());
+  });
+
+  it.each(AI_CALL_SITES)("privacy.html discloses $file ($purpose)", ({ discloses }) => {
+    for (const phrase of discloses) {
+      expect(PRIVACY_TEXT).toContain(phrase);
+    }
+  });
+
+  it("has a disclosure registered for every field the suggestion model produces", () => {
+    const fields = suggestionFields();
+    expect(fields.length).toBeGreaterThan(0);
+    expect(fields).toEqual(Object.keys(SUGGESTION_FIELD_DISCLOSURES).sort());
+  });
+
+  it.each(Object.entries(SUGGESTION_FIELD_DISCLOSURES))("privacy.html says what happens to the suggestion's %s", (_field, phrase) => {
+    expect(PRIVACY_TEXT).toContain(phrase);
+  });
+
+  it("says what is kept of the suggestion, not only that a model was involved", () => {
+    // The two halves that matter to a reader: what is stored on the listing
+    // (title, category and the tags — issue #36 persists those to
+    // `listing_aspects`, and the browse page groups by them), and what is
+    // not.
+    expect(PRIVACY_TEXT).toContain("saved");
+    expect(PRIVACY_TEXT).toContain("with your listing as ordinary listing content");
+    expect(PRIVACY_TEXT).toContain("anything you type over it wins");
+    expect(PRIVACY_TEXT).toContain("never reach our records");
   });
 });

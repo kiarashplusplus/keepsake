@@ -3,13 +3,31 @@ name: Deploy
 # Gated by `vars.DEPLOY_ENABLED` on the whole job, so the workflow is inert
 # until the account is wired up.
 #
-# Preview deploys itself on every PR and every push to main. **Production is
-# manual only** (`workflow_dispatch`): GitHub's required-reviewers gate is a
-# paid feature on private repos, so "merge to main ships to the public site"
-# would have had nothing standing in front of it. Ship production by running
-# this workflow from the Actions tab and choosing `production`.
+# **Preview deploys from `main` only.** Pull requests deploy nowhere. That is
+# the resolution of #73 (and the race #66 described): preview used to redeploy
+# on every open PR too, so the commit it served at any instant belonged to
+# whichever branch pushed last — not necessarily yours, and not necessarily
+# `main`. "Verified on preview" was therefore never safe to say without a
+# commit check either side of the observation. With this trigger removed,
+# `preview.keepsake.ing` means exactly one knowable thing: the newest commit
+# on `main`.
+#
+# What replaces a per-branch preview link: `pnpm --filter @keepsake/web e2e`
+# runs the whole product locally against real `workerd` with local D1/R2/KV
+# (see apps/web/playwright.config.ts), which is closer to production than the
+# shared Worker ever was, and CI runs it on every pull request.
+#
+# One consequence worth knowing, because it removes a real hazard: PR branches
+# no longer apply their migrations to the shared `keepsake-db-preview` D1. That
+# is what made a renumbered migration corrupt the ledger for every other
+# concurrent PR (#99).
+#
+# **Production is manual only** (`workflow_dispatch`): GitHub's
+# required-reviewers gate is a paid feature on private repos, so "merge to main
+# ships to the public site" would have had nothing standing in front of it.
+# Ship production by running this workflow from the Actions tab and choosing
+# `production`.
 on:
-  pull_request:
   push:
     branches: [main]
   workflow_dispatch:
@@ -101,35 +119,3 @@ jobs:
           done
           echo "::error::/health never reported '$expected' after 20 attempts (~2 min)"
           exit 1
-
-      - name: Comment preview URL
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const url = `${{ vars.EXPO_PUBLIC_SITE_URL }}`;
-            const sha = `${{ github.sha }}`;
-            const body = [
-              `Preview deployed: ${url}`,
-              `Commit: \`${sha.slice(0, 7)}\``,
-              '',
-              '⚠️ Preview is one shared Worker — every open PR deploys here (#66). This ' +
-                'comment only proves the commit above was live the instant the deploy job ' +
-                'checked it; another PR may have redeployed since. Before trusting anything ' +
-                'you observe on preview, re-check:',
-              '```',
-              `node tools/ci/verify-preview-commit.mjs ${url} ${sha}`,
-              '```',
-              'For anything that takes more than an instant (a manual click-through, a ' +
-                'curl against a write path), wrap it so drift mid-verification fails loud ' +
-                'instead of silently passing:',
-              '```',
-              `node tools/ci/verify-preview-commit.mjs ${url} ${sha} -- <your command>`,
-              '```',
-            ].join('\n');
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body,
-            });

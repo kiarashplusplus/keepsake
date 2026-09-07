@@ -89,13 +89,33 @@ jobs:
           # LFS bandwidth is metered; only preflight needs the real seed file
           # (its lfs-pointers check). Every other job seeds its own rows.
           lfs: true
+          # The `migration-drift` check compares apps/api/migrations against
+          # `merge-base(origin/main, HEAD)`: D1's `d1_migrations` ledger is
+          # keyed on the *filename*, so renaming or editing a migration that a
+          # deploy already applied silently corrupts it (#99). The default
+          # shallow, single-ref checkout has no `origin/main` and no shared
+          # history, so the check would have nothing to compare against.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Belt and braces: `fetch-depth: 0` already brings every branch, but a
+      # fork or a re-run against a pruned cache may not have `origin/main`.
+      # Fetching it explicitly means `migration-drift` fails on real drift
+      # rather than on a missing ref.
+      - name: Fetch the migration baseline
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+      # GITHUB_ACTIONS is already "true" here, which is what turns
+      # `migration-drift`'s "I could not resolve a baseline" SKIP into a
+      # FAIL — a check that silently passes when it cannot run is the exact
+      # failure mode AGENTS.md catalogues. Set explicitly so the intent
+      # survives someone running this workflow's steps elsewhere.
       - run: node tools/preflight/preflight.mjs
+        env:
+          PREFLIGHT_REQUIRE_GIT_BASELINE: "1"
 
   lint:
     name: lint
@@ -150,6 +170,26 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter "./packages/*" --if-present test
+
+  # tools/* are workspace packages too (pnpm-workspace.yaml lists `tools/*`),
+  # but `test-packages` filters on `./packages/*` and never matched them. So
+  # tools/preflight/preflight.test.mjs — 55 tests whose whole purpose is to
+  # prove each preflight check can still fail — had never executed in CI. That
+  # is this repo's recurring failure mode, found again while fixing #99.
+  test-tools:
+    name: test-tools
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, changes]
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.root == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter "./tools/*" --if-present test
 
   test-api:
     name: test-api
@@ -255,7 +295,7 @@ jobs:
     name: ci-complete
     runs-on: ubuntu-latest
     if: always()
-    needs: [changes, preflight, lint, typecheck, test-packages, test-api, test-web, build-web, e2e]
+    needs: [changes, preflight, lint, typecheck, test-packages, test-tools, test-api, test-web, build-web, e2e]
     steps:
       - uses: actions/checkout@v4
       - name: Assert CI ran what the diff required
@@ -277,5 +317,5 @@ jobs:
           # Index syntax rather than `needs.test-web.result`: unambiguous for
           # job ids containing a hyphen.
           JOBS: >-
-            changes=${{ needs.changes.result }},preflight=${{ needs.preflight.result }},lint=${{ needs.lint.result }},typecheck=${{ needs.typecheck.result }},test-packages=${{ needs['test-packages'].result }},test-api=${{ needs['test-api'].result }},test-web=${{ needs['test-web'].result }},build-web=${{ needs['build-web'].result }},e2e=${{ needs.e2e.result }}
+            changes=${{ needs.changes.result }},preflight=${{ needs.preflight.result }},lint=${{ needs.lint.result }},typecheck=${{ needs.typecheck.result }},test-packages=${{ needs['test-packages'].result }},test-tools=${{ needs['test-tools'].result }},test-api=${{ needs['test-api'].result }},test-web=${{ needs['test-web'].result }},build-web=${{ needs['build-web'].result }},e2e=${{ needs.e2e.result }}
         run: node tools/ci/assert-coverage.mjs

@@ -5,6 +5,49 @@ The single place that says what state Keepsake's build is actually in. Finderly'
 one status-of-record file plus small per-topic files, kept current in the same session code
 changes, not written up after the fact.
 
+## Where this stands — 2026-09-07
+
+Production went live during this session, so the top of this file changes meaning: `keepsake.ing`
+is a real site with real visitors possible, not a staging exercise.
+
+**Live now**
+- `https://keepsake.ing` serves `keepsake-production`. Both of that Worker's `workers.dev`
+  hostnames are disabled, and so are the preview Worker's (#46, #105). Production deploys are
+  still **manual** — `workflow_dispatch` — so merging to `main` does not ship the public site.
+- `preview.keepsake.ing` deploys from **`main` only**; pull requests deploy nowhere (#73, which
+  also resolved #66). Verify a branch with `pnpm --filter @keepsake/web e2e`, not on preview.
+- Production email is `live` for all recipients (#43). **What that rests on is still unproven**:
+  delivery to any address other than Kiarash's has never been observed arriving (#6). That is the
+  single most important open fact in this file.
+- `PRODUCTION_LIVE=true` is set, so `uptime.yml` now genuinely probes production every 15 minutes
+  rather than only checking that it *isn't* answering.
+
+**In flight**
+- **PR #107** — ten issues (#43, #66, #73, #86, #87, #88, #89, #90, #91, #92, #99, #106).
+  **Must not merge before #100**: #100 carries a sequential `0009_aspects_backfill.sql` that
+  preview D1 has already applied, and #99's new rule requires timestamped names — renaming it to
+  comply would be exactly the drift #99 exists to prevent. Merge #100, then #107.
+- **PR #100** (aspect backfill, #37) — CI green, review not completed.
+- **PR #101** (semantic search, #38) — CI red on one preflight rule: a `@cf/` id in a *doc
+  comment* in `search/search.ts`. The id itself is correctly declared in `models.ts`. Because
+  preflight fails, every other job skipped, so the rest of that PR has never been tested.
+
+**Open and genuinely blocked on a human**: #6 (read an inbox), #31 (a lawyer), #42 (walk it on a
+phone), #47 (`/health` on the apex plus the first real listing), #94 (a zone cache-purge token),
+#105 (whether Cloudflare Access should gate preview).
+
+**Open and workable by anyone**: #103 (CI on `main` is cancelled by back-to-back merges, so
+merged commits reach preview with no completed run), #104 (`wrangler dev` dies mid-e2e with no
+diagnostic and the restart wrapper hides it).
+
+**The lesson worth carrying, because it is now row six of `AGENTS.md`'s table.** Two separate
+alerting/verification paths turned out never to have executed: `tools/preflight/preflight.test.mjs`
+(55 tests proving each preflight check can fail — nothing ran them) and `uptime.yml`'s issue-filing
+step (#106 — every `gh` call died on missing repo context). Both looked healthy because everything
+*around* them worked. The common shape: **a branch that only runs when something is wrong is
+evidence-free until something is wrong.** A green history says nothing about it. When you add a
+path like that, force it to run once.
+
 ## Agent operating rules
 
 Adapted from Finderly's "Agent operating rules for design work" (`DESIGN-UX-AUDIT.md:42-96`),
@@ -45,7 +88,7 @@ condensed to what actually earns its keep on a solo-agent-driven repo:
 | M2 Browse + share | `[DONE]` | Feed (keyset/category/FTS/geo), item page, `/i/:id/:variant` edge cache, `/item/:id` OG injection, masonry feed, location bar, share, `+not-found`. |
 | M3 Requests, email, recovery | `[DONE]` | Turnstile, requests, giver email add/verify, `sendMail()` (cf + resend fallback), choose flow + contact reveal, given/withdraw/relist/edit/delete, recovery. |
 | M4 Trust and operations | `[DONE]`, version skew guard excepted (`[TODO]` on the client — issue #23) | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Workers Logs observability (issue #14, replaced a never-configured Sentry), Web Analytics, Playwright in CI, runbooks. Version skew: server half (`/version.json`, `no-store`) is done and tested; nothing in `apps/web` polls it yet — see `docs/design/ops.md#version-skew`. |
-| M5 Polish and launch | `[IN PROGRESS]` | About/Privacy/Terms, empty states, motion + reduce-motion pass, keyboard/focus audit, robots/sitemap, cache-header audit, production secrets, `keepsake.ing` cutover. |
+| M5 Polish and launch | `[QA]` — cutover done, apex unverified | About/Privacy/Terms, empty states, motion + reduce-motion pass, keyboard/focus audit, robots/sitemap, cache-header audit, production secrets, `keepsake.ing` cutover. |
 
 Definition of done per milestone lives with the plan (`M0`–`M5` DoD bullets); the short version:
 

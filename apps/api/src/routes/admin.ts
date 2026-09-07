@@ -33,7 +33,7 @@ import { maskEmail, type RequestStatus } from "@keepsake/contracts/request";
 import type { ReportReason } from "@keepsake/contracts/report";
 import { captureException, captureMessage } from "@keepsake/observability/capture";
 import type { Env } from "../env.js";
-import { emailProviderName } from "../env.js";
+import { emailProviderName, reportAutohideThreshold } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
 import { requireParam } from "../lib/params.js";
@@ -42,7 +42,13 @@ import { adminAuth } from "../middleware/adminAuth.js";
 import { burst } from "../middleware/rateLimit.js";
 import { validateBody, validateQuery } from "../middleware/validate.js";
 import { decodeKeysetCursor, encodeKeysetCursor } from "../lib/cursor.js";
-import { fetchAspectRows, fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
+import {
+  fetchAspectRows,
+  fetchAspectRowsForListings,
+  fetchListingRow,
+  fetchPhotoRows,
+  fetchPhotoRowsForListings,
+} from "../lib/listingsDb.js";
 import { serializeOwnerListing, type ListingRow } from "../lib/serialize.js";
 import { sendMail } from "../email/sendMail.js";
 import { adminTest as adminTestTemplate } from "../email/templates/adminTest.js";
@@ -137,6 +143,83 @@ interface ReportRow {
   created_at: number;
 }
 
+/**
+ * The three admin-only child lookups a queue page needs, each as one
+ * `IN (...)` query for the whole page rather than one query per row (#91 —
+ * an N+1 knowingly deferred when launch-audit finding 13 landed). They
+ * mirror `fetchPhotoRowsForListings`/`fetchAspectRowsForListings` in
+ * lib/listingsDb.ts, which `GET /api/feed` already uses for the same reason,
+ * and they live here rather than there because nothing outside the admin
+ * queue reads owner ban state, moderation events or reports in bulk.
+ *
+ * Grouping happens in JS; the SQL only has to return the page's rows in an
+ * order that, read left to right, already has each listing's children
+ * adjacent and correctly sequenced. Guarded by
+ * test/adminQueueBatching.test.ts, which counts prepared statements at two
+ * page sizes and fails if the count moves with the row count.
+ */
+function groupBy<Row, Value>(rows: Row[], keyOf: (row: Row) => string, valueOf: (row: Row) => Value): Map<string, Value[]> {
+  const byKey = new Map<string, Value[]>();
+  for (const row of rows) {
+    const key = keyOf(row);
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.push(valueOf(row));
+    } else {
+      byKey.set(key, [valueOf(row)]);
+    }
+  }
+  return byKey;
+}
+
+async function fetchOwnerSummaries(env: Env, ownerIds: string[]): Promise<Map<string, OwnerSummaryRow>> {
+  const byOwner = new Map<string, OwnerSummaryRow>();
+  if (ownerIds.length === 0) return byOwner;
+
+  const placeholders = ownerIds.map(() => "?").join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT id, email, email_verified_at, banned_at FROM owners WHERE id IN (${placeholders})`,
+  )
+    .bind(...ownerIds)
+    .all<OwnerSummaryRow>();
+  for (const row of results) byOwner.set(row.id, row);
+  return byOwner;
+}
+
+/**
+ * `ORDER BY listing_id, created_at, id` — the `id` is not decoration. The
+ * per-row version ordered by `created_at` alone and left same-millisecond
+ * events (routine: the text and image legs of one moderation run finish
+ * microseconds apart) to whatever order SQLite happened to walk the index
+ * in. Adding the primary key makes the sequence a function of the data, so
+ * two identical requests can never disagree.
+ */
+async function fetchModerationEventsForListings(env: Env, listingIds: string[]): Promise<Map<string, ModerationEventRow[]>> {
+  if (listingIds.length === 0) return new Map();
+
+  const placeholders = listingIds.map(() => "?").join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT listing_id, kind, model, verdict, flags_json, reason, attempt, latency_ms, created_at
+     FROM moderation_events WHERE listing_id IN (${placeholders}) ORDER BY listing_id, created_at, id`,
+  )
+    .bind(...listingIds)
+    .all<ModerationEventRow & { listing_id: string }>();
+  return groupBy(results, (row) => row.listing_id, (row) => row);
+}
+
+/** Same shape and same tiebreak reasoning as the events lookup above. */
+async function fetchReportsForListings(env: Env, listingIds: string[]): Promise<Map<string, ReportRow[]>> {
+  if (listingIds.length === 0) return new Map();
+
+  const placeholders = listingIds.map(() => "?").join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT listing_id, reason, details, created_at FROM reports WHERE listing_id IN (${placeholders}) ORDER BY listing_id, created_at, id`,
+  )
+    .bind(...listingIds)
+    .all<ReportRow & { listing_id: string }>();
+  return groupBy(results, (row) => row.listing_id, (row) => row);
+}
+
 adminRoutes.get("/queue", validateQuery(AdminQueueQuery), async (c) => {
   const query = c.get("validatedQuery") as AdminQueueQuery;
   const cursor = decodeKeysetCursor(query.cursor);
@@ -163,31 +246,25 @@ adminRoutes.get("/queue", validateQuery(AdminQueueQuery), async (c) => {
     .bind(...params)
     .all<ListingRow>();
 
-  const items: AdminQueueItem[] = [];
-  for (const row of rows) {
-    const photos = await fetchPhotoRows(c.env, row.id);
-    const aspects = await fetchAspectRows(c.env, row.id);
-    const ownerListing = serializeOwnerListing(row, photos, aspects);
+  // One query per child table for the whole page, not one per row. The
+  // owner lookup is de-duplicated first: a queue page is often several
+  // listings from the same repeat poster, and the old loop asked for that
+  // owner once per listing.
+  const listingIds = rows.map((row) => row.id);
+  const ownerIds = [...new Set(rows.map((row) => row.owner_id))];
+  const [photosByListing, aspectsByListing, ownersById, eventsByListing, reportsByListing] = await Promise.all([
+    fetchPhotoRowsForListings(c.env, listingIds),
+    fetchAspectRowsForListings(c.env, listingIds),
+    fetchOwnerSummaries(c.env, ownerIds),
+    fetchModerationEventsForListings(c.env, listingIds),
+    fetchReportsForListings(c.env, listingIds),
+  ]);
 
-    const ownerRow = await c.env.DB.prepare(
-      "SELECT id, email, email_verified_at, banned_at FROM owners WHERE id = ?",
-    )
-      .bind(row.owner_id)
-      .first<OwnerSummaryRow>();
+  const items: AdminQueueItem[] = rows.map((row) => {
+    const ownerListing = serializeOwnerListing(row, photosByListing.get(row.id) ?? [], aspectsByListing.get(row.id) ?? []);
+    const ownerRow = ownersById.get(row.owner_id);
 
-    const { results: eventRows } = await c.env.DB.prepare(
-      "SELECT kind, model, verdict, flags_json, reason, attempt, latency_ms, created_at FROM moderation_events WHERE listing_id = ? ORDER BY created_at",
-    )
-      .bind(row.id)
-      .all<ModerationEventRow>();
-
-    const { results: reportRows } = await c.env.DB.prepare(
-      "SELECT reason, details, created_at FROM reports WHERE listing_id = ? ORDER BY created_at",
-    )
-      .bind(row.id)
-      .all<ReportRow>();
-
-    items.push({
+    return {
       ...ownerListing,
       report_count: row.report_count,
       owner: {
@@ -196,7 +273,7 @@ adminRoutes.get("/queue", validateQuery(AdminQueueQuery), async (c) => {
         email_verified: Boolean(ownerRow?.email_verified_at),
         banned: Boolean(ownerRow?.banned_at),
       },
-      events: eventRows.map((event) => ({
+      events: (eventsByListing.get(row.id) ?? []).map((event) => ({
         kind: event.kind,
         model: event.model,
         verdict: event.verdict,
@@ -206,13 +283,13 @@ adminRoutes.get("/queue", validateQuery(AdminQueueQuery), async (c) => {
         latency_ms: event.latency_ms,
         created_at: event.created_at,
       })),
-      reports: reportRows.map((report) => ({
+      reports: (reportsByListing.get(row.id) ?? []).map((report) => ({
         reason: report.reason as ReportReason,
         details: report.details,
         created_at: report.created_at,
       })),
-    });
-  }
+    };
+  });
 
   const last = rows[rows.length - 1];
   const next_cursor = rows.length === query.limit && last ? encodeKeysetCursor(last.updated_at, last.id) : null;
@@ -599,6 +676,94 @@ const CRON_STALE_AFTER_MS: Record<string, number> = {
 
 const CRON_JOB_NAMES = ["moderationRetry", "orphanSweep"] as const;
 
+/**
+ * Issue #89: three independent reporters can hide a live listing on their
+ * own (`REPORT_AUTOHIDE_THRESHOLD`, enforced in
+ * `POST /api/listings/:id/reports`), and until this block existed nothing
+ * told a human it had happened. `GET /health` is a Worker liveness check —
+ * an auto-hide changes a *listing's* status, not the Worker's, so it stayed
+ * `ok: true` right through the event — and the `captureMessage` the
+ * auto-hide fires writes to Workers Logs, which has no Tail Worker and no
+ * Logpush reading it on a schedule (docs/runbooks/incident.md).
+ *
+ * Same shape as the cron-staleness read above: pull the raw signal, log a
+ * `console.warn` when it is non-empty, put it in the payload for the admin
+ * strip, and let it decide `ok`. Both directions of the risk land in the
+ * same bucket on purpose — a genuinely harmful listing that needs
+ * confirming, and a legitimate keepsake taken down by three coordinated
+ * reporters that needs restoring — because from here they are
+ * indistinguishable, and both want the same next step: a human, within
+ * hours.
+ */
+const AUTOHIDDEN_SAMPLE_LIMIT = 20;
+
+interface AutohiddenRow {
+  listing_id: string;
+  report_count: number;
+  autohidden_at: number;
+}
+
+interface NearThresholdRow {
+  listing_id: string;
+  report_count: number;
+}
+
+/**
+ * "Auto-hidden and nobody has looked" is `status = 'hidden'` plus a
+ * `report_autohide` event with no `kind = 'admin'` event at or after it.
+ * Deriving it from `moderation_events` rather than from a time window is
+ * what makes it self-clearing and non-nagging: every admin action on the
+ * listing (`logAdminEvent`) writes a newer `admin` row, so approving,
+ * restoring, rejecting or re-hiding it all take it off this list, while a
+ * listing nobody touches stays on it however many days pass. A hide an
+ * admin performed by hand never appears here at all — it has no
+ * `report_autohide` event to join against.
+ */
+async function fetchReportPressure(env: Env): Promise<AdminHealth["report_pressure"]> {
+  const threshold = reportAutohideThreshold(env);
+
+  const { results: autohiddenRows } = await env.DB.prepare(
+    `SELECT l.id AS listing_id, l.report_count AS report_count, MAX(e.created_at) AS autohidden_at
+       FROM listings l
+       JOIN moderation_events e ON e.listing_id = l.id AND e.kind = 'report_autohide'
+      WHERE l.status = 'hidden'
+        AND NOT EXISTS (
+              SELECT 1 FROM moderation_events a
+               WHERE a.listing_id = l.id AND a.kind = 'admin' AND a.created_at >= e.created_at)
+      GROUP BY l.id, l.report_count
+      ORDER BY autohidden_at DESC
+      LIMIT ?`,
+  )
+    .bind(AUTOHIDDEN_SAMPLE_LIMIT)
+    .all<AutohiddenRow>();
+
+  // `threshold - 1` rather than "any reports at all": this is the set where
+  // one more stranger takes the listing down, which is the only count that
+  // gives a moderator time to act *before* a legitimate keepsake disappears.
+  // Floored at 1 so a misconfigured `REPORT_AUTOHIDE_THRESHOLD=1` doesn't
+  // turn this into "every approved listing".
+  const nearFloor = Math.max(threshold - 1, 1);
+  const { results: nearRows } = await env.DB.prepare(
+    `SELECT id AS listing_id, report_count
+       FROM listings
+      WHERE status = 'approved' AND report_count >= ?
+      ORDER BY report_count DESC, updated_at DESC
+      LIMIT ?`,
+  )
+    .bind(nearFloor, AUTOHIDDEN_SAMPLE_LIMIT)
+    .all<NearThresholdRow>();
+
+  return {
+    threshold,
+    autohidden_awaiting_review: autohiddenRows.map((row) => ({
+      listing_id: row.listing_id,
+      report_count: row.report_count,
+      autohidden_at: row.autohidden_at,
+    })),
+    near_threshold: nearRows.map((row) => ({ listing_id: row.listing_id, report_count: row.report_count })),
+  };
+}
+
 adminRoutes.get("/health", async (c) => {
   const postalCountRow = await c.env.DB.prepare("SELECT COUNT(*) AS count FROM postal_codes").first<{ count: number }>();
   const postalCodesCount = postalCountRow?.count ?? 0;
@@ -627,10 +792,22 @@ adminRoutes.get("/health", async (c) => {
     console.warn("admin/health: cron heartbeat stale", { crons: staleCrons, cronLastRun });
   }
 
+  const reportPressure = await fetchReportPressure(c.env);
+  if (reportPressure.autohidden_awaiting_review.length > 0) {
+    // Same level and shape as the cron warning above, so one Workers Logs
+    // filter (`level = "warn"` on this Worker) catches every "needs a human"
+    // signal this endpoint knows about rather than one per feature.
+    console.warn("admin/health: listings auto-hidden by reports await review", {
+      count: reportPressure.autohidden_awaiting_review.length,
+      listing_ids: reportPressure.autohidden_awaiting_review.map((entry) => entry.listing_id),
+    });
+  }
+
   const health: AdminHealth = {
-    ok: postalCodesCount > 0 && staleCrons.length === 0,
+    ok: postalCodesCount > 0 && staleCrons.length === 0 && reportPressure.autohidden_awaiting_review.length === 0,
     postal_codes_count: postalCodesCount,
     cron_last_run: cronLastRun,
+    report_pressure: reportPressure,
   };
   return ok(c, health);
 });

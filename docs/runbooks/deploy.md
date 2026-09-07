@@ -8,7 +8,7 @@ finding 18 found them describing a workflow that no longer matched `deploy.yml`.
 
 | Environment | Trigger | Worker | Data |
 |---|---|---|---|
-| preview | every PR, and every push to `main` (`.github/workflows/deploy.yml`) | one shared Worker | its own D1/R2/KV — never production's |
+| preview | **every push to `main` only** (`.github/workflows/deploy.yml`) — pull requests deploy nowhere | one Worker, always serving `main` | its own D1/R2/KV — never production's |
 | production | **manual only** — `workflow_dispatch` from the Actions tab, choosing `production` | `keepsake.ing` | production D1/R2/KV |
 
 `deploy.yml`'s trigger logic (`inputs.environment` on `workflow_dispatch`, else always `preview`)
@@ -23,41 +23,46 @@ Cloudflare resources below exist, leave it unset (or `"false"`) so the workflow 
 
 ## Verifying against preview
 
-**"Preview is one shared Worker" (row above) is not a detail — it is the reason "I checked it on
-preview" is not, by itself, evidence of anything (issue #66).** Every open pull request deploys
-to the same Worker as every other open pull request and every push to `main`. Deploys queue
-(`concurrency: { group: deploy-preview, cancel-in-progress: false }`) rather than run in
-parallel, so `deploy.yml`'s own "Verify /health reports this commit" step is never wrong when it
-runs — but it proves nothing about a moment later, because the next queued deploy (someone else's
-PR) can land seconds after yours finishes. This is not hypothetical: verifying #14, a probe ran 90
-seconds after an unrelated branch's deploy landed on top of the one just verified, and got a
-commit belonging to neither.
+**Preview deploys from `main` only.** Pull requests do not deploy anywhere (decided on #73,
+implemented by dropping `pull_request:` from `deploy.yml`'s triggers). So
+`preview.keepsake.ing` means exactly one thing: the newest commit on `main` that has finished
+deploying.
 
-Before trusting anything you observe on preview — a probed endpoint, a page loaded in a browser,
-a screenshot — confirm which commit is actually being served, immediately before and immediately
-after:
+That was not true before. Preview used to redeploy on every open pull request as well, so the
+commit it served at any instant belonged to whichever branch pushed last — which made "I checked
+it on preview" evidence of nothing (#66). Deploys queued rather than ran in parallel
+(`concurrency: { group: deploy-preview, cancel-in-progress: false }`), so `deploy.yml`'s own
+"Verify /health reports this commit" step was never wrong *when it ran* — it just stopped being
+true a minute later. Verifying #14, a probe ran 90 seconds after an unrelated branch's deploy
+landed on top of the one just verified, and got a commit belonging to neither.
+
+**Verifying a branch now happens locally, not on preview.** `pnpm --filter @keepsake/web e2e`
+runs the whole product against real `workerd` with local D1/R2/KV — the same arrangement
+production runs, including the `[assets]` binding, `/item/:id`'s HTMLRewriter OG injection, the
+SPA fallback and the moderation pipeline (`apps/web/playwright.config.ts` explains why this is
+closer to production than `expo start` ever was). CI runs it on every pull request. For a
+one-off manual poke, `wrangler dev --local` from `apps/api/`.
+
+**Checking preview still matters after a merge**, because "the newest commit on `main`" and "the
+commit I just merged" diverge as soon as someone merges again. Before trusting anything you
+observe there:
 
 ```sh
 # One-off check: fails loud (exit 1) if preview isn't on the commit you expect.
 node tools/ci/verify-preview-commit.mjs https://preview.keepsake.ing <expected-sha>
 
 # Wrapping a longer verification: checks before AND after <your command>, and fails
-# even if <your command> itself "succeeded" — because a redeploy mid-check means
-# whatever you just observed may not belong to the commit you thought you tested.
+# even if <your command> itself "succeeded".
 node tools/ci/verify-preview-commit.mjs https://preview.keepsake.ing <expected-sha> -- <your command>
 ```
 
 `<expected-sha>` accepts a full 40-char commit or any non-empty prefix (short shas from
-`git rev-parse --short HEAD` work). Every preview deploy's PR comment (`deploy.yml`'s "Comment
-preview URL" step) now includes the exact command to run, filled in with that deploy's real
-commit, so you don't have to remember the syntax.
+`git rev-parse --short HEAD` work).
 
-This does not close the race — nothing checked after the fact can, on a Worker other sessions can
-redeploy at any time. It converts "silently wrong" into "loudly refuses to proceed," which is the
-bar this repo holds every guard to (`AGENTS.md`, "the one rule that matters"). The actual fix —
-per-PR preview Workers, or restricting preview deploys to `main` only so preview always means one
-knowable thing — needs a decision (and, for per-PR Workers, likely credentials) only Kiarash has;
-tracked in the follow-up filed from #66.
+One consequence of the trigger change, and it removes a real hazard: a pull request's migrations
+are no longer applied to the shared `keepsake-db-preview` D1 before merge. That sharing is what
+let a renumbered migration de-register an already-applied one and break `deploy (preview)` for
+every other concurrent pull request (#99).
 
 ## One-time Cloudflare setup
 
