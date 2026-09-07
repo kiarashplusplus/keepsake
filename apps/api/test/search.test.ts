@@ -147,6 +147,47 @@ describe("vectorSearchCandidates: relevance threshold", () => {
     expect(result).toEqual([{ id: "high-relevance", score: 1 }]);
   });
 
+  // The two tests above use cosine 0 and cosine 1 — the extreme ends. They
+  // pass for ANY threshold in (0, 1], which is precisely how MIN_SCORE sat at
+  // 0.3 for so long without anyone noticing it was unreachable: no score this
+  // model produces for anything ever falls below ~0.40, so the "nothing
+  // cleared the bar" fallback could never fire. A guard that cannot fail.
+  //
+  // These two pin MIN_SCORE to the band the real-model calibration actually
+  // justifies (docs/design/min-score-calibration.md, re-runnable via
+  // tools/calibrate-min-score.mjs):
+  //
+  //   off-corpus queries scored up to 0.6151, best-case 0.4850
+  //   true matches scored down to 0.5693
+  //
+  // Those overlap, so no cutoff separates them and MIN_SCORE is a floor, not
+  // a relevance classifier. 0.5 is below every true match observed and above
+  // the clearly-unrelated end. Move it out of that band — up toward 0.62 to
+  // "improve precision", or back down below 0.485 — and one of these fails.
+  it("rejects a score from the measured off-corpus band (MIN_SCORE is above the noise floor)", async () => {
+    const fake = installFakeVectorize();
+    await fake.upsert([{ id: "noise-floor", values: [1, 0] }]);
+    // cos(60.99°) ≈ 0.4850 — the best score a Kubernetes question scored
+    // against this corpus, i.e. a query with no answer in the index at all.
+    fixtureEmbedding("nothing like this in the index", [0.485, Math.sqrt(1 - 0.485 ** 2)]);
+
+    const result = await vectorSearchCandidates(env, "nothing like this in the index");
+    expect(result, "a score at the measured off-corpus floor must not clear MIN_SCORE").toEqual([]);
+  });
+
+  it("keeps a score from the measured true-match band (MIN_SCORE does not drop real matches)", async () => {
+    const fake = installFakeVectorize();
+    await fake.upsert([{ id: "weakest-true-match", values: [1, 0] }]);
+    // 0.5693 — the weakest genuine match in the calibration run ("something
+    // for feeding a toddler at the table" → a terse "Wooden high chair").
+    fixtureEmbedding("terse listing, oblique query", [0.5693, Math.sqrt(1 - 0.5693 ** 2)]);
+
+    const result = await vectorSearchCandidates(env, "terse listing, oblique query");
+    expect(result?.map((m) => m.id), "the weakest real match measured must survive MIN_SCORE").toEqual([
+      "weakest-true-match",
+    ]);
+  });
+
   it("returns null (not empty) when embedding the query fails, distinct from a real empty answer", async () => {
     // No fixture installed for this text — mockAi's run() throws, which
     // embed() catches and turns into null.

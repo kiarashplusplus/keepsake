@@ -21,34 +21,55 @@
  *     never fire — exactly the kind of guard-that-can't-fail this project
  *     has shipped before.
  *
- * MIN_SCORE is deliberately **not** a relevance classifier, and the number
- * below is **not calibrated against anything reproducible.**
+ * MIN_SCORE is deliberately **not** a relevance classifier, and cannot be
+ * one. That is now a measurement rather than an opinion.
  *
- * The original author of this branch reported measuring `MODELS.embedding`
- * directly against real Workers AI — six cosine pairs against one "brass
- * sextant" anchor, reported as: identical 1.00, close paraphrase 0.86, same
- * category/different item 0.56, unrelated but concrete 0.52, gibberish 0.55,
- * unrelated/abstract 0.42 — and set MIN_SCORE under that spread. **None of
- * that has been reproduced.** That agent never reported back and left no
- * transcript, log or issue comment behind (the header of
- * `test/search.test.ts` cites "the issue's closing comment" for it; no such
- * comment exists), and no session since has had a Cloudflare credential to
- * re-run it. The numbers are recorded here as a lead for whoever does have
- * one — not as a measurement this repo stands behind.
+ * Re-derived 2026-09-07 against real Workers AI, with a real credential, by
+ * `tools/calibrate-min-score.mjs` (re-runnable; full output recorded in
+ * `docs/design/min-score-calibration.md`). 19 listings in the shape
+ * `embeddingText()` builds, 19 queries whose intended listing is known, and
+ * 8 queries with no answer in the corpus at all:
  *
- * What survives independently of those numbers is the shape of the argument:
- * an absolute cosine cutoff on a bi-encoder is a weak relevance signal at
- * best, so this threshold is set low and treated as a *degenerate-result
- * floor* — it catches an empty index, or a query so far outside the
- * embedding space that even Vectorize's nearest neighbors are near
- * orthogonal. It is not asked to decide topical relevance, and must not be
- * trusted to. False negatives fall back to FTS (the listing is still
- * findable); false positives serve an imperfectly-ranked result.
+ *   true match          min 0.5693   mean 0.6811   max 0.7702
+ *   wrong doc           min 0.4002   mean 0.5147   max 0.6542
+ *   off-corpus, best    min 0.4850   mean 0.5559   max 0.6151
  *
- * Before `SEMANTIC_SEARCH` is ever turned on (see `semanticSearchEnabled` —
- * it is off in every environment today), this number has to be re-derived
- * against the real model, with the run recorded somewhere durable. Until
- * then no request reaches this code in a deployed environment at all.
+ * **The true-match and off-corpus distributions overlap, so no absolute
+ * cutoff separates them.** A floor above 0.6151 (needed to reject the worst
+ * off-corpus query) would discard real matches scoring 0.5693. This is the
+ * central fact about this number and the reason it is kept modest.
+ *
+ * Two things that overlap explains. First, `bge-base-en-v1.5` has no notion
+ * of "unrelated": nothing in the corpus ever scored below 0.40 against
+ * anything, so the "near orthogonal" case the original comment imagined does
+ * not occur. Second, the highest off-corpus scores are not meaningful
+ * queries but degenerate *text* — gibberish 0.6044, non-Latin script 0.6151,
+ * repetition 0.5720 — while genuinely unrelated English sits lower (a
+ * mortgage question 0.5834, a veterinary one 0.4856, a Kubernetes one
+ * 0.4850). A cutoff cannot tell "nonsense" from "a terse listing", because
+ * to this model they are the same distance from everything.
+ *
+ * What does the relevance work is **ranking**, not thresholding: the
+ * intended listing ranked first for 16 of 19 queries and never below third,
+ * including for the deliberately terse and obliquely-phrased ones.
+ *
+ * So 0.50 is a floor, chosen to sit below every true match observed (0.5693,
+ * a 0.07 margin) while still rejecting the clearly-unrelated end of the
+ * off-corpus range. Its job is case 3 above — noticing that the index is
+ * empty or degenerate, so the FTS fallback can fire — and **not** deciding
+ * topical relevance. It must not be raised toward 0.62 to "improve
+ * precision": the measurement says that trades a real, graceful FTS fallback
+ * for silently dropped matches.
+ *
+ * The previous value, 0.3, was below every score this model produces for
+ * anything at all, which made case 3 unreachable — a guard that could not
+ * fail. The pre-existing comment's six unattributed cosine figures are
+ * superseded by the run above; where they overlap they were roughly the
+ * right shape, but they were never reproducible and are not carried forward.
+ *
+ * Re-run the calibration if `MODELS.embedding` changes. The corpus is
+ * synthetic and small; treat these as the floor's order of magnitude, not
+ * as production statistics.
  */
 import type { Env } from "../env.js";
 import { semanticSearchEnabled } from "../env.js";
@@ -56,7 +77,7 @@ import { embed } from "./embedding.js";
 import { queryListingVectors, type VectorMatch } from "./vectorize.js";
 
 const SEARCH_TOP_K = 100;
-const MIN_SCORE = 0.3;
+const MIN_SCORE = 0.5;
 
 export async function vectorSearchCandidates(env: Env, rawQuery: string): Promise<VectorMatch[] | null> {
   // The kill switch, checked before anything else so that with the flag off

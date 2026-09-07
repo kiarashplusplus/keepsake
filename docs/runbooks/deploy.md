@@ -100,77 +100,92 @@ rather than failing if it isn't working yet).
 DNS: point `keepsake.ing` at the Worker via a route/custom domain in the Cloudflare dashboard,
 once `wrangler deploy --env production` has run at least once.
 
-## Vectorize (issue #38) — NOT DONE, needs a human
+## Vectorize / semantic search (issue #38) — DONE, on in every environment
 
-Semantic search is built and merged but **switched off in every environment**, because nobody
-has been able to confirm its Vectorize indexes exist. This section is the errand that would
-change that. Nothing here is optional-but-nice: until it is done, `SEMANTIC_SEARCH` must stay
-`"0"` and the `[[vectorize]]` blocks in `wrangler.toml` must stay commented out.
+Semantic search (`SEMANTIC_SEARCH`) is **on** in every deployed environment — preview and production — as of
+**2026-09-07**. This section is now the operating and rollback notes, not an
+errand. The history is kept because two of its warnings are still live.
 
-**Why it is blocked.** The branch that built the feature (PR #101) stated in its commit message
-that it had created all three indexes against real credentials. That claim was never
-corroborated — the agent left no transcript, log, or issue comment, and every session since has
-run in a sandbox with no `CLOUDFLARE_API_TOKEN` at all (`wrangler vectorize list` returns
-`In a non-interactive environment, it's necessary to set a CLOUDFLARE_API_TOKEN environment
-variable`). A separate probe of the account token reported it had no Vectorize permission. So
-the indexes may exist, or may never have been created; the honest state is "unknown".
+### What was actually verified, and how
 
-**1. Token permission.** The API token used must have, in addition to the scopes the deploy
-already needs:
+All three questions this section used to list as unanswerable were answered
+with a real credential (a token with `Vectorize` · Account · `Edit`, plus
+Workers AI):
 
-| Permission | Scope | Level |
+| Question | Answer | Evidence |
 | --- | --- | --- |
-| `Vectorize` | Account | `Edit` |
+| Do the indexes exist? | **Yes** | Vectorize API lists `keepsake-listings-{dev,preview,production}`, all `dimensions: 768, metric: cosine`. |
+| Does the real model work? | **Yes** | `REAL_AI=1` suite run for the first time: 370 passed, 0 skipped. Returns 768-dim, non-degenerate vectors. |
+| Does the round trip work? | **Yes** | embed → upsert → query against the real **dev** index returned the correct nearest neighbour (0.7305) ahead of the decoy (0.4695). Probe vectors deleted. |
 
-`Edit` (not `Read`) — creating the indexes needs write, and the Worker's own upserts/deletes at
-runtime go through the binding rather than this token. Add it at
-<https://dash.cloudflare.com/profile/api-tokens> to the token stored as the `CLOUDFLARE_API_TOKEN`
-GitHub Actions secret, or use a separate token locally just for step 2.
-
-**2. Create the three indexes.** From `apps/api/`:
-
-```sh
-wrangler vectorize create keepsake-listings-dev        --dimensions=768 --metric=cosine
-wrangler vectorize create keepsake-listings-preview    --dimensions=768 --metric=cosine
-wrangler vectorize create keepsake-listings-production --dimensions=768 --metric=cosine
-
-# Confirm — this is the check nobody has yet been able to run:
-wrangler vectorize list
-```
-
-`--dimensions=768` must match `MODELS.embedding` in `apps/api/src/models.ts`; `--metric=cosine`
-must match how `search/search.ts` interprets scores. An index created with the wrong values
-cannot be altered — it has to be deleted and recreated.
-
-**3. Verify the model before trusting it.** With a credential in the environment:
+Re-run the gated block any time with:
 
 ```sh
 CLOUDFLARE_API_TOKEN=… REAL_AI=1 pnpm --filter @keepsake/api test
 ```
 
-This un-skips the `real Workers AI embeddings (REAL_AI=1)` block in `test/search.test.ts`, which
-is skipped and has never once been observed to run. It asserts the model returns 768-dim
-vectors, that different inputs give different vectors, and that a related query lands nearer a
-zero-aspect story than an unrelated one. Those assertions exist because a mocked embedding
-cannot catch a model returning well-shaped meaningless output — the failure this project has
-already shipped once (see `docs/design/moderation.md`).
+Without a token that command fails loudly rather than passing on mocks — that
+is deliberate (`remoteBindings` in `vitest.config.ts` follows `REAL_AI`).
 
-**4. Re-derive `MIN_SCORE`.** `search/search.ts`'s threshold is currently an uncalibrated
-number; the measurements its comment reports were never reproduced. Re-derive it against the
-real model and record the run somewhere durable before relying on it.
+### `MIN_SCORE`
 
-**5. Only then turn it on.** Uncomment the three `[[vectorize]]` blocks in `wrangler.toml` and
-flip `SEMANTIC_SEARCH` to `"1"` — one environment at a time, `preview` first.
+Re-derived from measurement, not taste: **0.5**. Full run and reasoning in
+`docs/design/min-score-calibration.md`; reproduce with
+`node tools/calibrate-min-score.mjs`.
 
-In the same change, update the "Search by meaning" section of `apps/site/public/privacy.html`:
-it currently states the feature is *switched off and not running*, which stops being true the
-moment you flip the flag. `apps/web/test/guards/privacyPolicy.test.ts` asserts that exact
-sentence is present, so remove it from both the policy and the guard's `discloses` list
-together — the build fails until they agree, which is the point (#88).
+The one thing to know before touching it: **the true-match and off-corpus score
+distributions overlap** (true matches down to 0.5693, off-corpus junk up to
+0.6151), so no cutoff separates them. `MIN_SCORE` is a floor that lets the FTS
+fallback fire on an empty or degenerate index — it is *not* a relevance
+classifier, and raising it toward 0.62 to "improve precision" trades a graceful
+fallback for silently dropped matches. Two tests in `test/search.test.ts` pin it
+to the justified band and fail if it moves out either side.
 
-> Order matters. Uncommenting a `[[vectorize]]` binding that names a non-existent index makes
-> the Worker upload fail, which blocks **every** deploy of this Worker, including deploys of
-> unrelated changes. Create the indexes first and see `wrangler vectorize list` return them.
+The previous value, 0.3, was below every score this model produces for anything
+at all, which made the "nothing cleared the bar" fallback unreachable.
+
+### The backfill that does not exist — read before switching this off
+
+`reembedListing` runs **only on listing create and edit** (`routes/listings.ts`).
+There is no backfill for listings that already exist, and no admin endpoint to
+drive one. A listing created while `SEMANTIC_SEARCH` is `"0"` therefore has no
+vector and is invisible to vector search until someone edits it.
+
+The flag was flipped on while the production catalogue was still empty
+precisely so this never becomes a problem: every listing that has ever existed
+in production gets embedded on write. **If you switch it off while listings are
+being created, switching it back on will require writing that backfill first**
+(model it on `src/backfill/aspects.ts`, which solves the same shape of problem
+for #37 — batched, budget-respecting, resumable, idempotent).
+
+### Rolling back
+
+`SEMANTIC_SEARCH = "0"` in the relevant `wrangler.toml` env block and deploy.
+That is a complete rollback: the flag is checked before any embedding or
+Vectorize call on both the read and write paths, so with it off no AI budget is
+spent and `GET /api/feed?q=` is exactly the FTS5 search `main` has always
+served. There is a test asserting that equivalence against a no-binding control.
+
+Do **not** roll back by re-commenting the `[[vectorize]]` bindings. The flag is
+the kill switch; the binding is not. Note the asymmetry that made this section
+so cautious originally: an uncommented binding naming an index that does *not*
+exist fails the Worker upload and takes down **every** deploy of this Worker,
+including changes unrelated to search. The indexes are confirmed to exist now,
+so the bindings are safe — but if anyone ever deletes one, deploys break rather
+than search degrading.
+
+Index config cannot be altered after creation. Changing `MODELS.embedding` to a
+model of a different width means deleting and recreating all three indexes, and
+re-embedding everything in them.
+
+### Privacy
+
+`apps/site/public/privacy.html`'s "Search by meaning" section says the feature
+**is running**, that the vectors are stored with Cloudflare beside the listing
+id, and that deleting a listing deletes them.
+`apps/web/test/guards/privacyPolicy.test.ts` (#88) asserts those sentences and
+fails the build if they disappear. If the feature is ever switched off for good,
+the policy and that guard have to change together.
 
 ## Secrets
 

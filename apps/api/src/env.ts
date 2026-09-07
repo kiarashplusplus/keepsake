@@ -9,25 +9,26 @@
  * `Cloudflare.Env` names the same generated shape without that trap.
  */
 /**
- * `VECTORIZE` (issue #38) is declared here by hand rather than coming from
- * `wrangler types`, and is **optional**, because the `[[vectorize]]` blocks
- * in `wrangler.toml` are commented out — the indexes are not confirmed to
- * exist, and an unresolvable binding fails the whole Worker upload. With
- * them commented, `wrangler types` emits no `VECTORIZE` at all and every
- * `env.VECTORIZE` reference in `search/vectorize.ts` stops compiling.
+ * `VECTORIZE` (issue #38) is declared here by hand, as **optional**, and
+ * deliberately stays that way now that the `[[vectorize]]` blocks in
+ * `wrangler.toml` are uncommented and `wrangler types` emits the binding
+ * itself.
  *
- * Optional is also simply the truthful shape, and a better one than the
- * generated type would give. `search/vectorize.ts` has always branched on
- * `if (!env.VECTORIZE)` to fall back to FTS; against a generated
- * non-optional binding that branch is unreachable-by-type — the compiler
- * would let it rot, or flag it. Declaring it optional is what makes the
- * fallback a live, type-checked path in exactly the configuration the repo
- * actually ships.
+ * It was originally hand-declared out of necessity: with the blocks
+ * commented out, `wrangler types` emitted no `VECTORIZE` at all and every
+ * `env.VECTORIZE` reference in `search/vectorize.ts` stopped compiling. That
+ * necessity is gone. The declaration is kept because optional is the
+ * truthful shape, and a more useful one than the generated type gives.
  *
- * When the indexes are created and the binding uncommented (see
- * `docs/runbooks/deploy.md` → "Vectorize (issue #38)"), `wrangler types`
- * will start emitting `VECTORIZE` itself; this intersection stays correct
- * either way, since the generated non-optional property narrows this one.
+ * `search/vectorize.ts` has always branched on `if (!env.VECTORIZE)` to fall
+ * back to FTS. That branch is the feature's safety net and it is exercised
+ * by tests that stub the binding away entirely. Against a generated
+ * non-optional binding it would be unreachable-by-type — the compiler would
+ * let it rot, or flag it as dead. Declaring it optional keeps the fallback a
+ * live, type-checked path.
+ *
+ * The intersection is correct either way: where `wrangler types` emits a
+ * non-optional `VECTORIZE`, the generated property narrows this one.
  */
 export type Env = Cloudflare.Env & { VECTORIZE?: VectorizeIndex };
 
