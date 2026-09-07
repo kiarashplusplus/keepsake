@@ -5,7 +5,7 @@ import * as React from "react";
 import { Pressable, View, type ViewStyle } from "react-native";
 import { useRouter } from "expo-router";
 import { Image as ExpoImage } from "expo-image";
-import { FULL_EDGE_PX, MAX_PHOTOS, THUMB_EDGE_PX } from "@keepsake/contracts/photo";
+import { MAX_PHOTOS } from "@keepsake/contracts/photo";
 import { space } from "@keepsake/tokens/spacing";
 import { motion } from "@keepsake/tokens/motion";
 import { Text } from "@/ui/Text";
@@ -20,16 +20,35 @@ import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { coverPhoto, makeClientId, type GiveDraftPhoto } from "@/features/give/giveDraft";
 import { tiltDegForId } from "@/lib/masonry";
 import { pickImages } from "@/lib/images/pickImages";
-import { readImageDimensions, resizeImage } from "@/lib/images/resizeImage";
-import { IMAGE_VALIDATION_MESSAGES, validateImageDimensions, validateImageFile } from "@/lib/images/validateImage";
-import { encodeBlurhashFromBlob } from "@/lib/images/blurhash";
+import { prepareUpload } from "@/lib/images/prepareUpload";
+import { useFileDrop } from "@/lib/images/useFileDrop";
+import { ImagePrepError } from "@/lib/images/resizeImage";
 import { uploadPhoto, deletePhoto } from "@/api/photos";
 import { ApiError } from "@/api/client";
 import { track } from "@/lib/analytics";
 import { AnalyticsEvents } from "@/lib/analyticsEvents";
 
-function errorPhoto(clientId: string, message: string): GiveDraftPhoto {
-  return { clientId, id: null, objectUrl: null, width: 0, height: 0, blurhash: "", status: "error", error: message };
+/**
+ * Classifies whatever `processFile` caught into the copy the giver reads, a
+ * stable code for analytics, and whether a retry is worth offering.
+ *
+ * A refusal (wrong shape, wrong format, too big) would fail identically on a
+ * second attempt, so offering "Try again" there is a small lie. A timeout, a
+ * network failure (`ApiError` with status 0) or a 5xx is the case retry
+ * exists for.
+ */
+function classifyUploadFailure(error: unknown): { message: string; errorCode: string; canRetry: boolean } {
+  if (error instanceof ImagePrepError) {
+    return { message: error.message, errorCode: error.code, canRetry: error.code === "timed_out" };
+  }
+  if (error instanceof ApiError) {
+    return {
+      message: error.message,
+      errorCode: error.code,
+      canRetry: error.status === 0 || error.status >= 500 || error.code === "rate_limited",
+    };
+  }
+  return { message: "That upload didn't go through. Try again.", errorCode: "unknown", canRetry: true };
 }
 
 const TILE = 140;
@@ -41,9 +60,10 @@ type PhotoTileProps = {
   isCover: boolean;
   onRemove: () => void;
   onMove: (direction: -1 | 1) => void;
+  onRetry: () => void;
 };
 
-function PhotoTile({ photo, index, total, isCover, onRemove, onMove }: PhotoTileProps): React.ReactElement {
+function PhotoTile({ photo, index, total, isCover, onRemove, onMove, onRetry }: PhotoTileProps): React.ReactElement {
   const colors = useColors();
   const overlayStyle: ViewStyle = {
     position: "absolute",
@@ -101,9 +121,15 @@ function PhotoTile({ photo, index, total, isCover, onRemove, onMove }: PhotoTile
       </Print>
 
       {photo.status === "error" ? (
-        <Text variant="caption" color="dangerText">
-          {photo.error ?? "Something went wrong."}
-        </Text>
+        <View style={{ gap: space.xs }}>
+          <Text variant="caption" color="dangerText">
+            {photo.error ?? "Something went wrong."}
+          </Text>
+          {/* Only when the failure could plausibly go the other way — see
+              `classifyUploadFailure`. A retry button on a refused format is
+              an invitation to waste time. */}
+          {photo.canRetry ? <Button label="Try again" variant="secondary" onPress={onRetry} /> : null}
+        </View>
       ) : null}
 
       <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
@@ -126,54 +152,90 @@ export default function GivePhotos(): React.ReactElement {
     track(AnalyticsEvents.GiveStarted);
   }, []);
 
+  // Source `File`s kept alive so "Try again" can re-run the pipeline without
+  // making the giver pick the photo a second time. Dropped on remove and on
+  // unmount; a draft rehydrated from `sessionStorage` has none, which is why
+  // `handleRetry` degrades rather than assuming one is there.
+  const sourcesRef = React.useRef(new Map<string, File>());
+  // One controller per in-flight tile, so removing a tile (or leaving the
+  // screen) actually stops the work rather than letting it land on a photo
+  // nobody is waiting for.
+  const abortsRef = React.useRef(new Map<string, AbortController>());
+  // Every object URL this screen has minted. `handleRemove` revokes as it
+  // goes; this is the backstop for unmount, which previously revoked nothing
+  // — including on the successful-give path, where `review.tsx` resets the
+  // draft and drops every URL on the floor in a long-lived tab.
+  const objectUrlsRef = React.useRef(new Set<string>());
+  // Guards a double-tap on "+ Add" opening two pickers that each captured the
+  // same remaining-slot count. The consequence was deferred and confusing: a
+  // sixth photo uploads fine and then `CreateListingInput`'s `.max(5)` fails
+  // the submit four screens later.
+  const pickingRef = React.useRef(false);
+
+  // `intakeFiles` awaits between photos, so the slot count has to be read from
+  // a ref rather than the closure's render-time value. Written from an effect,
+  // not during render — a render-phase write isn't safe under concurrent
+  // rendering. The loop always yields at an `await` before re-reading, so the
+  // commit and this effect have both run by then.
+  const photosRef = React.useRef(draft.photos);
+  React.useEffect(() => {
+    photosRef.current = draft.photos;
+  }, [draft.photos]);
+
   const remainingSlots = MAX_PHOTOS - draft.photos.length;
 
-  async function processFile(file: File): Promise<void> {
-    const clientId = makeClientId();
+  const trackObjectUrl = React.useCallback((url: string): string => {
+    objectUrlsRef.current.add(url);
+    return url;
+  }, []);
 
-    const typeOrSizeError = validateImageFile(file);
-    if (typeOrSizeError !== null) {
-      dispatch({ type: "add_photo", photo: errorPhoto(clientId, IMAGE_VALIDATION_MESSAGES[typeOrSizeError]) });
-      return;
-    }
+  const releaseObjectUrl = React.useCallback((url: string | null): void => {
+    if (url === null) return;
+    objectUrlsRef.current.delete(url);
+    URL.revokeObjectURL(url);
+  }, []);
 
-    let sourceDims: { width: number; height: number };
+  React.useEffect(() => {
+    const aborts = abortsRef.current;
+    const objectUrls = objectUrlsRef.current;
+    const sources = sourcesRef.current;
+    return () => {
+      for (const controller of aborts.values()) controller.abort();
+      aborts.clear();
+      for (const url of objectUrls) URL.revokeObjectURL(url);
+      objectUrls.clear();
+      sources.clear();
+    };
+  }, []);
+
+  /**
+   * Runs the pipeline and the upload for one already-registered tile. The tile
+   * must already exist in the draft (either freshly added by `processFile` or
+   * reset by `handleRetry`) — this only ever patches.
+   *
+   * `supersedes` is the object URL currently on the tile, which this replaces
+   * on success. Revoking it here, rather than in the caller after the await,
+   * is deliberate: `photosRef` is updated from an effect, so a caller checking
+   * it straight after `await runUpload(...)` may read a state React has not
+   * committed yet and skip the revoke.
+   */
+  async function runUpload(file: File, clientId: string, supersedes: string | null): Promise<void> {
+    const controller = new AbortController();
+    abortsRef.current.get(clientId)?.abort();
+    abortsRef.current.set(clientId, controller);
+
     try {
-      sourceDims = await readImageDimensions(file);
-    } catch {
-      dispatch({ type: "add_photo", photo: errorPhoto(clientId, "Couldn't read that photo. Try another.") });
-      return;
-    }
+      const prepared = await prepareUpload(file, { signal: controller.signal });
+      const uploaded = await uploadPhoto({
+        full: prepared.full.blob,
+        thumb: prepared.thumb.blob,
+        width: prepared.full.width,
+        height: prepared.full.height,
+        blurhash: prepared.blurhash,
+        signal: controller.signal,
+      });
 
-    const dimError = validateImageDimensions(sourceDims.width, sourceDims.height);
-    if (dimError !== null) {
-      dispatch({ type: "add_photo", photo: errorPhoto(clientId, IMAGE_VALIDATION_MESSAGES[dimError]) });
-      return;
-    }
-
-    const previewUrl = URL.createObjectURL(file);
-    dispatch({
-      type: "add_photo",
-      photo: {
-        clientId,
-        id: null,
-        objectUrl: previewUrl,
-        width: sourceDims.width,
-        height: sourceDims.height,
-        blurhash: "",
-        status: "uploading",
-        error: null,
-      },
-    });
-
-    try {
-      const [full, thumb] = await Promise.all([resizeImage(file, FULL_EDGE_PX), resizeImage(file, THUMB_EDGE_PX)]);
-      const blurhash = await encodeBlurhashFromBlob(thumb.blob);
-      const uploaded = await uploadPhoto({ full: full.blob, thumb: thumb.blob, width: full.width, height: full.height, blurhash });
-
-      URL.revokeObjectURL(previewUrl);
-      const thumbUrl = URL.createObjectURL(thumb.blob);
-
+      const thumbUrl = trackObjectUrl(URL.createObjectURL(prepared.thumb.blob));
       dispatch({
         type: "update_photo",
         clientId,
@@ -185,27 +247,112 @@ export default function GivePhotos(): React.ReactElement {
           blurhash: uploaded.blurhash,
           status: "done",
           error: null,
+          errorCode: null,
+          canRetry: false,
         },
       });
+      releaseObjectUrl(supersedes);
       track(AnalyticsEvents.GivePhotoUploaded);
     } catch (error) {
-      const message = error instanceof ApiError ? error.message : "That upload didn't go through. Try again.";
-      dispatch({ type: "update_photo", clientId, patch: { status: "error", error: message } });
+      // An abort means the tile (or the whole screen) is gone. Dispatching
+      // would either be a no-op or resurrect a tile the giver just removed.
+      if (error instanceof DOMException && error.name === "AbortError") return;
+
+      const { message, errorCode, canRetry } = classifyUploadFailure(error);
+      dispatch({ type: "update_photo", clientId, patch: { status: "error", error: message, errorCode, canRetry } });
+      track(AnalyticsEvents.GivePhotoFailed, { code: errorCode });
+    } finally {
+      if (abortsRef.current.get(clientId) === controller) abortsRef.current.delete(clientId);
     }
   }
 
-  async function handleAddPhoto(): Promise<void> {
-    if (remainingSlots <= 0) return;
-    const files = await pickImages({ multiple: true });
-    for (const file of files.slice(0, remainingSlots)) {
-      // Sequential on purpose: parallel resizes of several full-size photos
-      // at once is a good way to peg a phone's CPU and OOM the tab.
+  async function processFile(file: File): Promise<void> {
+    const clientId = makeClientId();
+    sourcesRef.current.set(clientId, file);
+
+    // The preview is the source file itself, shown immediately so the tile
+    // isn't blank while the pipeline runs. It's replaced by the encoded thumb
+    // on success and kept as-is on failure, so the giver can see which photo
+    // the error is about.
+    const previewUrl = trackObjectUrl(URL.createObjectURL(file));
+    dispatch({
+      type: "add_photo",
+      photo: {
+        clientId,
+        id: null,
+        objectUrl: previewUrl,
+        // Real dimensions aren't known until the decode, which is now inside
+        // `prepareUpload`. Nothing reads these while `status` is "uploading".
+        width: 0,
+        height: 0,
+        blurhash: "",
+        status: "uploading",
+        error: null,
+        errorCode: null,
+        canRetry: false,
+      },
+    });
+
+    // On success `runUpload` swaps in the encoded thumb and revokes this
+    // preview; on failure it keeps it, so the giver can see which photo the
+    // error is about.
+    await runUpload(file, clientId, previewUrl);
+  }
+
+  function handleRetry(photo: GiveDraftPhoto): void {
+    const file = sourcesRef.current.get(photo.clientId);
+    if (file === undefined) return;
+    dispatch({
+      type: "update_photo",
+      clientId: photo.clientId,
+      patch: { status: "uploading", error: null, errorCode: null, canRetry: false },
+    });
+    void runUpload(file, photo.clientId, photo.objectUrl);
+  }
+
+  /** The one intake every source funnels through — the picker, a drop, and a
+   * paste all land here so the slot bound and the sequencing are enforced
+   * once rather than three times. */
+  async function intakeFiles(files: File[]): Promise<void> {
+    for (const file of files) {
+      // Recomputed each iteration rather than sliced up front: `processFile`
+      // awaits, and the draft it's adding to is the same one this bound is
+      // derived from.
+      if (MAX_PHOTOS - photosRef.current.length <= 0) break;
+      // Sequential on purpose: several photos' pipelines at once is a good
+      // way to peg a phone's CPU and OOM the tab. (Each photo is now a single
+      // decode — see `prepareUpload` — but five of those in parallel is still
+      // five full-size bitmaps resident at once.)
       await processFile(file);
     }
   }
 
+  async function handleAddPhoto(): Promise<void> {
+    if (pickingRef.current) return;
+    if (MAX_PHOTOS - photosRef.current.length <= 0) return;
+    pickingRef.current = true;
+    try {
+      await intakeFiles(await pickImages({ multiple: true }));
+    } finally {
+      pickingRef.current = false;
+    }
+  }
+
+  const { isDraggingOver } = useFileDrop({
+    enabled: remainingSlots > 0,
+    onFiles: (files) => {
+      void intakeFiles(files);
+    },
+  });
+
   function handleRemove(photo: GiveDraftPhoto): void {
-    if (photo.objectUrl !== null) URL.revokeObjectURL(photo.objectUrl);
+    // Stop the work before dropping the tile: an in-flight pipeline whose
+    // upload has not yet reached the server leaves no row at all, and one
+    // that has is handled by the `deletePhoto` below.
+    abortsRef.current.get(photo.clientId)?.abort();
+    abortsRef.current.delete(photo.clientId);
+    sourcesRef.current.delete(photo.clientId);
+    releaseObjectUrl(photo.objectUrl);
     if (photo.id !== null) {
       deletePhoto(photo.id).catch(() => {
         // Best-effort cleanup — an orphaned photo row is swept server-side.
@@ -233,7 +380,7 @@ export default function GivePhotos(): React.ReactElement {
           <Eyebrow>Photos</Eyebrow>
           <Text variant="displayLg">Show us the keepsake.</Text>
           <Text variant="bodyLg" color="textSecondary">
-            One to five photos. The first one is what people see first.
+            One to five photos. The first one is what people see first. You can drop them here or paste one.
           </Text>
         </View>
 
@@ -247,6 +394,7 @@ export default function GivePhotos(): React.ReactElement {
               isCover={cover !== null && cover.clientId === photo.clientId}
               onRemove={() => handleRemove(photo)}
               onMove={(direction) => dispatch({ type: "move_photo", clientId: photo.clientId, direction })}
+              onRetry={() => handleRetry(photo)}
             />
           ))}
 
@@ -264,10 +412,11 @@ export default function GivePhotos(): React.ReactElement {
                 alignItems: "center",
                 justifyContent: "center",
                 gap: space.xs,
+                ...(isDraggingOver ? { backgroundColor: colors.tableEdge } : {}),
               }}
             >
               <Text variant="label" color="ink" style={{ fontSize: 12 }}>
-                + Add
+                {isDraggingOver ? "Drop here" : "+ Add"}
               </Text>
               <Text variant="caption" color="textTertiary">
                 {remainingSlots} left

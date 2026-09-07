@@ -4,18 +4,29 @@ import { CategorySchema, TITLE_MAX, TITLE_MIN } from "./category";
 
 export const MAX_PHOTOS = 5;
 // `MAX_PHOTO_BYTES` was removed here 2026-09-07: nothing imported it. The
-// server-side ceiling is the `MAX_PHOTO_BYTES` var in `apps/api/wrangler.toml`
-// (read by `routes/photos.ts`, which 413s past it), and the client never
-// checks 5 MiB at all — `apps/web/src/lib/images/validateImage.ts` bounds the
-// *raw camera original* at 25 MB and then resizes to `FULL_EDGE_PX` before
-// upload, so what this package exported was a third copy of a number that
-// only two places enforce and neither read. A shared constant nobody shares
+// server-side ceilings are the `MAX_PHOTO_BYTES` and `MAX_THUMB_BYTES` vars in
+// `apps/api/wrangler.toml` (read by `routes/photos.ts`, which 413s past
+// either). The client bounds two different things, and neither is that number:
+// `apps/web/src/lib/images/validateImage.ts` caps the *raw camera original* at
+// 25 MB, and `lib/images/prepareUpload.ts` aims its quality ladder at its own
+// *output* budgets (`MAX_UPLOAD_BYTES`, `MAX_THUMB_UPLOAD_BYTES`), deliberately
+// set below the server's so the ladder has room to land before a 413 the giver
+// can't act on. Three numbers with three jobs — so what this package exported
+// was a fourth copy of one that only the server enforces. A shared constant nobody shares
 // is the same trap as a var nobody reads (see the `MAX_PHOTOS` /
 // `IMAGE_TRANSFORMS_ENABLED` note in wrangler.toml): it reads like the limit
 // while the real limit changes elsewhere.
-export const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
-export const AllowedImageTypeSchema = z.enum(ALLOWED_IMAGE_TYPES);
-export type AllowedImageType = z.infer<typeof AllowedImageTypeSchema>;
+// `ALLOWED_IMAGE_TYPES`/`AllowedImageTypeSchema`/`AllowedImageType` were
+// removed here for the same reason `MAX_PHOTO_BYTES` above was: after the
+// upload-pipeline hardening, nothing imported them. The client stopped
+// keeping an allowlist at all — `apps/web/src/lib/images/validateImage.ts`
+// now refuses only what is positively *not* an image and defers everything
+// else to the decode, because a picker reporting `""` or
+// `application/octet-stream` means "I don't know", not "not a photo". That
+// leaves exactly one enforced list, `ALLOWED_SNIFFED_TYPES` in
+// `apps/api/src/lib/imageSniff.ts`, which is checked against the bytes
+// rather than a client's claim — and a one-consumer constant belongs with
+// its consumer.
 
 /** Long edge, in px, that uploads are resized to before storage. */
 export const FULL_EDGE_PX = 2048;

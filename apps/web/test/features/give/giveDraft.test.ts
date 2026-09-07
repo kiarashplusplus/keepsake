@@ -10,7 +10,19 @@ import {
 } from "@/features/give/giveDraft";
 
 function photo(clientId: string, overrides: Partial<GiveDraftPhoto> = {}): GiveDraftPhoto {
-  return { clientId, id: null, objectUrl: null, width: 100, height: 100, blurhash: "abc", status: "uploading", error: null, ...overrides };
+  return {
+    clientId,
+    id: null,
+    objectUrl: null,
+    width: 100,
+    height: 100,
+    blurhash: "abc",
+    status: "uploading",
+    error: null,
+    errorCode: null,
+    canRetry: false,
+    ...overrides,
+  };
 }
 
 const SUGGESTION: PhotoSuggestion = {

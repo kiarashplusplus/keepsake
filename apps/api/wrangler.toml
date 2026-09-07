@@ -244,6 +244,11 @@ SHELF_MIN_ITEMS = "3"
 # `src/routes/photos.ts` via `parseIntVar` — unlike the two vars removed
 # below, this one does something.
 MAX_PHOTO_BYTES = "5242880"
+# The `thumb` variant's own, tighter ceiling. Both variants used to share
+# MAX_PHOTO_BYTES, so a caller could store a 5 MiB "thumbnail" and have it
+# served from /i/:id/thumb and base64'd into a vision prompt. Read by
+# `src/routes/photos.ts` via `parseIntVar`.
+MAX_THUMB_BYTES = "786432"
 # Removed 2026-09-06 (launch audit): `MAX_PHOTOS` and `IMAGE_TRANSFORMS_ENABLED`
 # were declared in all three environment blocks and referenced nowhere in
 # `apps/api/src`. The real photo limit is a hardcoded `.max(5)` in
@@ -494,6 +499,11 @@ SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
 SHELF_MIN_ITEMS = "3"
 MAX_PHOTO_BYTES = "5242880"
+# The `thumb` variant's own, tighter ceiling. Both variants used to share
+# MAX_PHOTO_BYTES, so a caller could store a 5 MiB "thumbnail" and have it
+# served from /i/:id/thumb and base64'd into a vision prompt. Read by
+# `src/routes/photos.ts` via `parseIntVar`.
+MAX_THUMB_BYTES = "786432"
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 # Preview shares the verified keepsake.ing sender with production, so it is
@@ -669,6 +679,11 @@ SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
 SHELF_MIN_ITEMS = "3"
 MAX_PHOTO_BYTES = "5242880"
+# The `thumb` variant's own, tighter ceiling. Both variants used to share
+# MAX_PHOTO_BYTES, so a caller could store a 5 MiB "thumbnail" and have it
+# served from /i/:id/thumb and base64'd into a vision prompt. Read by
+# `src/routes/photos.ts` via `parseIntVar`.
+MAX_THUMB_BYTES = "786432"
 EMAIL_PROVIDER = "cf"
 EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 # Real users. Reserved domains (example.com, .test, .invalid) are still

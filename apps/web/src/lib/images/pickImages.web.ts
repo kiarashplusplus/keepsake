@@ -8,6 +8,15 @@
  * awkward for a one-shot imperative picker that isn't part of any
  * component's output.
  */
+/**
+ * **Do not add `image/heic` here.** iOS Safari transcodes a HEIC library
+ * photo to JPEG on the way out of a file input precisely *because* HEIC is
+ * absent from `accept` — widening this would hand us the raw HEIC on the one
+ * platform where the problem is otherwise solved for us. Browsers that ignore
+ * `accept` (and desktop pickers where the user chooses "All files") are
+ * handled the other way round, by `validateImage.ts` deferring to the decode
+ * and `prepareUpload.ts` giving a HEIC that failed to decode its own message.
+ */
 const ACCEPT = "image/jpeg,image/png,image/webp";
 
 export function pickImages(options: { multiple?: boolean } = {}): Promise<File[]> {
@@ -30,6 +39,7 @@ export function pickImages(options: { multiple?: boolean } = {}): Promise<File[]
 
     const cleanup = (): void => {
       input.removeEventListener("change", onChange);
+      input.removeEventListener("cancel", onCancel);
       window.removeEventListener("focus", onWindowFocus);
       if (input.parentNode) input.parentNode.removeChild(input);
     };
@@ -46,10 +56,16 @@ export function pickImages(options: { multiple?: boolean } = {}): Promise<File[]
       settle(files);
     };
 
-    // The browser doesn't fire a reliable "cancel" event on every platform;
-    // a window focus shortly after the dialog closes with no files selected
-    // is the closest we get without a change event, so fall back to an
-    // empty array in that case.
+    // Every current engine fires `cancel` on the input when the dialog is
+    // dismissed, which is the unambiguous signal.
+    const onCancel = (): void => {
+      settle([]);
+    };
+
+    // Fallback for engines that don't fire `cancel`. This is a genuine race,
+    // not just redundancy: on a slow `change` dispatch the timer can settle a
+    // real pick as a cancel, which is why `cancel` above is preferred and the
+    // delay here is generous rather than tight.
     const onWindowFocus = (): void => {
       window.setTimeout(() => {
         if (!settled) settle([]);
@@ -57,6 +73,7 @@ export function pickImages(options: { multiple?: boolean } = {}): Promise<File[]
     };
 
     input.addEventListener("change", onChange);
+    input.addEventListener("cancel", onCancel);
     window.addEventListener("focus", onWindowFocus, { once: true });
 
     document.body.appendChild(input);

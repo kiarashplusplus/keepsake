@@ -33,6 +33,18 @@ export type GiveDraftPhoto = {
   blurhash: string;
   status: GiveDraftPhotoStatus;
   error: string | null;
+  /** Stable machine code for a failed tile — drives which copy shows and
+   * whether a retry is offered. Deliberately a plain `string` rather than
+   * `ImageValidationError`: this object is serialized into `sessionStorage`
+   * and must rehydrate cleanly into a build where those codes have changed,
+   * and typing it as the union would also drag a `lib/images` import into
+   * this otherwise dependency-free reducer. */
+  errorCode: string | null;
+  /** True when re-running the pipeline on the same source file could
+   * plausibly succeed (a timeout, a network blip, a 5xx) — false for a
+   * refusal (wrong shape, wrong format), where a retry would fail
+   * identically and offering one would just waste the giver's time. */
+  canRetry: boolean;
 };
 
 export type GiveDraft = {
@@ -218,7 +230,21 @@ export function deserializeGiveDraft(raw: string): GiveDraft | null {
       // every rehydrate (a reload, or React re-mounting the provider) so
       // nothing tries to render a revoked/nonexistent object URL; the
       // review step's cover-photo source ladder falls back to `/i/:id/thumb`.
-      photos: Array.isArray(parsed.photos) ? (parsed.photos as GiveDraftPhoto[]).map((photo) => ({ ...photo, objectUrl: null })) : [],
+      photos: Array.isArray(parsed.photos)
+        ? (parsed.photos as GiveDraftPhoto[]).map((photo) => ({
+            ...photo,
+            objectUrl: null,
+            // Defaults for fields added after a draft may already have been
+            // written, the same defensive shape `objectUrl` gets: a session
+            // persisted by an older build must rehydrate, not crash.
+            errorCode: photo.errorCode ?? null,
+            // Always false on rehydration, whatever was persisted: retrying
+            // re-runs the pipeline from the source `File` the photos screen
+            // held in memory, and that does not survive a reload. Offering a
+            // button that could only no-op is worse than not offering one.
+            canRetry: false,
+          }))
+        : [],
       // Issue #35: a draft written to `sessionStorage` by a tab still
       // running the pre-#35 build (or simply reloaded mid-migration) can
       // hold `category: null`, the old sentinel for "nothing picked yet" —

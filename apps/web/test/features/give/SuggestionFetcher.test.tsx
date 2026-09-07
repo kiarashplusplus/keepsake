@@ -34,7 +34,18 @@ async function flush(): Promise<void> {
 function addCoverPhoto(): void {
   capturedDispatch?.({
     type: "add_photo",
-    photo: { clientId: "a", id: "01PHOTOCOVER", objectUrl: null, width: 10, height: 10, blurhash: "x", status: "done", error: null },
+    photo: {
+      clientId: "a",
+      id: "01PHOTOCOVER",
+      objectUrl: null,
+      width: 10,
+      height: 10,
+      blurhash: "x",
+      status: "done",
+      error: null,
+      errorCode: null,
+      canRetry: false,
+    },
   });
 }
 
