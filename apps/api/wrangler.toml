@@ -212,7 +212,7 @@ EMAIL_FROM = "Keepsake <hello@keepsake.ing>"
 # restricted to a named list. Anything else is recorded and dropped — a smoke
 # test must never mail a stranger who typed their address into a request.
 EMAIL_MODE = "allowlist"
-EMAIL_ALLOWLIST = "kiarasha@alum.mit.edu"
+EMAIL_ALLOWLIST = "kiarasha@alum.mit.edu,leapkg@gmail.com"
 SITE_URL = "https://preview.keepsake.ing"
 MOCK_AI = "0"
 
