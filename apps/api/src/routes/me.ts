@@ -13,7 +13,7 @@ import type { Env } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ownerAuth, type OwnerRow } from "../middleware/ownerAuth.js";
 import { turnstile } from "../middleware/turnstile.js";
-import { burst } from "../middleware/rateLimit.js";
+import { burst, dailyBudget, DEFAULT_EMAIL_IP_DAILY_BUDGET } from "../middleware/rateLimit.js";
 import { validateBody } from "../middleware/validate.js";
 import { serializeOwnerListing } from "../lib/serialize.js";
 import { fetchAspectRows, fetchAspectRowsForListings, fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
@@ -242,35 +242,51 @@ meRoutes.post("/listings/:id/choose", ownerAuth(), validateBody(ChooseRequestInp
 // ---------------------------------------------------------------------------
 // POST/DELETE /api/me/email, GET /api/me/email/verify
 // ---------------------------------------------------------------------------
-meRoutes.post("/email", ownerAuth(), turnstile(), burst("RL_EMAIL"), validateBody(SetEmailInput), async (c) => {
-  const owner = c.get("owner");
-  const input = c.get("validatedBody") as import("@keepsake/contracts/owner").SetEmailInput;
-  const now = Date.now();
+// Issue #92: the `email` daily budget is the hard ceiling behind the burst
+// brake, shared with `POST /api/recover` (see that route's comment) so a
+// caller can't have the allowance twice by alternating between the two
+// mail-sending routes. Worth knowing: the early return below — resubmitting
+// an address you already confirmed, which sends nothing — still spends one
+// unit. The ceiling is sized so that costs a real person nothing, and making
+// it conditional would mean deciding whether to charge *after* running the
+// handler, which is a different and much easier thing to get wrong.
+meRoutes.post(
+  "/email",
+  ownerAuth(),
+  turnstile(),
+  burst("RL_EMAIL"),
+  dailyBudget({ kind: "email", ipDailyLimitVar: "EMAIL_IP_DAILY_BUDGET", fallbackIpDailyLimit: DEFAULT_EMAIL_IP_DAILY_BUDGET }),
+  validateBody(SetEmailInput),
+  async (c) => {
+    const owner = c.get("owner");
+    const input = c.get("validatedBody") as import("@keepsake/contracts/owner").SetEmailInput;
+    const now = Date.now();
 
-  // Re-submitting the address you already confirmed is a no-op, not a reset.
-  // Otherwise a double-tap on "Save", or re-opening the form and pressing it
-  // again, silently drops you back to unverified and mails you another link —
-  // which is exactly what happened during preview testing.
-  if (owner.email === input.email && owner.email_verified_at !== null) {
-    return ok(c, ownerMe(owner));
-  }
+    // Re-submitting the address you already confirmed is a no-op, not a reset.
+    // Otherwise a double-tap on "Save", or re-opening the form and pressing it
+    // again, silently drops you back to unverified and mails you another link —
+    // which is exactly what happened during preview testing.
+    if (owner.email === input.email && owner.email_verified_at !== null) {
+      return ok(c, ownerMe(owner));
+    }
 
-  await c.env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = NULL WHERE id = ?").bind(input.email, owner.id).run();
+    await c.env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = NULL WHERE id = ?").bind(input.email, owner.id).run();
 
-  const rawToken = randomTokenRaw();
-  const tokenHash = await sha256Hex(rawToken);
-  await c.env.DB.prepare(
-    `INSERT INTO recovery_tokens (id, owner_id, purpose, token_hash, expires_at, created_at)
-     VALUES (?, ?, 'verify_email', ?, ?, ?)`,
-  )
-    .bind(ulid(), owner.id, tokenHash, now + VERIFY_EMAIL_TTL_MS, now)
-    .run();
+    const rawToken = randomTokenRaw();
+    const tokenHash = await sha256Hex(rawToken);
+    await c.env.DB.prepare(
+      `INSERT INTO recovery_tokens (id, owner_id, purpose, token_hash, expires_at, created_at)
+       VALUES (?, ?, 'verify_email', ?, ?, ?)`,
+    )
+      .bind(ulid(), owner.id, tokenHash, now + VERIFY_EMAIL_TTL_MS, now)
+      .run();
 
-  const verifyUrl = `${c.env.SITE_URL}/api/me/email/verify?token=${rawToken}`;
-  await sendMail(c.env, { kind: "verify_email", to: input.email, ...verifyEmail({ link: verifyUrl }) });
+    const verifyUrl = `${c.env.SITE_URL}/api/me/email/verify?token=${rawToken}`;
+    await sendMail(c.env, { kind: "verify_email", to: input.email, ...verifyEmail({ link: verifyUrl }) });
 
-  return ok(c, ownerMe(owner, { email: input.email, email_verified: false }));
-});
+    return ok(c, ownerMe(owner, { email: input.email, email_verified: false }));
+  },
+);
 
 meRoutes.delete("/email", ownerAuth(), async (c) => {
   const owner = c.get("owner");

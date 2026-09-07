@@ -66,6 +66,8 @@ export default defineConfig({
             LISTING_IP_DAILY_BUDGET: "20",
             REQUEST_IP_DAILY_BUDGET: "20",
             UPLOAD_IP_DAILY_BUDGET: "60",
+            REPORT_IP_DAILY_BUDGET: "10",
+            EMAIL_IP_DAILY_BUDGET: "10",
             SUGGEST_IP_DAILY_BUDGET: "30",
             REPORT_AUTOHIDE_THRESHOLD: "3",
             SHELF_MIN_ITEMS: "3",

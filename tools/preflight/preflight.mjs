@@ -582,6 +582,88 @@ function checkModels(ctx) {
   return { status: "pass", details: [`${scanned} file(s) scanned under ${API_SRC_DIR} (tests excluded)`] };
 }
 
+// ── ip-digest ─────────────────────────────────────────────────────────
+//
+// Issue #87: two shapes of "hash the caller's IP" lived in this Worker at
+// once. `src/moderation/budget.ts` salted with the UTC day; `burst()` in
+// `src/middleware/rateLimit.ts` and `idempotency()` hashed the bare address,
+// producing a stable pseudonymous identifier for one caller that never
+// rotated. `apps/site/public/privacy.html`'s "Rate limiting" section
+// describes only the first shape — "combined with the date", worked example
+// `sha256("2026-09-05:203.0.113.4")` — so the second made a published policy
+// claim false, which is exactly the drift launch-audit §7 named.
+//
+// The fix is one helper (`dailyIpDigest` in `src/lib/digest.ts`) and this
+// check, so a new hashing site can't reintroduce the other shape. Three
+// rules:
+//
+//   1. `crypto.subtle.digest(` only in `src/lib/digest.ts` — a hand-rolled
+//      digest elsewhere would sidestep rules 2 and 3 entirely.
+//   2. No hashing primitive called on an expression that mentions a client
+//      IP outside that file: `sha256Hex(clientIPFrom(...))`,
+//      `sha256Hex(`${todayISO()}:${clientIP}`)`, `sha256Hex(ip)` and friends
+//      all fail. Use `dailyIpDigest`.
+//   3. `dailyIpDigest` itself must actually include the day.
+//
+// Known gap, stated rather than papered over: rule 2 reads one call
+// expression at a time, so assigning a digest of an address across two
+// statements with a variable name containing no "ip" would slip past it.
+// `apps/api/test/ipDigest.test.ts` covers the other side — it asserts the key
+// `burst()` actually hands the binding is the day-salted digest and not a
+// bare hash of the address — so a dodge would have to defeat both.
+const DIGEST_PATH = "apps/api/src/lib/digest.ts";
+const DAILY_DIGEST_FN = "dailyIpDigest";
+const HASH_PRIMITIVES = String.raw`(?:sha256Hex|crypto\.subtle\.digest)`;
+// A hashing call whose argument expression mentions a client IP, on one line.
+const HASHED_IP_RE = new RegExp(`${HASH_PRIMITIVES}\\s*\\([^;]{0,200}?client_?[iI][pP]`);
+// `sha256Hex(ip)` / `sha256Hex(clientIp)` — a bare identifier that reads as
+// an address, which rule 2's first regex misses when the name is the only
+// thing naming it.
+const HASHED_IP_IDENT_RE = new RegExp(`${HASH_PRIMITIVES}\\s*\\(\\s*[A-Za-z_$]*[iI][pP][A-Za-z0-9_$]*\\s*\\)`);
+const RAW_DIGEST_RE = /crypto\.subtle\.digest\s*\(/;
+
+function checkIpDigest(ctx) {
+  if (!ctx.exists(API_SRC_DIR)) return { status: "skip", details: [`${API_SRC_DIR} not present`] };
+  const files = ctx.walk(API_SRC_DIR).filter((f) => /\.(ts|tsx|js|mjs)$/.test(f));
+  if (files.length === 0) return { status: "skip", details: [`${API_SRC_DIR} has no source files yet`] };
+
+  const details = [];
+  let scanned = 0;
+  for (const file of files) {
+    if (isTestFile(file)) continue;
+    const text = ctx.readText(file) ?? "";
+    if (file === DIGEST_PATH) continue;
+    scanned += 1;
+    text.split("\n").forEach((line, i) => {
+      const code = line.replace(/^\s*(\/\/|\*|\/\*).*$/, "");
+      if (RAW_DIGEST_RE.test(code)) {
+        details.push(`${file}:${i + 1}: crypto.subtle.digest() outside ${DIGEST_PATH} — hash through that module instead`);
+      }
+      if (HASHED_IP_RE.test(code) || HASHED_IP_IDENT_RE.test(code)) {
+        details.push(
+          `${file}:${i + 1}: hashes a client IP without the day — use ${DAILY_DIGEST_FN}() from ${DIGEST_PATH}, ` +
+            `which is the only shape apps/site/public/privacy.html describes`,
+        );
+      }
+    });
+  }
+
+  const digestText = ctx.readText(DIGEST_PATH);
+  if (digestText === null) {
+    details.push(`${DIGEST_PATH} is missing — it holds the one day-rotating IP digest`);
+  } else {
+    const fn = new RegExp(`export\\s+async\\s+function\\s+${DAILY_DIGEST_FN}\\s*\\([^)]*\\)[^{]*\\{([\\s\\S]*?)\\n\\}`).exec(digestText);
+    if (!fn) {
+      details.push(`${DIGEST_PATH}: no exported ${DAILY_DIGEST_FN}() — every IP digest is meant to go through it`);
+    } else if (!/todayISO\s*\(\)/.test(fn[1])) {
+      details.push(`${DIGEST_PATH}: ${DAILY_DIGEST_FN}() does not include todayISO() — the digest would never rotate`);
+    }
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+  return { status: "pass", details: [`${scanned} file(s) scanned under ${API_SRC_DIR}; IP digests all rotate daily via ${DAILY_DIGEST_FN}()`] };
+}
+
 const PACKAGES_DIR = "packages";
 
 function exportTargets(value) {
@@ -772,6 +854,7 @@ export const CHECKS = {
   "migration-drift": { description: "no landed migration is renamed/edited/deleted (git)", run: checkMigrationDrift },
   "env-parity": { description: ".env.example vs wrangler.toml [vars] / [env.*.vars]", run: checkEnvParity },
   models: { description: '"@cf/" model ids confined to apps/api/src/models.ts', run: checkModels },
+  "ip-digest": { description: "client-IP hashes rotate daily via lib/digest.ts's dailyIpDigest", run: checkIpDigest },
   exports: { description: "packages/*/package.json subpath exports (no \".\")", run: checkExports },
   routes: { description: "apps/web/app/**/*.tsx export a default component", run: checkRoutes },
   "conflict-markers": { description: "no unresolved <<<<<<< / >>>>>>> in tracked text", run: checkConflictMarkers },

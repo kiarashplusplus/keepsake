@@ -101,6 +101,16 @@ SUGGEST_DAILY_BUDGET = "1000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
+# Issue #92: hard per-IP daily ceilings behind the two burst-only write paths
+# that had none. Reports drive the three-report auto-hide, and the handler's
+# per-listing `ip_digest` check only stops repeat reports of the *same*
+# listing — nothing stopped one address reporting many different ones.
+# EMAIL is one shared ceiling for POST /api/recover and POST /api/me/email,
+# since what's rationed is outbound mail, not the path asked for. Both are
+# generous for a person and instant for a script; the same numbers in every
+# environment, since neither scales with traffic the way an AI budget does.
+REPORT_IP_DAILY_BUDGET = "10"
+EMAIL_IP_DAILY_BUDGET = "10"
 # Loose for the same reason as the ceilings above — one giver calls this a
 # handful of times per give flow; this only stops a single retry loop from
 # working through SUGGEST_DAILY_BUDGET alone.
@@ -288,6 +298,8 @@ SUGGEST_DAILY_BUDGET = "1000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
+REPORT_IP_DAILY_BUDGET = "10"
+EMAIL_IP_DAILY_BUDGET = "10"
 SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
 SHELF_MIN_ITEMS = "3"
@@ -419,6 +431,8 @@ SUGGEST_DAILY_BUDGET = "1000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
+REPORT_IP_DAILY_BUDGET = "10"
+EMAIL_IP_DAILY_BUDGET = "10"
 SUGGEST_IP_DAILY_BUDGET = "30"
 REPORT_AUTOHIDE_THRESHOLD = "3"
 SHELF_MIN_ITEMS = "3"

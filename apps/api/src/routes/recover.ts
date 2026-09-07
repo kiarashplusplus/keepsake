@@ -13,7 +13,7 @@ import { sha256Hex } from "../lib/digest.js";
 import { randomTokenRaw } from "../lib/tokens.js";
 import { requireParam } from "../lib/params.js";
 import { turnstile } from "../middleware/turnstile.js";
-import { burst } from "../middleware/rateLimit.js";
+import { burst, dailyBudget, DEFAULT_EMAIL_IP_DAILY_BUDGET } from "../middleware/rateLimit.js";
 import { validateBody } from "../middleware/validate.js";
 import { sendMail } from "../email/sendMail.js";
 import { recover as recoverTemplate } from "../email/templates/recover.js";
@@ -25,33 +25,51 @@ export const recoverRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
  * between requesting it and clicking the emailed link. */
 const RECOVER_TTL_MS = 30 * 60 * 1000;
 
-recoverRoutes.post("/", turnstile(), burst("RL_EMAIL"), validateBody(RecoverInput), async (c) => {
-  const input = c.get("validatedBody");
+// Issue #92: this route puts a real message in a real inbox, and until now
+// the only thing in front of it was the best-effort burst brake (~2.6x
+// leakage measured, #8) — no hard ceiling at all on how much mail one
+// address could cause in a day. The `email` budget kind is shared with
+// `POST /api/me/email` on purpose: what's rationed is outbound mail, not the
+// path it was asked for, so alternating between the two routes doesn't buy a
+// second allowance. Budget after `turnstile()`, so a failed challenge doesn't
+// spend a real person's recovery attempts. Same caveat as the report route's
+// ceiling: it is per address, so a caller with a range of them still gets a
+// fresh allowance per address — see that comment for why the alternatives
+// cost more than they're worth today.
+recoverRoutes.post(
+  "/",
+  turnstile(),
+  burst("RL_EMAIL"),
+  dailyBudget({ kind: "email", ipDailyLimitVar: "EMAIL_IP_DAILY_BUDGET", fallbackIpDailyLimit: DEFAULT_EMAIL_IP_DAILY_BUDGET }),
+  validateBody(RecoverInput),
+  async (c) => {
+    const input = c.get("validatedBody");
 
-  const owner = await c.env.DB.prepare("SELECT id FROM owners WHERE email = ? AND email_verified_at IS NOT NULL")
-    .bind(input.email)
-    .first<{ id: string }>();
+    const owner = await c.env.DB.prepare("SELECT id FROM owners WHERE email = ? AND email_verified_at IS NOT NULL")
+      .bind(input.email)
+      .first<{ id: string }>();
 
-  // Always 200 regardless of a match — an error/different response for an
-  // unknown or unverified address would let a caller enumerate which
-  // addresses have a Keepsake dashboard behind them.
-  if (owner) {
-    const now = Date.now();
-    const rawToken = randomTokenRaw();
-    const tokenHash = await sha256Hex(rawToken);
-    await c.env.DB.prepare(
-      `INSERT INTO recovery_tokens (id, owner_id, purpose, token_hash, expires_at, created_at)
-       VALUES (?, ?, 'recover', ?, ?, ?)`,
-    )
-      .bind(ulid(), owner.id, tokenHash, now + RECOVER_TTL_MS, now)
-      .run();
+    // Always 200 regardless of a match — an error/different response for an
+    // unknown or unverified address would let a caller enumerate which
+    // addresses have a Keepsake dashboard behind them.
+    if (owner) {
+      const now = Date.now();
+      const rawToken = randomTokenRaw();
+      const tokenHash = await sha256Hex(rawToken);
+      await c.env.DB.prepare(
+        `INSERT INTO recovery_tokens (id, owner_id, purpose, token_hash, expires_at, created_at)
+         VALUES (?, ?, 'recover', ?, ?, ?)`,
+      )
+        .bind(ulid(), owner.id, tokenHash, now + RECOVER_TTL_MS, now)
+        .run();
 
-    const link = `${c.env.SITE_URL}/recover/${rawToken}`;
-    await sendMail(c.env, { kind: "recover", to: input.email, ...recoverTemplate({ link }) });
-  }
+      const link = `${c.env.SITE_URL}/recover/${rawToken}`;
+      await sendMail(c.env, { kind: "recover", to: input.email, ...recoverTemplate({ link }) });
+    }
 
-  return ok(c, { sent: true });
-});
+    return ok(c, { sent: true });
+  },
+);
 
 recoverRoutes.post("/:token", async (c) => {
   const token = requireParam(c, "token");

@@ -467,6 +467,83 @@ test("models: ignores test files", () => {
   assert.equal(result.status, "pass");
 });
 
+// ── ip-digest ──────────────────────────────────────────────────────────
+
+// The helper the real `apps/api/src/lib/digest.ts` exports, reduced to what
+// the check reads: an exported `dailyIpDigest` whose body includes the day.
+const DIGEST_GOOD = [
+  'import { todayISO } from "./day.js";',
+  "export async function sha256Hex(input: string): Promise<string> {",
+  '  return input;',
+  "}",
+  "export async function dailyIpDigest(clientIP: string): Promise<string> {",
+  "  return sha256Hex(`${todayISO()}:${clientIP}`);",
+  "}",
+  "",
+].join("\n");
+
+test("ip-digest: passes when every IP digest goes through dailyIpDigest", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD,
+    "apps/api/src/middleware/rateLimit.ts": "const key = await dailyIpDigest(clientIPFrom(c.req.raw));\n",
+    "apps/api/src/routes/recover.ts": "const tokenHash = await sha256Hex(rawToken);\n",
+  });
+  assert.equal(result.status, "pass");
+});
+
+test("ip-digest: fails on a bare sha256Hex of the caller's address (the #87 bug)", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD,
+    "apps/api/src/middleware/rateLimit.ts": "const key = await sha256Hex(clientIPFrom(c.req.raw));\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /rateLimit\.ts:1: hashes a client IP without the day/);
+});
+
+test("ip-digest: fails on a hand-rolled day-salted digest that bypasses the helper", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD,
+    "apps/api/src/routes/listings.ts": "const ipDigest = await sha256Hex(`${todayISO()}:${clientIP}`);\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /listings\.ts:1: hashes a client IP/);
+});
+
+test("ip-digest: fails on sha256Hex(ip) — the two-statement dodge with a telling name", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD,
+    "apps/api/src/middleware/rateLimit.ts": "const ip = clientIPFrom(c.req.raw);\nconst key = await sha256Hex(ip);\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /rateLimit\.ts:2: hashes a client IP/);
+});
+
+test("ip-digest: fails on crypto.subtle.digest outside lib/digest.ts", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD,
+    "apps/api/src/moderation/budget.ts": 'const d = await crypto.subtle.digest("SHA-256", input);\n',
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /budget\.ts:1: crypto\.subtle\.digest\(\) outside/);
+});
+
+test("ip-digest: fails when the helper itself stops including the day", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD.replace("`${todayISO()}:${clientIP}`", "clientIP"),
+    "apps/api/src/middleware/rateLimit.ts": "const key = await dailyIpDigest(clientIPFrom(c.req.raw));\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /does not include todayISO\(\)/);
+});
+
+test("ip-digest: ignores test files", () => {
+  const result = runOne("ip-digest", {
+    "apps/api/src/lib/digest.ts": DIGEST_GOOD,
+    "apps/api/src/middleware/rateLimit.test.ts": "const key = await sha256Hex(clientIPFrom(req));\n",
+  });
+  assert.equal(result.status, "pass");
+});
+
 // ── exports ────────────────────────────────────────────────────────────
 
 test("exports: passes for subpath-only exports whose targets exist", () => {

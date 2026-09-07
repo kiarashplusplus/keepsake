@@ -2,11 +2,11 @@
  * KV-based daily budget counters.
  *
  * Ported from Bayan `worker/src/budget.ts`. That Worker rations Workers AI
- * calls behind one unauthenticated endpoint; this one rations six different
- * things — three AI calls (`mod_text`, `mod_image`, `suggest`) and three
- * write endpoints that don't touch AI at all (`listing`, `request`,
- * `upload`) — because Keepsake has no accounts either, so the only caller
- * identity available is an IP address.
+ * calls behind one unauthenticated endpoint; this one rations eight
+ * different things — three AI calls (`mod_text`, `mod_image`, `suggest`) and
+ * five write endpoints that don't touch AI at all (`listing`, `request`,
+ * `upload`, `report`, `email`) — because Keepsake has no accounts either, so
+ * the only caller identity available is an IP address.
  *
  * `suggest` (AI autofill, `POST /api/photos/:id/suggest`) is checked with a
  * real global `dailyLimit`, the same way `mod_text`/`mod_image` are checked
@@ -55,10 +55,31 @@
  * anything.
  */
 
+import { dailyIpDigest } from "../lib/digest.js";
+import { todayISO } from "../lib/day.js";
+
 const TTL_SECONDS = 172_800; // 48 hours
 
-/** The six things this Worker rations per calendar day. */
-export type BudgetKind = "mod_text" | "mod_image" | "suggest" | "listing" | "request" | "upload";
+/**
+ * The eight things this Worker rations per calendar day.
+ *
+ * `report` and `email` joined the list in issue #92. Both were previously
+ * guarded only by a `[[ratelimits]]` burst binding, which
+ * `middleware/rateLimit.ts`'s own header calls best-effort and which was
+ * measured leaking ~2.6x its configured limit (#8) — so neither had a hard
+ * cap behind it at all:
+ *
+ * - `report` (`POST /api/listings/:id/reports`) drives the three-report
+ *   auto-hide. The handler's per-listing, per-day `ip_digest` uniqueness
+ *   check only stops one address reporting the *same* listing twice in a
+ *   day; it never stopped that address walking the catalogue and reporting
+ *   many *different* listings, each toward its own auto-hide.
+ * - `email` (`POST /api/recover`, `POST /api/me/email`) is one shared
+ *   counter for both routes on purpose: what's being rationed is outbound
+ *   mail to a real inbox, not a URL path, and two kinds would let a caller
+ *   have the allowance twice by alternating between them.
+ */
+export type BudgetKind = "mod_text" | "mod_image" | "suggest" | "listing" | "request" | "upload" | "report" | "email";
 
 export interface CheckAndBumpOptions {
   kind: BudgetKind;
@@ -117,13 +138,13 @@ export interface CheckAndBumpResult {
  * refusing them.
  */
 
-/** Exported for `moderation/pipeline.ts`'s once-a-day capture alert on budget
- * exhaustion (issue #18), which needs the same UTC-day key this module
- * uses so the "have we already alerted today" flag rolls over at the same
- * boundary the counters do. */
-export function todayISO(): string {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
-}
+/** Re-exported for `moderation/pipeline.ts`'s once-a-day capture alert on
+ * budget exhaustion (issue #18), which needs the same UTC-day key this
+ * module uses so the "have we already alerted today" flag rolls over at the
+ * same boundary the counters do. Defined in `lib/day.ts` since issue #87 —
+ * this module used to keep its own private copy, and two definitions of "the
+ * day" is one more than a promise about daily rotation can survive. */
+export { todayISO };
 
 function todayKey(kind: BudgetKind): string {
   return `budget:${kind}:${todayISO()}`;
@@ -136,13 +157,15 @@ function todayKey(kind: BudgetKind): string {
  * an unrelated digest tomorrow: two days of counters cannot be joined into a
  * history of one address, which is the only thing this data could otherwise
  * be turned into.
+ *
+ * The hashing itself moved to `lib/digest.ts`'s `dailyIpDigest` (issue #87)
+ * so every site that turns an address into an identifier shares one
+ * construction. Truncating its first 32 hex characters is byte-for-byte the
+ * old 16-byte slice of the same digest of the same input, so existing KV
+ * counters keep counting rather than resetting on deploy.
  */
 async function clientDigest(clientIP: string): Promise<string> {
-  const input = new TextEncoder().encode(`${todayISO()}:${clientIP}`);
-  const digest = await crypto.subtle.digest("SHA-256", input);
-  return Array.from(new Uint8Array(digest).slice(0, 16))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+  return (await dailyIpDigest(clientIP)).slice(0, 32);
 }
 
 /**
