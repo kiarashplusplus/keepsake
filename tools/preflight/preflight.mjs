@@ -719,12 +719,198 @@ export function cronExpressionProblem(expr) {
  * `case "..."` elsewhere in the file is not mistaken for a cron.
  */
 export function scheduledCronCases(text) {
+  const dispatch = scheduledCronDispatch(text);
+  return dispatch === null ? null : dispatch.map((d) => d.cron);
+}
+
+/**
+ * `scheduled()`'s switch as pairs: the literal cron it matches, and the job
+ * name it hands `runCron`. That second half is the one nothing checked
+ * (#176) — `runCron`'s first argument *is* the heartbeat key
+ * (`cron:last:<name>`), so a name that disagrees with `cron/registry.ts`
+ * leaves `GET /api/admin/health` and the daily digest watching a key no code
+ * will ever write.
+ *
+ * `jobName` is `null` for a case that dispatches without a `runCron` call.
+ */
+export function scheduledCronDispatch(text) {
   const start = text.search(/function\s+scheduled\s*\(/);
   if (start === -1) return null;
   const rest = text.slice(start);
   const end = rest.search(/\n\}/);
   const body = end === -1 ? rest : rest.slice(0, end);
-  return [...body.matchAll(/case\s+"([^"]*)"/g)].map((m) => m[1]);
+  const cases = [...body.matchAll(/case\s+"([^"]*)"\s*:/g)];
+  return cases.map((match, i) => {
+    const from = match.index + match[0].length;
+    const to = i + 1 < cases.length ? cases[i + 1].index : body.length;
+    const arm = body.slice(from, to);
+    const call = /runCron\(\s*"([^"]*)"/.exec(arm);
+    return { cron: match[1], jobName: call ? call[1] : null };
+  });
+}
+
+// ── cron/registry.ts ───────────────────────────────────────────────────────
+//
+// Issue #176. `cron-triggers` used to read `wrangler.toml` and `index.ts` and
+// nothing else, while `registry.ts:1-19` and AGENTS.md's "A new cron is three
+// edits" bullet both said it tied the *three* files together. Renaming
+// `dailyDigest` to `weeklyDigest` in the registry and moving its schedule to
+// `"0 0 * * 0"` left preflight reporting `3 cron(s) valid` — naming the old
+// schedules, from the two files it did read — while the registry described a
+// job nothing would ever dispatch or heartbeat.
+//
+// So this now parses `CRON_JOBS` too, and asserts all three agree.
+
+const CRON_REGISTRY_PATH = "apps/api/src/cron/registry.ts";
+
+/** `26 * HOUR` / `60 * 1000` / `MINUTE`, against consts declared in the same
+ * file. `undefined` when it is not a plain product of integers and names. */
+function resolveProductExpr(expr, consts, seen = new Set()) {
+  const trimmed = (expr ?? "").trim().replace(/[,;]$/, "");
+  if (trimmed === "") return undefined;
+  const terms = trimmed.split("*").map((t) => t.trim());
+  let product = 1;
+  for (const term of terms) {
+    if (/^[\d_]+$/.test(term)) {
+      product *= Number(term.replace(/_/g, ""));
+      continue;
+    }
+    if (!/^[A-Za-z_$][\w$]*$/.test(term) || seen.has(term)) return undefined;
+    const next = consts.get(term);
+    if (next === undefined) return undefined;
+    const value = resolveProductExpr(next, consts, new Set([...seen, term]));
+    if (value === undefined) return undefined;
+    product *= value;
+  }
+  return product;
+}
+
+/**
+ * `CRON_JOBS` out of `registry.ts`, as `[{ name, cron, staleAfterMs }]`.
+ * `null` when the array cannot be found at all — the caller treats that as a
+ * failure rather than a quiet pass, because "I could not read the registry"
+ * and "the registry agrees" must not look the same (#166's lesson, applied
+ * here).
+ */
+export function parseCronRegistry(text) {
+  const consts = new Map(
+    [...text.matchAll(/^\s*(?:export\s+)?const\s+([A-Z_][A-Z0-9_]*)\s*=\s*([^;\n]+);/gm)].map((m) => [m[1], m[2]]),
+  );
+
+  const at = text.search(/CRON_JOBS\s*(?::[^=]*)?=\s*\[/);
+  if (at === -1) return null;
+  const open = text.indexOf("[", at);
+  let depth = 0;
+  let close = -1;
+  for (let i = open; i < text.length; i += 1) {
+    if (text[i] === "[") depth += 1;
+    else if (text[i] === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        close = i;
+        break;
+      }
+    }
+  }
+  if (close === -1) return null;
+
+  const body = text
+    .slice(open + 1, close)
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:"])\/\/[^\n]*/g, "$1");
+
+  const jobs = [];
+  for (const entry of body.matchAll(/\{([^{}]*)\}/g)) {
+    const fields = entry[1];
+    const name = /\bname\s*:\s*"([^"]*)"/.exec(fields);
+    const cron = /\bcron\s*:\s*"([^"]*)"/.exec(fields);
+    const stale = /\bstaleAfterMs\s*:\s*([^,\n}]+)/.exec(fields);
+    if (!name || !cron) continue;
+    jobs.push({
+      name: name[1],
+      cron: cron[1],
+      staleAfterMs: stale ? resolveProductExpr(stale[1], consts) : undefined,
+      staleAfterMsExpr: stale ? stale[1].trim() : null,
+    });
+  }
+  return jobs;
+}
+
+/** The values a cron field matches, or `null` for a form this cannot expand
+ * (`L`, `?`, `3#2` — none of which appear here, and guessing at them would be
+ * worse than saying so). */
+function expandCronField(field, spec) {
+  if (spec.special?.test(field)) return null;
+  const out = new Set();
+  for (const part of field.split(",")) {
+    const [rangePart, stepPart, ...rest] = part.split("/");
+    if (rest.length > 0) return null;
+    const step = stepPart === undefined ? 1 : Number(stepPart);
+    if (!Number.isInteger(step) || step < 1) return null;
+    let lo;
+    let hi;
+    if (rangePart === "*") {
+      lo = spec.min;
+      hi = spec.max;
+    } else {
+      const ends = rangePart.split("-");
+      if (ends.length > 2) return null;
+      lo = cronEndpointValue(ends[0], spec);
+      hi = ends.length === 2 ? cronEndpointValue(ends[1], spec) : lo;
+      if (lo === null || hi === null) return null;
+      // A bare `5/2` means "from 5 to the ceiling, every 2" in standard cron.
+      if (ends.length === 1 && stepPart !== undefined) hi = spec.max;
+      if (lo > hi) return null;
+    }
+    for (let v = lo; v <= hi; v += step) out.add(v);
+  }
+  return out;
+}
+
+const WEEK_MINUTES = 7 * 24 * 60;
+
+/**
+ * The **longest** gap between two consecutive firings of `expr`, in ms — the
+ * number `staleAfterMs` has to beat, because a threshold shorter than the
+ * interval alarms on a perfectly healthy job.
+ *
+ * `null` when the schedule repeats on a cycle longer than a week (a fixed
+ * day-of-month, a month restriction). Callers say so out loud rather than
+ * treating "not computed" as "fine".
+ */
+export function cronIntervalMs(expr) {
+  const fields = (expr ?? "").trim().split(/\s+/).filter(Boolean);
+  if (fields.length !== 5) return null;
+  const [minuteF, hourF, domF, monthF, dowF] = fields;
+  if (monthF !== "*" || domF !== "*") return null;
+
+  const minutes = expandCronField(minuteF, CRON_FIELDS[0]);
+  const hours = expandCronField(hourF, CRON_FIELDS[1]);
+  const dows = expandCronField(dowF, CRON_FIELDS[4]);
+  if (!minutes || !hours || !dows) return null;
+  const dowSet = new Set([...dows].map((d) => (d === 7 ? 0 : d)));
+
+  const fires = [];
+  for (let i = 0; i < WEEK_MINUTES; i += 1) {
+    if (!minutes.has(i % 60)) continue;
+    if (!hours.has(Math.floor(i / 60) % 24)) continue;
+    if (!dowSet.has(Math.floor(i / 1440) % 7)) continue;
+    fires.push(i);
+  }
+  if (fires.length === 0) return null;
+
+  let longest = 0;
+  for (let i = 0; i < fires.length; i += 1) {
+    const next = i + 1 < fires.length ? fires[i + 1] : fires[0] + WEEK_MINUTES;
+    longest = Math.max(longest, next - fires[i]);
+  }
+  return longest * 60 * 1000;
+}
+
+function humanMs(ms) {
+  if (ms % (60 * 60 * 1000) === 0) return `${ms / (60 * 60 * 1000)}h`;
+  if (ms % (60 * 1000) === 0) return `${ms / (60 * 1000)}m`;
+  return `${ms}ms`;
 }
 
 function checkCronTriggers(ctx) {
@@ -733,7 +919,8 @@ function checkCronTriggers(ctx) {
 
   const triggerSections = parseCronTriggers(wranglerText);
   const indexText = ctx.readText(API_INDEX_PATH);
-  const handled = indexText === null ? null : scheduledCronCases(indexText);
+  const dispatch = indexText === null ? null : scheduledCronDispatch(indexText);
+  const handled = dispatch === null ? null : dispatch.map((d) => d.cron);
   const declared = Object.keys(triggerSections).length > 0;
 
   if (!declared) {
@@ -818,6 +1005,110 @@ function checkCronTriggers(ctx) {
     }
   }
 
+  // ── The third file (#176). ────────────────────────────────────────────
+  //
+  // `cron/registry.ts` is where the name, the schedule and the staleness
+  // threshold are described together, and it is what `GET /api/admin/health`
+  // and the daily digest read. Until this pass nothing compared it to the two
+  // files above, so a job renamed or rescheduled here alone kept the health
+  // endpoint watching a heartbeat key no code would ever write.
+  const registryText = ctx.readText(CRON_REGISTRY_PATH);
+  const notes = [];
+  if (registryText === null) {
+    notes.push(`${CRON_REGISTRY_PATH} not present, so registry agreement was not checked`);
+  } else {
+    const jobs = parseCronRegistry(registryText);
+    if (jobs === null || jobs.length === 0) {
+      details.push(
+        `${CRON_REGISTRY_PATH} exists but no CRON_JOBS entries could be parsed out of it — this check would otherwise report the registry as agreeing while reading nothing from it (#176)`,
+      );
+    } else {
+      const byName = new Map(jobs.map((job) => [job.name, job]));
+
+      // 1. Every registry schedule must actually be declared, in every tier —
+      //    a job whose cron is in the registry alone is never registered with
+      //    Cloudflare and never fires.
+      for (const job of jobs) {
+        for (const tier of tiers) {
+          if (tier.crons === undefined || tier.crons.length === 0) continue; // already reported above
+          if (!tier.crons.includes(job.cron)) {
+            details.push(
+              `${CRON_REGISTRY_PATH}: job "${job.name}" is scheduled "${job.cron}", which ${tier.label} does not declare — ${tier.envName ?? "that tier"} would never fire it, while /api/admin/health and the daily digest go on expecting its heartbeat`,
+            );
+          }
+        }
+      }
+
+      // 2. Every declared-and-dispatched cron must be described by the
+      //    registry, or nothing watches it.
+      const registryCrons = new Set(jobs.map((job) => job.cron));
+      for (const cron of [...resolved].sort()) {
+        if (!registryCrons.has(cron)) {
+          details.push(
+            `cron "${cron}" is declared in ${WRANGLER_PATH} but no CRON_JOBS entry in ${CRON_REGISTRY_PATH} describes it — it fires with no heartbeat and no staleness threshold, so nothing would notice it dying`,
+          );
+        }
+      }
+
+      // 3. The name in the registry must be the literal string `scheduled()`
+      //    hands `runCron` — that argument *is* the heartbeat key.
+      if (dispatch !== null) {
+        for (const { cron, jobName } of dispatch) {
+          const job = jobs.find((j) => j.cron === cron);
+          if (!job) continue; // reported by rule 2
+          if (jobName === null) {
+            details.push(
+              `${API_INDEX_PATH}: scheduled()'s case "${cron}" does not call runCron(), so nothing writes the heartbeat ${CRON_REGISTRY_PATH} names "${job.name}"`,
+            );
+          } else if (jobName !== job.name) {
+            details.push(
+              `${API_INDEX_PATH}: scheduled() runs "${jobName}" for cron "${cron}", but ${CRON_REGISTRY_PATH} calls that job "${job.name}" — runCron's first argument is the heartbeat key (cron:last:<name>), so /api/admin/health watches "${job.name}" while only "${jobName}" is ever written, and ok goes false forever`,
+            );
+          }
+        }
+        const dispatched = new Set(dispatch.map((d) => d.jobName).filter(Boolean));
+        for (const name of dispatched) {
+          if (!byName.has(name)) {
+            details.push(
+              `${API_INDEX_PATH}: scheduled() runs runCron("${name}"), which is not a CRON_JOBS entry in ${CRON_REGISTRY_PATH} — its heartbeat is written but nothing reads it, so the job could stop and no health check would say so`,
+            );
+          }
+        }
+      }
+
+      // 4. A staleness threshold shorter than the schedule alarms on a healthy
+      //    job; one much longer makes a dead job invisible, which is the
+      //    failure the heartbeat exists to prevent.
+      for (const job of jobs) {
+        const interval = cronIntervalMs(job.cron);
+        if (interval === null) {
+          notes.push(
+            `job "${job.name}" ("${job.cron}"): interval not computable (a fixed day-of-month or month), so staleAfterMs was not checked`,
+          );
+          continue;
+        }
+        if (job.staleAfterMs === undefined) {
+          details.push(
+            `${CRON_REGISTRY_PATH}: job "${job.name}" has staleAfterMs ${job.staleAfterMsExpr === null ? "missing" : `"${job.staleAfterMsExpr}"`}, which this check cannot resolve to a number — an unreadable threshold is an unchecked one`,
+          );
+          continue;
+        }
+        if (job.staleAfterMs <= interval) {
+          details.push(
+            `${CRON_REGISTRY_PATH}: job "${job.name}" fires every ${humanMs(interval)} ("${job.cron}") but staleAfterMs is ${humanMs(job.staleAfterMs)} — a threshold at or below the interval marks a perfectly healthy job stale, so /api/admin/health reports ok:false and the daily digest emits a permanent cron_stale critical`,
+          );
+        }
+      }
+
+      notes.unshift(
+        `${jobs.length} ${CRON_REGISTRY_PATH} job(s) agree with wrangler.toml and scheduled(): ` +
+          jobs
+            .map((job) => `${job.name} ("${job.cron}", stale after ${job.staleAfterMs === undefined ? "?" : humanMs(job.staleAfterMs)})`)
+            .join(", "),
+      );
+    }
+  }
+
   if (details.length > 0) return { status: "fail", details };
   const inherited = tiers.filter((t) => t.envName && !t.own).map((t) => t.envName);
   return {
@@ -825,6 +1116,7 @@ function checkCronTriggers(ctx) {
     details: [
       `${resolved.size} cron(s) valid and handled by scheduled(): ${[...resolved].sort().map((c) => `"${c}"`).join(", ")}` +
         (inherited.length > 0 ? `; inherited by ${inherited.join(", ")}` : ""),
+      ...notes,
     ],
   };
 }
@@ -1729,7 +2021,7 @@ export const CHECKS = {
   "migration-drift": { description: "no landed migration is renamed/edited/deleted (git)", run: checkMigrationDrift },
   "env-parity": { description: ".env.example vs wrangler.toml [vars] / [env.*.vars]", run: checkEnvParity },
   "var-usage": { description: "wrangler.toml [vars] vs what apps/api/src reads and falls back to", run: checkVarUsage },
-  "cron-triggers": { description: "every tier resolves valid crons, all handled by scheduled()", run: checkCronTriggers },
+  "cron-triggers": { description: "wrangler.toml [triggers] ↔ scheduled() ↔ cron/registry.ts agree (name, schedule, staleAfterMs)", run: checkCronTriggers },
   models: { description: '"@cf/" model ids confined to apps/api/src/models.ts', run: checkModels },
   "ip-digest": { description: "client-IP hashes rotate daily via lib/digest.ts's dailyIpDigest", run: checkIpDigest },
   exports: { description: "packages/*/package.json subpath exports (no \".\")", run: checkExports },

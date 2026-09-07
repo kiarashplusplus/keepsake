@@ -24,6 +24,9 @@ import {
   parseCronTriggers,
   cronExpressionProblem,
   scheduledCronCases,
+  scheduledCronDispatch,
+  parseCronRegistry,
+  cronIntervalMs,
   checkLfsPointers,
   lfsPointerDetail,
   resolveNumericExpr,
@@ -825,6 +828,157 @@ test("cron-triggers: fails when scheduled() handles crons nothing declares", () 
 test("cron-triggers: skips when wrangler.toml is not present", () => {
   const result = runOne("cron-triggers", { "apps/api/src/index.ts": SCHEDULED_GOOD });
   assert.equal(result.status, "skip");
+});
+
+// ── cron-triggers, the third file (#176) ───────────────────────────────
+//
+// `cron/registry.ts` is where a job's name, schedule and staleness threshold
+// are described together, and it is what `/api/admin/health` and the daily
+// digest read. The check used to open two of the three files while two
+// documents said it tied all three together.
+
+const REGISTRY_GOOD = `
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+
+export const CRON_JOBS = [
+  {
+    name: "moderationRetry",
+    cron: "*/5 * * * *",
+    staleAfterMs: 30 * MINUTE,
+  },
+  {
+    name: "orphanSweep",
+    cron: "17 3 * * *",
+    staleAfterMs: 26 * HOUR,
+  },
+] as const satisfies readonly CronJobSpec[];
+`;
+
+test("cron-triggers: passes and says so when the registry agrees with both other files", () => {
+  const result = runOne("cron-triggers", cronTree({ "apps/api/src/cron/registry.ts": REGISTRY_GOOD }));
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  assert.match(result.details.join("\n"), /2 apps\/api\/src\/cron\/registry\.ts job\(s\) agree/);
+  assert.match(result.details.join("\n"), /moderationRetry \("\*\/5 \* \* \* \*", stale after 30m\)/);
+});
+
+test("cron-triggers: says out loud when there is no registry to check, rather than implying it agreed", () => {
+  const result = runOne("cron-triggers", cronTree());
+  assert.equal(result.status, "pass");
+  assert.match(result.details.join("\n"), /registry\.ts not present, so registry agreement was not checked/);
+});
+
+test("cron-triggers: fails when a registry job's schedule is declared nowhere (#176's own experiment)", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      "apps/api/src/cron/registry.ts": REGISTRY_GOOD.replace('cron: "17 3 * * *"', 'cron: "0 0 * * 0"'),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /"orphanSweep" is scheduled "0 0 \* \* 0", which env\.production does not declare/);
+});
+
+test("cron-triggers: fails when the registry name is not the string runCron is handed", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      "apps/api/src/cron/registry.ts": REGISTRY_GOOD.replace('name: "orphanSweep"', 'name: "nightlySweep"'),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(
+    result.details.join("\n"),
+    /scheduled\(\) runs "orphanSweep" for cron "17 3 \* \* \*", but .*registry\.ts calls that job "nightlySweep"/,
+  );
+  assert.match(result.details.join("\n"), /heartbeat key \(cron:last:<name>\)/);
+});
+
+test("cron-triggers: fails when a declared, dispatched cron has no registry entry watching it", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      "apps/api/src/cron/registry.ts": REGISTRY_GOOD.replace(
+        /\{\s*name: "orphanSweep"[\s\S]*?\},\n/,
+        "",
+      ),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /no CRON_JOBS entry .* describes it/);
+});
+
+test("cron-triggers: fails when staleAfterMs does not exceed the schedule's own interval", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      // Five-minute job, five-minute threshold: every healthy run is "stale".
+      "apps/api/src/cron/registry.ts": REGISTRY_GOOD.replace("staleAfterMs: 30 * MINUTE", "staleAfterMs: 5 * MINUTE"),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /"moderationRetry" fires every 5m .* but staleAfterMs is 5m/);
+});
+
+test("cron-triggers: fails when staleAfterMs cannot be resolved to a number", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({
+      "apps/api/src/cron/registry.ts": REGISTRY_GOOD.replace("staleAfterMs: 26 * HOUR", "staleAfterMs: config.sweepStale"),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /cannot resolve to a number — an unreadable threshold is an unchecked one/);
+});
+
+test("cron-triggers: fails when registry.ts is present but CRON_JOBS cannot be parsed", () => {
+  const result = runOne(
+    "cron-triggers",
+    cronTree({ "apps/api/src/cron/registry.ts": "export const JOBS = [];\n" }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /no CRON_JOBS entries could be parsed/);
+});
+
+test("cron-triggers: reads this repository's real registry, and all three files agree today", () => {
+  const result = runChecks(["cron-triggers"], REPO_ROOT)[0];
+  assert.equal(result.status, "pass", result.details.join("\n"));
+  const text = result.details.join("\n");
+  for (const name of ["moderationRetry", "orphanSweep", "dailyDigest"]) {
+    assert.match(text, new RegExp(name), `the real registry job ${name} was not reported as checked`);
+  }
+});
+
+test("parseCronRegistry resolves MINUTE/HOUR products and ignores commented-out entries", () => {
+  const jobs = parseCronRegistry(REGISTRY_GOOD);
+  assert.deepEqual(
+    jobs.map((j) => [j.name, j.cron, j.staleAfterMs]),
+    [
+      ["moderationRetry", "*/5 * * * *", 30 * 60 * 1000],
+      ["orphanSweep", "17 3 * * *", 26 * 60 * 60 * 1000],
+    ],
+  );
+  assert.equal(parseCronRegistry("export const NOTHING = 1;\n"), null);
+});
+
+test("cronIntervalMs returns the longest gap between firings", () => {
+  assert.equal(cronIntervalMs("*/5 * * * *"), 5 * 60 * 1000);
+  assert.equal(cronIntervalMs("17 3 * * *"), 24 * 60 * 60 * 1000);
+  assert.equal(cronIntervalMs("7 0 * * *"), 24 * 60 * 60 * 1000);
+  assert.equal(cronIntervalMs("0 0 * * 0"), 7 * 24 * 60 * 60 * 1000);
+  // Weekdays only: the Friday→Monday gap is the one a threshold has to beat.
+  assert.equal(cronIntervalMs("0 9 * * 1-5"), 3 * 24 * 60 * 60 * 1000);
+  // Longer than a week: not computed, and the caller says so rather than
+  // treating "not computed" as "fine".
+  assert.equal(cronIntervalMs("0 0 1 * *"), null);
+});
+
+test("scheduledCronDispatch pairs each case with the name it hands runCron", () => {
+  assert.deepEqual(scheduledCronDispatch(SCHEDULED_GOOD), [
+    { cron: "*/5 * * * *", jobName: "moderationRetry" },
+    { cron: "17 3 * * *", jobName: "orphanSweep" },
+  ]);
+  assert.equal(scheduledCronDispatch("export default { fetch };\n"), null);
 });
 
 test("parseCronTriggers reads top-level, per-env, multi-line and empty lists", () => {
