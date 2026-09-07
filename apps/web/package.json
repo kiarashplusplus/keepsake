@@ -10,6 +10,7 @@
     "test": "jest",
     "lint": "eslint .",
     "e2e": "playwright test",
+    "e2e:ux": "pnpm run export && UX_SHOTS=1 playwright test --project=ux-mobile --project=ux-desktop --workers=1",
     "e2e:install": "playwright install --with-deps chromium"
   },
   "dependencies": {

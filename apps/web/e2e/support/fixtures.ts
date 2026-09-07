@@ -65,10 +65,17 @@ export function onScreen(page: Page, label: string): Locator {
  * need. `browser.newContext()` does not inherit the project's `use` options,
  * so `baseURL` has to be handed over explicitly.
  */
-export async function openFreshContext(browser: Browser): Promise<BrowserContext> {
+export async function openFreshContext(
+  browser: Browser,
+  /** Merged over the defaults below, for the same reason `baseURL` is set
+   * explicitly: nothing here comes from the project's `use`. The UX capture
+   * passes `reducedMotion` this way — see `ux.spec.ts`'s dark set. */
+  overrides: Parameters<Browser["newContext"]>[0] = {},
+): Promise<BrowserContext> {
   const context = await browser.newContext({
     baseURL: BASE_URL,
     extraHTTPHeaders: { "CF-Connecting-IP": freshClientIp() },
+    ...overrides,
   });
   // Same reason as the `context` fixture above: a second browser is still a
   // browser that has never answered the banner, or seen the site before.
