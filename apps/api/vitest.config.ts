@@ -63,6 +63,7 @@ export default defineConfig({
             MOD_TEXT_DAILY_BUDGET: "1000",
             MOD_IMAGE_DAILY_BUDGET: "3000",
             SUGGEST_DAILY_BUDGET: "1000",
+            EMBED_DAILY_BUDGET: "2000",
             LISTING_IP_DAILY_BUDGET: "20",
             REQUEST_IP_DAILY_BUDGET: "20",
             UPLOAD_IP_DAILY_BUDGET: "60",

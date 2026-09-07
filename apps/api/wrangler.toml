@@ -32,6 +32,23 @@ run_worker_first = true
 [ai]
 binding = "AI"
 
+# Issue #38: semantic search over story + aspects. One Vectorize index per
+# environment (created directly with `wrangler vectorize create <name>
+# --dimensions=768 --metric=cosine` — 768 to match `MODELS.embedding`,
+# `@cf/baai/bge-base-en-v1.5`), the same separation the D1/R2/KV bindings
+# below already follow so dev/preview/production traffic never shares an
+# index. `src/db/fts.ts`'s FTS5 search remains the fallback path
+# (`src/routes/feed.ts` decides when it fires) rather than being replaced —
+# per the issue, Vectorize is tried first and FTS is the documented swap
+# point if it's unavailable, an embedding call fails, or a query comes back
+# with nothing useful. Like `[ai]` above, Vectorize has no local emulator
+# (`V4RemoteBinding` in miniflare's own types) — every test that touches
+# this binding stubs `env.VECTORIZE` directly rather than hitting the real
+# index, same convention `test/moderation.test.ts` already uses for `env.AI`.
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "keepsake-listings-dev"
+
 # Issue #14: `SENTRY_DSN` was never set (it needs a Sentry account only
 # Kiarash can create), so every `Sentry.captureException`/`captureMessage`
 # call in the Worker was a silent no-op. Workers Logs is a Cloudflare-native
@@ -94,6 +111,13 @@ MOD_IMAGE_DAILY_BUDGET = "3000"
 # moderating. ~15 neurons/call, ~$0.17 per 1000 listings — this is runaway
 # protection, not a real usage ceiling.
 SUGGEST_DAILY_BUDGET = "1000"
+# Re-embedding on listing create/edit (issue #38, `src/search/reembed.ts`).
+# Global-only, no per-IP twin: unlike SUGGEST_DAILY_BUDGET this isn't behind
+# its own client-callable endpoint, and a failure here degrades to the FTS
+# fallback rather than parking anything, so a single runaway-protection
+# ceiling is enough. Pure runaway protection like every other budget in this
+# block, not sized against real traffic yet.
+EMBED_DAILY_BUDGET = "2000"
 # Per-IP daily ceilings for the write endpoints. An address is not a person —
 # a household or a mobile carrier's CGNAT range sits behind one IP — so these
 # are set loose on purpose; they catch a runaway script, not a family posting
@@ -264,6 +288,10 @@ run_worker_first = true
 [env.preview.ai]
 binding = "AI"
 
+[[env.preview.vectorize]]
+binding = "VECTORIZE"
+index_name = "keepsake-listings-preview"
+
 [env.preview.observability]
 enabled = true
 head_sampling_rate = 1
@@ -280,6 +308,7 @@ COMMIT_SHA = "dev"
 MOD_TEXT_DAILY_BUDGET = "2000"
 MOD_IMAGE_DAILY_BUDGET = "6000"
 SUGGEST_DAILY_BUDGET = "1000"
+EMBED_DAILY_BUDGET = "2000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"
@@ -375,6 +404,10 @@ run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/s
 [env.production.ai]
 binding = "AI"
 
+[[env.production.vectorize]]
+binding = "VECTORIZE"
+index_name = "keepsake-listings-production"
+
 [env.production.observability]
 enabled = true
 head_sampling_rate = 1
@@ -410,6 +443,7 @@ COMMIT_SHA = "dev"
 MOD_TEXT_DAILY_BUDGET = "5000"
 MOD_IMAGE_DAILY_BUDGET = "15000"
 SUGGEST_DAILY_BUDGET = "1000"
+EMBED_DAILY_BUDGET = "2000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
 UPLOAD_IP_DAILY_BUDGET = "60"

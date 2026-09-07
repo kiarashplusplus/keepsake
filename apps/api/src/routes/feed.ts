@@ -3,10 +3,16 @@
  * table and docs/design/feed.md:
  *
  *  - default: newest-first keyset on `(published_at DESC, id DESC)`.
- *  - `q`: FTS5 search (`src/db/fts.ts`), `bm25` order, bounded offset.
+ *  - `q`: semantic search first (`src/search/search.ts`, Vectorize +
+ *    Workers AI embeddings, issue #38), ranked by vector score, bounded
+ *    offset. Falls back to FTS5 (`src/db/fts.ts`), `bm25` order, when
+ *    Vectorize is unavailable, embedding the query fails, or the vector
+ *    search comes back with nothing useful — see `vectorSearchCandidates`
+ *    (`src/search/search.ts`) and the `useVector` check in the route
+ *    handler below for exactly which of those fired.
  *  - `country`+`postal` or `lat`+`lng`: bounding-box + haversine radius
  *    search, sorted by distance (or by search relevance when combined with
- *    `q` — see `buildGeoFeed` below), bounded offset.
+ *    `q` — see `buildGeoFeed`/`buildVectorGeoFeed` below), bounded offset.
  *
  * `category` applies as a filter in every mode. Only `status = 'approved'`
  * is ever selected — `given` listings are excluded from the feed (still
@@ -25,6 +31,7 @@ import { lookupPostalCode } from "../geo/lookup.js";
 import { serializePublicListing, type FeedListingRow } from "../lib/serialize.js";
 import { fetchAspectRowsForListings, fetchPhotoRowsForListings } from "../lib/listingsDb.js";
 import { sanitizeFtsQuery } from "../db/fts.js";
+import { vectorSearchCandidates, type VectorMatch } from "../search/search.js";
 import { decodeKeysetCursor, decodeOffsetCursor, encodeKeysetCursor, encodeOffsetCursor } from "../lib/cursor.js";
 
 type Vars = { validatedQuery: FeedQuery };
@@ -51,6 +58,44 @@ const FEED_COLUMNS = "id, title, story, category, country, place_name, admin1, s
 const FEED_COLUMNS_L = FEED_COLUMNS.split(", ")
   .map((column) => `l.${column}`)
   .join(", ");
+
+/**
+ * Fetches full listing rows for a set of Vectorize match ids, filtered the
+ * same way every other feed mode filters (`status = 'approved'`, optional
+ * `category`, optional geo bounding box) — Vectorize itself knows nothing
+ * about status or location, only similarity, so this is where a match
+ * against a `pending`/`hidden`/`given` listing (the index isn't pruned by
+ * status — see `search/reembed.ts`, it embeds regardless of status, the
+ * same way `listings_fts`'s insert trigger does) gets excluded, exactly
+ * like `buildSearchFeed`'s `l.status = 'approved'` join condition does for
+ * FTS. Returned as a map so callers can re-apply the caller's own rank
+ * order (`matches` is already sorted by vector score; `IN (...)` is not).
+ */
+async function fetchCandidateRows(
+  env: Env,
+  ids: string[],
+  category: string | undefined,
+  bbox?: { minLat: number; maxLat: number; minLng: number; maxLng: number },
+): Promise<Map<string, FeedListingRow>> {
+  if (ids.length === 0) return new Map();
+
+  const placeholders = ids.map(() => "?").join(",");
+  const conditions = ["status = 'approved'", `id IN (${placeholders})`];
+  const params: unknown[] = [...ids];
+  if (category) {
+    conditions.push("category = ?");
+    params.push(category);
+  }
+  if (bbox) {
+    conditions.push("lat BETWEEN ? AND ?", "lng BETWEEN ? AND ?");
+    params.push(bbox.minLat, bbox.maxLat, bbox.minLng, bbox.maxLng);
+  }
+
+  const { results } = await env.DB.prepare(`SELECT ${FEED_COLUMNS} FROM listings WHERE ${conditions.join(" AND ")}`)
+    .bind(...params)
+    .all<FeedListingRow>();
+  return new Map(results.map((row) => [row.id, row]));
+}
 
 async function serializePage(env: Env, rows: FeedListingRow[], distances?: Map<string, number>): Promise<PublicListing[]> {
   const ids = rows.map((row) => row.id);
@@ -117,6 +162,30 @@ async function buildSearchFeed(env: Env, query: FeedQuery, ftsQuery: string): Pr
   const items = await serializePage(env, results);
   const nextOffset = offset + limit;
   const next_cursor = results.length === limit && nextOffset < MAX_OFFSET ? encodeOffsetCursor(nextOffset) : null;
+  return { items, next_cursor };
+}
+
+/** Same offset pagination as `buildSearchFeed`, but the ranked candidate
+ * list already came back from Vectorize (`vectorSearchCandidates`) instead
+ * of a `bm25` SQL query — see the module doc comment for when this path is
+ * used instead of FTS. */
+async function buildVectorSearchFeed(env: Env, query: FeedQuery, matches: VectorMatch[]): Promise<FeedPage<PublicListing>> {
+  const limit = query.limit;
+  const offset = decodeOffsetCursor(query.cursor);
+  if (offset >= MAX_OFFSET) return { items: [], next_cursor: null };
+
+  const rowsById = await fetchCandidateRows(
+    env,
+    matches.map((match) => match.id),
+    query.category,
+  );
+  const ordered = matches.map((match) => rowsById.get(match.id)).filter((row): row is FeedListingRow => row !== undefined);
+
+  const page = ordered.slice(offset, offset + limit);
+  const items = await serializePage(env, page);
+  const nextOffset = offset + limit;
+  const hasMore = ordered.length > nextOffset;
+  const next_cursor = hasMore && nextOffset < MAX_OFFSET ? encodeOffsetCursor(nextOffset) : null;
   return { items, next_cursor };
 }
 
@@ -196,6 +265,51 @@ async function buildGeoFeed(
   return { items, next_cursor };
 }
 
+/** `buildGeoFeed`'s vector-search counterpart: candidates come from
+ * `vectorSearchCandidates` instead of an FTS `MATCH`, filtered to the
+ * bounding box + true circle exactly the same way, and — like
+ * `buildGeoFeed`'s own search+geo branch — kept in vector-score order
+ * rather than re-sorted by distance, since geo is a filter on top of
+ * search here, not a re-ranking. */
+async function buildVectorGeoFeed(
+  env: Env,
+  query: FeedQuery,
+  refPoint: LatLng,
+  radiusMi: number,
+  matches: VectorMatch[],
+): Promise<FeedPage<PublicListing>> {
+  const limit = query.limit;
+  const offset = decodeOffsetCursor(query.cursor);
+  if (offset >= MAX_OFFSET) return { items: [], next_cursor: null };
+
+  const bbox = boundingBox(refPoint.lat, refPoint.lng, radiusMi);
+  const rowsById = await fetchCandidateRows(
+    env,
+    matches.map((match) => match.id),
+    query.category,
+    bbox,
+  );
+
+  const withDistance = matches
+    .map((match) => rowsById.get(match.id))
+    .filter((row): row is FeedListingRow => row !== undefined)
+    .map((row) => ({ row, distanceMi: haversineMiles(refPoint, { lat: row.lat, lng: row.lng }) }))
+    .filter((entry) => entry.distanceMi <= radiusMi);
+
+  const page = withDistance.slice(offset, offset + limit);
+  const distances = new Map(page.map((entry) => [entry.row.id, entry.distanceMi]));
+  const items = await serializePage(
+    env,
+    page.map((entry) => entry.row),
+    distances,
+  );
+
+  const nextOffset = offset + limit;
+  const hasMore = withDistance.length > nextOffset;
+  const next_cursor = hasMore && nextOffset < MAX_OFFSET ? encodeOffsetCursor(nextOffset) : null;
+  return { items, next_cursor };
+}
+
 // Launch audit finding 9: `RL_READ` was declared in all three environment
 // blocks of wrangler.toml and used by nothing — `grep -rn 'burst(' apps/api/src`
 // returned eight call sites and this was not among them, so every public read
@@ -227,8 +341,25 @@ feedRoutes.get("/", burst("RL_READ"), validateQuery(FeedQuery), async (c) => {
 
   const ftsQuery = query.q !== undefined ? sanitizeFtsQuery(query.q) : null;
 
+  // Vectorize first, per the issue: `vectorSearchCandidates` returns `null`
+  // when it isn't safe to trust (no binding, the embedding call failed, or
+  // Vectorize itself threw) and an array — possibly empty, after its own
+  // relevance threshold — otherwise. Empty is deliberately still a
+  // fallback: Vectorize always returns its nearest neighbors even when none
+  // of them are actually relevant, so treating "matched nothing useful" the
+  // same as "couldn't try" is what makes `db/fts.ts` a real fallback rather
+  // than a path that only fires on an outage.
+  const vectorMatches = query.q !== undefined ? await vectorSearchCandidates(c.env, query.q) : null;
+  const useVector = vectorMatches !== null && vectorMatches.length > 0;
+
   if (refPoint) {
+    if (useVector) {
+      return ok(c, await buildVectorGeoFeed(c.env, query, refPoint, radiusMi, vectorMatches));
+    }
     return ok(c, await buildGeoFeed(c.env, query, refPoint, radiusMi, ftsQuery));
+  }
+  if (useVector) {
+    return ok(c, await buildVectorSearchFeed(c.env, query, vectorMatches));
   }
   if (ftsQuery) {
     return ok(c, await buildSearchFeed(c.env, query, ftsQuery));

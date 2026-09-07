@@ -316,6 +316,100 @@ export function removeFakeEmail(): void {
 // insert) ever executes.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Vectorize binding fake (issue #38).
+//
+// `env.VECTORIZE` has no local emulator (same as `env.AI` — both are
+// `V4RemoteBinding`s in miniflare's own types, confirmed by the "Vectorize
+// Index bindings do not support local development" warning `vitest run`
+// prints), so unlike D1/R2/KV it would otherwise make a real network call
+// to Cloudflare on every listing create/edit/delete a test drives — slow,
+// flaky, and (in CI, which sets no CLOUDFLARE_API_TOKEN for the test job)
+// unauthenticated. `test/setup.ts` installs this by default for every test
+// file, the same way `TEST_MIGRATIONS` is applied for every file, so a test
+// that never mentions Vectorize still can't reach the real index by
+// accident — only a test that explicitly wants deterministic search
+// behavior needs to call this itself (for a fresh, empty store) or read the
+// instance back off `env.VECTORIZE`.
+// ---------------------------------------------------------------------------
+
+interface FakeVector {
+  id: string;
+  values: number[];
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i]! * b[i]!;
+    normA += a[i]! * a[i]!;
+    normB += b[i]! * b[i]!;
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+/** In-memory stand-in for the real `VectorizeIndex` shape this Worker
+ * actually calls (`upsert`/`deleteByIds`/`query` — see `src/search/vectorize.ts`),
+ * scoring `query()` by real cosine similarity so a test can assert on
+ * ranking, not just membership. */
+export class FakeVectorizeIndex {
+  private readonly store = new Map<string, number[]>();
+
+  async upsert(vectors: FakeVector[]): Promise<{ ids: string[]; count: number }> {
+    for (const vector of vectors) this.store.set(vector.id, vector.values);
+    return { ids: vectors.map((vector) => vector.id), count: vectors.length };
+  }
+
+  async deleteByIds(ids: string[]): Promise<{ ids: string[]; count: number }> {
+    let count = 0;
+    for (const id of ids) {
+      if (this.store.delete(id)) count += 1;
+    }
+    return { ids, count };
+  }
+
+  async query(vector: number[], options?: { topK?: number }): Promise<{ matches: { id: string; score: number }[]; count: number }> {
+    const topK = options?.topK ?? 10;
+    const scored = Array.from(this.store.entries())
+      .map(([id, values]) => ({ id, score: cosineSimilarity(vector, values) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topK);
+    return { matches: scored, count: scored.length };
+  }
+
+  /** Test-only inspection, not part of the real `VectorizeIndex` surface —
+   * lets a test assert a listing's vector was (or wasn't) written without
+   * going back through a query's similarity ranking. */
+  has(id: string): boolean {
+    return this.store.has(id);
+  }
+
+  valuesFor(id: string): number[] | undefined {
+    return this.store.get(id);
+  }
+}
+
+/** Installs a fresh `FakeVectorizeIndex` as `env.VECTORIZE` and returns it.
+ * Safe to call again mid-test (e.g. to reset to an empty store and prove
+ * the "Vectorize answered but had nothing useful" fallback) — each call
+ * replaces the binding with a brand new, empty instance. */
+export function installFakeVectorize(): FakeVectorizeIndex {
+  const fake = new FakeVectorizeIndex();
+  (env as unknown as Record<string, unknown>).VECTORIZE = fake;
+  return fake;
+}
+
+/** Removes `env.VECTORIZE` entirely — for the "binding missing" fallback
+ * case, distinct from "binding present but empty" (`installFakeVectorize()`
+ * with nothing upserted). */
+export function removeFakeVectorize(): void {
+  delete (env as unknown as Record<string, unknown>).VECTORIZE;
+}
+
 /** Replaces a `[[ratelimits]]` binding with one that denies every call, and
  * returns a restore function. Same `env`-mutation seam as `installFakeEmail`:
  * `SELF` and this test share one `env` object. */

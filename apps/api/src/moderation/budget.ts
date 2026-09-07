@@ -57,8 +57,12 @@
 
 const TTL_SECONDS = 172_800; // 48 hours
 
-/** The six things this Worker rations per calendar day. */
-export type BudgetKind = "mod_text" | "mod_image" | "suggest" | "listing" | "request" | "upload";
+/** The seven things this Worker rations per calendar day. `embed` (issue
+ * #38) is global-only — no `ipDailyLimit` is ever passed for it, see
+ * `search/reembed.ts` — because unlike `suggest` it isn't behind its own
+ * client-callable endpoint; it only ever runs from inside a listing
+ * create/edit this Worker already authenticated and rate-limited. */
+export type BudgetKind = "mod_text" | "mod_image" | "suggest" | "listing" | "request" | "upload" | "embed";
 
 export interface CheckAndBumpOptions {
   kind: BudgetKind;
