@@ -24,6 +24,7 @@ import { randomTokenRaw } from "../lib/tokens.js";
 import { clientIPFrom } from "../moderation/budget.js";
 import { parseIntVar } from "../env.js";
 import { moderateListing } from "../moderation/pipeline.js";
+import { purgePhotoCache } from "../lib/photoCache.js";
 import { serializeOwnerListing, serializePublicListing } from "../lib/serialize.js";
 import { fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
 
@@ -130,7 +131,7 @@ listingRoutes.post(
       await sendMail(c.env, { kind: "verify_email", to: input.email, ...verifyEmail({ link: verifyUrl }) });
     }
 
-    c.executionCtx.waitUntil(moderateListing(c.env, id, 1));
+    c.executionCtx.waitUntil(moderateListing(c.env, id, 1, clientIPFrom(c.req.raw)));
 
     const row = await fetchListingRow(c.env, id);
     if (!row) return fail(c, "internal", "Listing failed to save.", 500);
@@ -214,7 +215,7 @@ listingRoutes.patch("/:id", ownerAuth(), validateBody(UpdateListingInput), async
     }
   }
 
-  c.executionCtx.waitUntil(moderateListing(c.env, id, nextVersion));
+  c.executionCtx.waitUntil(moderateListing(c.env, id, nextVersion, clientIPFrom(c.req.raw)));
 
   const updatedRow = await fetchListingRow(c.env, id);
   if (!updatedRow) return fail(c, "internal", "Listing failed to save.", 500);
@@ -233,12 +234,19 @@ listingRoutes.delete("/:id", ownerAuth(), async (c) => {
     return fail(c, "not_found", "Listing not found.", 404);
   }
 
-  const { results: photos } = await c.env.DB.prepare("SELECT r2_key_full, r2_key_thumb FROM photos WHERE listing_id = ?")
+  const { results: photos } = await c.env.DB.prepare("SELECT id, r2_key_full, r2_key_thumb FROM photos WHERE listing_id = ?")
     .bind(id)
-    .all<{ r2_key_full: string; r2_key_thumb: string }>();
+    .all<{ id: string; r2_key_full: string; r2_key_thumb: string }>();
   for (const photo of photos) {
     await c.env.BUCKET.delete(photo.r2_key_full);
     await c.env.BUCKET.delete(photo.r2_key_thumb);
+    // Issue #22: the R2 bytes are gone; also drop any cached edge copy so
+    // nothing can keep serving them from `caches.default`. See
+    // `lib/photoCache.ts` for why this is defense in depth rather than the
+    // whole fix — `GET /i/:id/:variant` already re-checks the DB before
+    // ever consulting the cache, so this route alone can't serve a deleted
+    // photo either way.
+    c.executionCtx.waitUntil(purgePhotoCache(c.env, photo.id));
   }
 
   // `photos`, `requests`, `reports`, `moderation_events` all have
@@ -314,7 +322,7 @@ listingRoutes.post("/:id/relist", ownerAuth(), async (c) => {
     .run();
 
   if (nextStatus === "pending") {
-    c.executionCtx.waitUntil(moderateListing(c.env, id, row.version));
+    c.executionCtx.waitUntil(moderateListing(c.env, id, row.version, clientIPFrom(c.req.raw)));
   }
 
   const updatedRow = await fetchListingRow(c.env, id);

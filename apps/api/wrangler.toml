@@ -47,6 +47,15 @@ COMMIT_SHA = "dev"
 # allocation regardless of what is set here, and the app has no signed-up
 # users to ration against. The ceilings exist so a scraper or a retry loop
 # can't spend the whole day's AI allocation before a real giver gets to post.
+#
+# Issue #18 (launch audit finding 8): MOD_IMAGE_DAILY_BUDGET is now charged
+# once per photo (`cost: photos.length` in moderation/pipeline.ts), not once
+# per listing — the pipeline makes up to 5 vision calls per listing, so a
+# number read as "listings/day" was actually 5x that in real vision calls.
+# `[env.preview]`/`[env.production]` below raise both ceilings for real
+# (estimated) launch traffic instead of leaving every environment at the
+# same numbers sized against zero traffic; this dev/local block is
+# deliberately left low since it's never customer-facing.
 MOD_TEXT_DAILY_BUDGET = "1000"
 MOD_IMAGE_DAILY_BUDGET = "3000"
 # AI autofill (POST /api/photos/:id/suggest). Its own counter, deliberately
@@ -109,6 +118,17 @@ database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "migrations"
 
 # --- R2 ---
+# No versioning, no lifecycle rule on this binding — checked directly against
+# this account (issue #17, docs/runbooks/restore.md#r2-photo-backup): R2 has
+# no native versioning to enable at all, and `orphanSweep`
+# (src/cron/orphanSweep.ts) still deletes unconditionally. The mitigation
+# lives outside this binding on purpose, so it survives a bug in the code
+# that reads this binding: `tools/backup-photos.mjs` copies every referenced
+# photo into a same-account `<bucket_name>-backup` bucket that nothing here
+# ever deletes from. That bucket is not declared as a binding because no
+# Worker code reads it — an unread binding is exactly the
+# configuration-that-can't-change-behavior anti-pattern the MAX_PHOTOS /
+# IMAGE_TRANSFORMS_ENABLED removal note above (in [vars]) warns about.
 [[r2_buckets]]
 binding = "BUCKET"
 bucket_name = "keepsake-photos-dev"
@@ -132,6 +152,26 @@ id = "local"
 # literal transcription of the plan's hourly numbers — Wrangler rejects any
 # `period` other than 10 or 60 (see apps/api's typecheck report for the
 # rejected `600`/`3600` attempt this replaced).
+#
+# Issue #8 (launch audit finding 10): the `limit` below is *not* a hard cap.
+# Cloudflare's own docs for this binding say it plainly: "The Rate Limiting
+# API is permissive, eventually consistent, and intentionally designed to
+# not be used as an accurate accounting system" — counters are cached
+# per-colo and reconciled asynchronously, so a burst that lands across
+# several colos (or several requests within one colo's reconciliation
+# window) rides through before the first refusal. Measured directly against
+# `RL_UPLOAD = 10/60s`: 26 consecutive requests from one address got through
+# before the first 429. That is Cloudflare's documented, intentional
+# behavior, not a bug in how this binding is called (see
+# `src/middleware/rateLimit.ts`'s `burst()` for the call site and why it
+# isn't the backstop). Sizing the numbers down to compensate (e.g. "10"
+# configured as "4") would chase a multiplier that isn't guaranteed to hold
+# — the docs don't promise 2.6x, they promise "eventually" — so the fix here
+# is honesty, not arithmetic: these are best-effort burst brakes, and the KV
+# calendar-day budgets above (`checkAndBump`, `middleware/rateLimit.ts`'s
+# `dailyBudget()`) are the only ceiling here that's actually a hard cap.
+# Nothing security-critical is allowed to depend on one of these numbers
+# being exact.
 [[ratelimits]]
 name = "RL_READ"
 namespace_id = "1001"
@@ -197,8 +237,11 @@ name = "EMAIL"
 [env.preview.vars]
 ENVIRONMENT = "preview"
 COMMIT_SHA = "dev"
-MOD_TEXT_DAILY_BUDGET = "1000"
-MOD_IMAGE_DAILY_BUDGET = "3000"
+# Estimated for real preview-scale traffic (issue #18) — see the top-level
+# `[vars]` comment above for why this is charged per-photo now and why it
+# differs from `[env.production]`.
+MOD_TEXT_DAILY_BUDGET = "2000"
+MOD_IMAGE_DAILY_BUDGET = "6000"
 SUGGEST_DAILY_BUDGET = "1000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
@@ -291,9 +334,26 @@ name = "EMAIL"
 
 [env.production.vars]
 ENVIRONMENT = "production"
+# Issue #24: this "dev" fallback only ships if a human runs
+# `wrangler deploy --env production` by hand without
+# `--var COMMIT_SHA:$(git rev-parse HEAD)` — deploy.yml's automated path
+# always overrides it (see below), so it never ships through CI. See
+# docs/runbooks/deploy.md#manual-deploys-and-commit_sha-issue-24 for the
+# required flag. Left as a real fallback rather than removed or made to
+# crash `/health`, because doing the latter needs code in apps/api/src
+# (out of scope here); .github/workflows/uptime.yml's scheduled `/health`
+# probe now fails loudly — distinct from "down" — if it ever sees this value
+# on this tier, so a forgotten flag is caught within 15 minutes instead of
+# silently misreporting the running commit forever.
 COMMIT_SHA = "dev"
-MOD_TEXT_DAILY_BUDGET = "1000"
-MOD_IMAGE_DAILY_BUDGET = "3000"
+# Estimated for real launch-day traffic (issue #18), not measured — there is
+# no production traffic yet to size against, which is the same gap the
+# launch audit called out for the old, identical-everywhere numbers. Revisit
+# once there's real usage to look at. See the top-level `[vars]` comment
+# above for why MOD_IMAGE_DAILY_BUDGET reads much higher than before for the
+# same real capacity (it's now per-photo, not per-listing).
+MOD_TEXT_DAILY_BUDGET = "5000"
+MOD_IMAGE_DAILY_BUDGET = "15000"
 SUGGEST_DAILY_BUDGET = "1000"
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"

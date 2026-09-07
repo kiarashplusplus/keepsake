@@ -40,6 +40,10 @@ export async function moderationRetry(env: Env): Promise<void> {
   let failed = 0;
   for (const candidate of candidates) {
     try {
+      // No `clientIP`: the cron has no request to read one from, so a
+      // budget-exhausted retry only draws from the general pool, never the
+      // reserved floor (`moderation/pipeline.ts`, issue #18) — that floor is
+      // for a fresh caller's first attempt, not a listing already stuck.
       await moderateListing(env, candidate.id, candidate.version);
     } catch (err) {
       failed += 1;

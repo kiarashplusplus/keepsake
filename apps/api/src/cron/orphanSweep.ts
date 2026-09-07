@@ -25,6 +25,7 @@
  * nothing already deleted can match the same `WHERE` clause again.
  */
 import type { Env } from "../env.js";
+import { purgePhotoCache } from "../lib/photoCache.js";
 
 const ORPHAN_PHOTO_AGE_MS = 24 * 60 * 60 * 1000;
 const RECOVERY_TOKEN_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -158,6 +159,11 @@ async function sweepTerminalListingPhotos(env: Env, cutoff: number): Promise<num
     for (const row of rows) {
       await env.BUCKET.delete(row.r2_key_full);
       await env.BUCKET.delete(row.r2_key_thumb);
+      // Issue #22. These listings have been non-public for 30 days, so
+      // `images.ts`'s DB-status-gated cache lookup already can't reach
+      // whatever's left of any cache entry — this is the same defense in
+      // depth as the owner-delete path, not a fix for an active leak here.
+      await purgePhotoCache(env, row.id);
     }
 
     const placeholders = rows.map(() => "?").join(",");

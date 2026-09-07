@@ -86,8 +86,25 @@ imageRoutes.get("/:id/:variant", burst("RL_READ"), async (c) => {
     "Cache-Control",
     // Owner-preview responses (unapproved listing, valid owner token) must
     // never be cached at the edge and handed back to a stranger who guesses
-    // the same URL — only the public, approved/given path is immutable.
-    isPublic ? "public, max-age=31536000, immutable" : "private, no-store",
+    // the same URL — only the public, approved/given path is cacheable at
+    // all.
+    //
+    // Issue #22: this used to be `immutable, max-age=31536000` (one year).
+    // That's the right choice for a URL whose *content* never changes, but
+    // this one's *visibility* can: a listing can be withdrawn, hidden, or
+    // deleted outright, and `caches.default.delete()` (see
+    // `purgePhotoCache`, called from the delete paths) only ever reaches
+    // Cloudflare's own edge cache. It cannot reach a stranger's browser
+    // cache, a corporate proxy, or any other cache this response passed
+    // through — every one of those is entitled by this header to keep
+    // serving its own copy for as long as it says, with zero revalidation,
+    // regardless of what happens server-side. A one-year promise on content
+    // that can be pulled for someone's privacy is the wrong trade; one hour
+    // bounds a real (if not instant) worst case instead of leaving it open
+    // for a year. `immutable` is dropped for the same reason — it's a
+    // promise that a *revalidation* would be wasted, which stops being true
+    // the moment the listing is taken down.
+    isPublic ? "public, max-age=3600" : "private, no-store",
   );
 
   const response = new Response(object.body, { headers });

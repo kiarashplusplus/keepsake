@@ -44,7 +44,7 @@ condensed to what actually earns its keep on a solo-agent-driven repo:
 | M1 Give + moderation | `[DONE]` | Migrations 0001–0003, geodata seed loaded on preview, owner token middleware, photo upload, create listing, moderation pipeline + cron retry + budgets, web give flow (5 steps), breathing seal, reviewing states, read-only dashboard. |
 | M2 Browse + share | `[DONE]` | Feed (keyset/category/FTS/geo), item page, `/i/:id/:variant` edge cache, `/item/:id` OG injection, masonry feed, location bar, share, `+not-found`. |
 | M3 Requests, email, recovery | `[DONE]` | Turnstile, requests, giver email add/verify, `sendMail()` (cf + resend fallback), choose flow + contact reveal, given/withdraw/relist/edit/delete, recovery. |
-| M4 Trust and operations | `[DONE]` | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Sentry both sides, Web Analytics, version skew guard, Playwright in CI, runbooks. |
+| M4 Trust and operations | `[DONE]`, version skew guard excepted (`[TODO]` on the client — issue #23) | Reports + auto-hide, admin API + page, orphan sweep, rate-limit bindings, Sentry both sides, Web Analytics, Playwright in CI, runbooks. Version skew: server half (`/version.json`, `no-store`) is done and tested; nothing in `apps/web` polls it yet — see `docs/design/ops.md#version-skew`. |
 | M5 Polish and launch | `[IN PROGRESS]` | About/Privacy/Terms, empty states, motion + reduce-motion pass, keyboard/focus audit, robots/sitemap, cache-header audit, production secrets, `keepsake.ing` cutover. |
 
 Definition of done per milestone lives with the plan (`M0`–`M5` DoD bullets); the short version:

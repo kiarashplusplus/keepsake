@@ -54,9 +54,21 @@ export const UpdateListingInput = CreateListingInput.partial();
 export type UpdateListingInput = z.infer<typeof UpdateListingInput>;
 
 /**
- * Giver-facing copy for each auto/human moderation outcome. `budget` is
- * internal only (moderation exhausted its daily AI budget) and must never be
- * shown to a giver — the listing just stays `pending` until the cron retry.
+ * Giver-facing copy for each auto/human moderation outcome.
+ *
+ * `budget` (issue #18) used to be internal-only, on the theory that a giver
+ * should never see the word "budget" — but that meant a listing stuck
+ * because the day's moderation budget ran out looked, from the giver's
+ * side, identical to one still going through the normal few-seconds check:
+ * both were just `pending` with no reason shown. `apps/api` now persists
+ * this reason on the listing itself (not only in the moderation log) the
+ * moment a budget denial happens, and `GET /api/me/listings(/:id)` already
+ * returns `moderation_reason` for every status, not only `rejected` — so
+ * the API is telling the truth today; whether/how `apps/web` surfaces it
+ * for a `pending` listing (currently its `mine/index.tsx` and `mine/[id].tsx`
+ * only render `MODERATION_REASONS[...]` when `status === "rejected"`) is
+ * for whoever owns that app to decide, since `pending` and `rejected` read
+ * very differently to a giver.
  *
  * Declared ahead of `OwnerListing` below, which references
  * `ModerationReasonSchema` in its own initializer.
@@ -82,7 +94,7 @@ export const MODERATION_REASONS: Record<ModerationReasonCode, string> = {
   violent_content: "This crosses a line we can't host: violent content.",
   sexual_content_minors: "This crosses a line we can't host: sexual content involving minors.",
   weapons_of_mass_harm: "This crosses a line we can't host: weapons capable of mass harm.",
-  budget: "Internal: moderation budget exhausted for the day.",
+  budget: "More listings than usual today — yours is still in the queue and will be checked automatically, no action needed.",
   held_for_review: "Taking a closer look. Usually within a day.",
 };
 

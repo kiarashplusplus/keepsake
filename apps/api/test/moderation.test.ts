@@ -1,7 +1,9 @@
 import { env, SELF } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as Sentry from "@sentry/cloudflare";
 import { decide, decideImage, decideText } from "../src/moderation/decide.js";
 import { moderateListing } from "../src/moderation/pipeline.js";
+import { todayISO } from "../src/moderation/budget.js";
 import { moderationRetry } from "../src/cron/moderationRetry.js";
 import { MODELS } from "../src/models.js";
 import { authHeaders, freshOwnerToken, readOk, seedStandardPostalCodes, setTestEnvVar, uploadPhoto, waitFor, waitForListingStatus } from "./helpers.js";
@@ -314,6 +316,60 @@ describe("moderateListing: budget gate", () => {
     expect(event?.reason).toBe("budget");
 
     setTestEnvVar("MOD_IMAGE_DAILY_BUDGET", "3000");
+  });
+
+  // Issue #18: the listing row itself must carry the truth (not only the
+  // moderation-event log), since `GET /api/me/listings(/:id)` reads
+  // `moderation_reason` off the listing for every status.
+  it("MOD_IMAGE_DAILY_BUDGET exhausted -> persists moderation_reason='budget' on the listing row", async () => {
+    mockAi({});
+    setTestEnvVar("MOD_IMAGE_DAILY_BUDGET", "0");
+    const token = freshOwnerToken();
+    const listing = await createListingWithOnePhoto(token);
+
+    await waitForAttempt1(listing.id);
+    const row = await env.DB.prepare("SELECT status, moderation_reason FROM listings WHERE id = ?")
+      .bind(listing.id)
+      .first<{ status: string; moderation_reason: string | null }>();
+    expect(row?.status).toBe("pending");
+    expect(row?.moderation_reason).toBe("budget");
+
+    setTestEnvVar("MOD_IMAGE_DAILY_BUDGET", "3000");
+  });
+
+  describe("Sentry alert on exhaustion", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      setTestEnvVar("MOD_IMAGE_DAILY_BUDGET", "3000");
+    });
+
+    it("fires once per UTC day, not once per denied listing", async () => {
+      mockAi({});
+      setTestEnvVar("MOD_IMAGE_DAILY_BUDGET", "0");
+      // The "already alerted today" flag is keyed only by kind + calendar
+      // day (`alertBudgetExhaustedOnce`, `moderation/pipeline.ts`), so it
+      // persists in this file's shared KV across the earlier budget-gate
+      // tests above, which also exhaust MOD_IMAGE_DAILY_BUDGET. Clear it
+      // first so this test observes its own first-alert, not a flag one of
+      // them already set today.
+      await env.KV.delete(`budget:alerted:mod_image:${todayISO()}`);
+      const captureMessageSpy = vi.spyOn(Sentry, "captureMessage");
+
+      const tokenA = freshOwnerToken();
+      const listingA = await createListingWithOnePhoto(tokenA);
+      await waitForAttempt1(listingA.id);
+      expect(captureMessageSpy).toHaveBeenCalledTimes(1);
+      const [message] = captureMessageSpy.mock.calls[0] ?? [];
+      expect(message).toContain("mod_image");
+
+      // A second, independent listing hits the same exhausted budget the
+      // same day — no second alert, so a filling queue doesn't also become
+      // a paging storm.
+      const tokenB = freshOwnerToken();
+      const listingB = await createListingWithOnePhoto(tokenB);
+      await waitForAttempt1(listingB.id);
+      expect(captureMessageSpy).toHaveBeenCalledTimes(1);
+    });
   });
 });
 
