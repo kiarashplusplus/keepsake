@@ -179,3 +179,4 @@ He reads the closing comment, not the diff. Say what changed, how you proved it,
 not do. If a test passed but you did not verify the real thing, say that. He has repeatedly caught
 problems by looking at the actual product on his phone; the fastest way to lose his trust is to
 report success for something that was never observed working.
+
