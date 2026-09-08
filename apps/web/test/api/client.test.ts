@@ -32,6 +32,27 @@ describe("apiFetch", () => {
     await expect(apiFetch("/api/thing")).rejects.toMatchObject({ code: "rate_limited", message: "Slow down", retryAfter: 30 });
   });
 
+  // #297: `isEnvelope` used to accept anything with an `ok` key, so a
+  // malformed `{ ok: true }` with no `data` reached a zod-less caller
+  // (`getAdminStats`/`getAdminHealth`) as `undefined` instead of an error.
+  it("rejects an ok:true envelope with no data field, instead of returning undefined", async () => {
+    mockFetchOnce({ ok: true });
+
+    await expect(apiFetch("/api/thing")).rejects.toMatchObject({ code: "internal" });
+  });
+
+  it("rejects an ok envelope whose ok isn't actually a boolean", async () => {
+    mockFetchOnce({ ok: "true", data: {} });
+
+    await expect(apiFetch("/api/thing")).rejects.toMatchObject({ code: "internal" });
+  });
+
+  it("rejects an ok:false envelope whose error is missing code/message", async () => {
+    mockFetchOnce({ ok: false, error: { message: "Slow down" } });
+
+    await expect(apiFetch("/api/thing")).rejects.toMatchObject({ code: "internal" });
+  });
+
   it("throws unavailable when fetch itself rejects (offline)", async () => {
     global.fetch = jest.fn().mockRejectedValue(new TypeError("network error")) as unknown as typeof fetch;
 

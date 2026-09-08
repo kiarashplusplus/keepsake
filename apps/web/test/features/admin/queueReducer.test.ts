@@ -93,4 +93,36 @@ describe("queueReducer", () => {
     const next = queueReducer(state, { type: "remove_many", status: "needs_review", ids: [] });
     expect(next.needs_review.items.map((i) => i.id)).toEqual(["a", "b"]);
   });
+
+  // #286: the two undos whose reversal doesn't land at one well-known index
+  // (banning/unbanning an owner can touch listings this client never
+  // fetched) mark a tab stale instead of guessing — this is that half of
+  // the fix, independent of whether the tab happens to be active right now.
+  it("invalidate clears loadedOnce on the named tabs without touching their items", () => {
+    const state = loadedState(["a", "b"]);
+    const next = queueReducer(state, { type: "invalidate", statuses: ["needs_review"] });
+    expect(next.needs_review.loadedOnce).toBe(false);
+    // Items stay put — the tab-load effect replaces them once the refetch
+    // resolves, so nothing flashes to an empty state in the meantime.
+    expect(next.needs_review.items.map((i) => i.id)).toEqual(["a", "b"]);
+  });
+
+  it("invalidate leaves tabs not named in statuses untouched", () => {
+    const state = loadedState(["a"]);
+    const next = queueReducer(state, { type: "invalidate", statuses: ["hidden"] });
+    expect(next.needs_review.loadedOnce).toBe(true);
+    expect(next.hidden.loadedOnce).toBe(false);
+  });
+
+  // #291: a re-authenticated admin (a 401 mid-session, or Forget) must not
+  // keep showing a previous session's queue — every tab's loadedOnce has to
+  // come back false so the load effect refetches instead of trusting stale
+  // state.
+  it("reset returns every tab to its initial, never-fetched state", () => {
+    const state = loadedState(["a", "b", "c"]);
+    const next = queueReducer(state, { type: "reset" });
+    expect(next).toEqual(initialQueueState());
+    expect(next.needs_review.loadedOnce).toBe(false);
+    expect(next.needs_review.items).toEqual([]);
+  });
 });
