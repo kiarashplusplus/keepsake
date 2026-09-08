@@ -489,6 +489,20 @@ simple = { limit = 120, period = 60 }
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Issue #245. Both of these default to `true`, and both were on: the account
+# API reported `{"enabled": true, "previews_enabled": true}` for this script,
+# which means `keepsake-preview.leapkg.workers.dev` served the preview Worker
+# and every single deploy additionally minted its own permanent
+# `<version>-keepsake-preview.leapkg.workers.dev` hostname. Those hostnames
+# are not on the zone: none of the zone's rules, redirects or analytics apply
+# to them, and no amount of DNS or zone configuration can take one down.
+# `preview.keepsake.ing` is the intended way to reach this tier and it is
+# routed by `wrangler.toml`'s route config, so nothing here needs a
+# workers.dev URL. Turning both off is the only way to make the set of
+# hostnames serving this Worker the set someone chose.
+workers_dev = false
+preview_urls = false
+
 # Issue #84: `true`, not a literal-path list — see the top-level `[assets]`
 # comment. Preview is the environment the noindex header exists to protect,
 # so it gets the same blanket coverage as dev rather than the narrower,
@@ -636,6 +650,34 @@ simple = { limit = 120, period = 60 }
 [env.production]
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
+
+# Issue #245 names preview. Production had the identical problem and it was
+# worse, which nothing had noticed: `keepsake-production.leapkg.workers.dev`
+# answered `/health` with `{"ok":true,...,"env":"production"}` — the live
+# Worker, the live D1, the live R2, reachable on a hostname that is not this
+# zone. Three consequences, in the order they matter:
+#
+#   1. It is off-zone. The free managed WAF ruleset, the DDoS L7 ruleset and
+#      the www→apex redirect are all *zone* rulesets and none of them apply
+#      there. Zone analytics do not see it either, so traffic to it is
+#      traffic nobody is looking at.
+#   2. It was indexable. The `X-Robots-Tag: noindex, nofollow` middleware in
+#      `src/index.ts` keys on `ENVIRONMENT`, not on hostname — which is right
+#      for its purpose and means production's clone is exempt by
+#      construction. Verified against the live site on 2026-09-08:
+#      `preview.keepsake.ing` sends the header, the production workers.dev
+#      host sends nothing, and no page carries a `rel=canonical`. That is a
+#      crawlable, brand-named duplicate of the whole product.
+#   3. It bypasses Turnstile's domain allowlist as a *deny*, not an allow —
+#      the widget is registered for `keepsake.ing` and `preview.keepsake.ing`
+#      only, so a challenge cannot legitimately be solved on workers.dev.
+#      That is protection by accident, and it is only protection at all where
+#      the challenge is actually enforced (cf. #183).
+#
+# `preview_urls` matters just as much here: it is per-deploy, so every push
+# to main was minting another permanent production-bound hostname.
+workers_dev = false
+preview_urls = false
 
 # Kept as an explicit list rather than `true` (unlike dev/preview above):
 # production doesn't need the noindex middleware to run on every static asset

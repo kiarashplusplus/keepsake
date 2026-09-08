@@ -1,0 +1,91 @@
+name: Backup database
+
+# The other half of issue #17. `backup-photos.yml` has copied the photo bytes
+# nightly since 2026-09-07; the database they hang off had only D1 Time Travel
+# — 30 days, inside D1, inside this one account, with no artefact anyone can
+# hold or move. `docs/runbooks/restore.md` has documented the working export
+# command for weeks and `docs/runbooks/launch-audit.md` explicitly recommended
+# "one scheduled workflow that runs `d1 export` weekly into R2". Nobody wrote
+# it. A search of `.github/workflows` on 2026-09-08 found backup-photos, ci,
+# deploy, report-pressure and uptime — the export existed only as instructions
+# for a human under pressure, which is the state the audit called out.
+#
+# Daily rather than the audit's weekly: the production dump is kilobytes (the
+# ~3.4 MB `postal_codes` seed is excluded and reproducible from
+# `apps/api/seeds/postal_codes.sql`), so weekly buys nothing but up to seven
+# days of lost listings and requests in the one scenario an export is for —
+# a mistake that Time Travel's 30-day window has already aged past.
+#
+# 02:00 UTC, an hour after backup-photos. There is no ordering requirement
+# between them the way there is between backup-photos and orphanSweep (see
+# that file's header for the race #178 removed) — a dump and a photo copy
+# cannot corrupt each other. The gap just keeps two jobs that both run
+# `wrangler` against the same account off the same minute.
+#
+# Destination is `keepsake-db-<env>-backup`, created 2026-09-08 with a 90-day
+# expiry lifecycle and a 30-day object lock, so pruning is the bucket's job
+# and not this script's — a backup job that deletes things is a backup job
+# that can delete the wrong thing. The lock means a leaked credential with R2
+# write cannot erase the last month of dumps; see
+# docs/runbooks/restore.md#d1-export-backup for the lock's trade-off.
+#
+# **What a green run means here.** `tools/backup-db.mjs` probes the bucket
+# before exporting, prints a per-table INSERT count, and re-downloads the
+# object to compare SHA-256 against the file it uploaded. So green means "a
+# dump of the documented tables is in R2 and its bytes match" — not merely
+# "the command exited 0". It does NOT mean the dump has rows: read the
+# per-table counts, which is why they are printed. That distinction is the
+# one backup-photos' first green run got wrong (its whole log was "0
+# referenced key(s) in D1" against a bucket that did not exist).
+#
+# Gated on the same `DEPLOY_ENABLED` variable and the same per-environment
+# `CLOUDFLARE_API_TOKEN` as deploy.yml and backup-photos.yml — nothing new to
+# provision. That token is account-wide (`keepsake-ci-deploy`: D1 Write,
+# Workers R2 Storage Write); a narrower token scoped to D1 read plus these two
+# buckets would be better and is issue-worthy, not blocking.
+
+on:
+  schedule:
+    # 02:00 UTC. See the note above: separation from backup-photos, not order.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which tier to back up (leave default to run both)
+        type: choice
+        options: [both, preview, production]
+        default: both
+        required: true
+
+concurrency:
+  group: backup-db
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: backup (${{ matrix.env }})
+    runs-on: ubuntu-latest
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    environment: ${{ matrix.env }}
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [preview, production]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Export the database into the backup bucket
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        # workflow_dispatch can target a single tier; skip the other matrix
+        # leg rather than running a job whose environment nobody asked for.
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.environment == 'both' || inputs.environment == matrix.env }}
+        run: node tools/backup-db.mjs --env ${{ matrix.env }}
