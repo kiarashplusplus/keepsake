@@ -67,6 +67,18 @@ describe("apiFetch", () => {
     expect(init?.body).toBe(JSON.stringify({ a: 1 }));
   });
 
+  it("merges custom headers in, without letting them override Authorization", async () => {
+    const mock = mockFetchOnce({ ok: true, data: null });
+    const token = getOrCreateOwnerToken();
+
+    await apiFetch("/api/bulk/thing", { owner: true, headers: { "x-bulk-grant": "grant-1", Authorization: "Bearer nope" } });
+
+    const init = mock.mock.calls[0]?.[1];
+    const headers = init?.headers as Record<string, string>;
+    expect(headers["x-bulk-grant"]).toBe("grant-1");
+    expect(headers.Authorization).toBe(`Bearer ${token}`);
+  });
+
   it("passes a FormData body through untouched, without a Content-Type header", async () => {
     const mock = mockFetchOnce({ ok: true, data: null });
     const form = new FormData();
