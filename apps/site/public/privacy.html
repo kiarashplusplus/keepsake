@@ -456,8 +456,9 @@
           advertising tag this site does not load, and is not a service we rely on), a few
           smaller services touch limited data on our behalf: Cloudflare Turnstile checks that a
           submission is coming from a real browser, not a bot, before it reaches our server; and
-          Resend is a backup email provider we can fall back to if Cloudflare's own email sending
-          isn't available. If something breaks, error diagnostics stay inside Cloudflare — the
+          Resend is an alternative email provider we're configured for and would switch to by hand
+          if Cloudflare's own email sending stopped working. If something breaks, error
+          diagnostics stay inside Cloudflare — the
           same platform already hosting the app — rather than going to a separate error-tracking
           company, with obvious personal data redacted before anything is written. None of them
           receive your photos or story text beyond what's needed to run the service itself.
