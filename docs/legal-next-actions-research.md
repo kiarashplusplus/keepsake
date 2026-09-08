@@ -31,6 +31,18 @@ box — serves the assumed-name certificate, the DMCA agent registration, and an
 application, and keeps the home address off all three public records. See
 [§5](#5-the-errand-that-unblocks-three-things).
 
+> **Status, later the same day.** The table above is as-of-writing and rows 1 and 2 have moved.
+> Everything in them that does **not** depend on the address was drafted and published to
+> `terms.html` on 2026-09-08 while the errand is outstanding: the licence grant, the ownership
+> representation, a copyright-complaint route with a described response and a repeat-infringer
+> rule, a $100 liability cap drafted against the same fair-notice doctrine as the indemnity, and
+> a venue clause that leaves small claims alone. **What is still waiting on the address is the
+> DMCA agent registration and the safe harbour that comes with it** — and `terms.html`
+> deliberately says nothing that would claim either, with a guard in
+> `apps/web/test/guards/termsOperator.test.ts` that fails the build if the words "designated
+> agent", "DMCA" or "safe harbour" appear on the page before the registration exists. The rest of
+> this document is left as written.
+
 ---
 
 ## 1. Content terms — the licence, the representation, and the copyright route

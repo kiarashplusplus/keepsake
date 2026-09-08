@@ -290,6 +290,32 @@ owner's call:
 Neither gap blocks the corrections above, and neither is new: they have been true since the pages
 were written. They are worth deciding before the first user rather than after.
 
+**Both were then decided, later the same day, and `terms.html` carries the result.** Kiarash asked
+what could be published while the mail-address errand (below) is outstanding, which is the right
+split: everything in both gaps except the DMCA registration is independent of it.
+
+- **Content terms — closed.** "Your photo and your words stay yours" grants a licence scoped to
+  the six uses the code actually makes (store, display, thumbnail, share card, sitemap, search
+  embedding), ends when the listing comes down, and grants nothing else; the giver keeps the
+  copyright and represents the photo is theirs to post. "If you think something here is yours"
+  gives a copyright complaint a route, a described response (hide, tell the poster, restore if
+  we're wrong), and a standing repeat-infringer rule — which is also the §512(i) "inform users of
+  the policy" half, done.
+- **Liability — closed, in the narrow sense.** A $100 cap, boxed in the same `.indemnity`
+  treatment as #63's clause because it is the same conspicuousness requirement, naming Keepsake's
+  own negligence expressly, and carving out gross negligence and anything the law won't let it
+  limit — the carve-out being what stops overbroad language tainting the part that works. The
+  governing-law section now also names Harris County as the forum and preserves small claims.
+- **Still open, and it is the registration, not the drafting.** The §512(c) safe harbour needs an
+  agent registered with the Copyright Office, which publishes a street address. `terms.html`
+  claims none of it, and `apps/web/test/guards/termsOperator.test.ts` fails the build if the words
+  "designated agent", "DMCA" or "safe harbour" reach the page before that is true.
+- **`terms.html` also gained a "What changed" section**, mirroring `privacy.html`'s since #60 and
+  guarded the same way. A cap on what Keepsake owes someone should not appear silently on a page
+  whose stated mechanism for telling you was a date.
+
+None of it is a lawyer's drafting, and the page says what it is.
+
 **Both were researched the same day**, along with the two errands in #142 and the Section 230
 posture underneath all of it:
 [`legal-next-actions-research.md`](legal-next-actions-research.md). Three things in it change what

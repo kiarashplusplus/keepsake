@@ -27,11 +27,13 @@
       .prohibited-items tr:last-child td {
         border-bottom: none;
       }
-      /* The boxed treatment for the indemnity below. Why it is boxed, and why that
-         is load-bearing rather than decorative, is in the comment beside the clause
-         itself — a CSS comment ships to the visitor, an HTML comment no longer does
-         (apps/web/scripts/copy-site.mjs strips those from the published page), so the
-         reasoning lives there and this stays a note about the rule. */
+      /* The boxed treatment shared by the two clauses that have to be conspicuous to be
+         enforceable at all: the indemnity, and the liability cap. Why that is load-bearing
+         rather than decorative is in the comment beside each clause — a CSS comment ships
+         to the visitor, an HTML comment no longer does (apps/web/scripts/copy-site.mjs
+         strips those from the published page), so the reasoning lives there and this stays
+         a note about the rule. One class, not two: they are the same requirement, and a
+         second treatment would invite the two to drift apart. */
       .indemnity {
         border: 2px solid var(--accent-text);
         padding: 1em 1.25em;
@@ -82,7 +84,7 @@
     <main id="main">
       <div class="page-header wrap">
         <h1>Terms</h1>
-        <p class="updated">Last updated September 2026</p>
+        <p class="updated">Last updated 8 September 2026</p>
       </div>
 
       <div class="prose-content prose">
@@ -142,6 +144,54 @@
           Only post something you own outright and have the right to give away. Don't post on
           behalf of someone else, and don't post anything you found, borrowed, or don't actually
           have in hand.
+        </p>
+
+        <h2>Your photo and your words stay yours</h2>
+        <!-- The licence grant, the ownership representation, and their limits. Added 2026-09-08.
+             Why it exists: until now this page said nothing at all about the content people
+             upload, while the product stores the photo, derives a thumbnail, publishes it in the
+             feed, crops a copy into a share card (apps/api/src/og/card.ts), lists the listing in
+             sitemap.xml and in schema.org Product markup, and embeds the title/story/tags for
+             semantic search. Every one of those is a reproduction or a derivative of someone's
+             photograph, and nothing authorised any of them.
+             Drafted narrow on purpose — the licence is scoped to running THIS site, ends with the
+             listing, and grants nothing else — because a broad "perpetual, worldwide,
+             sublicensable" grant of the kind larger platforms use would be both untrue to what
+             the code does and out of keeping with a product whose whole claim is that it is
+             small. Each verb below maps to a real code path; if a new one appears (a
+             recommendation email, a printed zine, an "as seen on Keepsake" advert), this
+             paragraph has to change before it ships, the same way the advertising paragraph in
+             privacy.html does.
+             Not a lawyer's drafting. See docs/legal-next-actions-research.md §1. -->
+        <p>
+          You keep the copyright in the photos you take and the stories you write. Posting a
+          keepsake doesn't transfer any of that to us, and it never will.
+        </p>
+        <p>
+          What you do give us is permission to run the site with it: to store your photos and
+          words, show them on Keepsake to anyone browsing, make the smaller and cropped copies
+          the site needs — a thumbnail for the feed, a share card for when someone sends a link
+          to your listing — list the page in our sitemap so search engines can find it, and turn
+          your listing's public words into the numbers that make search work. That's the whole
+          list, and it's the whole point of it: it covers running Keepsake and nothing else.
+        </p>
+        <p>
+          We don't use your photo or your story anywhere else. Not in adverts, not on another
+          site, not licensed or sold to anyone — if we ever wanted to use a listing to show
+          people what Keepsake is, we'd ask you first.
+        </p>
+        <p>
+          This permission lasts as long as your listing is up, and ends when you take it down.
+          After that, copies drop out on the timetable the
+          <a href="/privacy">Privacy</a> page describes rather than the same instant — and two
+          things are genuinely beyond our reach once something has been public: a copy someone
+          else saved, and a page a search engine has already cached. We can stop showing it. We
+          can't un-see it for the internet.
+        </p>
+        <p>
+          The other half of this is a promise from you: the photo is one you took, or one you
+          have permission to post, and the story is yours to tell. Don't post someone else's
+          photograph of an object, even an object you own.
         </p>
 
         <h2>What's not allowed</h2>
@@ -260,6 +310,56 @@
           our discretion, with or without explanation.
         </p>
 
+        <h2>If you think something here is yours</h2>
+        <!-- Copyright complaints. Added 2026-09-08 alongside the licence grant above — the two
+             halves of the same gap. Before this, a rights holder's only routes were the report
+             sheet's "other" reason and an inbox nothing signposted.
+             DELIBERATELY DOES NOT CLAIM THE DMCA SAFE HARBOUR, and does not use the words
+             "designated agent". §512(c) protection is opt-in and conditional: it needs an agent
+             registered with the Copyright Office ($6, expiring every three years, any lapse a
+             lapse in protection) whose full legal name AND PUBLIC STREET ADDRESS go in a public
+             directory. That collides with the decision in docs/legal-entity-and-insurance.md not
+             to publish the operator's home address, and the way through — a mail-forwarding
+             street address, which needs no waiver for a natural person operating from a
+             residence — is an errand in progress, not a thing that has happened.
+             So this section is what is true today: a real route, a real response, and a real
+             repeat-infringer rule (§512(i) wants one adopted AND users told about it, and this
+             is the telling). When the registration exists, add the agent block here and say so;
+             until then, claiming it would be the exact kind of false statement in a published
+             policy that #87/#88/#112 were each written about.
+             Working: docs/legal-next-actions-research.md §1. -->
+        <p>
+          If a photo or a piece of writing on Keepsake is yours and you didn't agree to it being
+          here, write to <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a> and we'll deal
+          with it. One person reads that inbox, so it goes straight to someone who can act.
+        </p>
+        <p>To save a round trip, tell us in the first message:</p>
+        <ul>
+          <li>
+            The link to the listing, and which part of it you mean — the photo, the words, or both.
+          </li>
+          <li>
+            What the work is and where we can see that it's yours, if there's somewhere to point at.
+          </li>
+          <li>Your name and a way to reply to you.</li>
+          <li>
+            That you believe in good faith the use wasn't authorised by you, by your agent, or by
+            law — and that what you've told us is accurate and you're the rights holder or
+            speaking for them.
+          </li>
+        </ul>
+        <p>
+          What happens then: we hide the listing while we look, we tell the person who posted it
+          what was claimed and by whom, and they get to reply. If we're wrong, it goes back up. We
+          would rather take a listing down for a day and be mistaken than leave someone's
+          photograph up over their objection.
+        </p>
+        <p>
+          And a standing rule, so it isn't decided case by case: if the same person keeps posting
+          work that isn't theirs, we ban the device key that posted it, the same way we would for
+          anything else on this page. Repeating it is the thing that gets you removed.
+        </p>
+
         <h2>Meeting up safely</h2>
         <p>
           A keepsake means a stranger comes to a door or a meeting spot for something that often
@@ -351,6 +451,47 @@
           that looks like in practice.
         </p>
 
+        <h2>The most we can be on the hook for</h2>
+        <!-- Limitation of liability. Added 2026-09-08; until now this page had a warranty
+             disclaimer and the indemnity and nothing capping anything, which left the disclaimer
+             carrying the whole load on its own — with no LLC behind it and no insurance bound
+             (#142).
+             Drafted against the SAME two-part Texas fair-notice doctrine the indemnity was, and
+             deliberately reusing the same `.indemnity` treatment rather than inventing a second
+             one: the boxed, bold block is the CONSPICUOUSNESS half (the doctrine borrows the UCC
+             standard — a heading or body text set off from its surroundings by type, weight or
+             marks), and the sentence naming a claim that Keepsake was itself negligent is the
+             EXPRESS-NEGLIGENCE half. A generic "we are not liable for any claims" reaches
+             everything except the one thing this clause is for.
+             THE CARVE-OUT IS NOT BOILERPLATE AND MUST NOT BE TRIMMED. Texas will not enforce a
+             release of gross negligence or intentional misconduct, and — the part that costs
+             something — overbroad language can taint the enforceability of the ordinary-negligence
+             limitation along with it. Naming what this clause does NOT reach is what keeps the
+             part that it does reach worth having. Same reason the number is a real number rather
+             than "the amount you paid us", which is zero and reads as a clause pretending to
+             concede something.
+             This page is an adhesion contract offered to consumers, which draws more scrutiny
+             than the commercial and construction contracts most of the doctrine was built in.
+             Whether online assent changes the conspicuousness analysis is the open question
+             search could not settle — docs/legal-next-actions-research.md §2, and one of the
+             better uses of an hour of counsel.
+             Not a lawyer's drafting. -->
+        <div class="indemnity">
+          <p>
+            <strong>
+              Keepsake is free, and it's one person. So there's a ceiling on what it can owe you.
+              To the fullest extent Texas law allows, we aren't liable for indirect, incidental,
+              or consequential losses — a keepsake you were counting on and didn't get, time you
+              spent, a plan that fell through — and our total liability to you for everything
+              arising out of Keepsake is capped at $100. That cap applies even to a claim that
+              Keepsake was itself negligent, which we'd rather say plainly than leave you to
+              discover. It does not apply to gross negligence or deliberate wrongdoing on our
+              part, or to anything the law doesn't let us limit; nothing here takes away a right
+              you have that can't be signed away.
+            </strong>
+          </p>
+        </div>
+
         <h2>Your device key — there is no account</h2>
         <p>
           There's no account here: no username, no password, no profile. The first time you post
@@ -377,18 +518,62 @@
         </p>
 
         <h2>Changes</h2>
+        <!-- The "what changed" list below was added 2026-09-08, at the same time as the licence
+             grant, the copyright route and the liability cap — because a cap on what Keepsake
+             owes you is exactly the kind of thing that should not appear silently on a page
+             whose own mechanism for telling you is a date. Mirrors what privacy.html has done
+             since #60; kept by hand, newest first, and it starts the day it started. The
+             paragraph above used to end "that's the entire mechanism" and it no longer is. -->
         <p>
           We may update these terms as Keepsake grows. When we do, the new version replaces this
-          page and the date at the top of it changes — that's the entire mechanism, and we'd rather
-          name it than imply more. There's no notification and no mailing list: with no accounts
+          page, the date at the top of it changes, and — since September 2026 — what moved gets
+          written down below. There's no notification and no mailing list: with no accounts
           there's nobody to notify, and the only mail Keepsake sends is about your own listing or
-          your own request. If these terms matter to you, the date at the top is what to check.
+          your own request. If these terms matter to you, the date at the top is what to check,
+          and the list under it is what to read.
         </p>
 
-        <h2>Governing law</h2>
+        <section id="changes">
+          <h2>What changed</h2>
+          <p>
+            <strong>8 September 2026.</strong> Three additions, all of them things this page
+            should have said from the start rather than changes in how Keepsake works. "Your
+            photo and your words stay yours" is new: you keep the copyright, and what you give
+            us is a narrow permission to run the site with your listing — store it, show it,
+            make the thumbnail and the share card, list it for search engines, index its words —
+            which ends when you take the listing down. Until now this page said nothing at all
+            about the photos and stories people upload, while the site did every one of those
+            things. "If you think something here is yours" is new too, and gives a copyright
+            complaint somewhere to go and a described response instead of a general inbox. And
+            "The most we can be on the hook for" adds a $100 cap on what Keepsake can owe you,
+            alongside the disclaimer that was already here — the one genuinely new limit on this
+            page, which is why it's boxed and why it says plainly what it doesn't cover.
+            Alongside them, the governing-law section now also says where a disagreement is
+            heard, keeping small claims available where you live.
+          </p>
+        </section>
+
+        <h2>Governing law, and where a disagreement goes</h2>
+        <!-- Venue added 2026-09-08 to sit with the governing-law line that was already here; a
+             choice of law without a forum leaves the second half of the same question open.
+             Harris County because that is where the operator is and where the assumed-name
+             certificate is filed — the same place the DBA makes it possible to bring an action
+             at all (Bus. & Com. Code §71.201, docs/legal-entity-and-insurance.md).
+             The small-claims sentence is deliberate rather than generous: an exclusive-venue
+             clause that would make a person in another state fly to Houston over something small
+             is the shape courts find unconscionable, and preserving the cheap forum costs
+             nothing worth having. -->
         <p>
           These terms are governed by the laws of the State of Texas, USA, without regard to its
-          conflict-of-law rules.
+          conflict-of-law rules. If something between us ends up in court, it goes to the state or
+          federal courts sitting in Harris County, Texas, and we both agree to that.
+        </p>
+        <p>
+          With one exception, because the rule above shouldn't turn a small problem into a plane
+          ticket: you can always bring a claim in small claims court where you live, if it belongs
+          there. We'd much rather hear from you at
+          <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a> first — one person reads it,
+          and most things end there.
         </p>
 
         <h2>Contact</h2>
