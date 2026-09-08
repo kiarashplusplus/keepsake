@@ -295,8 +295,12 @@ knows to check them:
    documents still described the option that lost as pending work. Comments are not searchable from
    a checkout, and a workflow header is not where anyone looks for a product decision.
 2. **A closing action with no words.** #6 was closed with no comment thirteen minutes after its own
-   last comment said it must stay open until someone reads an inbox. Whatever happened is not in
-   the repository, and no one can now tell "tested and fine" from "closed to tidy up."
+   last comment said it must stay open until someone reads an inbox. Whatever happened was not in
+   the repository, and at the time no one could tell "tested and fine" from "closed to tidy up" —
+   it turned out to be neither: the second-address test the closure assumed had never actually run,
+   and #6 was **reopened the same day** once that surfaced (`docs/design/README.md`). The lesson
+   stands regardless of how this one instance resolved: a closing action with no written result is
+   not evidence, and it cost a day to find out which way this one actually went.
 3. **A deleted issue.** #85 — whether anything indexed while preview was crawlable needs a Search
    Console removal — returns `410 This issue was deleted`, and for a while the question survived
    only as a sentence in `launch-audit.md`. Refiled as **#158**. Deleting an issue deletes the
