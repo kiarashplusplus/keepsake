@@ -141,7 +141,10 @@ test.describe("ux baseline", () => {
 
     await page.goto("/");
     await page.getByLabel("Search").fill("zzzznothingmatchesthis");
-    const nothingHere = page.getByText(/Nothing here yet/);
+    // Not /Nothing here yet/ any more: that was the empty-marketplace copy
+    // this frame was filed against (#220). A search that matches nothing now
+    // says so, and offers to clear itself.
+    const nothingHere = page.getByText(/Nothing matches/);
     await expect(nothingHere).toBeVisible();
     // `toBeVisible()` is happy with a line the visitor would have to scroll to
     // reach — which is exactly the state this frame is supposed to show.
