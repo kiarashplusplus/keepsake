@@ -140,7 +140,7 @@ export default function Mine(): React.ReactElement {
           line="Once you give something, it'll show up here so you can follow along."
           action={
             <View style={{ gap: space.lg, alignItems: "center" }}>
-              <Link href="/give" asChild>
+              <Link href="/give" dangerouslySingular asChild>
                 <Button label="Give something" />
               </Link>
               <Link href="/recover" asChild>
@@ -180,7 +180,7 @@ export default function Mine(): React.ReactElement {
           title="You haven't given anything yet."
           line="Once you give something, it'll show up here so you can follow along."
           action={
-            <Link href="/give" asChild>
+            <Link href="/give" dangerouslySingular asChild>
               <Button label="Give something" />
             </Link>
           }

@@ -18,6 +18,7 @@ import { Card } from "@/ui/Surface";
 import { useColors } from "@/ui/theme";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { coverPhoto, makeClientId, type GiveDraftPhoto } from "@/features/give/giveDraft";
+import { useDraftPhotoSource } from "@/features/give/photoSource";
 import { tiltDegForId } from "@/lib/masonry";
 import { pickImages } from "@/lib/images/pickImages";
 import { prepareUpload } from "@/lib/images/prepareUpload";
@@ -65,6 +66,12 @@ type PhotoTileProps = {
 
 function PhotoTile({ photo, index, total, isCover, onRemove, onMove, onRetry }: PhotoTileProps): React.ReactElement {
   const colors = useColors();
+  // This session's object URL, else the owner-authed thumb, else nothing
+  // but the blurhash — see `features/give/photoSource.ts`. The middle rung
+  // is what a draft that came back from `sessionStorage` needs: it used to
+  // fall straight to the blur, so "Give" after leaving the flow showed a
+  // smear a giver could not tell from a stuck upload.
+  const source = useDraftPhotoSource(photo);
   const overlayStyle: ViewStyle = {
     position: "absolute",
     top: 0,
@@ -88,7 +95,7 @@ function PhotoTile({ photo, index, total, isCover, onRemove, onMove, onRetry }: 
           }}
         >
           <ExpoImage
-            source={photo.objectUrl !== null ? { uri: photo.objectUrl } : null}
+            source={source}
             placeholder={photo.blurhash !== "" ? { blurhash: photo.blurhash } : null}
             style={{ width: "100%", height: "100%" }}
             contentFit="cover"
@@ -361,10 +368,38 @@ export default function GivePhotos(): React.ReactElement {
     dispatch({ type: "remove_photo", clientId: photo.clientId });
   }
 
+  /**
+   * Drops the whole draft — every tile, plus the story and details typed
+   * after them — for a giver who came back to a draft they did not mean to
+   * keep. Same per-photo cleanup as `handleRemove`, applied to all of them.
+   */
+  function handleStartOver(): void {
+    for (const photo of draft.photos) {
+      abortsRef.current.get(photo.clientId)?.abort();
+      releaseObjectUrl(photo.objectUrl);
+      if (photo.id !== null) {
+        deletePhoto(photo.id).catch(() => {
+          // Best-effort, as in `handleRemove` — the orphan sweep is the backstop.
+        });
+      }
+    }
+    abortsRef.current.clear();
+    sourcesRef.current.clear();
+    dispatch({ type: "reset" });
+  }
+
   const doneCount = draft.photos.filter((photo) => photo.status === "done").length;
   const isUploading = draft.photos.some((photo) => photo.status === "uploading");
   const canContinue = doneCount >= 1 && !isUploading;
   const cover = coverPhoto(draft);
+  // A draft that came back from `sessionStorage` rather than this visit's
+  // picker. Every photo added here carries an object URL from the moment it
+  // is picked (kept even on failure, so the giver can see which one the
+  // error is about); only `deserializeGiveDraft` ever nulls one. Not offered
+  // for an `?edit=` prefill (null object URLs too, but a real listing behind
+  // them): "start over" there would read as "delete my listing's photos",
+  // which is not what this button means.
+  const resumed = draft.listingId === null && draft.photos.some((photo) => photo.objectUrl === null);
 
   return (
     // `Page`, not a bare `Card`: this step is rendered by the give flow's
@@ -424,6 +459,19 @@ export default function GivePhotos(): React.ReactElement {
             </Pressable>
           ) : null}
         </View>
+
+        {/* Names the situation the tiles above are in. Without it, a giver
+            who tapped "Give" meaning to begin afresh met their earlier photos
+            with nothing to say where they came from — and no way to clear
+            them short of trashing each one and retyping nothing. */}
+        {resumed ? (
+          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: space.sm }}>
+            <Text variant="caption" color="textSecondary">
+              Picked up where you left off.
+            </Text>
+            <Button label="Start over" variant="link" onPress={handleStartOver} />
+          </View>
+        ) : null}
 
         <View style={{ flexDirection: "row" }}>
           <Button label="Continue" disabled={!canContinue} onPress={() => router.push("/give/story")} />

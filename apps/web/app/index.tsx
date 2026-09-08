@@ -258,7 +258,7 @@ export default function Feed(): React.ReactElement {
     switch (action.kind) {
       case "give":
         return (
-          <Link key={action.kind} href="/give" asChild>
+          <Link key={action.kind} href="/give" dangerouslySingular asChild>
             <Button label={action.label} variant={variant} />
           </Link>
         );
@@ -305,7 +305,8 @@ export default function Feed(): React.ReactElement {
               and get it.
             </Text>
             <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: space.xl, marginTop: space.sm }}>
-              <Link href="/give" asChild>
+              {/* `dangerouslySingular` — see `AppHeader`'s Give link. */}
+              <Link href="/give" dangerouslySingular asChild>
                 <Button label="Give something" />
               </Link>
             </View>
