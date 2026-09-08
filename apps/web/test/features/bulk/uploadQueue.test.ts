@@ -377,6 +377,26 @@ describe("UploadQueue", () => {
     expect(() => queue.updateLimits({ maxConcurrent: 5, maxPerMinute: 40 })).not.toThrow();
   });
 
+  it("clears localPreviewUrl in the success patch, so the render ladder falls through to the server thumb (#287)", async () => {
+    const driver = createMemoryDriver();
+    const updates: Partial<BulkDraftPhoto>[] = [];
+
+    const queue = new UploadQueue({
+      batchKey: "batch-1",
+      driver,
+      uploadPhoto: async () => ({ ok: true, data: photoSummary("photo-a") }),
+      prepareUpload: async () => preparedUpload(),
+      onPhotoUpdate: (_id, patch) => updates.push(patch),
+    });
+
+    queue.enqueue("photo-a", new Blob(["source"]));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const complete = updates.find((p) => p.status === "complete");
+    expect(complete).toMatchObject({ localPreviewUrl: null, hasLocalSource: false });
+  });
+
   it("destroy() aborts in-flight work and stops the queue from continuing", async () => {
     const driver = createMemoryDriver();
     let uploadCalls = 0;

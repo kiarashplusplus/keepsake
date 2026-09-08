@@ -307,6 +307,18 @@ export function useBulkWorkspace(clientBatchKey: string): UseBulkWorkspaceResult
       uploadPhoto: ({ clientPhotoId, full, thumb, width, height, blurhash, signal }) =>
         bulkApi.uploadBatchPhoto(batchId, clientPhotoId, { full, thumb, width, height, blurhash }, { signal }),
       onPhotoUpdate: (clientPhotoId, patch) => {
+        // The queue clears `localPreviewUrl` once a photo no longer needs
+        // it (upload complete — see uploadQueue.ts's success patch); revoke
+        // the object URL and drop it from `objectUrlsRef` at the same
+        // point, the same cleanup `removePhoto` below does on removal
+        // (#287).
+        if (patch.localPreviewUrl === null) {
+          const before = stateRef.current.photos[clientPhotoId];
+          if (before?.localPreviewUrl != null) {
+            URL.revokeObjectURL(before.localPreviewUrl);
+            objectUrlsRef.current.delete(before.localPreviewUrl);
+          }
+        }
         dispatchSync({ type: "update_photo", clientPhotoId, patch });
         const photo = stateRef.current.photos[clientPhotoId];
         if (photo !== undefined) void savePhotoMeta(driver, clientBatchKey, { ...photo, ...patch });

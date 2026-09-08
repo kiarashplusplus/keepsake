@@ -441,6 +441,14 @@ export class UploadQueue {
           canRetry: false,
           hasLocalSource: false,
           needsReselection: false,
+          // The queue's decode already produced the real thumb by this
+          // point, so the local preview's job is done — clear it here so
+          // `photoSource.ts`'s ladder falls through to the server thumb
+          // instead of pinning this session's full-resolution File for the
+          // rest of the batch (#287). The caller (`useBulkWorkspace.ts`)
+          // is what actually owns and revokes the object URL; this patch
+          // is its cue.
+          localPreviewUrl: null,
         });
         this.onPhotoSynced?.(result.data);
         return;
