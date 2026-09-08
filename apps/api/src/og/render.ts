@@ -42,6 +42,20 @@ import { cardFontBuffers } from "./fonts.js";
  */
 const JPEG_QUALITY = 82;
 
+/**
+ * The image formats resvg can decode — read out of the wasm binary, which
+ * carries `jpeg-decoder`, `png` and `gif` and the error string "currently
+ * resvg only supports PNG, JPEG and GIF".
+ *
+ * **WebP is missing, and `lib/imageSniff.ts` accepts it on upload.** The
+ * official client always re-encodes to JPEG (`resizeImage.ts`), so R2 is JPEG
+ * in practice, but a hand-rolled client can store WebP — and then the card
+ * cannot be drawn. Exported so `routes/item.ts` can tell, at the moment it
+ * writes the `<head>`, that this listing's `og:image` will be the raw photo
+ * rather than a 1200x630 card, and describe it honestly.
+ */
+export const RENDERABLE_COVER_TYPES = new Set(["image/jpeg", "image/png", "image/gif"]);
+
 let ready: Promise<void> | null = null;
 
 /** Idempotent, per-isolate. See the file header on why this is not top-level. */
@@ -82,20 +96,37 @@ export async function renderItemCard(input: RenderCardInput): Promise<Uint8Array
     font: { fontBuffers: cardFontBuffers(), defaultFontFamily: "Fraunces", loadSystemFonts: false },
   });
 
-  // resvg defers only hrefs it recognises as remote, which is why `card.ts`
-  // uses `https://*.invalid/` sentinels rather than a custom scheme — a
-  // scheme it does not understand yields an EMPTY `imagesToResolve()` and a
-  // blank photo window with no error at all. Verified against 2.6.2.
-  for (const href of resvg.imagesToResolve()) {
-    if (href === COVER_HREF) resvg.resolveImage(href, input.cover);
-  }
+  // Both `Resvg` and the `RenderedImage` it produces own memory on the wasm
+  // heap, and wasm memory only ever GROWS — nothing hands pages back to the
+  // OS. Without these `free()` calls each render leaks a parsed SVG tree plus
+  // a 1200x630 RGBA buffer (~3 MB) into an isolate that may serve thousands
+  // of requests, and workerd kills the whole thing when it crosses its memory
+  // ceiling — taking every other route down with it, not just the card.
+  //
+  // `finally`, not a trailing call: `render()` and the JPEG encode can both
+  // throw (a WebP cover is the realistic case), and the leak on the failure
+  // path is the one that compounds fastest.
+  let rendered: ReturnType<InstanceType<typeof Resvg>["render"]> | null = null;
+  try {
+    // resvg defers only hrefs it recognises as remote, which is why `card.ts`
+    // uses `https://*.invalid/` sentinels rather than a custom scheme — a
+    // scheme it does not understand yields an EMPTY `imagesToResolve()` and a
+    // blank photo window with no error at all. Verified against 2.6.2.
+    for (const href of resvg.imagesToResolve()) {
+      if (href === COVER_HREF) resvg.resolveImage(href, input.cover);
+    }
 
-  const rendered = resvg.render();
-  const { data } = encodeJpeg(
-    { data: rendered.pixels as unknown as Buffer, width: rendered.width, height: rendered.height },
-    JPEG_QUALITY,
-  );
-  return new Uint8Array(data);
+    rendered = resvg.render();
+    const { data } = encodeJpeg(
+      { data: rendered.pixels as unknown as Buffer, width: rendered.width, height: rendered.height },
+      JPEG_QUALITY,
+    );
+    // Copied out of the wasm heap before `free()` below invalidates it.
+    return new Uint8Array(data);
+  } finally {
+    rendered?.free();
+    resvg.free();
+  }
 }
 
 export { CARD_HEIGHT, CARD_WIDTH };

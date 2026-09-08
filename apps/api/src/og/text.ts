@@ -200,24 +200,39 @@ export function cardStoryExcerpt(story: string, maxChars = 160): string {
 }
 
 /**
- * Whether both card fonts can actually draw this string.
+ * Drops characters neither card font can draw.
  *
- * This matters more than it looks. resvg draws **nothing at all** for a glyph
- * no loaded font covers — not tofu, not a fallback box, just empty space
- * (linebender/resvg#159). A Cyrillic or CJK title would therefore render as a
- * silent hole in the card rather than as visibly-wrong text, and nobody would
- * ever notice it was broken. Fraunces and Courier Prime are Latin-only, so
- * `card.ts` checks this and drops the title line entirely rather than leaving
- * a gap where a title should be.
+ * This matters more than it looks. resvg renders **nothing at all** for a
+ * glyph no loaded font covers — not tofu, not a fallback box, just empty
+ * space (linebender/resvg#159). So an unrenderable character is invisible
+ * rather than visibly wrong, and nobody would ever notice the card was
+ * broken.
  *
- * The range is Latin-1 + Latin Extended-A/B (accented European text renders
- * fine) plus General Punctuation (curly quotes, em dashes, the ellipsis this
- * module itself inserts).
+ * The first version of this was all-or-nothing: any unrenderable character
+ * and the whole title was dropped. That is right for a title written entirely
+ * in a script the fonts do not cover, and badly wrong for the common case —
+ * `TitleSchema` accepts emoji and symbols, so "Grandmother's teacup 🫖" or
+ * "Pyrex™ bowl" would have blanked the title completely over one character.
+ * Removing just the offending characters keeps the line, and the trailing
+ * whitespace cleanup stops a dropped emoji leaving a gap before the ellipsis.
+ *
+ * The accepted range is Latin-1 + Latin Extended-A/B (accented European text
+ * renders fine) plus General Punctuation (curly quotes, em dashes, and the
+ * ellipsis this module itself inserts).
  */
-const RENDERABLE = /^[ -ɏ‐-⁞\s]*$/;
+const UNRENDERABLE = /[^\u0020-\u024F\u2000-\u206F\s]+/gu;
 
+export function stripUnrenderable(text: string): string {
+  return text.replace(UNRENDERABLE, "").replace(/\s{2,}/g, " ").trim();
+}
+
+/**
+ * True when `text` has at least one character the fonts can draw. A title
+ * that is entirely CJK, Cyrillic or emoji has nothing left after stripping,
+ * and `card.ts` omits the line rather than reserving space for a blank.
+ */
 export function isRenderable(text: string): boolean {
-  return RENDERABLE.test(text);
+  return stripUnrenderable(text).length > 0;
 }
 
 /**

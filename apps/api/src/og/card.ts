@@ -47,7 +47,7 @@
 import { colorsLight } from "@keepsake/tokens/colors";
 import { motion } from "@keepsake/tokens/motion";
 import { tiltDegForId } from "@keepsake/tokens/tilt";
-import { cardStoryExcerpt, escapeXml, isRenderable, measureText, wrapText } from "./text.js";
+import { cardStoryExcerpt, escapeXml, measureText, stripUnrenderable, wrapText } from "./text.js";
 
 export const CARD_WIDTH = 1200;
 export const CARD_HEIGHT = 630;
@@ -170,20 +170,23 @@ const DISPLAY_VARIATION = "'opsz' 144, 'SOFT' 40, 'WONK' 1";
  * The title, or nothing.
  *
  * resvg draws NOTHING for a glyph no loaded font covers — not tofu, just
- * empty space — so a Cyrillic or CJK title would leave a silent hole that
- * looks like a rendering bug nobody can diagnose. Both card faces are
- * Latin-only, so an unrenderable title is dropped outright and the card falls
- * back to photo + stamp + footer, which is honest about what it can show.
+ * empty space — so unrenderable characters leave a silent hole that looks
+ * like a rendering bug nobody can diagnose. Both card faces are Latin-only,
+ * so the undrawable characters are stripped and the rest of the line is kept:
+ * one emoji in an otherwise-Latin title (which `TitleSchema` allows) must not
+ * cost the whole title. Only a title with nothing drawable left is dropped,
+ * and then the card falls back to photo + stamp + footer.
  */
 function titleLines(title: string, maxWidth: number, size: number, maxLines: number): string[] {
-  if (!isRenderable(title)) return [];
-  return wrapText(title, { font: "fraunces", fontSize: size, maxWidth, maxLines });
+  const drawable = stripUnrenderable(title);
+  if (drawable.length === 0) return [];
+  return wrapText(drawable, { font: "fraunces", fontSize: size, maxWidth, maxLines });
 }
 
 function excerptLines(story: string, maxWidth: number, size: number, maxLines: number, chars: number): string[] {
-  const excerpt = cardStoryExcerpt(story, chars);
-  if (!isRenderable(excerpt)) return [];
-  return wrapText(excerpt, { font: "fraunces", fontSize: size, maxWidth, maxLines });
+  const drawable = stripUnrenderable(cardStoryExcerpt(story, chars));
+  if (drawable.length === 0) return [];
+  return wrapText(drawable, { font: "fraunces", fontSize: size, maxWidth, maxLines });
 }
 
 /* ------------------------------------------------------------------ *

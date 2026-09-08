@@ -36,7 +36,8 @@
  *
  * ## Caching
  *
- * Three layers, cheapest first: `caches.default` -> R2 -> render. The R2 key
+ * Three layers after the visibility check: `caches.default` -> R2 -> render.
+ * The check is deliberately NOT behind the cache — see the handler. The R2 key
  * is content-addressed (`og/fingerprint.ts`), so nothing is ever invalidated;
  * an edit produces a new key and a new `?v=`. `X-Keepsake-OG` reports which
  * layer answered — `edge`, `r2` or `render` — which is what makes the
@@ -141,6 +142,18 @@ function imageResponse(body: BodyInit, contentType: string, extra: Record<string
 ogCardRoutes.get("/item/:id/card.png", burst("RL_READ"), async (c) => {
   const id = requireParam(c, "id");
 
+  // The visibility check comes FIRST, before the edge cache — the same order
+  // `routes/images.ts` uses, and for the same reason. A card carries the
+  // giver's photo, the story and the town; serving one from cache for an hour
+  // after the listing was deleted, withdrawn or hidden is exactly the failure
+  // `lib/photoCache.ts` exists to prevent for the photo itself. One D1 read
+  // per request is the price of the listing's visibility being authoritative,
+  // and the cache still saves the R2 fetch and the raster.
+  const row = await fetchListingRow(c.env, id);
+  if (row === null || (row.status !== "approved" && row.status !== "given")) {
+    return fail(c, "not_found", "Not found.", 404);
+  }
+
   const cache = (caches as unknown as Record<"default", Cache>).default;
   const cacheKey = new Request(c.req.url);
   const cached = await cache.match(cacheKey);
@@ -154,11 +167,6 @@ ogCardRoutes.get("/item/:id/card.png", burst("RL_READ"), async (c) => {
     const headers = new Headers(cached.headers);
     headers.set("X-Keepsake-OG", "edge");
     return new Response(cached.body, { status: cached.status, headers });
-  }
-
-  const row = await fetchListingRow(c.env, id);
-  if (row === null || (row.status !== "approved" && row.status !== "given")) {
-    return fail(c, "not_found", "Not found.", 404);
   }
 
   const photo = await fetchCoverPhoto(c.env, id);

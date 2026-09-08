@@ -4,7 +4,7 @@ import { insertApprovedListing, insertOwner, realJpegBytes } from "./helpers.js"
 import { ulid } from "../src/lib/ids.js";
 
 /** A photo row + R2 objects, so `og:image` has something to point at. */
-async function insertPhoto(ownerId: string, listingId: string): Promise<string> {
+async function insertPhoto(ownerId: string, listingId: string, contentType = "image/jpeg"): Promise<string> {
   const photoId = ulid();
   const bytes = realJpegBytes(32, 24);
   await env.BUCKET.put(`photos/${photoId}/full.jpg`, bytes);
@@ -12,9 +12,9 @@ async function insertPhoto(ownerId: string, listingId: string): Promise<string> 
   await env.DB.prepare(
     `INSERT INTO photos (id, owner_id, listing_id, position, r2_key_full, r2_key_thumb, width, height,
                          bytes_full, blurhash, content_type, moderation_status, created_at)
-     VALUES (?, ?, ?, 0, ?, ?, 1200, 900, ?, 'LEHV6nWB2yk8', 'image/jpeg', 'passed', ?)`,
+     VALUES (?, ?, ?, 0, ?, ?, 1200, 900, ?, 'LEHV6nWB2yk8', ?, 'passed', ?)`,
   )
-    .bind(photoId, ownerId, listingId, `photos/${photoId}/full.jpg`, `photos/${photoId}/thumb.jpg`, bytes.length, Date.now())
+    .bind(photoId, ownerId, listingId, `photos/${photoId}/full.jpg`, `photos/${photoId}/thumb.jpg`, bytes.length, contentType, Date.now())
     .run();
   return photoId;
 }
@@ -72,6 +72,22 @@ describe("GET /item/:id", () => {
 
     // Alt text is a sentence, not the title echoed back at a screen reader.
     expect(html).toContain('<meta property="og:image:alt" content="A quiet teacup — a keepsake in Somerville, MA, free to a good home">');
+  });
+
+  it("describes the raw photo, not a card, when the cover cannot be rasterised", async () => {
+    // resvg decodes JPEG, PNG and GIF; `lib/imageSniff.ts` also accepts WebP
+    // on upload, so `routes/ogCard.ts` degrades to streaming the raw photo at
+    // the card's URL. Declaring 1200x630 JPEG for that would have every
+    // unfurler lay out a box the image does not fill — the mismatch is
+    // knowable here, so the tags tell the truth.
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId, title: "A WebP teacup" });
+    await insertPhoto(ownerId, listingId, "image/webp");
+
+    const html = await (await SELF.fetch(`http://x/item/${listingId}`)).text();
+    expect(html).toContain('<meta property="og:image:type" content="image/webp">');
+    expect(html).toContain('<meta property="og:image:width" content="1200">');
+    expect(html).toContain('<meta property="og:image:height" content="900">');
   });
 
   it("emits no og:image at all when the listing has no photo", async () => {

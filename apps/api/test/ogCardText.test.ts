@@ -17,7 +17,7 @@
  * that every line a wrap produces actually fits the column it was given.
  */
 import { describe, expect, it } from "vitest";
-import { cardStoryExcerpt, escapeXml, isRenderable, measureText, WRAP_SAFETY, wrapText } from "../src/og/text.js";
+import { cardStoryExcerpt, escapeXml, isRenderable, measureText, stripUnrenderable, WRAP_SAFETY, wrapText } from "../src/og/text.js";
 
 describe("measureText", () => {
   it("is exact for Courier Prime, which is monospace", () => {
@@ -159,23 +159,42 @@ describe("cardStoryExcerpt", () => {
   });
 });
 
+describe("stripUnrenderable", () => {
+  it("leaves text the card's two fonts actually cover", () => {
+    expect(stripUnrenderable("Grandmother's teacup")).toBe("Grandmother's teacup");
+    expect(stripUnrenderable("Émile's café — ñandú, 1998…")).toBe("Émile's café — ñandú, 1998…");
+  });
+
+  it("drops one stray symbol instead of the whole line", () => {
+    // The bug this replaced: `TitleSchema` accepts emoji and symbols, and an
+    // all-or-nothing check blanked the entire title over a single character.
+    // resvg draws NOTHING for an uncovered glyph, so the result was an
+    // invisible failure, not a visibly wrong one.
+    expect(stripUnrenderable("Grandmother's teacup 🫖")).toBe("Grandmother's teacup");
+    expect(stripUnrenderable("Pyrex™ mixing bowl")).toBe("Pyrex mixing bowl");
+  });
+
+  it("does not leave a double space where a character was removed", () => {
+    expect(stripUnrenderable("A 🫖 teacup")).toBe("A teacup");
+  });
+
+  it("returns nothing for text with no drawable characters at all", () => {
+    expect(stripUnrenderable("おばあちゃんの湯呑み")).toBe("");
+    expect(stripUnrenderable("Бабушкина чашка")).toBe("");
+  });
+});
+
 describe("isRenderable", () => {
-  it("accepts the Latin the card's two fonts actually cover", () => {
+  it("accepts a title with anything drawable in it", () => {
     expect(isRenderable("Grandmother's teacup")).toBe(true);
-    expect(isRenderable("Émile's café — ñandú, 1998…")).toBe(true);
+    expect(isRenderable("Teacup 湯呑み")).toBe(true);
   });
 
-  it("rejects scripts neither font covers", () => {
-    // resvg draws NOTHING for an uncovered glyph — not tofu — so an
-    // unrenderable title has to be detected here or it becomes a silent hole
-    // in the card that looks like a rendering bug.
+  it("rejects a title with nothing drawable", () => {
+    // Then `card.ts` omits the line rather than reserving space for a blank.
     expect(isRenderable("おばあちゃんの湯呑み")).toBe(false);
-    expect(isRenderable("Бабушкина чашка")).toBe(false);
     expect(isRenderable("فنجان جدتي")).toBe(false);
-  });
-
-  it("rejects a title that is only partly unrenderable", () => {
-    expect(isRenderable("Teacup 湯呑み")).toBe(false);
+    expect(isRenderable("🫖🫖🫖")).toBe(false);
   });
 });
 

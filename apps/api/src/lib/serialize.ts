@@ -36,6 +36,10 @@ export interface PhotoRow {
   width: number;
   height: number;
   blurhash: string;
+  /** Present only where the query selects it — `fetchPhotoRows` does, because
+   * `routes/item.ts` has to know whether the share card can be drawn from
+   * this photo before it declares the `og:image` dimensions. */
+  content_type?: string;
 }
 
 export function serializePhoto(row: PhotoRow): PublicPhoto {

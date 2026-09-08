@@ -21,6 +21,16 @@ import path from "node:path";
 import { feedQueryFromUrlParams } from "@/features/feed/feedUrlParams";
 
 const SHELL = fs.readFileSync(path.resolve(__dirname, "../../app/+html.tsx"), "utf8");
+
+/**
+ * `SHELL` with comments removed. The file explains at length why certain tags
+ * are absent, and prose about `<link rel="canonical">` matches a naive
+ * `not.toContain` for the tag itself — an absence assertion has to look at
+ * code, not at the paragraph describing the absence.
+ */
+const SHELL_CODE = SHELL.replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/^\s*\/\/.*$/gm, "");
 const SITE_PAGES = ["about.html", "privacy.html", "terms.html"].map((f) =>
   fs.readFileSync(path.resolve(__dirname, "../../../site/public", f), "utf8"),
 );
@@ -39,13 +49,23 @@ describe("the root shell's Open Graph tags", () => {
     expect(image).toMatch(/^https:\/\/keepsake\.ing\//);
   });
 
-  it("declares og:url, og:type and og:site_name", () => {
-    // `og:url` was missing entirely. Without it an unfurler falls back to
-    // whatever URL it happened to be given, including one carrying tracking
-    // parameters, and treats two spellings of the same page as two pages.
-    expect(metaContent(SHELL, "property", "og:url")).toBe("https://keepsake.ing/");
+  it("declares og:type and og:site_name", () => {
     expect(metaContent(SHELL, "property", "og:type")).toBe("website");
     expect(metaContent(SHELL, "property", "og:site_name")).toBe("Keepsake");
+  });
+
+  it("declares NO canonical and NO og:url, because this shell is every page", () => {
+    // These are per-page values and `+html.tsx` is one shell shared by all
+    // ~17 exported routes. A canonical of `https://keepsake.ing/` in here
+    // tells a crawler that /welcome, /give, /mine and the rest are duplicates
+    // of the homepage — which is how this was caught: they were added, and
+    // `dist/` showed the tag on every page.
+    //
+    // `/item/:id` gets a real canonical and og:url from the Worker's
+    // rewriter (asserted in `apps/api/test/item.test.ts`), and `apps/site`'s
+    // static pages carry their own.
+    expect(SHELL_CODE).not.toContain('rel="canonical"');
+    expect(metaContent(SHELL_CODE, "property", "og:url")).toBeNull();
   });
 
   it("declares the image's real dimensions and type", () => {
@@ -132,11 +152,19 @@ describe("the root shell's structured data", () => {
     }
   });
 
-  it("keeps the root redirect from eating a search query", () => {
+  it("keeps the root redirect from eating a search query, and only a search query", () => {
     // `SearchAction` sends a client to `/?q=...`, and that client is by
     // definition a first-time visitor — exactly the one the pre-hydration
     // script redirects to `/welcome`, dropping `location.search` on the way.
     // The structured data above is only true because of this condition.
-    expect(SHELL).toContain('window.location.pathname === "/" && !window.location.search && !returning');
+    expect(SHELL).toContain('new URLSearchParams(window.location.search).has("q")');
+    expect(SHELL).toContain('window.location.pathname === "/" && !searching && !returning');
+
+    // And specifically `q` — NOT "any query string", which is what this
+    // originally said. `?fbclid=`, `?gclid=` and `?utm_source=` are how a
+    // first-time visitor arrives from an ad or a shared link; skipping the
+    // explainer for them would also set VISITED_KEY on the way past, so they
+    // would never see it at all. Keepsake runs Google Ads.
+    expect(SHELL_CODE).not.toContain("&& !window.location.search &&");
   });
 });

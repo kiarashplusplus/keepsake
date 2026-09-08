@@ -24,12 +24,19 @@ import { config } from "@/lib/config";
 //
 // ROOT REDIRECT: `keepsake.ing` should show a short explainer to a
 // first-time visitor and the feed to everyone else — **unless the URL carries
-// a query string**, added 2026-09-07. `location.replace("/welcome")` drops
+// a `q`**, added 2026-09-07. `location.replace("/welcome")` drops
 // `location.search`, so a first-time visitor arriving at `keepsake.ing/?q=teacup`
 // landed on the explainer with their search silently discarded. That is also
 // exactly what a client following the `SearchAction` in the root JSON-LD below
 // does, which would have made the structured data describe a search entry
-// point that does not work. Editing the script below changes its CSP hash —
+// point that does not work.
+//
+// Specifically `q`, not "any query string". The broader test looked tidier and
+// was wrong: `?fbclid=`, `?gclid=` and `?utm_source=` are exactly how a
+// first-time visitor arrives from an ad or a shared link, and skipping the
+// explainer for them would ALSO set `VISITED_KEY` on the way past — so they
+// would never see it, then or later. Keepsake runs Google Ads; this is the
+// common case, not the edge case. Editing the script below changes its CSP hash —
 // see the note above `PREHYDRATION_SCRIPT`'s enumeration in
 // `apps/web/public/_headers` and `apps/api/src/middleware/securityHeaders.ts`,
 // which must be updated together, byte for byte.
@@ -73,7 +80,8 @@ const PREHYDRATION_SCRIPT = `
     var OWNER_KEY = "keepsake.ownerToken.v1";
     var VISITED_KEY = "keepsake.visited.v1";
     var returning = !!window.localStorage.getItem(OWNER_KEY) || !!window.localStorage.getItem(VISITED_KEY);
-    if (window.location.pathname === "/" && !window.location.search && !returning) {
+    var searching = new URLSearchParams(window.location.search).has("q");
+    if (window.location.pathname === "/" && !searching && !returning) {
       window.localStorage.setItem(VISITED_KEY, "1");
       window.location.replace("/welcome");
       return;
@@ -256,10 +264,20 @@ export default function Root({ children }: { children: React.ReactNode }): React
             `.env.example`. `apps/site/public/{about,privacy,terms}.html`
             already hardcode it, so this matches rather than inventing a
             second convention. The consequence is that unfurling a *preview*
-            root shows production's card and canonical — which is the
+            root shows production's card — which is the
             intended posture, not a leak: preview serves `Disallow: /` and an
             unconditional `X-Robots-Tag: noindex, nofollow`
             (`apps/api/src/routes/robots.ts`). Don't "fix" it.
+
+            **No `og:url` and no `<link rel="canonical">` here.** Both are
+            per-page values and this file is ONE shell shared by every
+            exported route — a canonical of `https://keepsake.ing/` in it
+            tells a crawler that `/welcome`, `/give`, `/mine` and `/about`
+            are all duplicates of the homepage, which is worse than declaring
+            nothing. (Verified in `dist/` when it was briefly added: 17 pages
+            carried it.) `/item/:id` gets a real canonical and `og:url` from
+            the Worker's rewriter, and `apps/site`'s static pages carry their
+            own; the remaining routes are app screens with nothing to index.
 
             `og:image` was relative (`/og-default.png`) until 2026-09-07.
             Facebook and WhatsApp both want an absolute URL and mishandle a
@@ -272,7 +290,6 @@ export default function Root({ children }: { children: React.ReactNode }): React
         <meta property="og:locale" content="en_US" />
         <meta property="og:title" content="Keepsake" />
         <meta property="og:description" content="Give a keepsake a second life." />
-        <meta property="og:url" content="https://keepsake.ing/" />
         <meta property="og:image" content="https://keepsake.ing/og-default.png" />
         <meta property="og:image:type" content="image/png" />
         <meta property="og:image:width" content="1200" />
@@ -283,7 +300,6 @@ export default function Root({ children }: { children: React.ReactNode }): React
         />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:image" content="https://keepsake.ing/og-default.png" />
-        <link rel="canonical" href="https://keepsake.ing/" />
         {/*
           The marker below must be a literal HTML comment `<!--KEEPSAKE_OG-->`
           in the exported markup so the Worker's HTMLRewriter can find it on

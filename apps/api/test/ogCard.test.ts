@@ -17,7 +17,8 @@ import { decode as decodeJpeg } from "jpeg-js";
 import { env, SELF } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 import { ulid } from "../src/lib/ids.js";
-import { authHeaders, freshClientIp, insertApprovedListing, insertOwner, realJpegBytes } from "./helpers";
+import { authHeaders, freshClientIp, freshOwnerToken, insertApprovedListing, insertOwner, realJpegBytes } from "./helpers";
+import { sha256Hex } from "../src/lib/digest.js";
 
 const CARD_PATH = (id: string) => `http://x/og/item/${id}/card.png`;
 
@@ -103,6 +104,22 @@ let ownerId: string;
 beforeAll(async () => {
   ownerId = await insertOwner();
 });
+
+/** `insertOwner` mints an owner with no usable token; the delete route needs
+ * one that authenticates. Creates the pair through the same seam
+ * `helpers.authHeaders` expects. */
+async function freshOwnerTokenForOwner(): Promise<{ token: string; ownerId: string }> {
+  const token = freshOwnerToken();
+  const hash = await sha256Hex(token);
+  const id = ulid();
+  const now = Date.now();
+  await env.DB.prepare(
+    "INSERT INTO owners (id, token_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?)",
+  )
+    .bind(id, hash, now, now)
+    .run();
+  return { token, ownerId: id };
+}
 
 describe("the rendered card", () => {
   it("is a JPEG at exactly 1200x630", async () => {
@@ -244,6 +261,30 @@ describe("visibility", () => {
     expect(Buffer.from(given).equals(Buffer.from(approved))).toBe(false);
   });
 
+  it("stops serving a cached card the moment the listing stops being public", async () => {
+    // The card carries the giver's photo, their story and their town. An
+    // earlier version checked `caches.default` BEFORE reading the listing, so
+    // a withdrawn or deleted keepsake kept being handed out at the edge for
+    // up to an hour — the exact failure `lib/photoCache.ts` exists to prevent
+    // for the photo itself, reintroduced one route over.
+    const id = await seedListing(ownerId);
+    const first = await get(CARD_PATH(id));
+    expect(first.status).toBe(200);
+    await first.arrayBuffer();
+
+    // Warm a cache layer: the second request must not re-render, so there is
+    // now a stored copy that could outlive the listing. Either `edge` or `r2`
+    // proves that; which one won the race with the `waitUntil` write is not
+    // what this test is about.
+    expect(["edge", "r2"]).toContain((await get(CARD_PATH(id))).headers.get("X-Keepsake-OG"));
+
+    await env.DB.prepare("UPDATE listings SET status = 'withdrawn' WHERE id = ?").bind(id).run();
+
+    const after = await get(CARD_PATH(id));
+    expect(after.status).toBe(404);
+    expect(after.headers.get("Content-Type")).not.toContain("image");
+  });
+
   for (const status of ["pending", "hidden", "withdrawn", "rejected"] as const) {
     it(`404s a ${status} listing even for its own owner`, async () => {
       // Deliberately stricter than `routes/images.ts`, which grants owners a
@@ -301,6 +342,30 @@ describe("the fingerprint", () => {
     const bothKeys = await listR2Prefix(`og/${id}/`);
     expect(bothKeys).toEqual(expect.arrayContaining(firstKeys));
     expect(bothKeys.length).toBe(firstKeys.length + 1);
+  });
+});
+
+describe("deleting a listing", () => {
+  it("removes its rendered cards from R2, not just its photos", async () => {
+    // A card is a rendered copy of the photo, the story and the town. The
+    // delete handler is careful to remove the photo objects; leaving the
+    // cards behind keeps exactly the material the delete was for. They are
+    // never invalidated while the listing lives (content-addressed), so this
+    // is the only sweep they get.
+    const ownerToken = await freshOwnerTokenForOwner();
+    const id = await seedListing(ownerToken.ownerId);
+
+    await (await get(CARD_PATH(id))).arrayBuffer();
+    expect(await waitForR2Prefix(`og/${id}/`)).not.toBeNull();
+
+    const res = await SELF.fetch(`http://x/api/listings/${id}`, {
+      method: "DELETE",
+      headers: { "CF-Connecting-IP": freshClientIp(), ...authHeaders(ownerToken.token) },
+    });
+    expect(res.status).toBe(200);
+
+    await vi_waitUntil(async () => (await listR2Prefix(`og/${id}/`)).length === 0);
+    expect(await listR2Prefix(`og/${id}/`)).toEqual([]);
   });
 });
 

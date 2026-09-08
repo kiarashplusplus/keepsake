@@ -36,6 +36,7 @@ import type { Env } from "../env.js";
 import { fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
 import { jsonLdScript, type JsonLdValue } from "../lib/jsonLd.js";
 import { CARD_HEIGHT, CARD_WIDTH } from "../og/card.js";
+import { RENDERABLE_COVER_TYPES } from "../og/render.js";
 import { cardFingerprint, placeLine } from "../og/fingerprint.js";
 import { requireParam } from "../lib/params.js";
 import { burst } from "../middleware/rateLimit.js";
@@ -59,6 +60,11 @@ function buildOgTags(params: {
   cardUrl?: string;
   /** Alt text for the card — a real sentence, not the title repeated. */
   cardAlt: string;
+  /** The image's real dimensions. 1200x630 for a card; the photo's own when
+   * `cardUrl` points at a fallback that cannot be rasterised. */
+  imageWidth: number;
+  imageHeight: number;
+  imageType: string;
 }): string {
   const title = escapeHtml(params.title);
   const description = escapeHtml(params.description);
@@ -71,9 +77,9 @@ function buildOgTags(params: {
     ? [
         `<meta property="og:image" content="${escapeHtml(params.cardUrl)}">`,
         `<meta property="og:image:secure_url" content="${escapeHtml(params.cardUrl)}">`,
-        `<meta property="og:image:type" content="image/jpeg">`,
-        `<meta property="og:image:width" content="${CARD_WIDTH}">`,
-        `<meta property="og:image:height" content="${CARD_HEIGHT}">`,
+        `<meta property="og:image:type" content="${escapeHtml(params.imageType)}">`,
+        `<meta property="og:image:width" content="${params.imageWidth}">`,
+        `<meta property="og:image:height" content="${params.imageHeight}">`,
         `<meta property="og:image:alt" content="${escapeHtml(params.cardAlt)}">`,
         `<meta name="twitter:card" content="summary_large_image">`,
         `<meta name="twitter:image" content="${escapeHtml(params.cardUrl)}">`,
@@ -189,6 +195,13 @@ itemRoutes.get("/:id", burst("RL_READ"), async (c) => {
   // own infrastructure and expose no flush. Computed by the SAME function the
   // card route keys R2 with (`og/fingerprint.ts`) so the HTML can never
   // advertise a version the route would not produce.
+  // A cover resvg cannot decode (WebP — accepted on upload, never written by
+  // the official client) means `routes/ogCard.ts` will fall back to streaming
+  // the raw photo at the card's URL. Declaring 1200x630 JPEG for it would
+  // make every unfurler lay out a box the image does not fill, so when that
+  // is knowable here the tags describe the photo instead.
+  const coverRenderable = firstPhoto !== undefined && RENDERABLE_COVER_TYPES.has(firstPhoto.content_type ?? "image/jpeg");
+
   const cardUrl = firstPhoto
     ? `${siteUrl}/og/item/${id}/card.png?v=${await cardFingerprint({
         id: row.id,
@@ -210,6 +223,9 @@ itemRoutes.get("/:id", burst("RL_READ"), async (c) => {
     description: storyExcerpt(row.story, 200),
     url: pageUrl,
     cardAlt: `${row.title} — a keepsake in ${place}, free to a good home`,
+    imageWidth: coverRenderable ? CARD_WIDTH : (firstPhoto?.width ?? CARD_WIDTH),
+    imageHeight: coverRenderable ? CARD_HEIGHT : (firstPhoto?.height ?? CARD_HEIGHT),
+    imageType: coverRenderable ? "image/jpeg" : (firstPhoto?.content_type ?? "image/jpeg"),
     ...(cardUrl ? { cardUrl } : {}),
   });
 
