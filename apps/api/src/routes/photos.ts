@@ -1,10 +1,9 @@
 import { Hono } from "hono";
-import { UploadPhotoFields } from "@keepsake/contracts/photo";
 import type { Env } from "../env.js";
 import { DEFAULT_SUGGEST_DAILY_BUDGET, parseIntVar } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
-import { extensionForSniffedType, sniffImageDimensions, sniffImageType } from "../lib/imageSniff.js";
+import { deletePhotoAndObjects, storePhotoUpload } from "../photos/store.js";
 import { requireParam } from "../lib/params.js";
 import { ownerAuth, type OwnerRow } from "../middleware/ownerAuth.js";
 import { burst, dailyBudget } from "../middleware/rateLimit.js";
@@ -14,31 +13,9 @@ import { suggestFromPhoto } from "../suggest/suggest.js";
 type Vars = { owner: OwnerRow };
 export const photoRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
-const DEFAULT_MAX_PHOTO_BYTES = 5 * 1024 * 1024;
-/**
- * The `thumb` variant gets its own, much tighter ceiling. Both variants used
- * to share `MAX_PHOTO_BYTES`, which meant a caller could PUT a 5 MiB
- * "thumbnail" — stored, served from `/i/:id/thumb`, and base64'd into a
- * vision-model prompt by `suggest/suggest.ts`. A real 640px thumb from our
- * own client is tens of kilobytes; 768 KiB is loose enough that no honest
- * encode can hit it and tight enough that the abuse case can't.
- */
-const DEFAULT_MAX_THUMB_BYTES = 768 * 1024;
-
-/**
- * Server-side backstop for the degenerate-aspect refusal the web client now
- * makes in `lib/images/validateImage.ts`. This route is reachable with an
- * owner token and nothing else (see the Turnstile note below), so a client
- * that isn't ours can still present a 16000x8 strip — which renders in the
- * feed as a wildly cropped sliver and gives the moderation model a few dozen
- * pixels of height to judge.
- *
- * Only applied when the dimensions were actually read off the bytes: a
- * declared aspect ratio is a claim, and refusing an upload on a claim we
- * can't verify would be worse than storing it.
- */
-const MAX_STORED_ASPECT_RATIO = 64;
-const MIN_STORED_EDGE_PX = 8;
+// The upload's byte ceilings, magic-byte sniff, dimension read and
+// aspect-ratio refusal all moved to `src/photos/store.ts` when the estate
+// bulk-upload route needed the same rules — their comments moved with them.
 const DEFAULT_UPLOAD_IP_DAILY_BUDGET = 60;
 // Global ceiling far past what a real day of givers reaches (~15 neurons per
 // call, about $0.17/1000 listings per the plan) — runaway protection only,
@@ -129,94 +106,17 @@ photoRoutes.put(
       return fail(c, "bad_request", "Expected multipart/form-data with `full` and `thumb` files.", 400);
     }
 
-    const full = form.get("full");
-    const thumb = form.get("thumb");
-    if (!(full instanceof File) || !(thumb instanceof File)) {
-      return fail(c, "bad_request", "Both `full` and `thumb` files are required.", 400);
+    // Every byte ceiling, the magic-byte sniff, the dimension read and the
+    // aspect-ratio refusal now live in `src/photos/store.ts`, so the bulk
+    // upload route cannot store a photo this route would have refused. This
+    // handler is the adapter: parse the body, call the service, map a
+    // refusal through this router's own `fail(...)`.
+    const result = await storePhotoUpload(c.env, { ownerId: owner.id, form });
+    if (!result.ok) {
+      return fail(c, result.code, result.message, result.status, result.issues ? { issues: result.issues } : {});
     }
 
-    const fieldsResult = UploadPhotoFields.safeParse({
-      width: Number(form.get("width")),
-      height: Number(form.get("height")),
-      blurhash: form.get("blurhash"),
-    });
-    if (!fieldsResult.success) {
-      return fail(c, "bad_request", "Invalid photo metadata.", 400, {
-        issues: fieldsResult.error.flatten() as unknown as Record<string, unknown>,
-      });
-    }
-    const { width, height, blurhash } = fieldsResult.data;
-
-    const maxBytes = parseIntVar("MAX_PHOTO_BYTES", c.env.MAX_PHOTO_BYTES, DEFAULT_MAX_PHOTO_BYTES);
-    const maxThumbBytes = parseIntVar("MAX_THUMB_BYTES", c.env.MAX_THUMB_BYTES, DEFAULT_MAX_THUMB_BYTES);
-
-    const fullBytes = new Uint8Array(await full.arrayBuffer());
-    const thumbBytes = new Uint8Array(await thumb.arrayBuffer());
-
-    if (fullBytes.byteLength > maxBytes) {
-      return fail(c, "payload_too_large", "Photo exceeds the maximum upload size.", 413);
-    }
-    // Its own message, so a 413 says which half blew rather than sending the
-    // caller to check the wrong number.
-    if (thumbBytes.byteLength > maxThumbBytes) {
-      return fail(c, "payload_too_large", "Photo thumbnail exceeds the maximum upload size.", 413);
-    }
-
-    // Never trust the multipart part's declared content-type — sniff the
-    // actual bytes. See docs/design/images.md.
-    const fullType = sniffImageType(fullBytes);
-    const thumbType = sniffImageType(thumbBytes);
-    if (!fullType || !thumbType) {
-      return fail(c, "unsupported_media", "Photos must be JPEG, PNG, or WebP.", 415);
-    }
-
-    // The client's declared width/height are a hint; the bytes we are about
-    // to store are the authority. These numbers drive the masonry layout and
-    // the public `PublicPhoto`, and nothing before this made a caller's claim
-    // agree with what it actually sent.
-    //
-    // `null` (a header this parser can't read) is not a failure — it falls
-    // back to the declared values, exactly as this route behaved before.
-    const sniffedDims = sniffImageDimensions(fullBytes);
-    const storedWidth = sniffedDims?.width ?? width;
-    const storedHeight = sniffedDims?.height ?? height;
-
-    if (sniffedDims) {
-      const shorter = Math.min(sniffedDims.width, sniffedDims.height);
-      const longer = Math.max(sniffedDims.width, sniffedDims.height);
-      if (shorter < MIN_STORED_EDGE_PX || longer / shorter > MAX_STORED_ASPECT_RATIO) {
-        return fail(c, "bad_request", "That photo is too long and thin to use.", 400);
-      }
-    }
-
-    const id = ulid();
-    const fullKey = `photos/${id}/full.${extensionForSniffedType(fullType)}`;
-    const thumbKey = `photos/${id}/thumb.${extensionForSniffedType(thumbType)}`;
-
-    await c.env.BUCKET.put(fullKey, fullBytes, { httpMetadata: { contentType: fullType } });
-    await c.env.BUCKET.put(thumbKey, thumbBytes, { httpMetadata: { contentType: thumbType } });
-
-    const now = Date.now();
-    await c.env.DB.prepare(
-      `INSERT INTO photos
-        (id, owner_id, listing_id, position, r2_key_full, r2_key_thumb, width, height, bytes_full, blurhash, content_type, moderation_status, created_at)
-       VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?)`,
-    )
-      .bind(id, owner.id, fullKey, thumbKey, storedWidth, storedHeight, fullBytes.byteLength, blurhash, fullType, now)
-      .run();
-
-    return ok(
-      c,
-      {
-        id,
-        width: storedWidth,
-        height: storedHeight,
-        blurhash,
-        url_full: `/i/${id}/full`,
-        url_thumb: `/i/${id}/thumb`,
-      },
-      201,
-    );
+    return ok(c, result.photo, 201);
   },
 );
 
@@ -239,9 +139,7 @@ photoRoutes.delete("/:id", ownerAuth(), async (c) => {
     return fail(c, "conflict", "This keepsake has already been given — its photos can't be removed.", 409);
   }
 
-  await c.env.BUCKET.delete(photo.r2_key_full);
-  await c.env.BUCKET.delete(photo.r2_key_thumb);
-  await c.env.DB.prepare("DELETE FROM photos WHERE id = ?").bind(id).run();
+  await deletePhotoAndObjects(c.env, photo);
 
   return ok(c, { id });
 });

@@ -26,6 +26,11 @@ import { purgePhotoCache } from "../lib/photoCache.js";
 import { containsContactInfo } from "../moderation/contactInfo.js";
 import { serializeOwnerListing, serializePublicListing } from "../lib/serialize.js";
 import { fetchAspectRows, fetchListingRow, fetchPhotoRows, replaceListingAspects } from "../lib/listingsDb.js";
+import {
+  ASPECT_CONTACT_INFO_MESSAGE,
+  aspectsContainContactInfo,
+  createListingForOwner,
+} from "../listings/create.js";
 import { reembedListing } from "../search/reembed.js";
 import { deleteListingVector } from "../search/vectorize.js";
 import { deleteCardObjects } from "../og/store.js";
@@ -94,13 +99,9 @@ const REQUEST_CONFIRM_TTL_MS = 72 * 60 * 60 * 1000;
  * is still caught — this boundary check is the one that gives the giver a
  * useful error, not the only thing standing in the way.
  */
-function aspectsContainContactInfo(aspects: readonly { name: string; value: string }[] | undefined): boolean {
-  if (!aspects) return false;
-  return aspects.some((aspect) => containsContactInfo(aspect.name) || containsContactInfo(aspect.value));
-}
-
-const ASPECT_CONTACT_INFO_MESSAGE =
-  "Keep contact details out of the item details — people reach you through Keepsake.";
+// Both now live in `src/listings/create.ts`, imported above, so the bulk
+// submission path cannot publish an aspect this route would have refused.
+// The comment block above them moved with them.
 
 // ---------------------------------------------------------------------------
 // Router-level write brake (issue #168)
@@ -184,51 +185,23 @@ listingRoutes.post(
       return fail(c, "bad_request", "We don't know that postcode yet.", 400);
     }
 
-    const id = ulid();
     const now = Date.now();
 
-    await c.env.DB.prepare(
-      `INSERT INTO listings
-        (id, owner_id, title, story, category, country, postal_code, place_name, admin1, lat, lng,
-         status, version, created_at, updated_at, age_attested_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?, ?, ?)`,
-    )
-      .bind(
-        id,
-        owner.id,
-        input.title,
-        input.story,
-        input.category,
-        place.country,
-        place.code,
-        place.place_name,
-        place.admin1,
-        place.lat,
-        place.lng,
-        now,
-        now,
-        // Issue #64: `CreateListingInput.date_of_birth` is validated by
-        // `DateOfBirthSchema` — a request only reaches this handler at all
-        // once it's already confirmed the birth date implies `MINIMUM_AGE`
-        // or older, so its mere presence here means the gate passed. Same
-        // "record the moment, not just the fact" convention as
-        // `email_verified_at`/`chosen_at` elsewhere in this schema — and
-        // the date of birth itself is deliberately never bound into this
-        // query or stored anywhere; only this timestamp is.
-        input.date_of_birth ? now : null,
-      )
-      .run();
-
-    for (let position = 0; position < input.photo_ids.length; position++) {
-      await c.env.DB.prepare("UPDATE photos SET listing_id = ?, position = ? WHERE id = ?")
-        .bind(id, position, input.photo_ids[position])
-        .run();
-    }
-
-    // `input.aspects` defaults to `[]` (CreateListingInput), never
-    // undefined, so this always runs — a brand-new listing with no
-    // confidently-read aspects gets zero rows, not a skipped write.
-    await replaceListingAspects(c.env, id, input.aspects);
+    // The listing, its photo attachments and its aspects, as one
+    // `DB.batch()` transaction — see `src/listings/create.ts` for what that
+    // fixed (these used to be separate awaits, so an eviction midway left a
+    // listing holding only some of its photos) and for why the bulk-upload
+    // submission runner shares this exact code rather than reimplementing it.
+    //
+    // `input.aspects` defaults to `[]` (CreateListingInput), never undefined,
+    // so a brand-new listing with no confidently-read aspects gets zero rows,
+    // not a skipped write.
+    const { listingId: id } = await createListingForOwner(c.env, {
+      ownerId: owner.id,
+      input,
+      place,
+      now,
+    });
 
     if (input.email) {
       await c.env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = NULL WHERE id = ?")
