@@ -240,7 +240,7 @@ const ROOT_JSON_LD = JSON.stringify([
  * disk. So the failure mode is "preflight is red until you paste the new
  * token", not "returning visitors silently keep the old font".
  */
-const FONT_VERSION = "798ad45b";
+const FONT_VERSION = "c2a65da9";
 
 /**
  * The theme, as CSS custom properties, in the one place they can be set
@@ -356,6 +356,22 @@ body { margin: 0; background: var(--ks-bg, #E4DDD1); }
   font-weight: 700;
   font-style: italic;
   font-display: swap;
+}
+/* The app's only icon glyphs — chevron-back/-forward, close, trash-outline,
+   sunny, moon, contrast (src/ui/Icon.tsx) — subset from
+   @expo/vector-icons' Ionicons.ttf (\`f229\`, \`f23b\`, \`f24a\`, \`f5f6\`,
+   \`f5ad\`, \`f460\`, \`f28c\`) with fonttools' pyftsubset. The full font is
+   ~207KB Brotli-compressed for ~1,300 glyphs this app never renders; the
+   subset is ~1.5KB for the 7 it does. No .ttf fallback: nothing here reads
+   these bytes back out the way ogCardFonts.test.ts does for Fraunces/Courier
+   Prime, so there's no second consumer to keep in sync.
+*/
+@font-face {
+  font-family: "Ionicons-subset";
+  src: url("/fonts/Ionicons-subset.woff2?v=${FONT_VERSION}") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: block;
 }
 `;
 

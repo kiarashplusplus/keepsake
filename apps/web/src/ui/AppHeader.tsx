@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Pressable, StyleSheet, useWindowDimensions, View, type ViewStyle } from "react-native";
 import { Link, usePathname, type Href } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Icon, type IconName } from "@/ui/Icon";
 import { space } from "@keepsake/tokens/spacing";
 import { radii } from "@keepsake/tokens/radii";
 import { type } from "@keepsake/tokens/typography";
@@ -16,7 +16,7 @@ const NEXT_MODE: Record<ThemeMode, ThemeMode> = {
   system: "light",
 };
 
-const MODE_ICON: Record<ThemeMode, keyof typeof Ionicons.glyphMap> = {
+const MODE_ICON: Record<ThemeMode, IconName> = {
   light: "sunny",
   dark: "moon",
   system: "contrast",
@@ -42,7 +42,7 @@ function ThemeToggle(): React.ReactElement {
         opacity: pressed ? 0.7 : 1,
       })}
     >
-      <Ionicons name={MODE_ICON[selectedMode]} size={20} color={colors.ink} />
+      <Icon name={MODE_ICON[selectedMode]} size={20} color={colors.ink} />
     </Pressable>
   );
 }
