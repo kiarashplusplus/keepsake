@@ -1,5 +1,6 @@
 import * as React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react-native";
+import { MAX_BATCH_PHOTOS } from "@keepsake/contracts/bulk";
 import { makeBulkDraftItem, makeBulkDraftPhoto } from "@/features/bulk/batchStore";
 import { pickImages } from "@/lib/images/pickImages";
 import { makeWorkspaceFixture, fixtureBatchState } from "../../support/bulkWorkspaceFixture";
@@ -114,6 +115,42 @@ describe("bulk photos screen", () => {
     // output at these pinned library versions — see `test/ui/Button.test.tsx`'s
     // header comment for the same workaround.
     expect(JSON.stringify(toJSON())).toContain("already added");
+  });
+
+  it("doesn't warn on a re-pick of a file the cap slice dropped — it was never actually added (#294)", async () => {
+    // One slot free: the tray already holds MAX_BATCH_PHOTOS - 1 photos.
+    const photos: Record<string, ReturnType<typeof trayPhoto>> = {};
+    for (let i = 0; i < MAX_BATCH_PHOTOS - 1; i += 1) photos[`photo-${i}`] = trayPhoto(`photo-${i}`);
+    const state = fixtureBatchState({ photos });
+    mockWorkspace = makeWorkspaceFixture({ state });
+
+    const first = new File(["a"], "keep.jpg", { type: "image/jpeg" });
+    const second = new File(["b"], "dropped.jpg", { type: "image/jpeg" });
+    // Only one slot free, two files picked — "dropped.jpg" is cut by the
+    // remainingSlots slice and never reaches workspace.addPhotos.
+    jest.mocked(pickImages).mockResolvedValueOnce([first, second]).mockResolvedValueOnce([second]);
+    const { toJSON, rerender } = render(<BulkPhotos />);
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Add photos"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mockWorkspace.addPhotos).toHaveBeenCalledTimes(1));
+    expect(jest.mocked(mockWorkspace.addPhotos).mock.calls[0]![0]).toEqual([first]);
+
+    // Now the giver frees a slot and re-picks the file that was dropped —
+    // it was never added, so this must not read as a duplicate.
+    photos["photo-0"] = undefined as never;
+    delete photos["photo-0"];
+    mockWorkspace = makeWorkspaceFixture({ state: fixtureBatchState({ photos }) });
+    rerender(<BulkPhotos />);
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Add photos"));
+      await Promise.resolve();
+    });
+
+    expect(JSON.stringify(toJSON())).not.toContain("already added");
   });
 
   it("retries against the resident source, with no file picker, when the source survived (needsReselection: false)", async () => {
