@@ -57,11 +57,26 @@ export default function NewBulkBatch(): React.ReactElement {
   const [submitError, setSubmitError] = React.useState<string | null>(null);
 
   // A `?grant=` link (an operator emailing a fresh code) always wins over
-  // whatever was stored before, and is remembered immediately so leaving
-  // and returning to this screen doesn't lose it.
+  // whatever was stored or typed before. Adjusting `grantId` from a changed
+  // prop like this — during render, guarded by comparing against the last
+  // value seen, rather than inside a `useEffect` — is the pattern React's
+  // own docs recommend for "reset/update some state when a prop changes"
+  // (react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes):
+  // the previous effect-based version tripped `eslint-plugin-react-hooks`'s
+  // "setState synchronously within an effect" rule, because this was never
+  // a synchronization with anything external — that part is the storage
+  // write below, which is a real effect.
+  const [lastGrantParam, setLastGrantParam] = React.useState(params.grant);
+  if (params.grant !== lastGrantParam) {
+    setLastGrantParam(params.grant);
+    if (params.grant !== undefined && params.grant.trim() !== "") setGrantId(params.grant);
+  }
+
+  // Remembered immediately (not just at submit, in `handleCreate` below) so
+  // leaving and returning to this screen before starting a batch doesn't
+  // lose a fresh `?grant=` link.
   React.useEffect(() => {
     if (params.grant === undefined || params.grant.trim() === "") return;
-    setGrantId(params.grant);
     setStoredGrantId(params.grant);
   }, [params.grant]);
 
