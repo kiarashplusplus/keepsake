@@ -1,0 +1,10 @@
+{
+  "name": "@keepsake/seed",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Seeds a browsable demo catalogue through the real public API. See seed.mjs for what it can and cannot reach.",
+  "scripts": {
+    "test": "node --test *.test.mjs"
+  }
+}
