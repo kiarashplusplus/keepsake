@@ -321,11 +321,11 @@ test.describe("ux baseline", () => {
     // refreshable — the alternative is a capture run that always fails, which
     // is what has been happening since #188 and is why every frame in this
     // directory was stale. `mine-detail-requests`, `-choose`, `-chosen` and
-    // `mine-email` stay at whatever they last showed; see #229.
+    // `mine-email` stay at whatever they last showed; see #240.
     const firstNote = page.getByText(DEMO_REQUESTS[0]!.note, { exact: true });
     test.skip(
       (await firstNote.count()) === 0,
-      "no confirmed request to photograph: #188 holds an ask until an emailed link is clicked, which this harness cannot do — see #229",
+      "no confirmed request to photograph: #188 holds an ask until an emailed link is clicked, which this harness cannot do — see #240",
     );
 
     await expect(firstNote).toBeVisible();
