@@ -429,26 +429,26 @@
   // (`packages/tokens/src/colors.ts`), hard-coded rather than read from CSS
   // variables: `apps/site/public/site.css` flips `--surface` per theme while
   // the app keeps it constant, so a var() would render two different banners.
-  // The bar is cut from the constant cream index card (`surface #F1E6CC`)
+  // The bar is cut from the constant cream index card (`surface #FAF6EE`)
   // with constant ink in BOTH themes, which is the identity's own rule — a
   // printed card does not change colour when the lights go down — and it
   // means every contrast pair below is verified once and holds in light and
   // dark:
-  //   ink #1B1815 on #F1E6CC               14.3:1  title, body, disclosures
+  //   ink #28231F on #FAF6EE               14.4:1  title, body, disclosures
   //                                                (both `Choose what to allow`
   //                                                 and the footnote link)
-  //   pencil #5A524A on #F1E6CC             6.2:1  category blurbs, footnote
-  //   stampText #8A2113 on #F1E6CC          7.3:1  eyebrow, GPC note
-  //   onAccent2 #F1E6CC on accent2 #1B1815  14.3:1  EVERY button's label
-  //   accent2 #1B1815 on #F1E6CC           14.3:1  ...and that button's fill
+  //   pencil #635B53 on #FAF6EE             6.2:1  category blurbs, footnote
+  //   stampText #87301F on #FAF6EE          8.0:1  eyebrow, GPC note
+  //   onAccent2 #FAF6EE on accent2 #28231F  14.4:1  EVERY button's label
+  //   accent2 #28231F on #FAF6EE           14.4:1  ...and that button's fill
   //                                                 against the bar behind it
-  //   focus #7A2515 on #F1E6CC              8.1:1  the focus ring
+  //   focus #7A2515 on #FAF6EE              9.5:1  the focus ring
   //
   // Those numbers were RECOMPUTED for #223 with
   // `packages/tokens/src/contrast.ts`'s `contrastRatio()`, because #223
   // changed which pairs exist here. The line this block used to carry —
-  // `onAccent #FBF9F4 on #C4341C  5.2:1 (the stamp button)` — left with the
-  // button that wore it (see the button comment below). Stamp red `#C4341C`
+  // `onAccent #FFFDF8 on #A9432E  5.9:1 (the stamp button)` — left with the
+  // button that wore it (see the button comment below). Stamp red `#A9432E`
   // survives in this file only where it is decorative and carries no text:
   // the GPC note's left rule, the checkboxes' native `accent-color`, and the
   // tint on `Accept all`'s stamp shadow. No label is ever set in it.
@@ -504,17 +504,17 @@
     // off the top of it. 82vh dropped to 78vh only because the bar's own
     // padding and rule now sit outside that box and still have to fit.
     '.ks-consent{position:fixed;left:0;right:0;bottom:0;z-index:9999;box-sizing:border-box;',
-    'padding:14px 16px;background:#F1E6CC;color:#1B1815;border-top:2px solid #1B1815;',
+    'padding:14px 16px;background:#FAF6EE;color:#28231F;border-top:2px solid #28231F;',
     'font-family:"CourierPrime","Courier Prime",ui-monospace,monospace;}',
     '.ks-consent[hidden]{display:none!important;}',
     '.ks-consent::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:48px;',
-    'pointer-events:none;background:linear-gradient(to top,rgba(27,24,21,.18),rgba(27,24,21,0));}',
+    'pointer-events:none;background:linear-gradient(to top,rgba(40,35,31,.14),rgba(40,35,31,0));}',
     '.ks-consent__card{box-sizing:border-box;width:100%;max-width:560px;margin:0 auto;',
     'max-height:78vh;overflow-y:auto;}',
-    '.ks-consent__eyebrow{margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#8A2113;}',
-    '.ks-consent__title{margin:0 0 6px;font-size:15px;font-weight:700;line-height:1.35;color:#1B1815;}',
-    '.ks-consent__body{margin:0 0 10px;font-size:13px;line-height:1.55;color:#1B1815;}',
-    '.ks-consent__note{margin:0 0 10px;font-size:12px;line-height:1.5;color:#8A2113;border-left:2px solid #C4341C;padding-left:8px;}',
+    '.ks-consent__eyebrow{margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#87301F;}',
+    '.ks-consent__title{margin:0 0 6px;font-size:15px;font-weight:700;line-height:1.35;color:#28231F;}',
+    '.ks-consent__body{margin:0 0 10px;font-size:13px;line-height:1.55;color:#28231F;}',
+    '.ks-consent__note{margin:0 0 10px;font-size:12px;line-height:1.5;color:#87301F;border-left:2px solid #A9432E;padding-left:8px;}',
     '.ks-consent__note[hidden]{display:none!important;}',
     '.ks-consent__actions{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px;}',
     // ── One button style, and neither answer is the recommended one ───────
@@ -531,8 +531,8 @@
     // the two boxes so it stays right.
     //
     // The COLOUR half was not (#223). `Accept all` wore `--stamp` (filled
-    // `accent #C4341C`) and `Reject all` wore `--outline` (a near-white
-    // `print #FBF9F4` fill inside an ink border). Stamp red is what every
+    // `accent #A9432E`) and `Reject all` wore `--outline` (a near-white
+    // `print #FFFDF8` fill inside an ink border). Stamp red is what every
     // primary action in this product wears, so the whole system was quietly
     // teaching that accept is the button you are meant to press — and both
     // the EDPB's guidance on valid consent and the CPRA's dark-pattern
@@ -542,10 +542,10 @@
     // deliberate CCPA work, so it was worth a decision rather than an
     // accident.
     //
-    // Both now wear `accent2 #1B1815` filled with an `onAccent2 #F1E6CC`
+    // Both now wear `accent2 #28231F` filled with an `onAccent2 #FAF6EE`
     // label: the pair `apps/web/src/ui/Button.tsx`'s `secondary` case adopted
     // for #134, and the long comment there is the argument. A filled ink
-    // rectangle is unmistakably a control — 14.3:1 against the paper it sits
+    // rectangle is unmistakably a control — 14.4:1 against the paper it sits
     // on, where `--outline`'s `print` fill measured 1.18:1 against the same
     // paper and read as an empty field with a line round it — while staying
     // clearly subordinate to the one stamp-red primary elsewhere in the
@@ -568,7 +568,7 @@
     // records no decision and its `aria-expanded` says so.
     '.ks-consent__btn{flex:1 1 0;min-width:132px;min-height:44px;box-sizing:border-box;padding:10px 14px;',
     'font:inherit;font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;',
-    'background:#1B1815;color:#F1E6CC;border:2px solid #1B1815;border-radius:2px;cursor:pointer;',
+    'background:#28231F;color:#FAF6EE;border:2px solid #28231F;border-radius:2px;cursor:pointer;',
     // The same pressed-stamp lift `Button.tsx`'s `secondary` carries, to the
     // same two alpha values, so the banner and the app agree on what a
     // filled-ink control looks like when you hover it.
@@ -593,7 +593,7 @@
     // Alpha `.32` against ink's `.22`: red on cream reads lighter than ink at
     // equal alpha, so the extra alpha buys the same visual weight, not more.
     // Both values are decorative — the shadow carries no text, and the
-    // button's boundary is its ink border and fill (14.3:1) with or without
+    // button's boundary is its ink border and fill (14.4:1) with or without
     // it — so there is no contrast pair here to verify, exactly as with the
     // bar's gradient scrim.
     //
@@ -604,26 +604,26 @@
     '.ks-consent__btn--hint{box-shadow:2px 3px 0 rgba(196,52,28,.32);}',
     '.ks-consent__btn--hint:hover{box-shadow:3px 5px 0 rgba(196,52,28,.4);}',
     '.ks-consent__more{display:block;min-height:44px;background:none;border:0;padding:0;cursor:pointer;',
-    'font:inherit;font-size:12px;letter-spacing:.5px;color:#1B1815;text-decoration:underline;text-underline-offset:3px;}',
+    'font:inherit;font-size:12px;letter-spacing:.5px;color:#28231F;text-decoration:underline;text-underline-offset:3px;}',
     '.ks-consent__panel{margin:8px 0 0;border-top:1px solid rgba(27,24,21,.32);padding-top:10px;}',
     '.ks-consent__panel[hidden]{display:none!important;}',
     '.ks-consent__row{display:flex;gap:10px;align-items:flex-start;padding:8px 0;}',
-    '.ks-consent__row input{margin:2px 0 0;width:18px;height:18px;flex:0 0 auto;accent-color:#C4341C;}',
-    '.ks-consent__row label{font-size:13px;font-weight:700;line-height:1.4;color:#1B1815;cursor:pointer;}',
-    '.ks-consent__row label span{display:block;font-weight:400;font-size:12px;line-height:1.5;color:#5A524A;}',
-    '.ks-consent__foot{margin:10px 0 0;font-size:12px;line-height:1.5;color:#5A524A;}',
+    '.ks-consent__row input{margin:2px 0 0;width:18px;height:18px;flex:0 0 auto;accent-color:#A9432E;}',
+    '.ks-consent__row label{font-size:13px;font-weight:700;line-height:1.4;color:#28231F;cursor:pointer;}',
+    '.ks-consent__row label span{display:block;font-weight:400;font-size:12px;line-height:1.5;color:#635B53;}',
+    '.ks-consent__foot{margin:10px 0 0;font-size:12px;line-height:1.5;color:#635B53;}',
     // The footnote link is a DISCLOSURE, like `.ks-consent__more` above it and
     // for the same reason: it explains the categories, it records no decision.
-    // It wore stamp red `#8A2113` until now, which made the one line on this
+    // It wore stamp red `#87301F` until now, which made the one line on this
     // screen that only DESCRIBES things the most saturated thing on it — louder
     // than the two answers, which are ink — and stamp red is the product's
     // "this is the action" colour everywhere else. So it takes the disclosure's
     // own treatment: ink, underlined, same 3px offset. It still reads as a link
     // (the underline, plus the ink/pencil step against the sentence around it),
-    // it just stops competing with the buttons. `ink #1B1815 on #F1E6CC` is
-    // 14.3:1 — the pair the contrast block above already verifies for the
+    // it just stops competing with the buttons. `ink #28231F on #FAF6EE` is
+    // 14.4:1 — the pair the contrast block above already verifies for the
     // title, the body and `Choose what to allow`.
-    '.ks-consent__foot a{color:#1B1815;text-decoration:underline;text-underline-offset:3px;}',
+    '.ks-consent__foot a{color:#28231F;text-decoration:underline;text-underline-offset:3px;}',
     '.ks-consent :focus-visible{outline:2px solid #7A2515;outline-offset:3px;}',
     // The reopen control, wherever a surface puts one. Styled here rather than
     // in `apps/site/public/site.css` so a static page opts in with the bare

@@ -4,18 +4,18 @@
  * The whole identity is: objects laid out on a tabletop. A photograph, once
  * printed, does not change colour when you turn the lights down in the room
  * — so almost nothing here flips between light and dark. Only the TABLE
- * itself (`bg`/`tableEdge`, kraft by day, walnut at night) and the shadows
+ * itself (`bg`/`tableEdge`, linen by day, walnut at night) and the shadows
  * it casts (`shadow`/`shadowStrong`/`overlay`/`lampLight`) respond to the
  * room's lighting. Every object resting on the table — the print, its ink
  * caption, the pencil-grey secondary line, the red rubber stamp, the tape,
- * the kraft-tinted index card an input looks like — stays exactly the same
+ * the linen index card an input looks like — stays exactly the same
  * colour in both modes. `bg`/`tableEdge` are decorative backdrop only: no
  * component in this app renders text directly on them without a paper
  * object (a print, an index card, the header's paper strip) underneath it,
  * so dark mode never asks black ink to sit on a dark table.
  *
  * `surface` is the *chrome* paper — the tint an input, sheet, chip or the
- * header bar is cut from (a lined index card: warm, kraft-tinted, not
+ * header bar is cut from (a lined index card: warm linen, not
  * stark). `print` is a slightly brighter, cleaner white reserved for the
  * photograph's own frame. Both are constant.
  *
@@ -26,40 +26,40 @@
  */
 export const colorsLight = {
   // --- the table (the only tokens that flip) ---
-  bg: "#D2BC97",
-  table: "#D2BC97",
-  tableEdge: "#B89D74",
-  surfaceSunken: "#B89D74",
-  overlay: "rgba(27,24,21,0.55)",
-  shadow: "rgba(60,40,20,0.18)",
-  shadowStrong: "rgba(60,40,20,0.32)",
+  bg: "#E4DDD1",
+  table: "#E4DDD1",
+  tableEdge: "#C9C0B3",
+  surfaceSunken: "#C9C0B3",
+  overlay: "rgba(40,35,31,0.55)",
+  shadow: "rgba(40,35,31,0.14)",
+  shadowStrong: "rgba(40,35,31,0.26)",
   /** The lamp's warm pool of light behind the hero, on the dark table only — a pale wash in light mode, where it does nothing. */
   lampLight: "rgba(255,247,224,0.35)",
 
   // --- objects on the table (constant in both modes) ---
-  surface: "#F1E6CC",
-  border: "#B89D74",
-  print: "#FBF9F4",
-  ink: "#1B1815",
-  textSecondary: "#5A524A",
-  pencil: "#5A524A",
-  textTertiary: "#6C6150",
-  inkSoft: "#3A332B",
-  accent2: "#1B1815",
-  accent2Text: "#1B1815",
-  onAccent2: "#F1E6CC",
-  accent: "#C4341C",
-  stamp: "#C4341C",
-  accentText: "#8A2113",
-  stampText: "#8A2113",
-  onAccent: "#FBF9F4",
-  accentSoft: "#F0D6C9",
+  surface: "#FAF6EE",
+  border: "#968A7E",
+  print: "#FFFDF8",
+  ink: "#28231F",
+  textSecondary: "#635B53",
+  pencil: "#635B53",
+  textTertiary: "#635B53",
+  inkSoft: "#49423C",
+  accent2: "#28231F",
+  accent2Text: "#28231F",
+  onAccent2: "#FAF6EE",
+  accent: "#A9432E",
+  stamp: "#A9432E",
+  accentText: "#87301F",
+  stampText: "#87301F",
+  onAccent: "#FFFDF8",
+  accentSoft: "#F0DDD3",
   foil: "#8A6D3F",
   foilText: "#5C4726",
-  onFoil: "#FBF9F4",
-  rule: "rgba(27,24,21,0.32)",
-  tape: "rgba(255,236,160,0.55)",
-  tapeStripe: "rgba(180,140,40,0.22)",
+  onFoil: "#FFFDF8",
+  rule: "rgba(40,35,31,0.32)",
+  tape: "rgba(205,184,140,0.42)",
+  tapeStripe: "rgba(139,113,67,0.18)",
   success: "#3E6B33",
   successText: "#2E4F26",
   danger: "#A8351F",
@@ -81,29 +81,29 @@ export const colorsDark = {
   lampLight: "rgba(255,214,140,0.16)",
 
   // --- objects on the table (byte-identical to colorsLight — see file header) ---
-  surface: "#F1E6CC",
-  border: "#B89D74",
-  print: "#FBF9F4",
-  ink: "#1B1815",
-  textSecondary: "#5A524A",
-  pencil: "#5A524A",
-  textTertiary: "#6C6150",
-  inkSoft: "#3A332B",
-  accent2: "#1B1815",
-  accent2Text: "#1B1815",
-  onAccent2: "#F1E6CC",
-  accent: "#C4341C",
-  stamp: "#C4341C",
-  accentText: "#8A2113",
-  stampText: "#8A2113",
-  onAccent: "#FBF9F4",
-  accentSoft: "#F0D6C9",
+  surface: "#FAF6EE",
+  border: "#968A7E",
+  print: "#FFFDF8",
+  ink: "#28231F",
+  textSecondary: "#635B53",
+  pencil: "#635B53",
+  textTertiary: "#635B53",
+  inkSoft: "#49423C",
+  accent2: "#28231F",
+  accent2Text: "#28231F",
+  onAccent2: "#FAF6EE",
+  accent: "#A9432E",
+  stamp: "#A9432E",
+  accentText: "#87301F",
+  stampText: "#87301F",
+  onAccent: "#FFFDF8",
+  accentSoft: "#F0DDD3",
   foil: "#8A6D3F",
   foilText: "#5C4726",
-  onFoil: "#FBF9F4",
-  rule: "rgba(27,24,21,0.32)",
-  tape: "rgba(255,236,160,0.55)",
-  tapeStripe: "rgba(180,140,40,0.22)",
+  onFoil: "#FFFDF8",
+  rule: "rgba(40,35,31,0.32)",
+  tape: "rgba(205,184,140,0.42)",
+  tapeStripe: "rgba(139,113,67,0.18)",
   success: "#3E6B33",
   successText: "#2E4F26",
   danger: "#A8351F",

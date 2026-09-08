@@ -103,12 +103,12 @@ export default function GiveStory(): React.ReactElement {
         {/* Issue #224. This note used to be a `Sunken` — a well filled with
             `tableEdge`, which is one of the handful of tokens that really
             does flip between light and dark (#B89D74 / #1C140F) while every
-            ink colour stays constant. `textSecondary` (#5A524A) on it
+            ink colour stays constant. `textSecondary` (#635B53) on it
             measured 2.96:1 in light and 2.37:1 in dark, against AA's 4.5:1:
             the lowest-contrast text on the screen, in both themes at once,
             and the only place in the app that put words in a well at all.
 
-            It sits on the card's own `surface` (#F1E6CC) now, marked as a
+            It sits on the card's own `surface` (#FAF6EE) now, marked as a
             note rather than a well by a stamp-red left rule — the same idiom
             as `public/consent.js`'s `.ks-consent__note`. `inkSoft` on
             `surface` is 10.03:1, and neither colour flips, so that number is

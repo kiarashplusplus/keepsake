@@ -35,11 +35,11 @@ export type TableHeadingProps = {
  * are token arithmetic and not eyeballed off a screenshot. AA wants 4.5:1.
  *
  *   what it renders now:
- *     accent2Text  #1B1815  on surface #F1E6CC  14.25:1   the heading itself
- *     textTertiary #6C6150  on surface #F1E6CC   4.89:1   the `note`
+ *     accent2Text  #28231F  on surface #FAF6EE  14.25:1   the heading itself
+ *     textTertiary #6C6150  on surface #FAF6EE   4.89:1   the `note`
  *   what it replaces (a bare Eyebrow on the table):
- *     accent2Text  #1B1815  on bg light #D2BC97  9.58:1   fine, always was
- *     accent2Text  #1B1815  on bg dark  #2B2119  1.12:1   invisible
+ *     accent2Text  #28231F  on bg light #E4DDD1  9.58:1   fine, always was
+ *     accent2Text  #28231F  on bg dark  #2B2119  1.12:1   invisible
  *
  * `surface` is a constant token, so the first two numbers are the numbers in
  * BOTH themes — that is the whole point of putting the words on paper. The

@@ -58,41 +58,37 @@
 
 /* ---------- Tokens ---------- */
 :root {
-  --bg: #d2bc97;
-  --surface: #f1e6cc;
-  --surface-sunken: #b89d74;
-  --print: #fbf9f4;
-  --border: #b89d74;
-  --ink: #1b1815;
-  --ink-soft: #3a332b;
-  /* Dark enough to clear 4.5:1 on the kraft table (4.95:1), not just on paper.
-     The previous #5a524a was 4.15:1 on kraft — fine on a card, failing wherever
-     text sits straight on the table, which is where the deck and the why-grid
-     actually are. Caught by the axe check in the Playwright suite. */
-  --text2: #4e4740;
-  /* Same reasoning: 4.73:1 on kraft, was 3.29:1. Used by the footer and the
-     page-header timestamp, both directly on the table. */
-  --text3: #524a3c;
-  --accent: #c4341c;
-  --accent-text: #8a2113;
-  --on-accent: #fbf9f4;
-  --accent-soft: #f0d6c9;
-  --accent2: #1b1815;
-  --accent2-text: #1b1815;
-  --on-accent2: #f1e6cc;
+  --bg: #e4ddd1;
+  --surface: #faf6ee;
+  --surface-sunken: #c9c0b3;
+  --print: #fffdf8;
+  --border: #968a7e;
+  --ink: #28231f;
+  --ink-soft: #49423c;
+  /* Secondary copy clears 4.5:1 on both linen and paper (4.94:1 minimum). */
+  --text2: #635b53;
+  /* Tertiary copy remains readable where the marketing site places it on linen. */
+  --text3: #635b53;
+  --accent: #a9432e;
+  --accent-text: #87301f;
+  --on-accent: #fffdf8;
+  --accent-soft: #f0ddd3;
+  --accent2: #28231f;
+  --accent2-text: #28231f;
+  --on-accent2: #faf6ee;
   --foil: #8a6d3f;
   --foil-text: #5c4726;
-  --on-foil: #fbf9f4;
-  --rule: rgba(27, 24, 21, 0.32);
-  --shadow: rgba(60, 40, 20, 0.18);
-  --shadow-strong: rgba(60, 40, 20, 0.32);
+  --on-foil: #fffdf8;
+  --rule: rgba(40, 35, 31, 0.32);
+  --shadow: rgba(40, 35, 31, 0.14);
+  --shadow-strong: rgba(40, 35, 31, 0.26);
   /* The fibre tile is an OPAQUE grey image centred on 50% grey, blended into
      the ground with `overlay` (see `body::before`), not a black alpha mask
      laid over the page. Slope is the fleck's contrast; light needs less of it
      than dark because `overlay`'s response is proportional to how far the
-     backdrop sits from black, and kraft is much further from black than
+     backdrop sits from black, and linen is much further from black than
      walnut. Tuned by eye per theme, then checked against a pixel sample. */
-  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='480' height='480'%3E%3Cfilter id='f' x='0' y='0' width='480' height='480' filterUnits='userSpaceOnUse' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0 0 0 0 1'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0.3' intercept='0.35'/%3E%3CfeFuncG type='linear' slope='0.3' intercept='0.35'/%3E%3CfeFuncB type='linear' slope='0.3' intercept='0.35'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='480' height='480' filter='url(%23f)'/%3E%3C/svg%3E");
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='480' height='480'%3E%3Cfilter id='f' x='0' y='0' width='480' height='480' filterUnits='userSpaceOnUse' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0 0 0 0 1'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0.15' intercept='0.425'/%3E%3CfeFuncG type='linear' slope='0.15' intercept='0.425'/%3E%3CfeFuncB type='linear' slope='0.15' intercept='0.425'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='480' height='480' filter='url(%23f)'/%3E%3C/svg%3E");
   /* The lamp's warm pool near the top of the table (`lampLight` upstream). */
   --lamp: rgba(255, 247, 224, 0.35);
 
@@ -814,7 +810,7 @@ h2 {
   left: 20px;
   width: 44px;
   height: 20px;
-  background: rgba(255, 236, 160, 0.55);
+  background: rgba(205, 184, 140, 0.42);
   transform: rotate(-16deg);
   box-shadow: 0px 1px 2px rgba(0, 0, 0, 0.12);
   z-index: 2;
@@ -879,7 +875,7 @@ h2 {
   /* Constant, not `--text2`: this sits on `.tag-card`'s `--print` fill,
      which never inverts (see site.css's file header) — the caption on a
      print stays pencil-grey regardless of the room's lighting. */
-  color: #5a524a;
+  color: #635b53;
   margin: 0 0 var(--space-sm);
   position: relative;
   padding-left: 0.5em;
@@ -895,7 +891,7 @@ h2 {
   line-height: 23px;
   margin: 0 0 var(--space-xs);
   /* Constant — see `.card-excerpt`'s comment above. */
-  color: #1b1815;
+  color: #28231f;
 }
 
 .card-caption {

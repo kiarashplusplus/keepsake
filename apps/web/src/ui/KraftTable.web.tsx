@@ -30,10 +30,10 @@ export function KraftTable(): React.ReactElement {
     backgroundColor: colors.table,
     backgroundImage: [
       `radial-gradient(ellipse 900px 480px at 50% -60px, ${colors.lampLight}, transparent 70%)`,
-      // Soft vignette: darkens toward the edges by ~8%, drawn as a CSS
+      // Soft vignette: darkens toward the edges by ~6%, drawn as a CSS
       // gradient (not the tile) so it scales with the viewport and never
       // repeats at any width.
-      "radial-gradient(ellipse 1400px 900px at 50% 45%, transparent 55%, rgba(0,0,0,0.08) 100%)",
+      "radial-gradient(ellipse 1400px 900px at 50% 45%, transparent 55%, rgba(40,35,31,0.06) 100%)",
     ].join(", "),
     backgroundRepeat: "no-repeat, no-repeat",
   } as unknown as ViewStyle;
@@ -45,7 +45,8 @@ export function KraftTable(): React.ReactElement {
     backgroundRepeat: "repeat",
     backgroundSize: "480px 480px",
     backgroundBlendMode: mode === "light" ? "multiply" : "overlay",
-    opacity: mode === "light" ? 1 : 0.55,
+    // Linen needs only a trace of fibre: half the former light-mode grain.
+    opacity: mode === "light" ? 0.5 : 0.55,
   } as unknown as ViewStyle;
 
   return (
