@@ -205,6 +205,8 @@ importers:
 
   tools/preflight: {}
 
+  tools/seed: {}
+
 packages:
 
   '@axe-core/playwright@4.13.0':
