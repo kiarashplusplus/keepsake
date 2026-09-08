@@ -65,6 +65,51 @@ interface ConfirmableRequestRow {
   confirm_expires_at: number | null;
 }
 
+/**
+ * Atomically opens a held request and accounts for it on its listing.
+ *
+ * The listing predicate belongs in the write, not only in the handler's
+ * earlier read. A giver can mark the keepsake given while the confirmation
+ * request is in flight; D1 serializes this batch with that write, and the
+ * predicate makes whichever write arrives second observe the first. Keeping
+ * the counter update in the same batch also prevents a withdrawal from
+ * landing between "open" and the increment and leaving a withdrawn request
+ * counted forever.
+ *
+ * Exported so the race guard can be exercised directly, without a timing-
+ * dependent pair of HTTP requests.
+ */
+export async function claimRequestConfirmation(
+  env: Env,
+  requestId: string,
+  now: number,
+  withdrawTokenHash: string,
+): Promise<boolean> {
+  const [claim] = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE requests SET status = 'open', confirmed_at = ?, withdraw_token_hash = ?
+       WHERE id = ? AND confirmed_at IS NULL
+         AND EXISTS (
+           SELECT 1 FROM listings
+           WHERE listings.id = requests.listing_id AND listings.status = 'approved'
+         )`,
+    ).bind(now, withdrawTokenHash, requestId),
+    env.DB.prepare(
+      `UPDATE listings SET request_count = request_count + 1
+       WHERE status = 'approved'
+         AND EXISTS (
+           SELECT 1 FROM requests
+           WHERE requests.id = ?
+             AND requests.listing_id = listings.id
+             AND requests.confirmed_at = ?
+             AND requests.withdraw_token_hash = ?
+         )`,
+    ).bind(requestId, now, withdrawTokenHash),
+  ]);
+
+  return (claim?.meta.changes ?? 0) > 0;
+}
+
 requestConfirmRoutes.post("/confirm", validateBody(RequestConfirmInput), async (c) => {
   const input = c.get("validatedBody");
   const tokenHash = await sha256Hex(input.token);
@@ -140,41 +185,39 @@ requestConfirmRoutes.post("/confirm", validateBody(RequestConfirmInput), async (
     return ok(c, result);
   }
 
-  // The single-use claim. `RETURNING` makes it a compare-and-set rather than
-  // a read-then-write: two clicks landing in the same second (a client that
-  // retries, a double-tap) both reach this line, and exactly one gets a row
-  // back. Everything with a side effect below — the count, both mails —
-  // hangs off that, so a race cannot double-count a request or mail a giver
-  // twice about one ask.
+  // The single-use claim is a compare-and-set rather than a read-then-write:
+  // two clicks landing in the same second (a client that retries, a
+  // double-tap) both reach this line, and exactly one changes the row.
+  // Everything with a side effect below — the count, both mails — hangs off
+  // that result, so a race cannot double-count a request or mail a giver
+  // twice about one ask. The helper also repeats the listing-status check in
+  // the write, closing the availability race left by the SELECT above.
   const rawWithdrawToken = randomTokenRaw();
   const withdrawTokenHash = await sha256Hex(rawWithdrawToken);
-  const claimed = await c.env.DB.prepare(
-    `UPDATE requests SET status = 'open', confirmed_at = ?, withdraw_token_hash = ?
-     WHERE id = ? AND confirmed_at IS NULL RETURNING id`,
-  )
-    .bind(now, withdrawTokenHash, row.id)
-    .first<{ id: string }>();
+  const claimed = await claimRequestConfirmation(c.env, row.id, now, withdrawTokenHash);
 
   if (!claimed) {
-    // Lost the race; the winner did the work. Report success, since from the
-    // caller's side the confirmation did happen.
+    // Either another confirmation won, or the listing stopped being
+    // available after the read above. Re-read both facts rather than
+    // reporting a confirmation that may never have happened.
+    const current = await c.env.DB.prepare(
+      `SELECT r.confirmed_at, r.status AS request_status, l.status AS listing_status
+       FROM requests r LEFT JOIN listings l ON l.id = r.listing_id
+       WHERE r.id = ?`,
+    )
+      .bind(row.id)
+      .first<{ confirmed_at: number | null; request_status: string; listing_status: string | null }>();
     const result: RequestConfirmResult = {
       id: row.id,
       listing_id: row.listing_id,
-      confirmed_at: now,
-      listing_available: true,
+      confirmed_at: current?.confirmed_at ?? null,
+      listing_available:
+        current?.confirmed_at !== null &&
+        (current?.request_status === "open" || current?.request_status === "chosen") &&
+        current?.listing_status === "approved",
     };
     return ok(c, result);
   }
-
-  // Counted here rather than at submit time — the number a giver sees is
-  // "people who asked", and until this moment nobody had proved they were a
-  // person who asked. `POST /api/requests/withdraw` and the admin removal path
-  // both decrement it, and both are careful to only do so for a request that
-  // was counted in the first place.
-  await c.env.DB.prepare("UPDATE listings SET request_count = request_count + 1 WHERE id = ?")
-    .bind(row.listing_id)
-    .run();
 
   const owner = await c.env.DB.prepare("SELECT email, email_verified_at, banned_at FROM owners WHERE id = ?")
     .bind(listing.owner_id)
