@@ -24,6 +24,7 @@ import { useColors } from "@/ui/theme";
 import { AgeGateField, isAgeGateValid } from "@/features/ageGate/AgeGateField";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { coverPhoto, makeClientId } from "@/features/give/giveDraft";
+import { StoryFieldSchema, TitleFieldSchema } from "@/features/give/giveValidation";
 import { editStepForReason, resolveReviewOutcome } from "@/features/give/reviewOutcome";
 import { createListing, updateListing } from "@/api/listings";
 import { getMyListing } from "@/api/me";
@@ -66,6 +67,16 @@ export default function GiveReview(): React.ReactElement {
   const photoIds = draft.photos.filter((photo) => photo.status === "done" && photo.id !== null).map((photo) => photo.id as string);
   const cover = coverPhoto(draft);
   const coverSource = useDraftPhotoSource(cover);
+  // #296: every earlier step validates its own field before letting the
+  // giver advance (`details.tsx`'s `canContinue`, `story.tsx`'s
+  // `handleContinue`) — this step didn't, so reaching it directly (a typed
+  // or bookmarked URL, browser back/forward across the flow) left "Give it"
+  // enabled with a blank title or story, spending a single-use Turnstile
+  // token on a submit the server was always going to reject against
+  // `CreateListingInput`'s own minimums. Same schemas the earlier steps use,
+  // via `giveValidation.ts`, so this can't drift from what they consider valid.
+  const titleValid = TitleFieldSchema.safeParse(draft.title).success;
+  const storyValid = StoryFieldSchema.safeParse(draft.story).success;
 
   React.useEffect(() => {
     if (phase !== "polling" || listing === null || listing.status !== "pending") return undefined;
@@ -106,7 +117,7 @@ export default function GiveReview(): React.ReactElement {
 
   async function handleSubmit(): Promise<void> {
     setDobTouched(true);
-    if (photoIds.length === 0 || !ageGateValid) return;
+    if (photoIds.length === 0 || !ageGateValid || !titleValid || !storyValid) return;
     setSubmitError(null);
     setPhase("submitting");
 
@@ -417,7 +428,9 @@ export default function GiveReview(): React.ReactElement {
           <Button
             label="Give it"
             loading={phase === "submitting"}
-            disabled={phase === "submitting" || !turnstileReady || photoIds.length === 0 || !ageGateValid}
+            disabled={
+              phase === "submitting" || !turnstileReady || photoIds.length === 0 || !ageGateValid || !titleValid || !storyValid
+            }
             onPress={() => void handleSubmit()}
           />
         </View>

@@ -3,8 +3,7 @@
 import * as React from "react";
 import { useWindowDimensions, View } from "react-native";
 import { useRouter } from "expo-router";
-import { z } from "zod";
-import { STORY_MAX, STORY_MIN } from "@keepsake/contracts/listing";
+import { STORY_MAX } from "@keepsake/contracts/listing";
 import { normalizeCondition } from "@keepsake/contracts/photo";
 import { space } from "@keepsake/tokens/spacing";
 import { type } from "@keepsake/tokens/typography";
@@ -18,13 +17,8 @@ import { Card } from "@/ui/Surface";
 import { useColors } from "@/ui/theme";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { coverPhoto } from "@/features/give/giveDraft";
+import { StoryFieldSchema } from "@/features/give/giveValidation";
 import { STORY_PROMPTS, STORY_PROMPT_ROTATE_MS } from "@/features/give/storyPrompts";
-
-const StoryFieldSchema = z
-  .string()
-  .trim()
-  .min(STORY_MIN, `At least ${STORY_MIN} characters — enough to say what it is and why it matters.`)
-  .max(STORY_MAX, `Keep it under ${STORY_MAX} characters.`);
 
 /** The same 640px split the rest of the app calls narrow — see
  * `src/ui/AppHeader.tsx` and `app/index.tsx`. */
