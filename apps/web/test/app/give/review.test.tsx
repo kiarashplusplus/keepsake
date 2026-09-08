@@ -64,6 +64,7 @@ const baseListing: OwnerListing = {
   created_at: 0,
   updated_at: 0,
   held: true,
+  category_chosen_at: null,
 };
 
 function seedDraft(): void {

@@ -30,6 +30,7 @@ function item(id: string): AdminQueueItem {
     created_at: 0,
     updated_at: 0,
     held: false,
+    category_chosen_at: null,
     report_count: 0,
     owner: { id: "owner1", email_masked: null, email_verified: false, banned: false },
     events: [],

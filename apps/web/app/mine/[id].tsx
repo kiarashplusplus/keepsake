@@ -20,8 +20,9 @@ import { EmptyState } from "@/ui/EmptyState";
 import { useColors } from "@/ui/theme";
 import { tiltDegForId } from "@/lib/masonry";
 import { chooseRequest, getMyListing, type OwnerListingDetail } from "@/api/me";
-import { deleteListing, markGiven, relistListing, withdrawListing } from "@/api/listings";
+import { deleteListing, markGiven, relistListing, setListingCategory, withdrawListing } from "@/api/listings";
 import { ApiError } from "@/api/client";
+import { CategorySection } from "@/features/mine/CategorySection";
 import { RequestList } from "@/features/mine/RequestList";
 import { HandoffSheet } from "@/features/mine/HandoffSheet";
 import { track } from "@/lib/analytics";
@@ -185,6 +186,20 @@ export default function MineDetail(): React.ReactElement {
             </Text>
           ) : null}
         </View>
+
+        {/* Issue #155: the model decided this, and until now nobody could
+            disagree with it. Sits above Requests because it is about the
+            object rather than about who has asked for it. */}
+        <CategorySection
+          category={listing.category}
+          categoryChosenAt={listing.category_chosen_at}
+          editable={listing.status !== "given"}
+          busy={busy}
+          onChange={async (next) => {
+            await runAction(() => setListingCategory(listing.id, next));
+          }}
+          rule={rule}
+        />
 
         <View style={{ gap: space.sm }}>
           <View style={rule}>

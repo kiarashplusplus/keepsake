@@ -9,7 +9,7 @@ export async function fetchListingRow(env: Env, id: string): Promise<ListingRow 
   return env.DB.prepare(
     `SELECT id, owner_id, title, story, category, country, postal_code, place_name, admin1, lat, lng,
             status, moderation_reason, version, report_count, request_count, chosen_request_id,
-            created_at, updated_at, published_at, given_at
+            created_at, updated_at, published_at, given_at, category_chosen_at
      FROM listings WHERE id = ?`,
   )
     .bind(id)
