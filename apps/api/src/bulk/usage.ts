@@ -81,11 +81,21 @@ export function buildUsageDebitStatement(env: Env, options: UsageDebitOptions): 
 }
 
 /**
- * The compensating write for a debit whose paired insert then refused —
- * used only where the insert cannot be made a precondition of the debit in
- * the same transaction. Callers that *can* guard the insert (every one in
- * `routes/bulk.ts` today) should do that instead: an unspent debit is
- * better than a refunded one.
+ * The compensating write for a debit whose paired insert refused. Both
+ * current callers (`routes/bulk.ts`, `kind: "items"` and `kind: "photos"`)
+ * *do* guard the insert with a predicate in the same `env.DB.batch()` as
+ * this debit — but a guard that refuses by writing zero rows is not an
+ * error, so D1 does not roll the batch back, and the debit sitting beside
+ * that refused insert still lands. That is exactly why this exists: each
+ * call site checks the insert's own `meta.changes`, and when it is `0`
+ * calls this to give back the debit that already charged.
+ *
+ * So "guard the insert instead of refunding" is not advice this file's
+ * callers already followed — it's advice about *ordering*: put the debit
+ * and its insert in the same `batch()` so a refusal is visible in the same
+ * response and can be compensated immediately, rather than debiting in one
+ * `.run()` and inserting in another where a refusal would leave the debit
+ * permanently unaccounted for with no result to react to.
  */
 export async function refundUsage(env: Env, options: { kind: UsageKind; ownerId: string; day: string }): Promise<void> {
   const column = USAGE_COLUMNS[options.kind];
