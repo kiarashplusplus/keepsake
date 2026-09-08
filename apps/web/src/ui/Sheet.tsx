@@ -12,6 +12,7 @@ import { space } from "@keepsake/tokens/spacing";
 import { useColors } from "@/ui/theme";
 import { useMotion } from "@/ui/MotionProvider";
 import { Text } from "@/ui/Text";
+import { useVisualViewportHeight } from "@/ui/useVisualViewportHeight";
 
 const BOTTOM_SHEET_BREAKPOINT = 720;
 const FOCUSABLE_SELECTOR =
@@ -39,7 +40,17 @@ export function Sheet({
 }: SheetProps): React.ReactElement | null {
   const colors = useColors();
   const motion = useMotion();
-  const { width, height } = useWindowDimensions();
+  const { width, height: windowHeight } = useWindowDimensions();
+  // `useWindowDimensions` tracks `window.innerWidth`/`innerHeight` (the
+  // layout viewport), which iOS Safari deliberately leaves unchanged when
+  // the on-screen keyboard opens — react-native-web's own `Dimensions`
+  // 'change' event doesn't fire there either (necolas/react-native-web#2430)
+  // — so it never reflects the keyboard. `visualViewport.height` is the one
+  // measurement that does. See `useVisualViewportHeight`'s own comment for
+  // why sizing off it is safe where `docs/platform-differences.md` §3 says
+  // *positioning* off `visualViewport` (via `offsetTop`/`scrollY` deltas)
+  // isn't.
+  const height = useVisualViewportHeight(windowHeight);
   const isBottomSheet = width < BOTTOM_SHEET_BREAKPOINT;
   const panelRef = React.useRef<View>(null);
   // Callers routinely pass an inline `onClose` (a fresh function every
@@ -130,7 +141,17 @@ export function Sheet({
         accessibilityLabel="Close"
         onPress={onClose}
         style={{
-          flex: 1,
+          // An explicit `height`, not `flex: 1`: this sits inside the
+          // `Modal`'s own `position: fixed` full-screen box, which (like
+          // `windowHeight` above) keeps its full height even once the
+          // keyboard covers its bottom portion. `flex: 1` would keep
+          // filling that whole box and `justifyContent: "flex-end"` would
+          // keep flushing the panel to ITS bottom edge — still under the
+          // keyboard — no matter how short `maxHeight` below makes the
+          // panel itself. Sizing this box to `height` is what actually
+          // moves the flush-bottom edge up to the visible area.
+          height,
+          width: "100%",
           backgroundColor: colors.overlay,
           justifyContent: isBottomSheet ? "flex-end" : "center",
           alignItems: "center",
