@@ -17,10 +17,15 @@ import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
 import { Card } from "@/ui/Surface";
 import { Stamp } from "@/ui/Stamp";
+import { RouteHead } from "@/ui/RouteHead";
 
 export default function Welcome(): React.ReactElement {
   return (
     <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+      <RouteHead
+        title="Welcome"
+        description="Someone nearby has something they're ready to let go of. No accounts, no money — just neighbors giving things a second life."
+      />
       <Card style={{ gap: space.lg, alignItems: "flex-start", maxWidth: 640 }}>
         <Stamp state="idle" label="Free" />
 

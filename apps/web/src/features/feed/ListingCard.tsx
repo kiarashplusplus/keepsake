@@ -26,7 +26,12 @@ function caption(listing: PublicListing): string {
   return listing.distance_mi !== undefined ? `${place} · ${formatDistance(listing.distance_mi)}` : place;
 }
 
-export function ListingCard({ listing, testID }: ListingCardProps): React.ReactElement {
+// React.memo'd: the feed can hold hundreds of cards after a few "More"
+// pages, and `listing` is a stable object reference from `useFeed`'s array
+// (untouched by re-fetch) with no callback props passed in — a clean case
+// where memoizing actually stops every earlier card from re-rendering when
+// a later page mounts.
+export const ListingCard = React.memo(function ListingCard({ listing, testID }: ListingCardProps): React.ReactElement {
   const colors = useColors();
   const rnMotion = useMotion();
   const cover = listing.photos[0];
@@ -88,4 +93,4 @@ export function ListingCard({ listing, testID }: ListingCardProps): React.ReactE
       </Pressable>
     </Link>
   );
-}
+});

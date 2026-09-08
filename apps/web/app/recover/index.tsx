@@ -13,6 +13,7 @@ import { Input } from "@/ui/Input";
 import { Button } from "@/ui/Button";
 import { Card } from "@/ui/Surface";
 import { Turnstile, type TurnstileHandle, type TurnstileStatus } from "@/ui/Turnstile";
+import { RouteHead } from "@/ui/RouteHead";
 import { recover } from "@/api/recover";
 import { ApiError } from "@/api/client";
 import { track } from "@/lib/analytics";
@@ -60,6 +61,7 @@ export default function Recover(): React.ReactElement {
 
   return (
     <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+      <RouteHead title="Recover your keepsakes" description="Get a link back to your dashboard on this device." />
       <Card style={{ gap: space.xl, transform: [{ rotate: "0.3deg" }] }}>
         <View style={{ gap: space.sm }}>
           <Eyebrow tick>Lost your listings?</Eyebrow>

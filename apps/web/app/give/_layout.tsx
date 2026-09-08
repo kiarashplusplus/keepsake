@@ -13,6 +13,7 @@ import { ReadableWidth } from "@/ui/ReadableWidth";
 import { StepNumerals } from "@/ui/StepNumerals";
 import { Card } from "@/ui/Surface";
 import { Text } from "@/ui/Text";
+import { RouteHead } from "@/ui/RouteHead";
 
 /**
  * The give flow's header (back link + step numerals) gets its own small
@@ -42,9 +43,15 @@ function StepShell({ children }: { children: React.ReactNode }): React.ReactElem
   // mean leaving the flow. It used to be the feed from every step, so
   // stepping back from the story threw the giver out of the flow entirely.
   const previous = previousGiveStep(pathname);
+  // One title per step rather than a single static one for the whole flow —
+  // read from the same `GIVE_STEP_NAMES` table the Back link's a11y label
+  // already does, so there's one place that knows what each step is called.
+  const stepName = GIVE_STEP_NAMES[GIVE_STEP_PATHS[current] ?? "/give"];
+  const stepTitle = `Give a keepsake: ${stepName.charAt(0).toUpperCase()}${stepName.slice(1)}`;
 
   return (
     <ReadableWidth variant="prose" style={{ flex: 1, paddingVertical: space.xxl, gap: space.xl }}>
+      <RouteHead title={stepTitle} />
       <Card
         style={{
           flexDirection: "row",

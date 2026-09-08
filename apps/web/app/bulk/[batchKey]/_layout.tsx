@@ -15,6 +15,7 @@ import { EmptyState } from "@/ui/EmptyState";
 import { Stamp } from "@/ui/Stamp";
 import { Page } from "@/ui/Page";
 import { BulkWorkspaceProvider, useBulkWorkspaceContext } from "@/features/bulk/BulkWorkspaceContext";
+import { RouteHead } from "@/ui/RouteHead";
 
 const TABS: { path: string; label: string }[] = [
   { path: "photos", label: "Photos" },
@@ -47,10 +48,17 @@ function Tabs({ batchKey }: { batchKey: string }): React.ReactElement {
 
 function WorkspaceShell({ batchKey, children }: { batchKey: string; children: React.ReactNode }): React.ReactElement {
   const workspace = useBulkWorkspaceContext();
+  const pathname = usePathname();
+  // One title per tab, the same table `Tabs` above uses to highlight the
+  // active one — falls back to the flow's own name while nothing under
+  // `/bulk/[batchKey]` has matched yet (still loading, or a bare redirect).
+  const activeTabLabel = TABS.find((tab) => pathname.endsWith(`/${tab.path}`))?.label;
+  const stepTitle = activeTabLabel !== undefined ? `Give several items: ${activeTabLabel}` : "Give several items";
 
   if (workspace.status === "loading") {
     return (
       <Page variant="prose">
+        <RouteHead title={stepTitle} />
         <View style={{ gap: space.md }}>
           <Skeleton height={56} />
           <Skeleton height={200} />
@@ -62,6 +70,7 @@ function WorkspaceShell({ batchKey, children }: { batchKey: string; children: Re
   if (workspace.status === "not_found") {
     return (
       <Page variant="prose">
+        <RouteHead title={stepTitle} />
         <EmptyState
           ornament={<Stamp state="idle" label="Gone" />}
           eyebrow="Give several items"
@@ -82,6 +91,7 @@ function WorkspaceShell({ batchKey, children }: { batchKey: string; children: Re
   if (workspace.status === "unavailable") {
     return (
       <Page variant="prose">
+        <RouteHead title={stepTitle} />
         <EmptyState eyebrow="Give several items" title="Not open on this build yet." line="Estate clear-out batches are a pilot feature." />
       </Page>
     );
@@ -89,6 +99,7 @@ function WorkspaceShell({ batchKey, children }: { batchKey: string; children: Re
 
   return (
     <ReadableWidth variant="prose" style={{ flex: 1, paddingVertical: space.xxl, gap: space.xl }}>
+      <RouteHead title={stepTitle} />
       <Card style={{ gap: space.sm, transform: [{ rotate: "0.3deg" }] }}>
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: space.sm }}>
           <Link href="/bulk" accessibilityRole="link" style={{ flexShrink: 0 }}>

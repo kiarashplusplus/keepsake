@@ -42,6 +42,7 @@ import { Button } from "@/ui/Button";
 import { Turnstile, type TurnstileHandle, type TurnstileStatus } from "@/ui/Turnstile";
 import { Page } from "@/ui/Page";
 import { Card } from "@/ui/Surface";
+import { RouteHead } from "@/ui/RouteHead";
 import { createBatch } from "@/api/bulk";
 import { getMe, setEmail } from "@/api/me";
 import { ApiError } from "@/api/client";
@@ -229,6 +230,7 @@ export default function NewBulkBatch(): React.ReactElement {
 
   return (
     <Page variant="prose">
+      <RouteHead title="Start a batch" description="Prepare many keepsakes over several sittings, then publish the ready ones together." />
       <Card style={{ gap: space.xl }}>
         <View style={{ gap: space.sm }}>
           <Eyebrow tick>Give several items</Eyebrow>

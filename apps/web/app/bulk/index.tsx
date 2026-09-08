@@ -14,6 +14,7 @@ import { Card } from "@/ui/Surface";
 import { Skeleton } from "@/ui/Skeleton";
 import { EmptyState } from "@/ui/EmptyState";
 import { Stamp } from "@/ui/Stamp";
+import { RouteHead } from "@/ui/RouteHead";
 import { listBatches } from "@/api/bulk";
 import { ApiError } from "@/api/client";
 import { getOwnerToken } from "@/lib/ownerToken";
@@ -103,6 +104,7 @@ export default function BulkBatchList(): React.ReactElement {
   if (unavailable) {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+        <RouteHead title="Give several items" />
         <EmptyState
           ornament={<Stamp state="idle" label="Estate" />}
           eyebrow="Give several items"
@@ -115,6 +117,7 @@ export default function BulkBatchList(): React.ReactElement {
 
   return (
     <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: sectionRhythm.tight }}>
+      <RouteHead title="Give several items" description="Prepare many keepsakes over several sittings, then publish the ready ones together." />
       <Card style={{ gap: sectionRhythm.tight, transform: [{ rotate: "0.2deg" }] }}>
         <View style={{ gap: space.sm }}>
           <Eyebrow tick>Estate clear-outs</Eyebrow>
