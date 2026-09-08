@@ -109,9 +109,25 @@ export type FeedEmptyInput = {
   location: LocationPref;
 };
 
-/** The typographic quotes the rest of the product's copy uses. */
+/**
+ * How much of the visitor's own search term the heading will echo back.
+ *
+ * The heading is `displayLg` — 40px — and the search box accepts anything,
+ * so this is the difference between naming what was searched for and handing
+ * a stranger control of the layout. Caught in the baseline rather than in
+ * review: `feed-search-empty.jpg` was captured with `zzzznothingmatchesthis`
+ * (22 characters, no space in it to break at), and the title ran off both
+ * edges of its card. `EmptyState` breaks a long word rather than overflowing
+ * now too — the two fixes are independent on purpose, since a term that is
+ * merely long should wrap, and one that is absurd should be cut.
+ */
+const ECHOED_TERM_MAX = 24;
+
+/** The typographic quotes the rest of the product's copy uses, around at most
+ * `ECHOED_TERM_MAX` characters of whatever was typed. */
 function quoted(text: string): string {
-  return `“${text}”`;
+  const clipped = text.length > ECHOED_TERM_MAX ? `${text.slice(0, ECHOED_TERM_MAX).trimEnd()}…` : text;
+  return `“${clipped}”`;
 }
 
 function filteredTitle(q: string, category: Category | null): string {

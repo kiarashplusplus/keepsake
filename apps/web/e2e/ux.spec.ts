@@ -171,7 +171,11 @@ test.describe("ux baseline", () => {
     await shot(page, testInfo, "item-request-sheet-filled");
 
     await page.getByLabel("Send").click();
-    await expect(page.getByText("Sent. The giver will choose in their own time.")).toBeVisible();
+    // #188 replaced "Sent." with the confirm-by-email copy, and this line was
+    // never updated — so the whole capture run has been failing here, and the
+    // baseline unrefreshable, since that shipped. Matching a stable fragment
+    // rather than the full paragraph so a comma does not do this again.
+    await expect(page.getByText(/We've emailed you to check it was really you/)).toBeVisible();
     await shot(page, testInfo, "item-request-sent");
 
     await page.goto(`/item/${catalog.ids.records}`);
@@ -304,7 +308,27 @@ test.describe("ux baseline", () => {
     // shared table, not a flake.
     const requestedId = catalog.requestedIdFor(testInfo.project.name);
     await page.goto(`/mine/${requestedId}`);
-    await expect(page.getByText(DEMO_REQUESTS[0]!.note, { exact: true })).toBeVisible();
+
+    // The four frames below need a request the giver can actually see, and
+    // since #188 there is no way for this harness to produce one: an ask is
+    // held until the stranger clicks a link that only exists in an email, and
+    // `request.spec.ts` is explicit that not being able to reach that token
+    // is the point rather than a gap ("giving the product a way to hand a
+    // confirmation token to a test" is the thing #188 exists to prevent).
+    //
+    // So this stops here rather than pretending. Skipping loudly, with the
+    // frames above already written, keeps the rest of the baseline
+    // refreshable — the alternative is a capture run that always fails, which
+    // is what has been happening since #188 and is why every frame in this
+    // directory was stale. `mine-detail-requests`, `-choose`, `-chosen` and
+    // `mine-email` stay at whatever they last showed; see #229.
+    const firstNote = page.getByText(DEMO_REQUESTS[0]!.note, { exact: true });
+    test.skip(
+      (await firstNote.count()) === 0,
+      "no confirmed request to photograph: #188 holds an ask until an emailed link is clicked, which this harness cannot do — see #229",
+    );
+
+    await expect(firstNote).toBeVisible();
     await shot(page, testInfo, "mine-detail-requests");
 
     await page.getByLabel("Choose").first().click();

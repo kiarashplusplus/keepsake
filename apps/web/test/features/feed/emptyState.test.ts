@@ -124,4 +124,25 @@ describe("resolveFeedEmptyState (issue #220)", () => {
     expect(state.kind).toBe("catalogue");
     expect(state.actions.map((action) => action.kind)).not.toContain("widenRadius");
   });
+
+  // The heading echoes the visitor's own text at 40px, and the search box
+  // takes anything. Caught in `docs/qa/baseline/ux-mobile/feed-search-empty.jpg`,
+  // where a 22-character word with nothing to break at ran off both edges of
+  // its card.
+  it("clips an absurd search term instead of letting it set the width of the page", () => {
+    const state = resolveFeedEmptyState({
+      q: "z".repeat(400),
+      category: null,
+      location: unanchored,
+    });
+
+    expect(state.title.length).toBeLessThan(60);
+    expect(state.title).toContain("…”");
+  });
+
+  it("leaves an ordinary search term whole", () => {
+    const state = resolveFeedEmptyState({ q: "brooch", category: null, location: unanchored });
+
+    expect(state.title).toBe("Nothing matches “brooch”.");
+  });
 });
