@@ -47,6 +47,17 @@ export type ApiFetchOptions = {
   turnstileToken?: string;
   /** Sent as `X-Idempotency-Key`. */
   idempotencyKey?: string;
+  /**
+   * Extra request headers, merged in before `Authorization`/`Content-Type`
+   * are set — so those two still win if a caller collides with them, and a
+   * caller can't be surprised into overriding auth by accident. Added for
+   * `src/api/bulk.ts`'s `x-bulk-grant` header (`BULK_GRANT_HEADER` in
+   * `@keepsake/contracts/bulk`): a bulk write needs a header no other
+   * domain module has ever needed, and the alternative — a bespoke fetch
+   * wrapper duplicating this file's envelope handling — is the exact drift
+   * this module exists to prevent.
+   */
+  headers?: Record<string, string>;
   signal?: AbortSignal;
 };
 
@@ -61,10 +72,10 @@ function isEnvelope(value: unknown): value is Envelope<unknown> {
 }
 
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const { method = "GET", body, owner = false, adminToken, turnstileToken, idempotencyKey, signal } = options;
+  const { method = "GET", body, owner = false, adminToken, turnstileToken, idempotencyKey, headers: extraHeaders, signal } = options;
 
   const url = `${config.siteUrl}${path}`;
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...(extraHeaders ?? {}) };
   let requestBody: BodyInit | null = null;
 
   if (body !== undefined) {
