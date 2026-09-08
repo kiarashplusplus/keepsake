@@ -450,7 +450,8 @@
   // `onAccent #FBF9F4 on #C4341C  5.2:1 (the stamp button)` — left with the
   // button that wore it (see the button comment below). Stamp red `#C4341C`
   // survives in this file only where it is decorative and carries no text:
-  // the GPC note's left rule, and the checkboxes' native `accent-color`.
+  // the GPC note's left rule, the checkboxes' native `accent-color`, and the
+  // tint on `Accept all`'s stamp shadow. No label is ever set in it.
   // The bottom bar's gradient scrim is decorative too — no text sits on it,
   // so it has no pair to verify.
   //
@@ -557,9 +558,12 @@
     // it is the only action in its own row, reached only by opening the
     // panel, so matching it costs no hierarchy — and styling it more weakly
     // would re-introduce the exact asymmetry above against the visitor who
-    // took the trouble to choose per category. That leaves `.ks-consent__btn`
-    // as the file's only button rule (`--outline` and `--stamp` are gone),
-    // which is the part of #224 this closes. `.ks-consent__more` stays a
+    // took the trouble to choose per category. That left `.ks-consent__btn` as
+    // the file's only button rule (`--outline` and `--stamp` are gone), which
+    // is the part of #224 #223 closed. It is no longer quite the only one:
+    // `--hint` below tints `Accept all`'s stamp shadow and changes nothing
+    // else, so everything above still holds for both buttons' fill, border,
+    // label, size and weight. `.ks-consent__more` stays a
     // plain underlined line because it is a DISCLOSURE, not an answer — it
     // records no decision and its `aria-expanded` says so.
     '.ks-consent__btn{flex:1 1 0;min-width:132px;min-height:44px;box-sizing:border-box;padding:10px 14px;',
@@ -570,6 +574,35 @@
     // filled-ink control looks like when you hover it.
     'box-shadow:2px 3px 0 rgba(27,24,21,.22);}',
     '.ks-consent__btn:hover{box-shadow:3px 5px 0 rgba(27,24,21,.28);}',
+    // The light hint toward `Accept all`: its pressed-stamp shadow is tinted
+    // stamp red instead of ink. Everything the `.ks-consent__btn` comment
+    // above argues still holds literally — same fill, same border, same label
+    // colour, same size, same weight, same type, same 44px target, same row,
+    // same shadow GEOMETRY. Only the shadow's colour differs, so the pair
+    // still reads as two equal answers and `Reject all` is not dimmed,
+    // shrunk, outlined or moved. Nothing about it changed at all.
+    //
+    // A red BORDER was tried first and rejected on sight: a hard 2px ring
+    // around a filled ink button reads as an alert or an error state, which is
+    // both louder than a hint should be and off-brand — nothing else in the
+    // product outlines a control to recommend it. The offset shadow is the
+    // identity's own affordance (a stamp pressed onto the card, sitting a
+    // little forward of the table), so tinting it says `this one is raised`
+    // in the vocabulary the rest of the page already speaks.
+    //
+    // Alpha `.32` against ink's `.22`: red on cream reads lighter than ink at
+    // equal alpha, so the extra alpha buys the same visual weight, not more.
+    // Both values are decorative — the shadow carries no text, and the
+    // button's boundary is its ink border and fill (14.3:1) with or without
+    // it — so there is no contrast pair here to verify, exactly as with the
+    // bar's gradient scrim.
+    //
+    // The `:hover` twin is required, not decoration: `.ks-consent__btn:hover`
+    // is specificity 0,2,0 and would otherwise reset the tint to ink on hover.
+    // It mirrors that rule's 3px/5px lift so the hinted button lifts by the
+    // same distance as the other one.
+    '.ks-consent__btn--hint{box-shadow:2px 3px 0 rgba(196,52,28,.32);}',
+    '.ks-consent__btn--hint:hover{box-shadow:3px 5px 0 rgba(196,52,28,.4);}',
     '.ks-consent__more{display:block;min-height:44px;background:none;border:0;padding:0;cursor:pointer;',
     'font:inherit;font-size:12px;letter-spacing:.5px;color:#1B1815;text-decoration:underline;text-underline-offset:3px;}',
     '.ks-consent__panel{margin:8px 0 0;border-top:1px solid rgba(27,24,21,.32);padding-top:10px;}',
@@ -700,7 +733,9 @@
     // the consent mechanism and not a styling preference. Ids, order and
     // handlers are untouched.
     el.reject = element('button', { type: 'button', id: 'ks-consent-reject', class: 'ks-consent__btn' }, ['Reject all']);
-    el.accept = element('button', { type: 'button', id: 'ks-consent-accept', class: 'ks-consent__btn' }, ['Accept all']);
+    // `--hint` tints this button's stamp shadow and nothing else — see the
+    // rule for what it leaves alone. `Reject all` above is untouched by it.
+    el.accept = element('button', { type: 'button', id: 'ks-consent-accept', class: 'ks-consent__btn ks-consent__btn--hint' }, ['Accept all']);
     el.more = element('button', { type: 'button', id: 'ks-consent-customise', class: 'ks-consent__more', 'aria-expanded': 'false', 'aria-controls': 'ks-consent-panel' }, ['Choose what to allow']);
     // Same class as the two above, deliberately (#223/#224 — see the
     // `.ks-consent__btn` comment). `flex:0 0 auto` is the one thing that
