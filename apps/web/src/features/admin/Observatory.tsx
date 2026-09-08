@@ -355,9 +355,9 @@ function AppSeriesSection({ byDay }: { byDay: ObservatoryAppData["by_day"] }): R
 // Five sub-blocks, in the order an operator would actually check them when
 // something feels stuck: is anything moving at all (batches), what's
 // backed up (drafts), is a submission actually stuck (operations — the age
-// is the one number in this whole section worth a second look), is admission
-// the reason (grants), and finally the windowed funnel a quiet day still
-// wants reported.
+// is the one number in this whole section worth a second look), is a daily
+// ceiling the reason (usage), and finally the windowed funnel a quiet day
+// still wants reported.
 // ---------------------------------------------------------------------------
 
 /** A small caps label above a group of `StatBadge`s — one down from
@@ -384,7 +384,7 @@ function BulkSection({ bulk }: { bulk: ObservatoryBulk }): React.ReactElement {
     );
   }
 
-  const { batches, drafts, operations, grants, funnel } = bulk;
+  const { batches, drafts, operations, usage, funnel } = bulk;
 
   return (
     <View style={{ gap: space.sm }}>
@@ -431,14 +431,13 @@ function BulkSection({ bulk }: { bulk: ObservatoryBulk }): React.ReactElement {
       </View>
 
       <View style={{ gap: space.xs }}>
-        <SubHeading>Grants</SubHeading>
+        <SubHeading>Usage today</SubHeading>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
-          <StatBadge label="Active" value={grants.active} />
-          <StatBadge label="Expired" value={grants.expired} />
-          <StatBadge label="Revoked" value={grants.revoked} />
-          <StatBadge label="Items remaining" value={grants.items_remaining} />
-          <StatBadge label="Photos remaining" value={grants.photos_remaining} />
-          <StatBadge label="Suggestions remaining" value={grants.suggestions_remaining} />
+          <StatBadge label="Owners today" value={usage.owners_today} />
+          <StatBadge label="Items used" value={usage.items_used} />
+          <StatBadge label="Photos used" value={usage.photos_used} />
+          <StatBadge label="Suggestions used" value={usage.suggestions_used} />
+          <StatBadge label="Owners at a limit" value={usage.owners_at_limit} />
         </View>
       </View>
 

@@ -5,7 +5,7 @@
  * it resolves to the same row rather than a duplicate — the whole point of
  * `client_batch_key`/`client_item_id`/`client_photo_id`.
  */
-import { env, SELF } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { bulkRoutes } from "../src/routes/bulk.js";
 import { ulid } from "../src/lib/ids.js";
@@ -14,15 +14,12 @@ import {
   authHeaders,
   fakeFile,
   fakeJpegBytes,
-  freshClientIp,
   freshOwnerToken,
   readErr,
   readOk,
   seedStandardPostalCodes,
-  setTestEnvVar,
 } from "./helpers.js";
 
-const ADMIN_TOKEN = "test-admin-token-bulk-batches";
 const VALID_STORY = "This belonged to my grandmother, and I would love for it to find a new home.";
 
 async function seedOwner(token: string): Promise<string> {
@@ -35,30 +32,8 @@ async function seedOwner(token: string): Promise<string> {
   return id;
 }
 
-interface GrantSummary {
-  id: string;
-  batch_id: string | null;
-  items_remaining: number;
-  photos_remaining: number;
-  expires_at: number;
-}
-
-async function mintGrant(ownerId: string, extra: { items?: number; photos?: number } = {}): Promise<GrantSummary> {
-  setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
-  const res = await SELF.fetch("http://x/api/admin/bulk/grants", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json", "CF-Connecting-IP": freshClientIp() },
-    body: JSON.stringify({ owner_id: ownerId, ...extra }),
-  });
-  return readOk<GrantSummary>(res);
-}
-
-function bulkHeaders(token: string, grantId?: string): Record<string, string> {
-  return {
-    ...authHeaders(token),
-    "Content-Type": "application/json",
-    ...(grantId ? { "x-bulk-grant": grantId } : {}),
-  };
+function bulkHeaders(token: string): Record<string, string> {
+  return { ...authHeaders(token), "Content-Type": "application/json" };
 }
 
 async function bulk(path: string, init: RequestInit = {}): Promise<Response> {
@@ -112,12 +87,11 @@ describe("estate bulk upload: batches, items, photos", () => {
     await seedStandardPostalCodes();
 
     const token = freshOwnerToken();
-    const ownerId = await seedOwner(token);
-    const grant = await mintGrant(ownerId, { items: 10, photos: 10 });
+    await seedOwner(token);
 
     // --- POST /batches -------------------------------------------------
     const createBody = { client_batch_key: "estate-42", name: "Mum's house", country: "US", postal_code: "02144" };
-    const createRes = await bulk("/batches", { method: "POST", headers: bulkHeaders(token, grant.id), body: JSON.stringify(createBody) });
+    const createRes = await bulk("/batches", { method: "POST", headers: bulkHeaders(token), body: JSON.stringify(createBody) });
     expect(createRes.status).toBe(201);
     const batch = await readOk<BatchSummaryBody>(createRes);
     expect(batch.state).toBe("draft");
@@ -126,7 +100,7 @@ describe("estate bulk upload: batches, items, photos", () => {
     expect(batch.photo_count).toBe(0);
 
     // A retry of the exact same create resolves to the same row.
-    const retryCreateRes = await bulk("/batches", { method: "POST", headers: bulkHeaders(token, grant.id), body: JSON.stringify(createBody) });
+    const retryCreateRes = await bulk("/batches", { method: "POST", headers: bulkHeaders(token), body: JSON.stringify(createBody) });
     expect(retryCreateRes.status).toBe(201);
     const retryBatch = await readOk<BatchSummaryBody>(retryCreateRes);
     expect(retryBatch.id).toBe(batch.id);
@@ -135,7 +109,7 @@ describe("estate bulk upload: batches, items, photos", () => {
     // --- PUT items/:clientItemId (create) -------------------------------
     const createItemRes = await bulk(`/batches/${batch.id}/items/teacup`, {
       method: "PUT",
-      headers: bulkHeaders(token, grant.id),
+      headers: bulkHeaders(token),
       body: JSON.stringify({ fields: { title: "A quiet teacup", story: VALID_STORY, category: "home_kitchen" }, room_label: "front bedroom" }),
     });
     expect(createItemRes.status).toBe(201);
@@ -151,7 +125,7 @@ describe("estate bulk upload: batches, items, photos", () => {
     // than a conflict or a second item.
     const retryItemRes = await bulk(`/batches/${batch.id}/items/teacup`, {
       method: "PUT",
-      headers: bulkHeaders(token, grant.id),
+      headers: bulkHeaders(token),
       body: JSON.stringify({ fields: { title: "A quiet teacup", story: VALID_STORY, category: "home_kitchen" } }),
     });
     expect(retryItemRes.status).toBe(200);
@@ -162,7 +136,7 @@ describe("estate bulk upload: batches, items, photos", () => {
     // --- PUT photos/:clientPhotoId --------------------------------------
     const uploadRes = await bulk(`/batches/${batch.id}/photos/cover`, {
       method: "PUT",
-      headers: { ...authHeaders(token), "x-bulk-grant": grant.id },
+      headers: authHeaders(token),
       body: photoForm(),
     });
     expect(uploadRes.status).toBe(201);
@@ -175,7 +149,7 @@ describe("estate bulk upload: batches, items, photos", () => {
     // replay cache.
     const retryUploadRes = await bulk(`/batches/${batch.id}/photos/cover`, {
       method: "PUT",
-      headers: { ...authHeaders(token), "x-bulk-grant": grant.id },
+      headers: authHeaders(token),
       body: photoForm(),
     });
     expect(retryUploadRes.status).toBe(200);
@@ -185,7 +159,7 @@ describe("estate bulk upload: batches, items, photos", () => {
     // --- PUT items/:clientItemId (update: attach the photo) ------------
     const attachRes = await bulk(`/batches/${batch.id}/items/teacup`, {
       method: "PUT",
-      headers: bulkHeaders(token, grant.id),
+      headers: bulkHeaders(token),
       body: JSON.stringify({
         expected_revision: item1.revision,
         fields: { title: "A quiet teacup", story: VALID_STORY, category: "home_kitchen" },
@@ -205,7 +179,7 @@ describe("estate bulk upload: batches, items, photos", () => {
     // attach above — is a 409, not a silent overwrite.
     const staleRes = await bulk(`/batches/${batch.id}/items/teacup`, {
       method: "PUT",
-      headers: bulkHeaders(token, grant.id),
+      headers: bulkHeaders(token),
       body: JSON.stringify({ expected_revision: item1.revision, fields: { title: "Renamed", story: VALID_STORY, category: "home_kitchen" } }),
     });
     expect(staleRes.status).toBe(409);
@@ -230,12 +204,11 @@ describe("estate bulk upload: batches, items, photos", () => {
     await seedStandardPostalCodes();
 
     const token = freshOwnerToken();
-    const ownerId = await seedOwner(token);
-    const grant = await mintGrant(ownerId);
+    await seedOwner(token);
 
     const createRes = await bulk("/batches", {
       method: "POST",
-      headers: bulkHeaders(token, grant.id),
+      headers: bulkHeaders(token),
       body: JSON.stringify({ client_batch_key: "patch-me", name: "Original name", country: "US", postal_code: "02144" }),
     });
     const batch = await readOk<{ id: string; revision: number; place_name: string }>(createRes);
@@ -244,7 +217,7 @@ describe("estate bulk upload: batches, items, photos", () => {
     // Name-only edit: no postcode change, revision must match.
     const renameRes = await bulk(`/batches/${batch.id}`, {
       method: "PATCH",
-      headers: bulkHeaders(token, grant.id),
+      headers: bulkHeaders(token),
       body: JSON.stringify({ expected_revision: batch.revision, name: "Renamed estate" }),
     });
     expect(renameRes.status).toBe(200);
@@ -258,7 +231,7 @@ describe("estate bulk upload: batches, items, photos", () => {
     // Stale revision — the one before the rename above.
     const staleRes = await bulk(`/batches/${batch.id}`, {
       method: "PATCH",
-      headers: bulkHeaders(token, grant.id),
+      headers: bulkHeaders(token),
       body: JSON.stringify({ expected_revision: batch.revision, name: "Should not land" }),
     });
     expect(staleRes.status).toBe(409);
@@ -266,7 +239,7 @@ describe("estate bulk upload: batches, items, photos", () => {
     // A real postcode change re-resolves geo.
     const movedRes = await bulk(`/batches/${batch.id}`, {
       method: "PATCH",
-      headers: bulkHeaders(token, grant.id),
+      headers: bulkHeaders(token),
       body: JSON.stringify({ expected_revision: renamed.revision, postal_code: "M5V", country: "CA" }),
     });
     expect(movedRes.status).toBe(200);
@@ -279,19 +252,18 @@ describe("estate bulk upload: batches, items, photos", () => {
     await seedStandardPostalCodes();
 
     const token = freshOwnerToken();
-    const ownerId = await seedOwner(token);
-    const grant = await mintGrant(ownerId);
+    await seedOwner(token);
 
     const createRes = await bulk("/batches", {
       method: "POST",
-      headers: bulkHeaders(token, grant.id),
+      headers: bulkHeaders(token),
       body: JSON.stringify({ client_batch_key: "cancel-me", name: "To cancel", country: "US", postal_code: "02144" }),
     });
     const batch = await readOk<{ id: string }>(createRes);
 
     const uploadRes = await bulk(`/batches/${batch.id}/photos/only`, {
       method: "PUT",
-      headers: { ...authHeaders(token), "x-bulk-grant": grant.id },
+      headers: authHeaders(token),
       body: photoForm(),
     });
     const photo = await readOk<BatchPhotoBody>(uploadRes);

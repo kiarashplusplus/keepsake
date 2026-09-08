@@ -364,25 +364,27 @@ MOCK_AI = "0"
 # reason at all to let a giver reach it. Preview is where that first real
 # browser run has to happen before this can be considered for production.
 #
-# The grant counters below — `BULK_MAX_ITEMS_PER_BATCH`, `_PHOTOS_PER_BATCH`,
-# `BULK_OWNER_DAILY_ITEMS`, `_PHOTOS` — are what actually bounds a batch, not
-# Turnstile. Worth saying plainly, because it is what an audit would
-# otherwise go looking for and not find: `turnstile()`
+# The counters below — `BULK_MAX_ITEMS_PER_BATCH`, `_PHOTOS_PER_BATCH`,
+# `BULK_OWNER_DAILY_ITEMS`, `_PHOTOS`, `_SUGGESTIONS` — are what actually
+# bounds a batch, not Turnstile. Worth saying plainly, because it is what an
+# audit would otherwise go looking for and not find: `turnstile()`
 # (`src/middleware/turnstile.ts`) soft-passes whenever `TURNSTILE_SECRET` is
 # unset, which is every local run and every test, and a challenge is
 # single-use and expires in 300 seconds regardless — mounting one per photo
-# would mean 300 challenges for a 100-item estate. So admission is a grant
-# (`bulk_grants`, minted by an operator for the pilot) whose two counters are
-# exact D1 guarded updates, never KV: the KV budgets elsewhere on this page
-# are eventually consistent by their own documentation and cannot be a lock.
-# `BULK_GRANT_TTL_HOURS` is how long an unspent grant stays valid before it
-# needs renewing.
+# would mean 300 challenges for a 100-item estate. So the bound is D1: the
+# per-batch caps are predicates on the item and photo inserts themselves,
+# and the per-owner-per-day ones are guarded upserts on `bulk_owner_usage`.
+# Never KV — the KV budgets elsewhere on this page are eventually consistent
+# by their own documentation and cannot be a lock. (There used to be a third
+# layer here, an operator-minted `bulk_grants` row a giver pasted in as an
+# "admission code". It is gone, with its table; see
+# `20260908094215_bulk_drop_grants.sql`.)
 #
 # `BULK_MAX_ITEMS_PER_BATCH` must never exceed `MAX_BATCH_ITEMS` and
 # `BULK_MAX_PHOTOS_PER_BATCH` must never exceed `MAX_BATCH_PHOTOS`, both from
 # `packages/contracts/src/bulk.ts` — those are the caps `SubmitBatchInput`
-# and `AdminMintBulkGrantInput` actually enforce, so raising the var past the
-# contract does not raise what the API will accept. Get that backwards and
+# actually enforces, so raising the var past the contract does not raise
+# what the API will accept. Get that backwards and
 # the failure lands on exactly the person this feature exists to help: an
 # operator raises the var, a giver spends an evening photographing and
 # describing 120 items against the higher ceiling, and the submission 400s
@@ -394,11 +396,11 @@ MOCK_AI = "0"
 # see the migration's header for why that lives on `photos` rather than a
 # join.
 BULK_UPLOAD = "0"
-BULK_GRANT_TTL_HOURS = "72"
 BULK_MAX_ITEMS_PER_BATCH = "100"
 BULK_MAX_PHOTOS_PER_BATCH = "300"
 BULK_OWNER_DAILY_ITEMS = "150"
 BULK_OWNER_DAILY_PHOTOS = "450"
+BULK_OWNER_DAILY_SUGGESTIONS = "225"
 BULK_DRAFT_RETENTION_DAYS = "7"
 
 # --- D1 ---
@@ -525,8 +527,8 @@ simple = { limit = 10, period = 60 }
 # upload time, not 30+. This is *not* meant to be exact — see this file's
 # own "not a hard cap" comment two sections up — and it is safe to be
 # generous here specifically because it is not doing the rationing:
-# `photos_remaining` on the batch's `bulk_grants` row is the exact D1-guarded
-# ceiling on total volume (`src/bulk/grants.ts`), so this binding's only job
+# `bulk_owner_usage.photos_used` is the exact D1-guarded ceiling on total
+# volume (`src/bulk/usage.ts`), so this binding's only job
 # is to blunt a burst within one minute, not to bound how many photos a
 # batch may ever upload. Restated identically under `[env.preview]` and
 # `[env.production]` below, and `test/bulkCaps.test.ts` asserts all three
@@ -680,11 +682,11 @@ MOCK_AI = "0"
 # where the estate bulk upload pilot gets its first real-browser run before
 # it can be considered for production.
 BULK_UPLOAD = "1"
-BULK_GRANT_TTL_HOURS = "72"
 BULK_MAX_ITEMS_PER_BATCH = "100"
 BULK_MAX_PHOTOS_PER_BATCH = "300"
 BULK_OWNER_DAILY_ITEMS = "150"
 BULK_OWNER_DAILY_PHOTOS = "450"
+BULK_OWNER_DAILY_SUGGESTIONS = "225"
 BULK_DRAFT_RETENTION_DAYS = "7"
 
 [[env.preview.d1_databases]]
@@ -914,11 +916,11 @@ MOCK_AI = "0"
 # not run against a real browser anywhere yet, so it has not been approved
 # for production; preview is where that has to happen first.
 BULK_UPLOAD = "0"
-BULK_GRANT_TTL_HOURS = "72"
 BULK_MAX_ITEMS_PER_BATCH = "100"
 BULK_MAX_PHOTOS_PER_BATCH = "300"
 BULK_OWNER_DAILY_ITEMS = "150"
 BULK_OWNER_DAILY_PHOTOS = "450"
+BULK_OWNER_DAILY_SUGGESTIONS = "225"
 BULK_DRAFT_RETENTION_DAYS = "7"
 
 [[env.production.d1_databases]]

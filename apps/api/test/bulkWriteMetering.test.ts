@@ -6,14 +6,12 @@
  * last one below, which enumerates the router's own registrations and fails
  * if a write route is ever added outside the guard.
  */
-import { env, SELF } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { bulkRoutes } from "../src/routes/bulk.js";
 import { ulid } from "../src/lib/ids.js";
 import { sha256Hex } from "../src/lib/digest.js";
-import { authHeaders, fakeFile, fakeJpegBytes, freshClientIp, freshOwnerToken, installDenyingRateLimiter, readOk, seedStandardPostalCodes, setTestEnvVar } from "./helpers.js";
-
-const ADMIN_TOKEN = "test-admin-token-bulk-write-metering";
+import { authHeaders, fakeFile, fakeJpegBytes, freshOwnerToken, installDenyingRateLimiter, readOk, seedStandardPostalCodes } from "./helpers.js";
 
 async function seedOwner(token: string): Promise<string> {
   const id = ulid();
@@ -25,18 +23,8 @@ async function seedOwner(token: string): Promise<string> {
   return id;
 }
 
-interface GrantSummary {
-  id: string;
-}
-
-async function mintGrant(ownerId: string): Promise<GrantSummary> {
-  setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
-  const res = await SELF.fetch("http://x/api/admin/bulk/grants", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json", "CF-Connecting-IP": freshClientIp() },
-    body: JSON.stringify({ owner_id: ownerId }),
-  });
-  return readOk<GrantSummary>(res);
+function bulkHeaders(token: string): Record<string, string> {
+  return { ...authHeaders(token), "Content-Type": "application/json" };
 }
 
 async function bulk(path: string, init: RequestInit = {}): Promise<Response> {
@@ -96,11 +84,10 @@ describe("every write on bulkRoutes is behind the router-level burst brake", () 
   it("429s every non-GET route when RL_WRITE denies, before auth or a handler runs", async () => {
     await seedStandardPostalCodes();
     const token = freshOwnerToken();
-    const ownerId = await seedOwner(token);
-    const grant = await mintGrant(ownerId);
+    await seedOwner(token);
     const batch = await bulk("/batches", {
       method: "POST",
-      headers: { ...authHeaders(token), "Content-Type": "application/json", "x-bulk-grant": grant.id },
+      headers: bulkHeaders(token),
       body: JSON.stringify({ client_batch_key: "seed", name: "Estate", country: "US", postal_code: "02144" }),
     }).then((res) => readOk<{ id: string }>(res));
 
@@ -110,7 +97,7 @@ describe("every write on bulkRoutes is behind the router-level burst brake", () 
         const path = route.url({ batchId: batch.id });
         const init: RequestInit = { method: route.method };
         if (route.multipart) {
-          // Deliberately no `Authorization`/grant header either — the
+          // Deliberately no `Authorization` header either — the
           // limiter has to sit in front of everything, and a 429 with no
           // credential presented at all is the proof it does.
           init.body = photoForm();

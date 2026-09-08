@@ -320,7 +320,7 @@ important thing about them is that they fail *separately*:
 
 - **`app`** — listings, requests, the give→get funnel, how long the moderation queue has been
   waiting, the search index, and (plan Stage 5) estate bulk upload's own batches/drafts/operations/
-  grants/funnel. Comes from D1, needs no credential, and is always present. If this is missing the
+  usage/funnel. Comes from D1, needs no credential, and is always present. If this is missing the
   request 500s, because a Worker that cannot read its own database has nothing to say.
 - **`edge`** — request/error counts and CPU quantiles from Cloudflare's GraphQL Analytics API.
 - **`logs`** — the Worker's own `console.error`/`console.warn` lines, read back out of Workers Logs.
@@ -384,7 +384,7 @@ With `enabled: true`, five sub-objects, read in the order an operator would actu
   honest count of batches a giver started and never came back to.
 - **`drafts`** — `items_by_state` (`editing` / `ready` / `queued` / `submitted` / `failed`),
   `items_outstanding` (everything except `submitted`), and `photos_reserved`/`photos_stored` —
-  `upload_batch_photos` rows where admission was charged but the bytes never finished landing in R2
+  `upload_batch_photos` rows where the allowance was charged but the bytes never finished landing in R2
   (`photo_id IS NULL`) versus rows where the upload actually finished. **`items_by_state.ready`
   reads `0` on every environment today, and that is correct, not a bug in the query**: nothing in
   `src/bulk/submit.ts` or `routes/bulk.ts` ever writes `state = 'ready'` — readiness
@@ -402,9 +402,13 @@ With `enabled: true`, five sub-objects, read in the order an operator would actu
   purpose every ~3 minutes. Scoped to active operations so one that needed a recovery and then
   finished cleanly doesn't keep this number above zero forever — **a rising count here, among work
   still in flight, means the runner is dying mid-run.**
-- **`grants`** — `active` / `expired` / `revoked` counts, and `items_remaining` /
-  `photos_remaining` / `suggestions_remaining` summed across only the `active` grants: how much
-  admission is outstanding right now.
+- **`usage`** — today's `bulk_owner_usage`: `owners_today` (rows for today's UTC date),
+  `items_used` / `photos_used` / `suggestions_used` summed across them, and **`owners_at_limit`**,
+  the count of callers who have hit at least one of `BULK_OWNER_DAILY_ITEMS` /
+  `_PHOTOS` / `_SUGGESTIONS` and whose next write of that kind is refused until UTC midnight. That
+  last number is the one worth an alert: it is the shape of "a giver emailed asking why their
+  upload stopped". This panel replaced a `grants` one when the admission code was removed — same
+  question, asked of the ceiling that is still there.
 - **`funnel`** — windowed the same way `app.funnel` is: `batches_started`, `items_submitted`,
   `items_approved`, **`orphan_bytes`** (real bytes — `SUM(photos.bytes_full)` — for finished
   uploads that never got attached to any item in a batch whose fate is already sealed, `closed` or
@@ -427,7 +431,7 @@ With `enabled: true`, five sub-objects, read in the order an operator would actu
   operation id (the message field is redacted — see "Log hygiene" below — so cross-reference by id,
   not by message content) and treat it as a platform-level symptom (CPU limits, a hung fetch inside
   `moderateListing`), not a data problem.
-- **`drafts.photos_reserved` stays non-zero for a while** — a giver was charged admission for a
+- **`drafts.photos_reserved` stays non-zero for a while** — a giver was charged for a
   photo whose bytes never finished storing (an evicted `PUT /api/bulk/batches/:id/photos/:id`
   mid-upload). A retry of the same `client_photo_id` resumes it without a second debit — that is the
   whole point of the reservation row (`20260908063000_bulk_photo_reservation.sql`) — so this is

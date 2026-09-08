@@ -1,14 +1,37 @@
 // "Give several items" — start a batch. Collects everything
-// `CreateBatchInput` needs (name, country/postcode, optional shared story)
-// plus two things the wire contract deliberately doesn't carry: the
-// admission grant id (an operator hands this to a giver out of band — see
-// `src/lib/bulkGrant.ts`) and an optional private pickup-deadline reminder
-// (`src/features/bulk/pickupDeadline.ts`, local-only, never a promise the
-// product makes to anyone).
+// `CreateBatchInput` needs (name, country/postcode, optional shared story),
+// an optional private pickup-deadline reminder that the wire contract
+// deliberately doesn't carry (`src/features/bulk/pickupDeadline.ts`,
+// local-only, never a promise the product makes to anyone), and an optional
+// email.
+//
+// The email is saved **here**, inline, by `POST /api/me/email` — the same
+// call `app/mine/email.tsx` makes. It used to be a link to that screen at
+// the bottom of the form, which meant the first thing this page asked of
+// someone about to spend an evening photographing a house was to leave it.
+// A batch lives on a device token; an email is the only way back to it from
+// another browser, so it belongs in the form that starts the batch, beside
+// the name it will be found under — not on a page they have to navigate to
+// and then navigate back from.
+//
+// It is attached to the *owner*, not the batch (there is no email field on
+// `CreateBatchInput` and shouldn't be), so it is saved as its own step —
+// after the batch, because `POST /api/me/email` is one of the routes that
+// 401s a token with no `owners` row yet, and on a fresh device
+// `POST /api/bulk/batches` is what creates that row
+// (`ownerAuth({ createIfMissing: true })`, see `routes/bulk.ts`).
+//
+// A refused address therefore leaves a batch already created — which is
+// why `clientBatchKeyRef` below is minted once per visit rather than per
+// press. `POST /api/bulk/batches` resolves a repeated client key to the
+// same batch (its own `ON CONFLICT` re-select), so pressing "Start this
+// batch" again after fixing or clearing the email retries the email
+// against that same batch instead of stranding a second one.
 import * as React from "react";
 import { View } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { COUNTRIES, COUNTRY_LABELS, COUNTRY_POSTCODE_HINTS, normalizePostalCode, type Country, type PostalLookup } from "@keepsake/contracts/geo";
+import { MailableEmailSchema, RESERVED_EMAIL_DOMAIN_MESSAGE } from "@keepsake/contracts/common";
 import { STORY_MAX } from "@keepsake/contracts/listing";
 import { space } from "@keepsake/tokens/spacing";
 import { Text } from "@/ui/Text";
@@ -18,14 +41,17 @@ import { TextArea } from "@/ui/TextArea";
 import { Chip } from "@/ui/Chip";
 import { Button } from "@/ui/Button";
 import { DateField } from "@/ui/DateField";
+import { Turnstile, type TurnstileHandle, type TurnstileStatus } from "@/ui/Turnstile";
 import { Page } from "@/ui/Page";
 import { Card } from "@/ui/Surface";
 import { createBatch } from "@/api/bulk";
+import { getMe, setEmail } from "@/api/me";
+import { ApiError } from "@/api/client";
 import { lookupPostalCode } from "@/api/geo";
+import { getOwnerToken } from "@/lib/ownerToken";
 import { batchMetaFromSummary } from "@/features/bulk/batchStore";
 import { getDefaultBulkStorageDriver, saveBatchMeta } from "@/features/bulk/storage";
 import { describeBulkFailure, makeBulkClientId } from "@/features/bulk/useBulkWorkspace";
-import { getStoredGrantId, setStoredGrantId } from "@/lib/bulkGrant";
 import { setPickupDeadline } from "@/features/bulk/pickupDeadline";
 
 const NAME_MAX = 80;
@@ -43,42 +69,50 @@ function todayIso(): string {
 
 export default function NewBulkBatch(): React.ReactElement {
   const router = useRouter();
-  const params = useLocalSearchParams<{ grant?: string }>();
   const [name, setName] = React.useState("");
   const [nameTouched, setNameTouched] = React.useState(false);
   const [country, setCountry] = React.useState<Country>("US");
   const [postalCode, setPostalCode] = React.useState("");
   const [sharedStory, setSharedStory] = React.useState("");
   const [deadline, setDeadline] = React.useState("");
-  const [grantId, setGrantId] = React.useState(() => params.grant ?? getStoredGrantId());
-  const [grantTouched, setGrantTouched] = React.useState(false);
+  const [email, setEmailInput] = React.useState("");
+  const [emailTouched, setEmailTouched] = React.useState(false);
+  /** The address already attached to this device's owner, once `getMe`
+   * answers — `null` while unknown or when there is none. Kept apart from
+   * `email` (what is in the field) so re-submitting an unchanged address
+   * doesn't spend a Turnstile token or send a second verification mail. */
+  const [savedEmail, setSavedEmail] = React.useState<string | null>(null);
+  const [emailVerified, setEmailVerified] = React.useState(false);
+  const [turnstileStatus, setTurnstileStatus] = React.useState<TurnstileStatus>({ status: "pending" });
+  const turnstileRef = React.useRef<TurnstileHandle>(null);
   const [resolved, setResolved] = React.useState<Resolved | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
+  /** One key for this visit, not one per press — see this file's header on
+   * why a retry has to resolve to the batch the last press created. */
+  const clientBatchKeyRef = React.useRef<string | null>(null);
 
-  // A `?grant=` link (an operator emailing a fresh code) always wins over
-  // whatever was stored or typed before. Adjusting `grantId` from a changed
-  // prop like this — during render, guarded by comparing against the last
-  // value seen, rather than inside a `useEffect` — is the pattern React's
-  // own docs recommend for "reset/update some state when a prop changes"
-  // (react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes):
-  // the previous effect-based version tripped `eslint-plugin-react-hooks`'s
-  // "setState synchronously within an effect" rule, because this was never
-  // a synchronization with anything external — that part is the storage
-  // write below, which is a real effect.
-  const [lastGrantParam, setLastGrantParam] = React.useState(params.grant);
-  if (params.grant !== lastGrantParam) {
-    setLastGrantParam(params.grant);
-    if (params.grant !== undefined && params.grant.trim() !== "") setGrantId(params.grant);
-  }
-
-  // Remembered immediately (not just at submit, in `handleCreate` below) so
-  // leaving and returning to this screen before starting a batch doesn't
-  // lose a fresh `?grant=` link.
+  // Only asked for when this device already has an owner identity — `getMe`
+  // is `owner: true`, and `src/api/client.ts` mints a token for any call
+  // that says so. Minting one just because someone opened this form would
+  // hand out an identity to a visitor who has given nothing, which is
+  // exactly what `lib/ownerToken.ts`'s header forbids.
   React.useEffect(() => {
-    if (params.grant === undefined || params.grant.trim() === "") return;
-    setStoredGrantId(params.grant);
-  }, [params.grant]);
+    if (getOwnerToken() === null) return;
+    getMe()
+      .then((me) => {
+        if (me.email === undefined) return;
+        setSavedEmail(me.email);
+        setEmailVerified(me.email_verified === true);
+        // Functional update: never clobber something already typed.
+        setEmailInput((current) => (current === "" ? (me.email ?? "") : current));
+      })
+      .catch(() => {
+        // A failed `getMe` says nothing about whether the address the giver
+        // is about to type will save — leave the field empty and let the
+        // save itself report a real problem.
+      });
+  }, []);
 
   const normalized = normalizePostalCode(country, postalCode);
 
@@ -110,31 +144,55 @@ export default function NewBulkBatch(): React.ReactElement {
   const trimmedName = name.trim();
   const nameValid = trimmedName.length > 0 && trimmedName.length <= NAME_MAX;
   const nameError = nameTouched && !nameValid ? "A name for this batch, up to 80 characters." : undefined;
-  const grantValid = grantId.trim() !== "";
-  const grantError = grantTouched && !grantValid ? "Ask whoever set up your pilot for an admission code." : undefined;
 
-  const canSubmit = nameValid && isResolvedForCurrent && lookupResult !== null && grantValid && !submitting;
+  const trimmedEmail = email.trim();
+  const emailValidation = MailableEmailSchema.safeParse(trimmedEmail);
+  // Optional: an empty field is not an error, it is a giver choosing to
+  // stay device-only. Anything typed has to be a real address.
+  const emailValid = trimmedEmail === "" || emailValidation.success;
+  const emailNeedsSaving = trimmedEmail !== "" && trimmedEmail !== savedEmail;
+  const emailError =
+    emailTouched && !emailValid
+      ? emailValidation.success === false && emailValidation.error.issues[0]?.message === RESERVED_EMAIL_DOMAIN_MESSAGE
+        ? RESERVED_EMAIL_DOMAIN_MESSAGE
+        : "That doesn't look like an email address."
+      : undefined;
+
+  // `POST /api/me/email` is Turnstile-protected, so a pending challenge
+  // blocks the button only when there is actually an address to save —
+  // never for a giver who left the field empty.
+  const turnstileReady = turnstileStatus.status === "ready" || turnstileStatus.status === "unconfigured";
+  const turnstileToken = turnstileStatus.status === "ready" ? turnstileStatus.token : "";
+
+  const canSubmit =
+    nameValid && isResolvedForCurrent && lookupResult !== null && emailValid && (!emailNeedsSaving || turnstileReady) && !submitting;
+
+  const emailHelper = emailNeedsSaving
+    ? "We'll send one note to verify it. Nothing else."
+    : savedEmail !== null && trimmedEmail === savedEmail
+      ? emailVerified
+        ? "Verified — this batch is reachable from any browser."
+        : "Saved. Check your inbox to verify it."
+      : "Optional. Without one, this batch lives only in this browser.";
 
   async function handleCreate(): Promise<void> {
     setNameTouched(true);
-    setGrantTouched(true);
+    setEmailTouched(true);
     if (!canSubmit) return;
 
     setSubmitting(true);
     setSubmitError(null);
-    setStoredGrantId(grantId);
 
-    const clientBatchKey = makeBulkClientId("batch");
-    const result = await createBatch(
-      {
-        client_batch_key: clientBatchKey,
-        name: trimmedName,
-        country,
-        postal_code: postalCode,
-        ...(sharedStory.trim() !== "" ? { shared_story: sharedStory.trim() } : {}),
-      },
-      { grantId: grantId.trim() },
-    );
+    const clientBatchKey = clientBatchKeyRef.current ?? makeBulkClientId("batch");
+    clientBatchKeyRef.current = clientBatchKey;
+
+    const result = await createBatch({
+      client_batch_key: clientBatchKey,
+      name: trimmedName,
+      country,
+      postal_code: postalCode,
+      ...(sharedStory.trim() !== "" ? { shared_story: sharedStory.trim() } : {}),
+    });
 
     if (!result.ok) {
       setSubmitError(describeBulkFailure(result.error));
@@ -145,6 +203,29 @@ export default function NewBulkBatch(): React.ReactElement {
     const meta = batchMetaFromSummary(clientBatchKey, result.data);
     await saveBatchMeta(getDefaultBulkStorageDriver(), meta);
     if (deadline.trim() !== "") setPickupDeadline(clientBatchKey, deadline.trim());
+
+    if (emailNeedsSaving) {
+      try {
+        const me = await setEmail({ email: trimmedEmail }, { turnstileToken });
+        setSavedEmail(me.email ?? trimmedEmail);
+        setEmailVerified(me.email_verified === true);
+      } catch (err) {
+        // A Turnstile token is single-use and was just spent, so force a
+        // fresh one before the next attempt — the same reason
+        // `app/mine/email.tsx` resets its widget after every send. The
+        // batch above is saved and its key is held, so pressing again
+        // retries only the email.
+        turnstileRef.current?.reset();
+        setTurnstileStatus({ status: "pending" });
+        setSubmitError(
+          err instanceof ApiError
+            ? `${err.message} Your batch is saved — fix the address or clear it, then press again.`
+            : "That email didn't go through. Your batch is saved — try again, or clear the address to carry on without one.",
+        );
+        setSubmitting(false);
+        return;
+      }
+    }
 
     router.replace({ pathname: "/bulk/[batchKey]/photos", params: { batchKey: clientBatchKey } });
   }
@@ -173,6 +254,25 @@ export default function NewBulkBatch(): React.ReactElement {
           <Text variant="caption" color="textTertiary">
             {"Private — only you ever see this name. It's how you'll find this batch again in Mine."}
           </Text>
+        </View>
+
+        <View style={{ gap: space.xs }}>
+          <Input
+            label="Email (optional)"
+            value={email}
+            onChangeText={setEmailInput}
+            onBlur={() => setEmailTouched(true)}
+            error={emailError}
+            helper={emailHelper}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="you@example.com"
+          />
+          <Text variant="caption" color="textTertiary">
+            {"This can take several sittings over a number of days. An email is how you pick this batch up again from another browser — and how you hear when someone asks for something."}
+          </Text>
+          {emailNeedsSaving ? <Turnstile ref={turnstileRef} onStatus={setTurnstileStatus} /> : null}
         </View>
 
         <View style={{ gap: space.sm }}>
@@ -215,23 +315,6 @@ export default function NewBulkBatch(): React.ReactElement {
           <DateField label="Pickup deadline (optional)" value={deadline} onChangeText={setDeadline} min={todayIso()} helper="Private — a reminder for you only. Never shown to anyone, and never promises items go live by this date." />
         </View>
 
-        <View style={{ gap: space.xs, paddingTop: space.sm, borderTopWidth: 1, borderTopColor: "transparent" }}>
-          <Input
-            label="Admission code"
-            value={grantId}
-            onChangeText={setGrantId}
-            onBlur={() => setGrantTouched(true)}
-            error={grantError}
-            placeholder="Given to you by whoever set up your pilot"
-            autoCapitalize="none"
-            autoCorrect={false}
-            style={{ maxWidth: 320 }}
-          />
-          <Text variant="caption" color="textTertiary">
-            {"This estate upload needs an admission code from the pilot's operator — it bounds how many items and photos you can add, not who you are."}
-          </Text>
-        </View>
-
         {submitError !== null ? (
           <Text variant="body" color="dangerText">
             {submitError}
@@ -240,20 +323,6 @@ export default function NewBulkBatch(): React.ReactElement {
 
         <View style={{ flexDirection: "row" }}>
           <Button label="Start this batch" loading={submitting} disabled={!canSubmit} onPress={() => void handleCreate()} />
-        </View>
-
-        <View
-          style={{
-            paddingTop: space.md,
-            borderTopWidth: 1,
-            borderTopColor: "transparent",
-            gap: space.xs,
-          }}
-        >
-          <Text variant="body" color="textSecondary">
-            This can take several sittings over a number of days. Add a verified email so you can find this batch again, even from a different browser.
-          </Text>
-          <Button label="Add your email" variant="link" onPress={() => router.push("/mine/email")} />
         </View>
       </Card>
     </Page>

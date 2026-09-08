@@ -65,8 +65,9 @@ export const MAX_BATCH_PHOTOS = 300;
  * per-IP KV counter defaulting to 30 a day, which a 100-item estate would
  * exhaust on item 31 — and a KV counter is eventually consistent by its own
  * documentation, so it could not bound a batch exactly even if the number
- * were bigger. Bulk suggestions are admitted the way bulk items and photos
- * already are: a guarded D1 decrement on the grant.
+ * were bigger. Bulk suggestions are bounded the way bulk items and photos
+ * already are: a guarded D1 decrement on `bulk_owner_usage`, this owner's
+ * row for today.
  */
 export const MAX_BATCH_SUGGESTIONS = 150;
 
@@ -286,37 +287,3 @@ export const BulkOperationSummary = z.object({
   finished_at: TimestampMs.nullable(),
 });
 export type BulkOperationSummary = z.infer<typeof BulkOperationSummary>;
-
-/**
- * What admission a caller currently holds. The id is not a secret — it says
- * only *how much*, never *who* — so it travels in a plain header and a leaked
- * one is worth nothing without the device token it is bound to.
- */
-export const BulkGrantSummary = z.object({
-  id: UlidSchema,
-  batch_id: UlidSchema.nullable(),
-  items_remaining: z.number().int().nonnegative(),
-  photos_remaining: z.number().int().nonnegative(),
-  /** Cover suggestions left on this grant. Spent by the same guarded D1
-   * decrement as the other two, so a lost response that is retried cannot be
-   * charged twice, and a batch cannot quietly outspend what was admitted. */
-  suggestions_remaining: z.number().int().nonnegative(),
-  expires_at: TimestampMs,
-});
-export type BulkGrantSummary = z.infer<typeof BulkGrantSummary>;
-
-/** The header naming the grant a bulk write should be charged against. Not
- * `Authorization` — that one carries the owner token, and a bulk write needs
- * both: the owner token says whose batch it is, the grant says how much work
- * has been admitted. */
-export const BULK_GRANT_HEADER = "x-bulk-grant";
-
-/** Minting a grant is an operator action for the pilot — `POST
- * /api/admin/bulk/grants`, behind the existing admin token. */
-export const AdminMintBulkGrantInput = z.object({
-  owner_id: UlidSchema,
-  items: z.number().int().positive().max(MAX_BATCH_ITEMS).optional(),
-  photos: z.number().int().positive().max(MAX_BATCH_PHOTOS).optional(),
-  suggestions: z.number().int().positive().max(MAX_BATCH_SUGGESTIONS).optional(),
-});
-export type AdminMintBulkGrantInput = z.infer<typeof AdminMintBulkGrantInput>;

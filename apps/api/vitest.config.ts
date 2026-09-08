@@ -146,11 +146,11 @@ export default defineConfig({
             // vars above are pinned — a retune of the real ceilings must not
             // silently change what the bulk tests assert against.
             BULK_UPLOAD: "1",
-            BULK_GRANT_TTL_HOURS: "72",
             BULK_MAX_ITEMS_PER_BATCH: "100",
             BULK_MAX_PHOTOS_PER_BATCH: "300",
             BULK_OWNER_DAILY_ITEMS: "150",
             BULK_OWNER_DAILY_PHOTOS: "450",
+            BULK_OWNER_DAILY_SUGGESTIONS: "225",
             BULK_DRAFT_RETENTION_DAYS: "7",
           },
           // `../web/dist` (wrangler.toml's real `[assets] directory`) does

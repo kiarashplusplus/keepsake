@@ -37,7 +37,6 @@ type TrackedQueue = {
   retry: jest.Mock;
   cancel: jest.Mock;
   destroy: jest.Mock;
-  setGrantId: jest.Mock;
   resume: jest.Mock;
 };
 let mockTrackedQueues: TrackedQueue[] = [];
@@ -48,7 +47,6 @@ jest.mock("@/features/bulk/uploadQueue", () => ({
     this.retry = jest.fn();
     this.cancel = jest.fn();
     this.destroy = jest.fn();
-    this.setGrantId = jest.fn();
     this.resume = jest.fn().mockResolvedValue(undefined);
     mockTrackedQueues.push(this as unknown as TrackedQueue);
   }),
@@ -157,7 +155,7 @@ describe("useBulkWorkspace", () => {
     const key = freshBatchKey();
     await seedLocalBatch(key);
 
-    const { result } = renderHook(() => useBulkWorkspace(key, ""));
+    const { result } = renderHook(() => useBulkWorkspace(key));
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
     expect(bulkApi.listBatches).not.toHaveBeenCalled();
@@ -170,7 +168,7 @@ describe("useBulkWorkspace", () => {
     const detail: BatchDetail = { ...batchSummary(key), items: [itemSummary()], photos: [photoSummary({ item_client_id: "item-a" })] };
     jest.mocked(bulkApi.getBatch).mockResolvedValue(detail);
 
-    const { result } = renderHook(() => useBulkWorkspace(key, ""));
+    const { result } = renderHook(() => useBulkWorkspace(key));
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
     expect(result.current.state.items["item-a"]).toBeDefined();
@@ -178,7 +176,7 @@ describe("useBulkWorkspace", () => {
 
     // A second mount now finds it locally, with no further network call.
     jest.mocked(bulkApi.listBatches).mockClear();
-    const { result: second } = renderHook(() => useBulkWorkspace(key, ""));
+    const { result: second } = renderHook(() => useBulkWorkspace(key));
     await waitFor(() => expect(second.current.status).toBe("ready"));
     expect(bulkApi.listBatches).not.toHaveBeenCalled();
   });
@@ -187,7 +185,7 @@ describe("useBulkWorkspace", () => {
     const key = freshBatchKey();
     jest.mocked(bulkApi.listBatches).mockResolvedValue([]);
 
-    const { result } = renderHook(() => useBulkWorkspace(key, ""));
+    const { result } = renderHook(() => useBulkWorkspace(key));
     await waitFor(() => expect(result.current.status).toBe("not_found"));
   });
 
@@ -195,14 +193,14 @@ describe("useBulkWorkspace", () => {
     const key = freshBatchKey();
     jest.mocked(bulkApi.listBatches).mockRejectedValue(new ApiError("not_found", "Not found.", 404));
 
-    const { result } = renderHook(() => useBulkWorkspace(key, ""));
+    const { result } = renderHook(() => useBulkWorkspace(key));
     await waitFor(() => expect(result.current.status).toBe("unavailable"));
   });
 
   it("addPhotos adds a tray photo and enqueues it on the upload queue", async () => {
     const key = freshBatchKey();
     await seedLocalBatch(key);
-    const { result } = renderHook(() => useBulkWorkspace(key, "grant-1"));
+    const { result } = renderHook(() => useBulkWorkspace(key));
     await waitFor(() => expect(result.current.status).toBe("ready"));
     await waitFor(() => expect(mockTrackedQueues).toHaveLength(1));
 
@@ -221,7 +219,7 @@ describe("useBulkWorkspace", () => {
     await seedLocalBatch(key);
     jest.mocked(bulkApi.upsertBatchItem).mockResolvedValue({ ok: true, data: itemSummary({ client_item_id: "will-be-ignored" }) });
 
-    const { result } = renderHook(() => useBulkWorkspace(key, "grant-1"));
+    const { result } = renderHook(() => useBulkWorkspace(key));
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
     await act(async () => {
@@ -254,7 +252,7 @@ describe("useBulkWorkspace", () => {
       }),
     );
 
-    const { result } = renderHook(() => useBulkWorkspace(key, "grant-1"));
+    const { result } = renderHook(() => useBulkWorkspace(key));
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
     await act(async () => {
@@ -328,7 +326,7 @@ describe("useBulkWorkspace", () => {
       },
     });
 
-    const { result } = renderHook(() => useBulkWorkspace(key, "grant-1"));
+    const { result } = renderHook(() => useBulkWorkspace(key));
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
     await act(async () => {
@@ -376,9 +374,9 @@ describe("useBulkWorkspace", () => {
       return Promise.resolve({ ok: true, data: itemSummary({ client_item_id: clientItemId, photo_client_ids: lastPhotoClientIds, revision: 2 }) });
     });
     // The first cover's suggestion fails outright — must never set a marker.
-    jest.mocked(bulkApi.suggestBatchPhoto).mockResolvedValueOnce({ ok: false, error: { kind: "admission_exhausted", message: "No suggestions left." } });
+    jest.mocked(bulkApi.suggestBatchPhoto).mockResolvedValueOnce({ ok: false, error: { kind: "limit_reached", message: "No suggestions left." } });
 
-    const { result } = renderHook(() => useBulkWorkspace(key, "grant-1"));
+    const { result } = renderHook(() => useBulkWorkspace(key));
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
     await act(async () => {
@@ -440,7 +438,7 @@ describe("useBulkWorkspace", () => {
       Promise.resolve({ ok: true, data: itemSummary({ client_item_id: clientItemId, story: input.fields.story ?? null, revision: 2 }) }),
     );
 
-    const { result } = renderHook(() => useBulkWorkspace(key, "grant-1"));
+    const { result } = renderHook(() => useBulkWorkspace(key));
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
     act(() => {
@@ -507,7 +505,7 @@ describe("useBulkWorkspace", () => {
       data: { id: "01OPA0000000000000000000A", batch_id: "01BATCHA000000000000000000", kind: "submit", status: "queued", total: 1, succeeded: 0, failed: 0, created_at: 1, updated_at: 1, finished_at: null },
     });
 
-    const { result } = renderHook(() => useBulkWorkspace(key, "grant-1"));
+    const { result } = renderHook(() => useBulkWorkspace(key));
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
     act(() => {
@@ -539,14 +537,13 @@ describe("useBulkWorkspace", () => {
     expect(bulkApi.submitBatch).toHaveBeenCalledWith(
       "01BATCHA000000000000000000",
       expect.objectContaining({ date_of_birth: "1990-01-01", items: [{ client_item_id: "item-ready", revision: 3 }] }),
-      { grantId: "grant-1" },
     );
   });
 
   it("refuses to submit when nothing selected has a known revision yet", async () => {
     const key = freshBatchKey();
     await seedLocalBatch(key);
-    const { result } = renderHook(() => useBulkWorkspace(key, "grant-1"));
+    const { result } = renderHook(() => useBulkWorkspace(key));
     await waitFor(() => expect(result.current.status).toBe("ready"));
 
     let outcome: Awaited<ReturnType<typeof result.current.submitItems>> | undefined;

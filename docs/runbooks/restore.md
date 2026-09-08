@@ -143,7 +143,7 @@ pnpm exec wrangler d1 export keepsake-db-production --env production --remote --
   --table moderation_events --table recovery_tokens --table email_events \
   --table listing_aspects \
   --table upload_batches --table upload_batch_items --table upload_batch_photos \
-  --table bulk_grants --table bulk_owner_usage --table bulk_operations
+  --table bulk_owner_usage --table bulk_operations
 ```
 
 **This list is enforced, not trusted** (issue #164). `node tools/preflight/preflight.mjs --only
@@ -162,8 +162,8 @@ That is the same hazard the migration loop below is written to avoid, one paragr
 hard-coded list going stale once is a typo; going stale twice is a missing guard, so there is now
 a guard.
 
-`upload_batches`, `upload_batch_items`, `upload_batch_photos`, `bulk_grants`, `bulk_owner_usage`
-and `bulk_operations` (migration `20260908043946_bulk_upload.sql`) are the estate bulk upload
+`upload_batches`, `upload_batch_items`, `upload_batch_photos`, `bulk_owner_usage` and
+`bulk_operations` (migration `20260908043946_bulk_upload.sql`) are the estate bulk upload
 pilot's tables, and they are the same failure shape as `listing_aspects`, not a different one: an
 export that omits them would still look complete — `owners`, `listings` and `photos` are all
 present — while quietly discarding the one thing a giver working through an estate actually has
@@ -172,13 +172,15 @@ carry the draft objects themselves — the titles, stories, categories and room 
 however many sittings it took, for whichever items were not yet ready to submit.
 `upload_batch_photos` carries the grouping and ordering that ties a batch's photos to its items,
 without which a restored batch's photos come back as an unsorted, unattributed pile.
-`bulk_grants` and `bulk_owner_usage` carry the admission state — the per-batch counters an operator
-minted and the per-owner daily ceiling above them — and losing those does not just lose bookkeeping,
-it silently regrants an allowance that had already been partly spent. `bulk_operations` carries a
-submission in flight, and losing its row mid-run leaves items claimed (`upload_batch_items.listing_id`
-set) with nothing left to record whether the run finished. None of these six are excluded tables:
+`bulk_owner_usage` carries the per-owner daily ceiling, and losing it does not just lose
+bookkeeping, it silently hands back an allowance that had already been partly spent for the day.
+(A sixth table, `bulk_grants`, was in this list until the admission code was removed —
+`20260908094215_bulk_drop_grants.sql` drops it, and `backup-tables` is what keeps this paragraph
+and that `--table` list honest about it.) `bulk_operations` carries a submission in flight, and
+losing its row mid-run leaves items claimed (`upload_batch_items.listing_id` set) with nothing
+left to record whether the run finished. None of these five are excluded tables:
 they belong in the `--table` list above, exactly like `listing_aspects` did, and `backup-tables`
-fails the build the same way if a future migration adds a seventh and this list is not updated in
+fails the build the same way if a future migration adds a sixth and this list is not updated in
 the same pull request.
 
 - `--no-schema` is deliberate: the export contains **no `CREATE INDEX` and no `CREATE TRIGGER`**

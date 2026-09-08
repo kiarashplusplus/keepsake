@@ -218,33 +218,17 @@ export function bulkUploadEnabled(env: Env): boolean {
 }
 
 /**
- * How long an admin-minted `bulk_grants` row stays valid before it needs
- * renewing. "renew" grants reset only this, never the two counters below —
- * otherwise a renewal loop would be unlimited admission (see the migration's
- * comment on `bulk_grants.issued_by`).
- */
-export const DEFAULT_BULK_GRANT_TTL_HOURS = 72;
-
-export function bulkGrantTtlHours(env: Env): number {
-  return parseIntVar(
-    "BULK_GRANT_TTL_HOURS",
-    env.BULK_GRANT_TTL_HOURS as string | undefined,
-    DEFAULT_BULK_GRANT_TTL_HOURS,
-  );
-}
-
-/**
- * The per-batch ceilings a `bulk_grants` row is minted against. Not
- * Turnstile — see `bulkUploadEnabled` and `wrangler.toml`'s comment for why
- * these D1-guarded counters, not a challenge, are what actually bounds a
- * batch.
+ * How much one batch may hold, enforced by `routes/bulk.ts` as a predicate
+ * on the item and photo inserts themselves. Not Turnstile — see
+ * `bulkUploadEnabled` and `wrangler.toml`'s comment for why these
+ * D1-guarded counters, not a challenge, are what actually bounds a batch.
  *
  * **Must never exceed `MAX_BATCH_ITEMS`/`MAX_BATCH_PHOTOS`**
- * (`packages/contracts/src/bulk.ts`), which is what `SubmitBatchInput` and
- * `AdminMintBulkGrantInput` actually enforce: raising this var past the
- * contract's cap does not raise what the API will accept, so an operator
- * raising it and a giver preparing more items than the contract allows ends
- * with the submission 400ing after the work was already done.
+ * (`packages/contracts/src/bulk.ts`), which is what `SubmitBatchInput`
+ * actually enforces: raising this var past the contract's cap does not
+ * raise what the API will accept, so an operator raising it and a giver
+ * preparing more items than the contract allows ends with the submission
+ * 400ing after the work was already done.
  * `apps/api/test/bulkCaps.test.ts` asserts the inequality against the real
  * `wrangler.toml` text in every environment block.
  */
@@ -269,12 +253,21 @@ export function bulkMaxPhotosPerBatch(env: Env): number {
 
 /**
  * The ceiling above the per-batch one: per owner per day, tracked in
- * `bulk_owner_usage` and surviving both a new batch and a renewed grant —
- * what makes "creating additional batches must not reset the allowance"
- * actually true rather than merely intended.
+ * `bulk_owner_usage` and surviving a new batch — what makes "creating
+ * additional batches must not reset the allowance" actually true rather
+ * than merely intended. Each is 1.5x its per-batch cap, so a giver has
+ * headroom for a second sitting without a second day being free.
+ *
+ * `BULK_OWNER_DAILY_SUGGESTIONS` is the one ceiling on bulk cover
+ * suggestions per caller, now that there is no per-batch grant carrying a
+ * `suggestions_remaining` of its own. The global `SUGGEST_DAILY_BUDGET`
+ * still applies on top of it — see `routes/bulk.ts`'s suggest route for why
+ * the account-wide runaway ceiling is never skipped, only the give flow's
+ * per-IP one.
  */
 export const DEFAULT_BULK_OWNER_DAILY_ITEMS = 150;
 export const DEFAULT_BULK_OWNER_DAILY_PHOTOS = 450;
+export const DEFAULT_BULK_OWNER_DAILY_SUGGESTIONS = 225;
 
 export function bulkOwnerDailyItems(env: Env): number {
   return parseIntVar(
@@ -289,6 +282,14 @@ export function bulkOwnerDailyPhotos(env: Env): number {
     "BULK_OWNER_DAILY_PHOTOS",
     env.BULK_OWNER_DAILY_PHOTOS as string | undefined,
     DEFAULT_BULK_OWNER_DAILY_PHOTOS,
+  );
+}
+
+export function bulkOwnerDailySuggestions(env: Env): number {
+  return parseIntVar(
+    "BULK_OWNER_DAILY_SUGGESTIONS",
+    env.BULK_OWNER_DAILY_SUGGESTIONS as string | undefined,
+    DEFAULT_BULK_OWNER_DAILY_SUGGESTIONS,
   );
 }
 

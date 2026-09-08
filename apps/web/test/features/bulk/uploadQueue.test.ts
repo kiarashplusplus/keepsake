@@ -322,7 +322,7 @@ describe("UploadQueue", () => {
     expect(updates.some(([id]) => id === "already-done")).toBe(false);
   });
 
-  it("setGrantId doesn't require recreating the queue, and updateLimits is accepted without throwing", () => {
+  it("updateLimits is accepted at runtime without recreating the queue", () => {
     const driver = createMemoryDriver();
     const queue = new UploadQueue({
       batchKey: "batch-1",
@@ -330,7 +330,6 @@ describe("UploadQueue", () => {
       uploadPhoto: async () => ({ ok: true, data: photoSummary("x") }),
       onPhotoUpdate: () => {},
     });
-    expect(() => queue.setGrantId("grant-2")).not.toThrow();
     expect(() => queue.updateLimits({ maxConcurrent: 5, maxPerMinute: 40 })).not.toThrow();
   });
 

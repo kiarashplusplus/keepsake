@@ -21,9 +21,7 @@ import { bulkRoutes } from "../src/routes/bulk.js";
 import { ITEMS_PER_INVOCATION, runBulkOperation } from "../src/bulk/submit.js";
 import { ulid } from "../src/lib/ids.js";
 import { sha256Hex } from "../src/lib/digest.js";
-import { authHeaders, fakeFile, fakeJpegBytes, freshClientIp, freshOwnerToken, readErr, readOk, seedStandardPostalCodes, setTestEnvVar, waitFor } from "./helpers.js";
-
-const ADMIN_TOKEN = "test-admin-token-bulk-submit-route";
+import { authHeaders, fakeFile, fakeJpegBytes, freshOwnerToken, readErr, readOk, seedStandardPostalCodes, waitFor } from "./helpers.js";
 
 async function seedOwner(token: string): Promise<string> {
   const id = ulid();
@@ -35,26 +33,8 @@ async function seedOwner(token: string): Promise<string> {
   return id;
 }
 
-interface GrantSummary {
-  id: string;
-}
-
-async function mintGrant(ownerId: string): Promise<GrantSummary> {
-  setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
-  const res = await SELF.fetch("http://x/api/admin/bulk/grants", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json", "CF-Connecting-IP": freshClientIp() },
-    body: JSON.stringify({ owner_id: ownerId }),
-  });
-  return readOk<GrantSummary>(res);
-}
-
-function bulkHeaders(token: string, grantId?: string): Record<string, string> {
-  return {
-    ...authHeaders(token),
-    "Content-Type": "application/json",
-    ...(grantId ? { "x-bulk-grant": grantId } : {}),
-  };
+function bulkHeaders(token: string): Record<string, string> {
+  return { ...authHeaders(token), "Content-Type": "application/json" };
 }
 
 /** Setup calls (batch/item/photo) — no `ExecutionContext` needed, so a bare
@@ -92,35 +72,34 @@ interface ItemBody {
   revision: number;
 }
 
-/** A fresh owner, grant, batch, and one ready item with an attached photo —
+/** A fresh owner, batch, and one ready item with an attached photo —
  * the smallest fixture every test below builds on. */
-async function readyFixture(): Promise<{ ownerId: string; token: string; grantId: string; batchId: string; item: ItemBody }> {
+async function readyFixture(): Promise<{ ownerId: string; token: string; batchId: string; item: ItemBody }> {
   await seedStandardPostalCodes();
   const token = freshOwnerToken();
   const ownerId = await seedOwner(token);
-  const grant = await mintGrant(ownerId);
 
   const batch = await bulk("/batches", {
     method: "POST",
-    headers: bulkHeaders(token, grant.id),
+    headers: bulkHeaders(token),
     body: JSON.stringify({ client_batch_key: `batch-${ownerId}`, name: "Estate", country: "US", postal_code: "02144" }),
   }).then((res) => readOk<BatchBody>(res));
 
   const item = await bulk(`/batches/${batch.id}/items/item-1`, {
     method: "PUT",
-    headers: bulkHeaders(token, grant.id),
+    headers: bulkHeaders(token),
     body: JSON.stringify({ fields: { title: "A lovely teacup", story: VALID_STORY, category: "home_kitchen" } }),
   }).then((res) => readOk<ItemBody>(res));
 
   await bulk(`/batches/${batch.id}/photos/photo-1`, {
     method: "PUT",
-    headers: { ...authHeaders(token), "x-bulk-grant": grant.id },
+    headers: authHeaders(token),
     body: photoForm(),
   }).then((res) => readOk(res));
 
   const linked = await bulk(`/batches/${batch.id}/items/item-1`, {
     method: "PUT",
-    headers: bulkHeaders(token, grant.id),
+    headers: bulkHeaders(token),
     body: JSON.stringify({
       expected_revision: item.revision,
       fields: { title: "A lovely teacup", story: VALID_STORY, category: "home_kitchen" },
@@ -128,7 +107,7 @@ async function readyFixture(): Promise<{ ownerId: string; token: string; grantId
     }),
   }).then((res) => readOk<ItemBody>(res));
 
-  return { ownerId, token, grantId: grant.id, batchId: batch.id, item: linked };
+  return { ownerId, token, batchId: batch.id, item: linked };
 }
 
 function validDateOfBirth(): string {
@@ -207,13 +186,13 @@ describe("bulk submission routes", () => {
   });
 
   it("409s when the named item moved since it was reviewed", async () => {
-    const { token, grantId, batchId, item } = await readyFixture();
+    const { token, batchId, item } = await readyFixture();
 
     // Bumps the item's revision without changing what's being submitted —
     // just enough to make the reviewed revision stale.
     await bulk(`/batches/${batchId}/items/${item.client_item_id}`, {
       method: "PUT",
-      headers: bulkHeaders(token, grantId),
+      headers: bulkHeaders(token),
       body: JSON.stringify({ expected_revision: item.revision, fields: { title: "Edited after review", story: VALID_STORY, category: "home_kitchen" } }),
     }).then((res) => readOk(res));
 
@@ -224,11 +203,11 @@ describe("bulk submission routes", () => {
   });
 
   it("409s when the same op_key arrives with a different selection", async () => {
-    const { token, grantId, batchId, item } = await readyFixture();
+    const { token, batchId, item } = await readyFixture();
 
     const second = await bulk(`/batches/${batchId}/items/item-2`, {
       method: "PUT",
-      headers: bulkHeaders(token, grantId),
+      headers: bulkHeaders(token),
       body: JSON.stringify({ fields: { title: "A second thing", story: VALID_STORY, category: "home_kitchen" } }),
     }).then((res) => readOk<ItemBody>(res));
 
@@ -274,7 +253,7 @@ describe("bulk submission routes", () => {
   });
 
   it("retry re-queues a still-failing item and is idempotent — the succeeded item's listing never doubles", async () => {
-    const { token, grantId, batchId, item: okItem } = await readyFixture();
+    const { token, batchId, item: okItem } = await readyFixture();
 
     // A second item with no story at all — permanently invalid, so it fails
     // the exact same way on every attempt, forever, which is what makes it
@@ -282,7 +261,7 @@ describe("bulk submission routes", () => {
     // retries must be identical.
     const badItem = await bulk(`/batches/${batchId}/items/item-bad`, {
       method: "PUT",
-      headers: bulkHeaders(token, grantId),
+      headers: bulkHeaders(token),
       body: JSON.stringify({ fields: { title: "Incomplete", category: "home_kitchen" } }),
     }).then((res) => readOk<ItemBody>(res));
 
@@ -349,7 +328,7 @@ describe("bulk submission routes", () => {
   });
 
   it("cancel stops unstarted work but never withdraws a listing already created", async () => {
-    const { token, grantId, batchId } = await readyFixture();
+    const { token, batchId } = await readyFixture();
 
     // `readyFixture` already made item-1; add enough more ready items that
     // one eager `ITEMS_PER_INVOCATION`-bounded pass cannot finish them all —
@@ -360,19 +339,19 @@ describe("bulk submission routes", () => {
       const clientId = `cancel-item-${i}`;
       const created = await bulk(`/batches/${batchId}/items/${clientId}`, {
         method: "PUT",
-        headers: bulkHeaders(token, grantId),
+        headers: bulkHeaders(token),
         body: JSON.stringify({ fields: { title: `Object ${i}`, story: VALID_STORY, category: "home_kitchen" } }),
       }).then((res) => readOk<ItemBody>(res));
 
       await bulk(`/batches/${batchId}/photos/cancel-photo-${i}`, {
         method: "PUT",
-        headers: { ...authHeaders(token), "x-bulk-grant": grantId },
+        headers: authHeaders(token),
         body: photoForm(),
       }).then((res) => readOk(res));
 
       const withPhoto = await bulk(`/batches/${batchId}/items/${clientId}`, {
         method: "PUT",
-        headers: bulkHeaders(token, grantId),
+        headers: bulkHeaders(token),
         body: JSON.stringify({
           expected_revision: created.revision,
           fields: { title: `Object ${i}`, story: VALID_STORY, category: "home_kitchen" },
