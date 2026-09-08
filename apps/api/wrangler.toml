@@ -584,10 +584,22 @@ COMMIT_SHA = "dev"
 # Estimated for real preview-scale traffic (issue #18) — see the top-level
 # `[vars]` comment above for why this is charged per-photo now and why it
 # differs from `[env.production]`.
-MOD_TEXT_DAILY_BUDGET = "2000"
-MOD_IMAGE_DAILY_BUDGET = "6000"
-SUGGEST_DAILY_BUDGET = "1000"
-EMBED_DAILY_BUDGET = "2000"
+#
+# Raised again for the estate bulk-upload pilot, which runs on preview only
+# (`BULK_UPLOAD` below is "1" here and "0" everywhere else). A full batch is
+# 100 listings / 300 photos (`MAX_BATCH_ITEMS`/`MAX_BATCH_PHOTOS`,
+# `packages/contracts/src/bulk.ts`) — 100 text calls, 600 vision calls
+# (`MODERATED_PHOTO_VARIANTS.length` per photo). One owner's whole day
+# (`BULK_OWNER_DAILY_ITEMS`/`BULK_OWNER_DAILY_PHOTOS` below: 150/450) run
+# through `MAX_ATTEMPTS` retries worst-case is 450 text / 2700 vision calls —
+# still under a fifth of the general pool at these numbers
+# (`test/moderationBudgetHeadroom.test.ts` guards the inequality against
+# this file directly). See the commit that raised these for the full
+# arithmetic.
+MOD_TEXT_DAILY_BUDGET = "6000"
+MOD_IMAGE_DAILY_BUDGET = "18000"
+SUGGEST_DAILY_BUDGET = "2500"
+EMBED_DAILY_BUDGET = "4000"
 SEMANTIC_SEARCH = "1"  # issue #38, on — see top-level [vars]
 LISTING_IP_DAILY_BUDGET = "20"
 REQUEST_IP_DAILY_BUDGET = "20"
