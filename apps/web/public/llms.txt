@@ -1,0 +1,18 @@
+# Keepsake
+
+> Keepsake is a free marketplace for giving away sentimental objects — photos, books, jewelry, and
+> other things worth a second life — rather than throwing them out. Givers post a photo and a
+> story; people who want the item ask for it, and the giver chooses. No accounts, no payments, no
+> shipping fees to the platform.
+
+## Key pages
+
+- [Browse the feed](https://keepsake.ing/): everything currently available to request.
+- [What Keepsake is](https://keepsake.ing/welcome): the explainer for first-time visitors.
+- [Give something](https://keepsake.ing/give): start listing an object.
+- [About](https://keepsake.ing/about): who built this and why.
+
+## Policies
+
+- [Privacy policy](https://keepsake.ing/privacy)
+- [Terms](https://keepsake.ing/terms)
