@@ -157,12 +157,30 @@ export function buildListingCreateStatements(env: Env, args: ListingCreateArgs):
       ),
     );
   } else {
+    // Issue #283: guarded the same way the bulk branch above is, minus the
+    // claim — the give flow has no `upload_batch_items` row to gate on, but
+    // it has the same photo race the bulk comment already names: the
+    // caller's pre-check `SELECT` (`routes/listings.ts`) and this INSERT are
+    // separated by a window, so two submissions racing on the same photo
+    // could previously both insert a listing while only one attach below
+    // actually won the photo — an unconditional insert can't see that, so
+    // `created` always read `true` and a photo-less listing shipped straight
+    // past image moderation (`moderation/pipeline.ts` skips image work when
+    // `photos.length === 0`). Re-checking eligibility inside the same
+    // statement that inserts closes the window: the insert only fires if
+    // every requested photo is still this owner's unattached orphan at the
+    // instant this statement runs, so `created` now means what it always
+    // claimed to for the bulk path — the listing exists iff every photo did
+    // too.
+    const placeholders = photoIds.map(() => "?").join(",");
     statements.push(
       env.DB.prepare(
         `INSERT INTO listings
            (id, owner_id, title, story, category, country, postal_code, place_name, admin1, lat, lng,
             status, version, created_at, updated_at, age_attested_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?, ?, ?)`,
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?, ?, ?
+          WHERE (SELECT COUNT(*) FROM photos
+                  WHERE owner_id = ? AND listing_id IS NULL AND id IN (${placeholders})) = ?`,
       ).bind(
         listingId,
         ownerId,
@@ -183,6 +201,9 @@ export function buildListingCreateStatements(env: Env, args: ListingCreateArgs):
         // The date itself is deliberately never bound into this query and
         // never stored anywhere — only this timestamp is.
         input.date_of_birth ? now : null,
+        ownerId,
+        ...photoIds,
+        photoIds.length,
       ),
     );
   }
@@ -232,8 +253,12 @@ export function buildListingCreateStatements(env: Env, args: ListingCreateArgs):
 
 export interface ListingCreateResult {
   listingId: string;
-  /** False on the bulk path when the claim or the photo-eligibility guard
-   * declined. Always true on the give flow, whose insert is unguarded. */
+  /** False when the insert's own photo-eligibility guard declined — on the
+   * bulk path that also covers a lost claim (issue #283's fix gave the give
+   * flow's insert the same guard the bulk branch always had, so both paths
+   * report this the same way now). Callers must check it: a `false` here
+   * means nothing was written — no listing, no photo attach, no aspect —
+   * and the caller owns turning that into a response the client sees. */
   created: boolean;
 }
 
