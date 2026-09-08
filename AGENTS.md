@@ -8,7 +8,9 @@ mistakes this project has already made so you do not repeat them.
 A free gifting marketplace at `keepsake.ing`. Someone photographs a sentimental object, writes its
 story, and posts it. Anyone nearby can browse. A stranger leaves a note and an email; the giver
 picks one and they meet in person to hand it over. **No money. No accounts** — a giver is a
-device-bound secret token plus an optional verified email.
+device-bound secret token plus an email, which the give flow always asks for (2026-09-08; it used
+to be skippable, and skipping produced listings nobody could be told about) and which is only
+load-bearing once verified.
 
 The product is the story. Anything that makes a listing feel like a classified ad is wrong.
 

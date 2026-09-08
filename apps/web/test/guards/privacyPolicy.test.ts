@@ -68,7 +68,7 @@ const EMAIL_SCREEN = path.join(WEB_ROOT, "app/mine/email.tsx");
 const EXPECTED_SECTIONS = [
   "Who runs this",
   "No accounts, just a device key",
-  "An optional email",
+  "Your email",
   "What a requester shares",
   "Photos",
   "Location",
@@ -104,7 +104,7 @@ const LOCKED_PASSAGES: { name: string; phrases: string[] }[] = [
     name: "Rhode Island's RIDTPPA disclosure (#60)",
     phrases: [
       "a device-generated identifier (your device key)",
-      "an optional email address",
+      "an email address",
       "We don't sell any of it, to anyone, for any reason",
       "is the controller for all of it",
     ],
