@@ -777,40 +777,93 @@ export function useBulkWorkspace(clientBatchKey: string): UseBulkWorkspaceResult
     return result;
   }, []);
 
-  return {
-    status,
-    state,
-    markers,
-    markerFor: (itemClientId) => markerFor(markers, itemClientId),
-    isSuggestionStale: (itemClientId) => isSuggestionStale(markers, itemClientId, state.items[itemClientId]?.photoClientIds[0] ?? null),
-    suggestionLoading,
-    uploadPausedUntil,
-    updateBatchMeta,
-    cancelBatch: cancelBatchFn,
-    addPhotos,
-    removePhoto,
-    retryPhoto,
-    groupAsOneItem,
-    groupOnePerPhoto,
-    addPhotosToItem,
-    removePhotoFromItem,
-    setCoverPhoto,
-    dissolveItem,
-    setItemTitle,
-    setItemStory,
-    setItemCategory,
-    setItemLabels,
-    saveItem,
-    requestSuggestion,
-    suggestionForPhoto,
-    applyRoomLabelToSelected,
-    applyLotLabelToSelected,
-    previewSharedStoryApplication,
-    applySharedStoryToSelected,
-    operations,
-    refreshOperations,
-    submitItems,
-  };
+  // Bound versions of the two free functions imported from `itemMarkers.ts`
+  // — named apart from them so the assignment below can't shadow-recurse —
+  // memoized against their real dependencies so the returned object below
+  // gets a stable function identity across renders that don't touch
+  // `markers`/`state.items` (#295).
+  const getMarkerFor = React.useCallback((itemClientId: string) => markerFor(markers, itemClientId), [markers]);
+  const getIsSuggestionStale = React.useCallback(
+    (itemClientId: string) => isSuggestionStale(markers, itemClientId, state.items[itemClientId]?.photoClientIds[0] ?? null),
+    [markers, state.items],
+  );
+
+  // Every value below is itself either plain state or a `useCallback` with
+  // stable dependencies, so memoizing the object they're assembled into
+  // gives `BulkWorkspaceContext.Provider`'s `value` a stable identity
+  // across renders that change none of them — otherwise every consumer
+  // under the provider re-renders on every progress tick from the upload
+  // queue, at up to 300 photos in flight (#295).
+  return React.useMemo<UseBulkWorkspaceResult>(
+    () => ({
+      status,
+      state,
+      markers,
+      markerFor: getMarkerFor,
+      isSuggestionStale: getIsSuggestionStale,
+      suggestionLoading,
+      uploadPausedUntil,
+      updateBatchMeta,
+      cancelBatch: cancelBatchFn,
+      addPhotos,
+      removePhoto,
+      retryPhoto,
+      groupAsOneItem,
+      groupOnePerPhoto,
+      addPhotosToItem,
+      removePhotoFromItem,
+      setCoverPhoto,
+      dissolveItem,
+      setItemTitle,
+      setItemStory,
+      setItemCategory,
+      setItemLabels,
+      saveItem,
+      requestSuggestion,
+      suggestionForPhoto,
+      applyRoomLabelToSelected,
+      applyLotLabelToSelected,
+      previewSharedStoryApplication,
+      applySharedStoryToSelected,
+      operations,
+      refreshOperations,
+      submitItems,
+    }),
+    [
+      status,
+      state,
+      markers,
+      getMarkerFor,
+      getIsSuggestionStale,
+      suggestionLoading,
+      uploadPausedUntil,
+      updateBatchMeta,
+      cancelBatchFn,
+      addPhotos,
+      removePhoto,
+      retryPhoto,
+      groupAsOneItem,
+      groupOnePerPhoto,
+      addPhotosToItem,
+      removePhotoFromItem,
+      setCoverPhoto,
+      dissolveItem,
+      setItemTitle,
+      setItemStory,
+      setItemCategory,
+      setItemLabels,
+      saveItem,
+      requestSuggestion,
+      suggestionForPhoto,
+      applyRoomLabelToSelected,
+      applyLotLabelToSelected,
+      previewSharedStoryApplication,
+      applySharedStoryToSelected,
+      operations,
+      refreshOperations,
+      submitItems,
+    ],
+  );
 }
 
 /** Test/UI convenience: drops every local record for a batch and clears its
