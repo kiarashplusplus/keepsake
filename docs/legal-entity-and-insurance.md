@@ -224,6 +224,46 @@ week.
 
 ---
 
+## Status note, 2026-09-08 — three of the unverified marks now have answers
+
+Appended rather than edited into the sections above, so this stays a record of what was known when
+the decision was made. Full working, and the same egress caveat that applies to everything else
+here, in [`legal-next-actions-research.md`](legal-next-actions-research.md).
+
+- **The assumed-name fee is $15.00** for one owner if the form is already notarized ($0.50 for each
+  additional owner; add $1.00 per owner in witnessing fees if it is signed in front of a deputy
+  clerk instead). That replaces the `[unverified figure]` in
+  ["The assumed-name certificate"](#the-assumed-name-certificate--the-one-filing-that-is-actually-required)
+  above, which guessed "tens of dollars, not hundreds" and was right. Harris County files
+  unincorporated assumed names at ten walk-in locations; the term is ten years, and re-registering
+  before it ends is a second diary entry.
+- **The mailbox question has a provisional answer: yes, if it is a real street address.** A Texas
+  DBA needs a physical street address rather than a P.O. box, and a commercial mail-receiving agency
+  that provides one appears to satisfy that. Still worth one sentence to the deputy clerk at the
+  counter rather than taking this paragraph's word for it.
+- **A second, unrelated filing wants the same address, and publishes it.** If the copyright gap in
+  `terms.html` is ever closed with a registered DMCA agent, that registration publishes the service
+  provider's full legal name **and street address** in a public directory — which is precisely what
+  ["Where the address goes"](#where-the-address-goes-and-where-it-deliberately-does-not) declines to
+  do. A P.O. box needs a waiver on demonstrable-personal-safety grounds; a **mail-forwarding
+  service's street address needs no waiver** where the provider is a natural person operating from a
+  private residence. So the same commercial mail address serves the DBA, that registration, and an
+  insurance application. Getting one is the cheapest way to keep this document's address decision
+  intact as more filings arrive.
+
+**And one correction to the insurance section's question 2.** It tells the broker to say *which* of
+CGL or tech E&O responds to "a user was hurt meeting another user we introduced". The better-informed
+answer is **neither, cleanly**: tech E&O carries a standard exclusion for bodily injury, assault and
+battery outright — it is for financial harm — while CGL has the right trigger but is where the
+professional-services and assault-and-battery exclusions bite. The coverage that names this exposure
+is **marketplace trust-and-safety wording**, as a specialist policy or an endorsement, described in
+terms close to this fact pattern (negligent screening or vetting, harm arising from user
+interactions the platform facilitated) and commonly excluded without it. Ask for it by name. The
+$300–$800/year sanity check above was for plain small-business CGL and should be expected to move
+once that wording is on the table.
+
+---
+
 ## Sources
 
 All of these are search-result summaries. Every attempt to fetch a primary source — the Texas

@@ -326,6 +326,9 @@ cannot pass by having scanned the light palette twice.
 - `docs/legal-considerations.md` — compliance research, with eight questions marked for a lawyer.
 - `docs/legal-entity-and-insurance.md` — why Keepsake is a sole proprietorship and not an LLC
   (#108), what has to be bought and filed because of that, and what would reverse it.
+- `docs/legal-next-actions-research.md` — the four things that still look outstanding: content
+  terms and the DMCA question, a limitation of liability, why Section 230 means less needs doing
+  than it looks, and #142's two errands with real numbers.
 - `docs/product-decisions.md` — the register of product decisions this build rests on, each with
   what it costs and what would change the answer. Read it before reopening one, and add a row when
   you make one.

@@ -290,6 +290,19 @@ owner's call:
 Neither gap blocks the corrections above, and neither is new: they have been true since the pages
 were written. They are worth deciding before the first user rather than after.
 
+**Both were researched the same day**, along with the two errands in #142 and the Section 230
+posture underneath all of it:
+[`legal-next-actions-research.md`](legal-next-actions-research.md). Three things in it change what
+acting on them costs. Registering a DMCA agent **publishes a street address**, which collides with
+#108's decision to keep the operator's home address off public records — a mail-forwarding street
+address is the documented way through, and it is the same address the assumed-name certificate
+needs, so one errand unblocks both. The Harris County filing fee is **$15.00**, replacing an
+`[unverified figure]`. And the insurance ask in
+[`legal-entity-and-insurance.md`](legal-entity-and-insurance.md) has a better name than "CGL or tech
+E&O": tech E&O generally excludes bodily injury outright, so what to ask for is **CGL with
+affirmative marketplace trust-and-safety wording**. Same method limit as every other legal document
+here — the egress proxy refused `copyright.gov`, so it is search summaries throughout.
+
 ---
 
 ## What I would do before launch (or before turning ads on)
