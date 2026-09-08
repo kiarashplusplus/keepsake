@@ -201,6 +201,13 @@ CREATE TABLE bulk_grants (
   batch_id TEXT REFERENCES upload_batches(id) ON DELETE CASCADE,
   items_remaining INTEGER NOT NULL,
   photos_remaining INTEGER NOT NULL,
+  -- Cover suggestions. A third counter rather than a share of the other two,
+  -- because a suggestion is optional work: a batch that never asks for one
+  -- should not thereby be allowed more photos, and a batch that exhausts its
+  -- suggestions must still be able to finish uploading and submit. The give
+  -- flow's per-IP KV ceiling could not do this job — see
+  -- `MAX_BATCH_SUGGESTIONS` in `packages/contracts/src/bulk.ts`.
+  suggestions_remaining INTEGER NOT NULL DEFAULT 0,
   -- 'admin' (minted for the pilot) | 'renew' (never resets the two counters
   -- above, only `expires_at` — otherwise a renewal loop would be unlimited
   -- admission).

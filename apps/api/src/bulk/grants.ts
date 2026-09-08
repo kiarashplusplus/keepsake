@@ -31,6 +31,7 @@ export interface BulkGrantRow {
   batch_id: string | null;
   items_remaining: number;
   photos_remaining: number;
+  suggestions_remaining: number;
   issued_by: string;
   expires_at: number;
   revoked_at: number | null;
@@ -44,6 +45,7 @@ export interface MintGrantOptions {
   ownerId: string;
   items: number;
   photos: number;
+  suggestions: number;
   now?: number;
 }
 
@@ -57,10 +59,10 @@ export async function mintGrant(env: Env, options: MintGrantOptions): Promise<Bu
   const expiresAt = now + bulkGrantTtlHours(env) * 3_600_000;
 
   await env.DB.prepare(
-    `INSERT INTO bulk_grants (id, owner_id, batch_id, items_remaining, photos_remaining, issued_by, expires_at, created_at)
-     VALUES (?, ?, NULL, ?, ?, 'admin', ?, ?)`,
+    `INSERT INTO bulk_grants (id, owner_id, batch_id, items_remaining, photos_remaining, suggestions_remaining, issued_by, expires_at, created_at)
+     VALUES (?, ?, NULL, ?, ?, ?, 'admin', ?, ?)`,
   )
-    .bind(id, options.ownerId, options.items, options.photos, expiresAt, now)
+    .bind(id, options.ownerId, options.items, options.photos, options.suggestions, expiresAt, now)
     .run();
 
   return {
@@ -69,6 +71,7 @@ export async function mintGrant(env: Env, options: MintGrantOptions): Promise<Bu
     batch_id: null,
     items_remaining: options.items,
     photos_remaining: options.photos,
+    suggestions_remaining: options.suggestions,
     issued_by: "admin",
     expires_at: expiresAt,
     revoked_at: null,
@@ -252,6 +255,7 @@ export function serializeBulkGrant(grant: BulkGrantRow): BulkGrantSummary {
     batch_id: grant.batch_id,
     items_remaining: grant.items_remaining,
     photos_remaining: grant.photos_remaining,
+    suggestions_remaining: grant.suggestions_remaining,
     expires_at: grant.expires_at,
   };
 }

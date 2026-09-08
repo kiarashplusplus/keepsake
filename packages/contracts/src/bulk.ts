@@ -55,6 +55,22 @@ export const MAX_BATCH_ITEMS = 100;
 export const MAX_BATCH_PHOTOS = 300;
 
 /**
+ * Cover suggestions a single batch may ask for. Higher than `MAX_BATCH_ITEMS`
+ * because a giver who regroups photos changes an item's cover, and the
+ * suggestion for the old cover is then worth nothing — the headroom is for
+ * that, not for a second opinion on the same picture.
+ *
+ * It exists at all because the give flow's ceiling cannot serve a batch:
+ * `POST /api/photos/:id/suggest` is bounded by `SUGGEST_IP_DAILY_BUDGET`, a
+ * per-IP KV counter defaulting to 30 a day, which a 100-item estate would
+ * exhaust on item 31 — and a KV counter is eventually consistent by its own
+ * documentation, so it could not bound a batch exactly even if the number
+ * were bigger. Bulk suggestions are admitted the way bulk items and photos
+ * already are: a guarded D1 decrement on the grant.
+ */
+export const MAX_BATCH_SUGGESTIONS = 150;
+
+/**
  * A caller-chosen key. Deliberately narrow: it lands in a unique index and in
  * error messages, so it carries no newlines, no control characters, and
  * nothing that would read as markup if a client rendered one back. Opaque to
@@ -281,6 +297,10 @@ export const BulkGrantSummary = z.object({
   batch_id: UlidSchema.nullable(),
   items_remaining: z.number().int().nonnegative(),
   photos_remaining: z.number().int().nonnegative(),
+  /** Cover suggestions left on this grant. Spent by the same guarded D1
+   * decrement as the other two, so a lost response that is retried cannot be
+   * charged twice, and a batch cannot quietly outspend what was admitted. */
+  suggestions_remaining: z.number().int().nonnegative(),
   expires_at: TimestampMs,
 });
 export type BulkGrantSummary = z.infer<typeof BulkGrantSummary>;
@@ -297,5 +317,6 @@ export const AdminMintBulkGrantInput = z.object({
   owner_id: UlidSchema,
   items: z.number().int().positive().max(MAX_BATCH_ITEMS).optional(),
   photos: z.number().int().positive().max(MAX_BATCH_PHOTOS).optional(),
+  suggestions: z.number().int().positive().max(MAX_BATCH_SUGGESTIONS).optional(),
 });
 export type AdminMintBulkGrantInput = z.infer<typeof AdminMintBulkGrantInput>;
