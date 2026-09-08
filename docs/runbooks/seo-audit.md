@@ -177,14 +177,30 @@ people's words in the one place this product is about.
    still comes from hydration. The Worker has the row; rendering the title, story and cover into
    the HTML is the next real step, and the one that would make a shared link readable with no
    JavaScript at all.
-2. **Route-level code splitting** (`asyncRoutes`). Browsing still downloads the give flow and the
-   admin screens. Measured on this export: the entry bundle is **3,224,619 bytes raw, 672,893
-   compressed** (Brotli q5, locally) and there is exactly one other chunk — `heic-to`, 2,995,641
-   raw / 592,166 compressed, already split out because the give flow imports it dynamically. So
-   the split that exists is the one someone did by hand for a single dependency, and everything
-   else a visitor could ever reach is in the file the feed downloads. Expo labels web
-   `asyncRoutes` alpha, so this wants an `expo-atlas` pass and a careful check of direct links
-   before it is worth the risk.
+2. **Route-level code splitting** (`asyncRoutes`) — *done, branch `seo/async-routes-web`.*
+   `app.base.json`'s `expo-router` plugin entry took `{ "asyncRoutes": { "web": "production" } }`
+   (schema confirmed against this repo's own `node_modules/expo-router/plugin/options.json`,
+   expo-router 57.0.19 — `web` scoped so native is untouched in both dev and production, matching
+   this option's own description: `"production"` is web-only regardless). The single 3.2MB entry
+   bundle became 23 chunks — a small `__common`/`entry` pair every route needs plus one small chunk
+   per route (`admin` 47,551 bytes, `give/details` 6,021, `welcome` 1,499, …).
+   The honest result: the win is smaller than it looks from the entry bundle's size alone, because
+   almost all of it is React/react-native-web/Expo Router runtime that every route needs regardless
+   — not give-flow or admin code. `/welcome`'s own JS fell from 3,227,134 raw / 672,974 Brotli q5
+   (the whole entry bundle) to 3,057,748 / 643,187 (`__common` + `entry` + its own tiny chunk): -5%
+   raw, -4% compressed. Real `wrangler dev` + Lighthouse 13.4.1 on `/welcome` (mobile, simulated
+   Slow 4G) agrees on Total Blocking Time (183ms → 65ms, -65%, since a route no longer parses code
+   it will never run) but shows LCP *unchanged under real `--throttling-method=devtools` network
+   throttling* (798ms before and after — the LCP text is in the static HTML either way, so it
+   paints independent of which JS chunks are still loading) while `--throttling-method=simulate`
+   (Lantern) reports LCP ~300ms worse after, which is most likely an artifact of local
+   `wrangler dev` serving HTTP/1.1 (confirmed via `curl -I`) — more, smaller requests contending for
+   Chrome's 6-connections-per-origin cap in Lantern's model — rather than something that would
+   happen on Cloudflare's HTTP/2 production edge. 30 Playwright specs added
+   (`e2e/deepLinkColdLoad.spec.ts`, both viewport projects) hard-load every exported route — give
+   flow, `/item/:id`, `/mine`, `/mine/:id`, `/recover`, `/recover/:token`, `/withdraw/:token`,
+   `/confirm/:token`, `/admin` — in a fresh browser context with no prior navigation, and all pass,
+   alongside the rest of the suite (158 e2e specs, `pnpm -r typecheck`, `pnpm lint`, preflight).
 3. **Bounding a long feed.** Pagination appends without limit and the masonry renders every card it
    has. Profile it with several hundred listings before choosing virtualisation — the current feed
    has nothing like that many.
