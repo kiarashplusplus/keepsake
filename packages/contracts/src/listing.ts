@@ -105,6 +105,23 @@ export const UpdateListingInput = CreateListingInput.partial().extend({
 export type UpdateListingInput = z.infer<typeof UpdateListingInput>;
 
 /**
+ * `PUT /api/listings/:id/category` — the giver's own correction of what the
+ * model decided their object is (issue #155).
+ *
+ * Its own route, and its own one-field input, rather than a `PATCH` carrying
+ * only `category`. `PATCH` bumps `version`, resets `status` to `pending` and
+ * re-runs the moderation pipeline, which is right for title/story/photos —
+ * free text and images a stranger will read — and wrong here. A category is
+ * a closed enum this product defines; there is no sentence in it to moderate,
+ * and nothing about picking the correct one of twelve labels should take a
+ * live listing out of the feed for a moderation cycle. Correcting "other" to
+ * "tools" would otherwise cost the giver their listing's visibility, which is
+ * exactly the tax that stops people correcting anything.
+ */
+export const SetListingCategoryInput = z.object({ category: CategorySchema });
+export type SetListingCategoryInput = z.infer<typeof SetListingCategoryInput>;
+
+/**
  * Giver-facing copy for each auto/human moderation outcome.
  *
  * `budget` (issue #18) used to be internal-only, on the theory that a giver
@@ -185,5 +202,17 @@ export const OwnerListing = PublicListing.omit({ status: true }).extend({
   created_at: TimestampMs,
   updated_at: TimestampMs,
   held: z.boolean(),
+  /**
+   * When the giver last chose this listing's category themselves, or `null`
+   * while the model's suggestion stands (issue #155).
+   *
+   * Giver-only, like `postal_code` above: a stranger has no business knowing
+   * whether a category was guessed or corrected, and the distinction would
+   * read as a confidence score on someone's keepsake. The dashboard uses it
+   * for one thing — whether to say "we guessed this" or "you set this" — and
+   * `POST /api/admin/listings/:id/resuggest` uses it to leave a corrected
+   * category alone.
+   */
+  category_chosen_at: TimestampMs.nullable(),
 });
 export type OwnerListing = z.infer<typeof OwnerListing>;

@@ -1,0 +1,19 @@
+-- Issue #155. `category` has only ever had one writer with an opinion: the
+-- model, via the cover-photo suggestion at create and
+-- `POST /api/admin/listings/:id/resuggest` afterwards. #35 removed the give
+-- flow's category picker for a good reason — it was a step in a flow whose
+-- product is the story — but it left the product with no human path to a
+-- category at all, and the first real production listing showed a visitor
+-- the single word OTHER (#135).
+--
+-- This column is what makes a giver's correction *stick*. Without it, a
+-- human choice and a model guess are the same string in the same column, so
+-- the next `resuggest` overwrites the giver's answer about their own object
+-- with the model's second opinion, and nothing anywhere could tell the two
+-- apart afterwards.
+--
+-- A timestamp rather than a boolean, and named for the moment rather than
+-- the fact — the same convention `age_attested_at`, `email_verified_at`,
+-- `chosen_at` and `vector_indexed_at` already follow in this schema. NULL
+-- means "nobody has corrected this; the model's answer stands".
+ALTER TABLE listings ADD COLUMN category_chosen_at INTEGER;

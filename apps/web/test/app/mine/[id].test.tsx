@@ -2,7 +2,7 @@ import * as React from "react";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import { ToastProvider } from "@/ui/Toast";
 import { chooseRequest, getMyListing, type OwnerListingDetail } from "@/api/me";
-import { deleteListing } from "@/api/listings";
+import { deleteListing, setListingCategory } from "@/api/listings";
 import { ApiError } from "@/api/client";
 import MineDetail from "../../../app/mine/[id]";
 
@@ -29,6 +29,7 @@ jest.mock("@/api/listings", () => ({
   deleteListing: jest.fn(),
   markGiven: jest.fn(),
   relistListing: jest.fn(),
+  setListingCategory: jest.fn(),
   withdrawListing: jest.fn(),
 }));
 
@@ -70,6 +71,7 @@ function detailWithOpenRequest(): OwnerListingDetail {
     created_at: 0,
     updated_at: 0,
     held: false,
+    category_chosen_at: null,
     requests: [
       {
         id: "req-1",
@@ -276,5 +278,74 @@ describe("mine/[id] delete", () => {
 
     expect(jest.mocked(deleteListing)).toHaveBeenCalledWith("listing-1");
     expect(mockRouter.replace).toHaveBeenCalledWith("/mine");
+  });
+});
+
+describe("mine/[id] category correction (#155)", () => {
+  beforeEach(() => {
+    jest.mocked(getMyListing).mockReset();
+    jest.mocked(setListingCategory).mockReset();
+  });
+
+  async function renderDetail(detail: OwnerListingDetail): Promise<ReturnType<typeof render>> {
+    jest.mocked(getMyListing).mockResolvedValue(detail);
+    const instance = render(
+      <ToastProvider>
+        <MineDetail />
+      </ToastProvider>,
+    );
+    await act(async () => {
+      await flush();
+    });
+    return instance;
+  }
+
+  // Rendered copy is asserted through `toJSON()`, and controls through
+  // `UNSAFE_getByProps({ accessibilityLabel })` — the convention the rest of
+  // this file already uses, because react-native-web renders `Text` as a
+  // `div` and RNTL's text queries never match it.
+  it("says the category was guessed, and invites a correction", async () => {
+    // The copy is the affordance. "We guessed this" is what tells a giver the
+    // single word OTHER on their listing is theirs to fix (#135).
+    const instance = await renderDetail(detailWithOpenRequest());
+    const tree = JSON.stringify(instance.toJSON());
+    expect(tree).toContain("Home & kitchen");
+    expect(tree).toContain("We guessed this from your photo.");
+  });
+
+  it("says the category is the giver's once they have chosen one", async () => {
+    const instance = await renderDetail({ ...detailWithOpenRequest(), category_chosen_at: 1_700_000_000_000 });
+    const tree = JSON.stringify(instance.toJSON());
+    expect(tree).toContain("You chose this, so we'll leave it alone.");
+    expect(tree).not.toContain("We guessed this from your photo.");
+  });
+
+  it("sends the giver's pick to the category endpoint, not a full edit", async () => {
+    // `setListingCategory`, not `updateListing`: a PATCH would bump the
+    // version and re-moderate, taking a live listing out of the feed to
+    // change one word.
+    jest.mocked(setListingCategory).mockResolvedValue({} as never);
+    const instance = await renderDetail(detailWithOpenRequest());
+
+    const opener = instance.UNSAFE_getByProps({ accessibilityLabel: "Change category" });
+    await act(async () => {
+      fireEvent.press(opener);
+      await flush();
+    });
+
+    const chip = instance.UNSAFE_getByProps({ accessibilityLabel: "Tools & DIY" });
+    await act(async () => {
+      fireEvent.press(chip);
+      await flush();
+    });
+
+    expect(jest.mocked(setListingCategory)).toHaveBeenCalledWith("listing-1", "tools_diy");
+  });
+
+  it("offers no correction once the keepsake has been given", async () => {
+    const instance = await renderDetail({ ...detailWithOpenRequest(), status: "given" });
+    // The section still says what the category is; only the control is gone.
+    expect(JSON.stringify(instance.toJSON())).toContain("Home & kitchen");
+    expect(instance.UNSAFE_queryByProps({ accessibilityLabel: "Change category" })).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { captureMessage } from "@keepsake/observability/capture";
-import { CreateListingInput, UpdateListingInput } from "@keepsake/contracts/listing";
+import { CreateListingInput, SetListingCategoryInput, UpdateListingInput } from "@keepsake/contracts/listing";
 import type { Country } from "@keepsake/contracts/geo";
 import { CreateReportInput } from "@keepsake/contracts/report";
 import { CreateRequestInput, type CreateRequestResult } from "@keepsake/contracts/request";
@@ -339,9 +339,24 @@ listingRoutes.patch(
     const nextVersion = row.version + 1;
     const now = Date.now();
 
+    // Issue #155: `category` reaching this handler at all is a human saying
+    // what their own object is. Nothing else sends it — the give flow has had
+    // no category picker since #35, and the model's answer is written at
+    // create and by `resuggest`, neither of which comes through here — so the
+    // stamp cannot be set by a client echoing a field back unchanged today.
+    // It is what makes the correction stick: without it a giver's answer and
+    // a model's guess are the same string in the same column, and the next
+    // `resuggest` silently replaces one with the other.
+    //
+    // Re-choosing the same category still stamps. A giver confirming the
+    // model happened to be right is a human decision, and the point of the
+    // column is whether a human has decided, not whether they changed
+    // anything.
+    const categoryChosenAt = input.category !== undefined ? now : row.category_chosen_at;
+
     await c.env.DB.prepare(
       `UPDATE listings SET
-         title = ?, story = ?, category = ?,
+         title = ?, story = ?, category = ?, category_chosen_at = ?,
          country = ?, postal_code = ?, place_name = ?, admin1 = ?, lat = ?, lng = ?,
          status = 'pending', moderation_reason = NULL, version = ?, updated_at = ?
        WHERE id = ? AND version = ?`,
@@ -350,6 +365,7 @@ listingRoutes.patch(
         input.title ?? row.title,
         input.story ?? row.story,
         input.category ?? row.category,
+        categoryChosenAt,
         place?.country ?? row.country,
         place?.code ?? row.postal_code,
         place?.place_name ?? row.place_name,
@@ -495,6 +511,61 @@ listingRoutes.post("/:id/given", ownerAuth(), async (c) => {
 // who wants a taken-down listing gone entirely is doing something legitimate,
 // and refusing here would only teach them to delete it instead. The one-way
 // door is `relist` below, not this guard.
+// ---------------------------------------------------------------------------
+// PUT /api/listings/:id/category — the giver's own correction (issue #155)
+// ---------------------------------------------------------------------------
+// Until this route, `category` had exactly one kind of writer: the model.
+// The cover-photo suggestion sets it at create, `POST /api/admin/listings/
+// :id/resuggest` re-reads the photo afterwards, and #35 removed the give
+// flow's picker — correctly, it was a step in a flow whose product is the
+// story, but it left no human path to a category at any layer. The first
+// real production listing showed a visitor the single word OTHER (#135), and
+// the three fixes that followed (#136, #139, #141) all improved the *model's*
+// answer. If it is wrong twice, the giver — whose object it is — could not
+// fix it.
+//
+// Not a `PATCH` carrying only `category`, for the reason written out on
+// `SetListingCategoryInput`: `PATCH` bumps `version`, resets `status` to
+// `pending` and re-runs the pipeline, so correcting a one-word label would
+// cost a live listing its place in the feed for a moderation cycle. That is
+// the tax that stops people correcting anything. A category is a closed enum
+// this product defines — `CategorySchema` refuses anything else at the
+// boundary — so there is no free text here for a moderator to read.
+//
+// No re-embed either: `embeddingText()` is title + story + aspects, and
+// `category` is not part of it. The FTS index is over the same three. So
+// this write changes exactly one column plus its timestamp, and nothing
+// downstream needs to hear about it.
+//
+// `given` is refused for the same reason `PATCH` refuses it: the object has
+// changed hands and the listing is a record of that now.
+listingRoutes.put("/:id/category", ownerAuth(), validateBody(SetListingCategoryInput), async (c) => {
+  const owner = c.get("owner");
+  const id = requireParam(c, "id");
+  const input = c.get("validatedBody") as SetListingCategoryInput;
+
+  const row = await fetchListingRow(c.env, id);
+  if (!row || row.owner_id !== owner.id) return fail(c, "not_found", "Listing not found.", 404);
+  if (row.status === "given") {
+    return fail(c, "conflict", "This keepsake has already been given and can't be edited.", 409);
+  }
+
+  const now = Date.now();
+  // `category_chosen_at` is what makes the correction stick: `resuggest`
+  // reads it and leaves a giver-chosen category alone. Stamped even when the
+  // giver picks the category the model already chose — the column records
+  // that a human decided, not that they changed something.
+  await c.env.DB.prepare("UPDATE listings SET category = ?, category_chosen_at = ?, updated_at = ? WHERE id = ?")
+    .bind(input.category, now, now, id)
+    .run();
+
+  const updatedRow = await fetchListingRow(c.env, id);
+  if (!updatedRow) return fail(c, "internal", "Listing failed to save.", 500);
+  const photos = await fetchPhotoRows(c.env, id);
+  const aspects = await fetchAspectRows(c.env, id);
+  return ok(c, serializeOwnerListing(updatedRow, photos, aspects));
+});
+
 listingRoutes.post("/:id/withdraw", ownerAuth(), async (c) => {
   const owner = c.get("owner");
   const id = requireParam(c, "id");

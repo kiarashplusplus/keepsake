@@ -5,6 +5,8 @@ import {
   type OwnerListing as OwnerListingT,
   PublicListing,
   type PublicListing as PublicListingT,
+  SetListingCategoryInput,
+  type Category,
   UpdateListingInput as UpdateListingInputSchema,
   type UpdateListingInput,
 } from "@keepsake/contracts/listing";
@@ -47,6 +49,25 @@ export async function updateListing(id: string, input: UpdateListingInput, signa
   const body = UpdateListingInputSchema.parse(input);
   const data = await apiFetch<unknown>(`/api/listings/${encodeURIComponent(id)}`, {
     method: "PATCH",
+    body,
+    owner: true,
+    ...(signal !== undefined ? { signal } : {}),
+  });
+  return OwnerListing.parse(fixPhotoUrls(data));
+}
+
+/**
+ * Issue #155 — the giver's own correction of the category the model chose.
+ *
+ * Its own endpoint rather than `updateListing({ category })`: a PATCH bumps
+ * the listing's version and sends it back through moderation, so correcting
+ * one word would take a live listing out of the feed for a cycle. See the
+ * route's comment in `apps/api/src/routes/listings.ts`.
+ */
+export async function setListingCategory(id: string, category: Category, signal?: AbortSignal): Promise<OwnerListingT> {
+  const body = SetListingCategoryInput.parse({ category });
+  const data = await apiFetch<unknown>(`/api/listings/${encodeURIComponent(id)}/category`, {
+    method: "PUT",
     body,
     owner: true,
     ...(signal !== undefined ? { signal } : {}),

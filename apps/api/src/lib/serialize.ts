@@ -29,6 +29,8 @@ export interface ListingRow {
   updated_at: number;
   published_at: number | null;
   given_at: number | null;
+  /** Issue #155: when the giver last chose the category themselves. */
+  category_chosen_at: number | null;
 }
 
 export interface PhotoRow {
@@ -136,5 +138,6 @@ export function serializeOwnerListing(row: ListingRow, photos: PhotoRow[], aspec
     created_at: row.created_at,
     updated_at: row.updated_at,
     held: row.status === "needs_review",
+    category_chosen_at: row.category_chosen_at ?? null,
   };
 }
