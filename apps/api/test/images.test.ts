@@ -11,7 +11,7 @@
  * gates it). This file re-asserts the same shape against the fast in-process
  * runtime so a regression here fails CI, not just a one-off manual check.
  */
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OwnerListing } from "@keepsake/contracts/listing";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
@@ -25,6 +25,7 @@ import {
   uploadPhoto,
   waitForListingStatus,
 } from "./helpers.js";
+import { sha256Hex } from "../src/lib/digest.js";
 
 beforeEach(async () => {
   await seedStandardPostalCodes();
@@ -43,7 +44,9 @@ const VALID_LISTING_BODY = {
   email: "giver@keepsake.ing",
 };
 
-async function createApprovedListingWithPhoto(token: string): Promise<{ listing: OwnerListing; photoId: string }> {
+async function createApprovedListingWithPhoto(
+  token: string,
+): Promise<{ listing: OwnerListing; photoId: string }> {
   const photo = await readOk<PublicPhoto>(await uploadPhoto({ token }));
   const res = await SELF.fetch("http://x/api/listings", {
     method: "POST",
@@ -77,6 +80,18 @@ describe("GET /i/:id/:variant — Cache-Control", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
   });
+
+  it("does not let a banned owner use their old token to preview a private photo", async () => {
+    const token = freshOwnerToken();
+    const photo = await readOk<PublicPhoto>(await uploadPhoto({ token }));
+
+    await env.DB.prepare("UPDATE owners SET banned_at = ? WHERE token_hash = ?")
+      .bind(Date.now(), await sha256Hex(token))
+      .run();
+
+    const res = await SELF.fetch(`http://x/i/${photo.id}/full`, { headers: authHeaders(token) });
+    expect(res.status).toBe(404);
+  });
 });
 
 describe("GET /i/:id/:variant — cache purge on delete (issue #22)", () => {
@@ -91,7 +106,10 @@ describe("GET /i/:id/:variant — cache purge on delete (issue #22)", () => {
     const second = await SELF.fetch(`http://x/i/${photoId}/full`);
     expect(second.status).toBe(200);
 
-    const del = await SELF.fetch(`http://x/api/listings/${listing.id}`, { method: "DELETE", headers: authHeaders(token) });
+    const del = await SELF.fetch(`http://x/api/listings/${listing.id}`, {
+      method: "DELETE",
+      headers: authHeaders(token),
+    });
     expect(del.status).toBe(200);
 
     const after = await SELF.fetch(`http://x/i/${photoId}/full`);
@@ -106,7 +124,10 @@ describe("GET /i/:id/:variant — cache purge on delete (issue #22)", () => {
     const cached = await SELF.fetch(`http://x/i/${photoId}/full`);
     expect(cached.status).toBe(200);
 
-    const withdraw = await SELF.fetch(`http://x/api/listings/${listing.id}/withdraw`, { method: "POST", headers: authHeaders(token) });
+    const withdraw = await SELF.fetch(`http://x/api/listings/${listing.id}/withdraw`, {
+      method: "POST",
+      headers: authHeaders(token),
+    });
     expect(withdraw.status).toBe(200);
 
     // Nothing purges `caches.default` on withdraw (only R2-deleting paths
