@@ -13,6 +13,7 @@ import { Text } from "@/ui/Text";
 import { TextArea } from "@/ui/TextArea";
 import { Input } from "@/ui/Input";
 import { Button } from "@/ui/Button";
+import { SafetyNote } from "@/ui/SafetyNote";
 import { Turnstile, type TurnstileHandle, type TurnstileStatus } from "@/ui/Turnstile";
 import { AgeGateField, isAgeGateValid } from "@/features/ageGate/AgeGateField";
 import { createRequest } from "@/api/requests";
@@ -149,12 +150,18 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
             {"We've emailed you to check it was really you. Click the link and your note goes to the giver — " +
               "they'll choose in their own time."}
           </Text>
-          <Text variant="caption" color="textTertiary">
+          {/* Issue #224 item 2: this was `<Text variant="caption"
+              color="textTertiary">` — 12px mono in the faintest colour the
+              palette has, i.e. set exactly like a disclaimer, on the one
+              screen where the reader has just committed to meeting a
+              stranger. `SafetyNote` carries the argument and the contrast
+              number; the wording below is unchanged to the character. */}
+          <SafetyNote>
             {"If you're chosen: meet somewhere public and well-lit, bring a friend or tell " +
               "someone the plan, and keep working out the details here in Keepsake rather than " +
               "switching to text. Leaving it on a porch instead of meeting face to face is always " +
               "fine too — just say so."}
-          </Text>
+          </SafetyNote>
           <Button label="Done" onPress={handleClose} />
         </View>
       ) : (
@@ -184,11 +191,14 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
 
           <AgeGateField value={dateOfBirth} onChangeText={setDateOfBirth} touched={touched} onBlur={() => setTouched(true)} />
 
-          <Text variant="caption" color="textTertiary">
+          {/* The same change on the form itself (#224 item 2) — the two
+              paragraphs are the same guidance at two moments, so they are set
+              the same way. Wording unchanged. */}
+          <SafetyNote>
             {"A note before you send this: if you two meet up, pick a public spot, bring a " +
               "friend if you can, and keep talking here in Keepsake rather than trading numbers " +
               "early. A porch handoff works too, if you'd both rather skip meeting in person."}
-          </Text>
+          </SafetyNote>
 
           <Turnstile ref={turnstileRef} onStatus={setTurnstileStatus} />
 

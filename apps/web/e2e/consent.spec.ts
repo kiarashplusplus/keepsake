@@ -229,6 +229,41 @@ test.describe("the consent gate", () => {
     expect(Math.abs((rejectBox?.y ?? 0) - (acceptBox?.y ?? 0))).toBeLessThanOrEqual(1);
     // Reject comes first in reading and tab order.
     expect(rejectBox?.x ?? 0).toBeLessThan(acceptBox?.x ?? 0);
+
+    // ...and the same TREATMENT, not merely the same box (#223). This test
+    // measured geometry only, and geometry was never the defect: the two were
+    // always the same size in the same row, while `Accept all` wore the
+    // filled stamp red that every primary action in the product wears and
+    // `Reject all` wore a near-white outline. Equal size, unequal weight —
+    // which is the half of "symmetry in choice" a bounding box cannot see, so
+    // this guard could not have failed on the thing the issue was about.
+    //
+    // Asserted as an equality between the two buttons rather than against
+    // hard-coded hexes: the point is that they match each other, and a
+    // palette change that moves both together is not a regression.
+    // `public/consent.js` is where the chosen pair and its contrast ratio are
+    // written down.
+    const treatment = (locator: ReturnType<typeof page.locator>) =>
+      locator.evaluate((node) => {
+        const computed = getComputedStyle(node as Element);
+        return [
+          computed.backgroundColor,
+          computed.borderTopColor,
+          computed.borderTopWidth,
+          computed.color,
+          computed.boxShadow,
+          computed.fontFamily,
+          computed.fontSize,
+          computed.fontWeight,
+          computed.letterSpacing,
+          computed.textTransform,
+        ].join(" | ");
+      });
+
+    expect(await treatment(accept)).toBe(await treatment(reject));
+    // The bluntest form of the same statement, and the one that fails first
+    // if someone re-introduces a per-button modifier class.
+    expect(await accept.getAttribute("class")).toBe(await reject.getAttribute("class"));
     await context.close();
   });
 

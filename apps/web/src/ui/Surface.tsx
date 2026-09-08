@@ -34,7 +34,18 @@ export function Card({ style, children, ...rest }: SurfaceProps): React.ReactEle
   );
 }
 
-/** A recessed well cut into a `Card` (skeleton blocks, inset wells). */
+/**
+ * A recessed well cut into a `Card` (skeleton blocks, inset wells).
+ *
+ * **Never put text in one.** It fills with `tableEdge`, which is one of the
+ * handful of tokens that genuinely flips between light and dark (#B89D74 /
+ * #1C140F) while every ink colour stays constant — so any text placed on it
+ * is measured against two very different grounds and clears neither. The one
+ * caller that did (the give flow's photo-suggestion chip) put
+ * `textSecondary` on it at 2.96:1 in light and 2.37:1 in dark, against AA's
+ * 4.5:1, and was moved onto the card's own `surface` by #224. A well is a
+ * shape, not a surface for words.
+ */
 export function Sunken({ style, children, ...rest }: SurfaceProps): React.ReactElement {
   const colors = useColors();
 

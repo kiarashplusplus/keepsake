@@ -15,6 +15,21 @@ import { Text, type TextColor } from "@/ui/Text";
  * Every variant carries a small, fixed rotation (derived from the label so
  * it's stable across renders, not random) — a button is a stamp pressed
  * onto the page slightly off true, not a laser-cut UI control.
+ *
+ * **"The ONE" is per surface, and a sheet is its own surface.** Issue #224
+ * read the near-black `Choose` on `/mine/:id` sitting above the stamp-red
+ * `Confirm` in the sheet it opens as black outranking red in one place and
+ * not in another. It is neither: red marks the single action that completes
+ * what the surface in front of you is for, and an action that repeats — one
+ * `Choose` per request row — can never be that action, because there is no
+ * "the" about it. The giver picks a row (ink), and commits in the sheet
+ * (red). Repeat the red down a list of rows and it stops meaning anything.
+ *
+ * There are exactly two filled ranks in the product and no third. The
+ * outline button #224 also reported was never one of these variants: it was
+ * `.ks-consent__btn--outline` in `public/consent.js`, which the same issue
+ * removed — that banner's two answers are now identically weighted, which is
+ * what #223 required of them anyway.
  */
 export type ButtonVariant = "primary" | "secondary" | "link" | "ghost";
 
