@@ -434,9 +434,11 @@
   // printed card does not change colour when the lights go down — and it
   // means every contrast pair below is verified once and holds in light and
   // dark:
-  //   ink #1B1815 on #F1E6CC               14.3:1  title, body, disclosure
+  //   ink #1B1815 on #F1E6CC               14.3:1  title, body, disclosures
+  //                                                (both `Choose what to allow`
+  //                                                 and the footnote link)
   //   pencil #5A524A on #F1E6CC             6.2:1  category blurbs, footnote
-  //   stampText #8A2113 on #F1E6CC          7.3:1  eyebrow, GPC note, links
+  //   stampText #8A2113 on #F1E6CC          7.3:1  eyebrow, GPC note
   //   onAccent2 #F1E6CC on accent2 #1B1815  14.3:1  EVERY button's label
   //   accent2 #1B1815 on #F1E6CC           14.3:1  ...and that button's fill
   //                                                 against the bar behind it
@@ -577,7 +579,18 @@
     '.ks-consent__row label{font-size:13px;font-weight:700;line-height:1.4;color:#1B1815;cursor:pointer;}',
     '.ks-consent__row label span{display:block;font-weight:400;font-size:12px;line-height:1.5;color:#5A524A;}',
     '.ks-consent__foot{margin:10px 0 0;font-size:12px;line-height:1.5;color:#5A524A;}',
-    '.ks-consent__foot a{color:#8A2113;}',
+    // The footnote link is a DISCLOSURE, like `.ks-consent__more` above it and
+    // for the same reason: it explains the categories, it records no decision.
+    // It wore stamp red `#8A2113` until now, which made the one line on this
+    // screen that only DESCRIBES things the most saturated thing on it — louder
+    // than the two answers, which are ink — and stamp red is the product's
+    // "this is the action" colour everywhere else. So it takes the disclosure's
+    // own treatment: ink, underlined, same 3px offset. It still reads as a link
+    // (the underline, plus the ink/pencil step against the sentence around it),
+    // it just stops competing with the buttons. `ink #1B1815 on #F1E6CC` is
+    // 14.3:1 — the pair the contrast block above already verifies for the
+    // title, the body and `Choose what to allow`.
+    '.ks-consent__foot a{color:#1B1815;text-decoration:underline;text-underline-offset:3px;}',
     '.ks-consent :focus-visible{outline:2px solid #7A2515;outline-offset:3px;}',
     // The reopen control, wherever a surface puts one. Styled here rather than
     // in `apps/site/public/site.css` so a static page opts in with the bare
