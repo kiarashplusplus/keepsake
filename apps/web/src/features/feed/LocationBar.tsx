@@ -48,6 +48,15 @@ export function LocationBar({ value, onChange }: LocationBarProps): React.ReactE
     commit({ ...value, radius });
   }
 
+  /** Leaves coordinate mode and hands the postcode field back. Whatever the
+   * visitor had typed before they pressed "Use my location" is still in
+   * `postal` (coordinate mode keeps it rather than blanking it), so this
+   * restores that search instead of dropping them back to no filter. */
+  function handleUsePostcode(): void {
+    setGeoError(null);
+    commit({ ...value, mode: value.postal.trim() === "" ? "none" : "postal", lat: null, lng: null });
+  }
+
   function handleUseMyLocation(): void {
     // `locateOnce` must be called synchronously from this press handler
     // (not after an `await`) or iOS Safari can silently drop the
@@ -57,7 +66,7 @@ export function LocationBar({ value, onChange }: LocationBarProps): React.ReactE
     locateOnce(
       (coords) => {
         setLocating(false);
-        commit({ ...value, mode: "coords", postal: "", lat: coords.lat, lng: coords.lng });
+        commit({ ...value, mode: "coords", lat: coords.lat, lng: coords.lng });
       },
       // Same reasoning as `app/give/details.tsx` (#132): `geoLocate.ts`
       // already distinguishes a denied permission from an unavailable
@@ -86,17 +95,32 @@ export function LocationBar({ value, onChange }: LocationBarProps): React.ReactE
         ))}
       </View>
 
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md, alignItems: "flex-end" }}>
-        <Input
-          label="Postcode"
-          value={value.mode === "coords" ? "" : value.postal}
-          onChangeText={handlePostal}
-          placeholder={COUNTRY_POSTCODE_HINTS[value.country]}
-          helper={value.mode === "coords" ? "Using your current location." : undefined}
-          style={{ minWidth: 160 }}
-        />
-        <Button label={locating ? "Locating…" : "Use my location"} variant="secondary" loading={locating} onPress={handleUseMyLocation} />
-      </View>
+      {/* Coordinate mode replaces the postcode field rather than emptying it.
+          Reported from a phone: once the device permission prompt was
+          allowed, the field went blank and kept its "5-digit ZIP code"
+          placeholder under a "POSTCODE" label, so the one control on screen
+          read as an unfilled required field — while the helper line under it
+          said the postcode was no longer being used at all. There is nothing
+          to put in it (we hold coordinates, not a postcode, and don't reverse
+          geocode), so the honest state is a plain confirmation plus the way
+          back. */}
+      {value.mode === "coords" ? (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md, alignItems: "center" }}>
+          <Text variant="body">Using your current location.</Text>
+          <Button label="Use a postcode instead" variant="link" arrow={false} onPress={handleUsePostcode} />
+        </View>
+      ) : (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md, alignItems: "flex-end" }}>
+          <Input
+            label="Postcode"
+            value={value.postal}
+            onChangeText={handlePostal}
+            placeholder={COUNTRY_POSTCODE_HINTS[value.country]}
+            style={{ minWidth: 160 }}
+          />
+          <Button label={locating ? "Locating…" : "Use my location"} variant="secondary" loading={locating} onPress={handleUseMyLocation} />
+        </View>
+      )}
 
       {geoError !== null ? (
         <Text variant="caption" color="dangerText">
