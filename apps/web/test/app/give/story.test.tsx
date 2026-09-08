@@ -25,17 +25,6 @@ jest.mock("expo-router", () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
 }));
 
-// `IconButton` (the note's dismiss ×) pulls in `@expo/vector-icons`, whose
-// dependency chain reaches `expo-font`'s untranspiled ESM — the same class of
-// problem `test/mocks/expoImage.tsx` exists for, and the same answer: nothing
-// here is about a glyph. `react` is required lazily inside the factory
-// because a `jest.mock` factory may not close over an out-of-scope binding.
-jest.mock("@expo/vector-icons", () => {
-  const react = jest.requireActual("react") as typeof import("react");
-  const { View } = jest.requireActual("react-native") as typeof import("react-native");
-  return { Ionicons: (props: Record<string, unknown>) => react.createElement(View, props) };
-});
-
 /** WCAG AA for body-sized text, the bar `packages/tokens` holds itself to. */
 const AA = 4.5;
 

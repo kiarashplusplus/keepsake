@@ -1,11 +1,11 @@
 import * as React from "react";
 import { Pressable, type PressableStateCallbackType, type ViewStyle } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Icon, type IconName } from "@/ui/Icon";
 import { radii } from "@keepsake/tokens/radii";
 import { useColors } from "@/ui/theme";
 
 export type IconButtonProps = {
-  icon: keyof typeof Ionicons.glyphMap;
+  icon: IconName;
   label: string;
   onPress?: () => void;
   size?: number;
@@ -39,7 +39,7 @@ export function IconButton({ icon, label, onPress, size = 20, disabled = false, 
         style ?? {},
       ]}
     >
-      <Ionicons name={icon} size={size} color={colors.ink} />
+      <Icon name={icon} size={size} color={colors.ink} />
     </Pressable>
   );
 }
