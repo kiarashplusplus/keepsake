@@ -301,6 +301,58 @@ body { margin: 0; background: var(--ks-bg, #E4DDD1); }
   [data-ks-print="drop"] { animation: none; }
 }
 
+/* Skeleton.web.tsx's loading pulse: a 2-keyframe opacity pingpong, in CSS
+   so it costs no JS runtime. Values from packages/tokens/src/motion.ts
+   (shimmerMs 1400, halved per leg since withRepeat(..., -1, true) pingpongs
+   between the from/to keyframes). */
+@keyframes ks-skeleton-pulse {
+  from { opacity: 0.7; }
+  to { opacity: 1; }
+}
+[data-ks-skeleton="pulse"] {
+  animation: ks-skeleton-pulse 700ms ease-in-out infinite alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-ks-skeleton="pulse"] { animation: none; opacity: 0.85; }
+}
+
+/* Stamp.web.tsx's review tilt and settle, in CSS so the loop and the
+   settle transition cost no JS runtime. Values from
+   packages/tokens/src/motion.ts.
+   "breathing": tilt pingpongs 0deg -> reviewTiltDeg (1) over reviewTiltMs/2
+   (1500) per leg — it starts at 0 and only ever animates toward the target,
+   never negative.
+   "settled": the original animates two independent Reanimated values —
+   tilt back to 0 over quickMs (150) and a flip (scaleX 1 -> 0 -> 1, the
+   second leg a "settle" spring: damping 14, stiffness 220, mass 1) — folded
+   into one transform timeline. The tilt de-tilt is dropped entirely (it's
+   at most 1deg over 150ms, imperceptible on a 96px stamp), so this keyframe
+   stays flat at rotate(0deg). The flip's spring is approximated by a
+   cubic-bezier overshoot; its duration (600ms) is "settle"'s ~2%-settling
+   time, from its damping ratio (damping / (2*sqrt(stiffness*mass)) ~= 0.472)
+   and natural frequency (sqrt(stiffness/mass) ~= 14.83 rad/s) via
+   ts ~= 4/(zeta*omega0) ~= 570ms, rounded up. Re-derive if "settle" changes.
+   Total duration is quickMs (150, the "close") + 600 = 750ms. */
+[data-ks-stamp] { transform: rotate(0deg) scaleX(1); }
+@keyframes ks-stamp-breathe {
+  from { transform: rotate(0deg) scaleX(1); }
+  to { transform: rotate(1deg) scaleX(1); }
+}
+[data-ks-stamp="breathing"] {
+  animation: ks-stamp-breathe 1500ms ease-in-out infinite alternate;
+}
+@keyframes ks-stamp-settle {
+  0% { transform: rotate(0deg) scaleX(1); animation-timing-function: ease-in; }
+  20% { transform: rotate(0deg) scaleX(0); animation-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1); }
+  100% { transform: rotate(0deg) scaleX(1); }
+}
+[data-ks-stamp="settled"] {
+  animation: ks-stamp-settle 750ms both;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-ks-stamp] { animation: none; transform: rotate(0deg) scaleX(1); }
+}
+
 @font-face {
   font-family: "Fraunces";
   src:
