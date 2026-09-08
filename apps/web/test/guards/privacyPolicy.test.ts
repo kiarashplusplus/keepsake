@@ -559,6 +559,22 @@ describe("privacy policy vs. the age gate (#64)", () => {
     expect(PRIVACY_TEXT).toContain("doesn't ask you to tick a box");
   });
 
+  it("no longer describes the date-of-birth field as one you type (#302)", () => {
+    // Since #133 the control is a real date picker (`ui/DateField`, a DOM
+    // `<input type="date">` on the web) — the system wheel on iOS, the
+    // system calendar on desktop — not a text box someone types
+    // `1990-12-12` into. "YYYY-MM-DD" is still the wire format
+    // `DateOfBirthSchema` validates, so that half is true of the *data*;
+    // "typed as ..." described the user's *action*, and that action is
+    // gone. Pinning the word rather than a whole sentence, because a
+    // picker also lets desktop users type into segmented fields, so
+    // describing the *new* widget would be just as overspecified as the
+    // old wording was.
+    expect(PRIVACY_TEXT).not.toMatch(/\btyped as\b/);
+    expect(PRIVACY_TEXT).not.toMatch(/\ba date you type\b/);
+    expect(PRIVACY_TEXT).toContain("your date of birth");
+  });
+
   it("says the date is discarded, and no migration adds a column that would make that false", () => {
     expect(PRIVACY_TEXT).toContain("No column in our database holds a date of birth");
     const offending = filesUnder(MIGRATIONS).filter(
