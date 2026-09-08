@@ -357,11 +357,43 @@ app.all("/api/*", (c) => c.json({ ok: false as const, error: { code: "not_found"
 // served by the `ASSETS` binding. Only the HTML document is forced to
 // `no-store`; hashed `/_expo/static/*` assets keep whatever immutable
 // caching header the assets binding already set, untouched.
+//
+// Issue #272: `#262` turned on route splitting (`asyncRoutes`), so a route's
+// JS now arrives as its own content-hashed chunk under this prefix instead
+// of in the one entry bundle, and a deploy replaces those hashes. Every
+// `[env.*].assets` block sets `not_found_handling = "single-page-application"`,
+// which is right for an app route on a hard refresh (`/item/:id` has to come
+// back as the shell) but wrong here: a tab left open across a deploy that
+// navigates to a route it hasn't already loaded requests a chunk that no
+// longer exists, and the assets binding answers that miss the same way it
+// answers every miss — `200 text/html`, the SPA shell — instead of 404. The
+// browser gets HTML where a JS module was expected and the dynamic import
+// rejects with "Unexpected token '<'", which tells nobody what happened.
+const CHUNK_PATH_PREFIX = "/_expo/static/";
+
 app.all("*", async (c) => {
   const assetResponse = await c.env.ASSETS.fetch(c.req.raw);
   const contentType = assetResponse.headers.get("content-type") ?? "";
   if (!contentType.includes("text/html")) {
     return assetResponse;
+  }
+
+  // Nothing under `_expo/static/*` is ever legitimately HTML — it's
+  // route-split JS chunks, source maps and fonts, all content-hashed
+  // filenames from a single build. So a `text/html` response under this
+  // prefix is never the file the request actually asked for; it can only be
+  // the SPA-shell fallback the assets binding substitutes for a miss.
+  // Answering that truthfully (a real 404, uncached) is what lets the
+  // client's chunk-load recovery
+  // (`apps/web/src/features/chunkRecovery/useChunkRecoveryGuard.ts`) tell
+  // "this needs a reload" apart from an ordinary network failure, and turns
+  // the failure into a plain 404 in the network panel instead of a parse
+  // error.
+  if (c.req.path.startsWith(CHUNK_PATH_PREFIX)) {
+    return new Response("Not found", {
+      status: 404,
+      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+    });
   }
 
   const headers = new Headers(assetResponse.headers);
