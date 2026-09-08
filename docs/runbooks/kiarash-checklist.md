@@ -128,7 +128,30 @@ two different colos at once. Full measurements — including the two ways this i
 and the one link still unverified — in `docs/runbooks/deploy.md#the-cache-purge-token-94`.
 
 
-## 8. Two paper things, off this computer entirely (#108, tracked as #142)
+## 8. Cloudflare Web Analytics — mostly done, one optional token (#228, #231, #233)
+
+Nothing blocking. Recorded because three of these needed you and the fourth still might.
+
+Done on 2026-09-07: `EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN` set as a **variable** (not a secret — it
+ships in the HTML) on both GitHub Environments, and the site switched from automatic injection to
+**"Enable with JS Snippet installation"** so `consent.js` stays the only thing that loads the
+beacon. Before that switch, Cloudflare was injecting it at the edge and the banner's "Reject all"
+did nothing (#231).
+
+**Optional, when it next annoys someone.** No Cloudflare token in `~/Documents/.env` can *write*
+Web Analytics config — creating a site or changing the installation mode both return `403`, so
+they are dashboard actions. A token with **Account → Web Analytics → Edit** would close that, and
+would let a separate analytics site be created for `preview.keepsake.ing` so staging traffic stops
+sharing production's. Neither is urgent: the hostname is recorded on every event, so the two are
+already separable in the dashboard.
+
+**Still outstanding, and it is a deploy rather than a click (#232).** Production serves no beacon
+token at all, because an `EXPO_PUBLIC_*` value is inlined at build time and only reaches a tier
+deployed *after* it was set. Production analytics stays dark until `deploy.yml` is dispatched with
+`environment: production` — which ships whatever backlog `main` has accumulated and applies D1
+migrations, so it is a release decision, not a config one.
+
+## 9. Two paper things, off this computer entirely (#108, tracked as #142)
 
 Neither is a Cloudflare click and neither blocks a deploy. Both fall out of the 2026-09-07 decision
 to keep Keepsake a sole proprietorship rather than form an LLC — the reasoning, the numbers and the

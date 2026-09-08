@@ -39,7 +39,28 @@ requestWithdrawRoutes.post("/withdraw", validateBody(RequestWithdrawInput), asyn
   const input = c.get("validatedBody");
   const tokenHash = await sha256Hex(input.token);
 
+  const row = await c.env.DB.prepare(
+    `SELECT id, listing_id FROM requests WHERE withdraw_token_hash = ? AND withdrawn_at IS NULL`,
+  )
+    .bind(tokenHash)
+    .first<WithdrawableRequestRow>();
+
+  // Same "don't distinguish reasons" posture as `POST /api/recover/:token`:
+  // unknown token, already-used token, and a typo all look identical from
+  // the outside, so a caller can't learn anything by probing.
+  if (!row) {
+    return fail(c, "unauthorized", "This link is invalid or has already been used.", 401);
+  }
+
   const now = Date.now();
+  // Spend the bearer token in the same statement that performs the erasure.
+  // The SELECT above is only a lookup: two isolates can both complete it
+  // before either reaches this write. Keeping `withdrawn_at IS NULL` in the
+  // UPDATE makes this the compare-and-set, so exactly one caller can claim
+  // the token and therefore exactly one caller may decrement request_count.
+  // `RETURNING` distinguishes the winner from a no-op without another
+  // read-then-write window.
+  //
   // `ip_digest = NULL` alongside the three obvious columns, issue #169. It
   // was absent from this list, so the one control a requester has over their
   // own data left behind the hashed IP of the day they used the site —
@@ -54,35 +75,37 @@ requestWithdrawRoutes.post("/withdraw", validateBody(RequestWithdrawInput), asyn
   // email put the request back — reviving a note and an address this row was
   // just asked to forget. Nulling it also frees the row from
   // `requests_confirm_token`, which is a UNIQUE index.
-  // Claim and redact in one compare-and-set. The old SELECT followed by an
-  // unconditional UPDATE let two simultaneous uses both observe a live
-  // token and both decrement request_count. RETURNING is the single-use
-  // decision: exactly one caller can receive the row and proceed to the
-  // aggregate update below.
-  const row = await c.env.DB.prepare(
+  // The withdraw hash is erased too. Once spent it has no product purpose,
+  // and retaining a bearer credential after its holder asked us to remove
+  // their information would be needless storage even though it is hashed.
+  const claimed = await c.env.DB.prepare(
     `UPDATE requests SET status = 'withdrawn', withdrawn_at = ?, note = NULL, email = NULL, phone = NULL, ip_digest = NULL,
-                         confirm_token_hash = NULL
-     WHERE withdraw_token_hash = ? AND withdrawn_at IS NULL RETURNING id, listing_id`,
+                         confirm_token_hash = NULL, withdraw_token_hash = NULL
+     WHERE id = ? AND withdrawn_at IS NULL AND withdraw_token_hash = ?
+     RETURNING id`,
   )
-    .bind(now, tokenHash)
-    .first<WithdrawableRequestRow>();
+    .bind(now, row.id, tokenHash)
+    .first<{ id: string }>();
 
-  // Same "don't distinguish reasons" posture as `POST /api/recover/:token`:
-  // unknown token, already-used token, and a typo all look identical from
-  // the outside, so a caller can't learn anything by probing.
-  if (!row) {
+  if (!claimed) {
     return fail(c, "unauthorized", "This link is invalid or has already been used.", 401);
   }
 
   // Keep the listing's request_count honest: a withdrawn request is no
   // longer a live ask. Floored at 0 defensively — it should never go
-  // negative (this row's own creation is the only increment, and this token
-  // can't be replayed), but the floor costs nothing and a negative count
+  // negative (this row's own confirmation is the only increment, and the
+  // compare-and-set above means this token can't be replayed), but the floor costs nothing and a negative count
   // displayed in a dashboard would be a worse bug than a clamp.
-  await c.env.DB.prepare("UPDATE listings SET request_count = MAX(request_count - 1, 0) WHERE id = ?")
+  await c.env.DB.prepare(
+    "UPDATE listings SET request_count = MAX(request_count - 1, 0) WHERE id = ?",
+  )
     .bind(row.listing_id)
     .run();
 
-  const result: RequestWithdrawResult = { id: row.id, listing_id: row.listing_id, withdrawn_at: now };
+  const result: RequestWithdrawResult = {
+    id: row.id,
+    listing_id: row.listing_id,
+    withdrawn_at: now,
+  };
   return ok(c, result);
 });

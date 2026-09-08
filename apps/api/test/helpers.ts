@@ -2,6 +2,7 @@
  * minimal-but-valid image bytes, and small request-building helpers. Kept
  * out of any one test file since photos/listings/moderation tests all need
  * the same building blocks. */
+import { encode as encodeJpeg } from "jpeg-js";
 import { env, SELF } from "cloudflare:test";
 import { ulid } from "../src/lib/ids.js";
 import type { RateLimitBindingName } from "../src/middleware/rateLimit.js";
@@ -119,6 +120,34 @@ export function fakePngBytes(width: number, height: number, sizeBytes = 64): Uin
   bytes.set([(width >>> 24) & 0xff, (width >>> 16) & 0xff, (width >>> 8) & 0xff, width & 0xff], 16);
   bytes.set([(height >>> 24) & 0xff, (height >>> 16) & 0xff, (height >>> 8) & 0xff, height & 0xff], 20);
   return bytes;
+}
+
+/**
+ * A real, decodable baseline JPEG of `width`x`height`.
+ *
+ * `fakeJpegBytes` and `fakeJpegWithSof` are headers followed by zeros — which
+ * is all `sniffImageDimensions` and the upload path ever look at, and is
+ * exactly why they exist. The share card is different: resvg genuinely
+ * decodes the cover photo, and correctly refuses a fixture that only *looks*
+ * like a JPEG. Encoding one here (with the same `jpeg-js` the card's renderer
+ * uses) keeps the repo free of a base64 blob and lets a test pick whatever
+ * dimensions it needs to exercise `pickVariant`'s thumb-vs-full rule.
+ *
+ * The pixels are a gradient rather than one flat colour so a card rendered
+ * from this is visibly a photo in any screenshot a failing run leaves behind.
+ */
+export function realJpegBytes(width = 16, height = 16): Uint8Array {
+  const data = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const at = (y * width + x) * 4;
+      data[at] = (x * 16) & 0xff;
+      data[at + 1] = (y * 16) & 0xff;
+      data[at + 2] = ((x + y) * 8) & 0xff;
+      data[at + 3] = 255;
+    }
+  }
+  return new Uint8Array(encodeJpeg({ data, width, height }, 80).data);
 }
 
 export function fakeFile(bytes: Uint8Array, name: string, type: string): File {
@@ -499,6 +528,54 @@ export function installDenyingRateLimiter(name: RateLimitBindingName): () => voi
   bindings[name] = { limit: async () => ({ success: false }) };
   return () => {
     bindings[name] = original;
+  };
+}
+
+/**
+ * Replaces a `[[ratelimits]]` binding with one that allows exactly `limit`
+ * calls per key and denies every call after that, recording each key it was
+ * handed.
+ *
+ * Issue #116. The admin brute-force test used to exhaust the *real* `RL_ADMIN`
+ * binding with 400 sequential requests, because the audit that found the bug
+ * measured it that way. Two things made that unreliable, and neither is about
+ * the code under test: Cloudflare documents these bindings as "permissive,
+ * eventually consistent, and intentionally designed to not be used as an
+ * accurate accounting system" (measured here at ~2.6x overshoot), and 400
+ * awaited round trips is real wall-clock work whose duration depends on how
+ * busy the machine is. Reproduced deliberately for #116: with 24 busy loops on
+ * a 4-core container the test hit its own 30s timeout, and it is the same test
+ * two sessions saw fail on unmodified `main`.
+ *
+ * A test that fails when the host is loaded cannot distinguish "the guard
+ * works" from "the machine was fast today", so the guard is asserted against a
+ * limiter this repo controls instead — the same trade `readRateLimit.test.ts`
+ * already makes with `installDenyingRateLimiter`, and for the same measured
+ * reason. What is gained is a stronger claim than the real binding could ever
+ * support: *every* request must reach the limiter, all under one key, with the
+ * refusal landing on exactly the call after the limit.
+ */
+export function installCountingRateLimiter(
+  name: RateLimitBindingName,
+  options: { limit: number },
+): { keys: string[]; restore: () => void } {
+  const bindings = env as unknown as Record<string, unknown>;
+  const original = bindings[name];
+  const keys: string[] = [];
+  const seen = new Map<string, number>();
+  bindings[name] = {
+    limit: async ({ key }: { key: string }) => {
+      keys.push(key);
+      const used = (seen.get(key) ?? 0) + 1;
+      seen.set(key, used);
+      return { success: used <= options.limit };
+    },
+  };
+  return {
+    keys,
+    restore: () => {
+      bindings[name] = original;
+    },
   };
 }
 

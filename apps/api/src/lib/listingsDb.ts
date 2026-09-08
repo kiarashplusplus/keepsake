@@ -17,7 +17,9 @@ export async function fetchListingRow(env: Env, id: string): Promise<ListingRow 
 }
 
 export async function fetchPhotoRows(env: Env, listingId: string): Promise<PhotoRow[]> {
-  const { results } = await env.DB.prepare("SELECT id, width, height, blurhash FROM photos WHERE listing_id = ? ORDER BY position")
+  const { results } = await env.DB.prepare(
+    "SELECT id, width, height, blurhash, content_type FROM photos WHERE listing_id = ? ORDER BY position",
+  )
     .bind(listingId)
     .all<PhotoRow>();
   return results;

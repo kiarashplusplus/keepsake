@@ -23,7 +23,25 @@ import { config } from "@/lib/config";
 // looking at the feed.
 //
 // ROOT REDIRECT: `keepsake.ing` should show a short explainer to a
-// first-time visitor and the feed to everyone else. The naive fix — branch
+// first-time visitor and the feed to everyone else — **unless the URL carries
+// a `q`**, added 2026-09-07. `location.replace("/welcome")` drops
+// `location.search`, so a first-time visitor arriving at `keepsake.ing/?q=teacup`
+// landed on the explainer with their search silently discarded. That is also
+// exactly what a client following the `SearchAction` in the root JSON-LD below
+// does, which would have made the structured data describe a search entry
+// point that does not work.
+//
+// Specifically `q`, not "any query string". The broader test looked tidier and
+// was wrong: `?fbclid=`, `?gclid=` and `?utm_source=` are exactly how a
+// first-time visitor arrives from an ad or a shared link, and skipping the
+// explainer for them would ALSO set `VISITED_KEY` on the way past — so they
+// would never see it, then or later. Keepsake runs Google Ads; this is the
+// common case, not the edge case. Editing the script below changes its CSP hash —
+// see the note above `PREHYDRATION_SCRIPT`'s enumeration in
+// `apps/web/public/_headers` and `apps/api/src/middleware/securityHeaders.ts`,
+// which must be updated together, byte for byte.
+//
+// The naive fix — branch
 // on visitor state inside the Feed component itself, after mount — was
 // rejected for two reasons: (1) despite `web.output: "static"`, `expo
 // export`'s per-route HTML ships an EMPTY body (a Suspense placeholder, no
@@ -62,7 +80,8 @@ const PREHYDRATION_SCRIPT = `
     var OWNER_KEY = "keepsake.ownerToken.v1";
     var VISITED_KEY = "keepsake.visited.v1";
     var returning = !!window.localStorage.getItem(OWNER_KEY) || !!window.localStorage.getItem(VISITED_KEY);
-    if (window.location.pathname === "/" && !returning) {
+    var searching = new URLSearchParams(window.location.search).has("q");
+    if (window.location.pathname === "/" && !searching && !returning) {
       window.localStorage.setItem(VISITED_KEY, "1");
       window.location.replace("/welcome");
       return;
@@ -88,6 +107,73 @@ const PREHYDRATION_SCRIPT = `
   }
 })();
 `;
+
+/**
+ * Site-level structured data, emitted on every exported page.
+ *
+ * Two nodes, linked by `@id` so a consumer knows the site and the
+ * organisation behind it are the same subject rather than two unrelated
+ * things that happen to share a name. The per-listing `Product` is injected
+ * server-side instead (`apps/api/src/routes/item.ts`), because it needs the
+ * row.
+ *
+ * ## Why this is at export time and not in the Worker
+ *
+ * Serving `/` through the Worker would mean adding it to production's
+ * `run_worker_first`, putting a Worker hop on every root request — which
+ * `wrangler.toml`'s own comment argues against, and for markup that is
+ * identical for every visitor. This is a constant; it belongs in the shell.
+ *
+ * ## Why no `logo`
+ *
+ * Google's Organization logo guidance wants at least 112x112 and
+ * `favicon.png` is 64x64. A `logo` Google rejects is worse than no `logo`:
+ * it turns a clean parse into a validation warning. Add one when there is a
+ * real square mark to point at.
+ *
+ * ## CSP
+ *
+ * `<script type="application/ld+json">` is a data block, never executed, so
+ * `script-src` does not apply and this needs no fourth hash in
+ * `apps/web/public/_headers` / `apps/api/src/middleware/securityHeaders.ts`.
+ * That is the spec and the observed behaviour, but this repo has been bitten
+ * by a silent CSP drop before (the `www.googletagmanager.com` incident both
+ * of those files record), so it was checked in a browser rather than
+ * assumed. If a violation ever does appear, the fix is a new hash added
+ * byte-identically to both files — never to only one.
+ *
+ * `SearchAction` points at `/?q=`, which is the real feed parameter
+ * (`src/features/feed/feedUrlParams.ts`). The pre-hydration script above had
+ * to stop dropping `location.search` for that to be true; see its comment.
+ */
+const ROOT_JSON_LD = JSON.stringify([
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "@id": "https://keepsake.ing/#website",
+    url: "https://keepsake.ing/",
+    name: "Keepsake",
+    description: "Give a keepsake a second life.",
+    inLanguage: "en",
+    publisher: { "@id": "https://keepsake.ing/#organization" },
+    potentialAction: {
+      "@type": "SearchAction",
+      target: {
+        "@type": "EntryPoint",
+        urlTemplate: "https://keepsake.ing/?q={search_term_string}",
+      },
+      "query-input": "required name=search_term_string",
+    },
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "@id": "https://keepsake.ing/#organization",
+    name: "Keepsake",
+    url: "https://keepsake.ing/",
+    description: "A free gifting marketplace for objects with a story.",
+  },
+]);
 
 const ROOT_CSS = `
 html, body, #root { height: 100%; }
@@ -167,14 +253,53 @@ export default function Root({ children }: { children: React.ReactNode }): React
         <title>Keepsake</title>
         <meta name="description" content="Give a keepsake a second life." />
 
-        {/* Default Open Graph / Twitter tags. The Worker rewrites these on
-            /item/:id via HTMLRewriter, targeting the marker comment below —
-            see apps/api's route for /item/:id (owned by another agent). */}
+        {/* Default Open Graph / Twitter tags — what `keepsake.ing` itself
+            unfurls as. The Worker replaces all of these on `/item/:id` via
+            HTMLRewriter (see `apps/api/src/routes/item.ts`); everywhere else
+            this is the preview.
+
+            The origin is hardcoded rather than read from `config.siteUrl`,
+            which is `""` in production by design (same-origin —
+            `src/lib/config.ts`) and `http://localhost:8081` in
+            `.env.example`. `apps/site/public/{about,privacy,terms}.html`
+            already hardcode it, so this matches rather than inventing a
+            second convention. The consequence is that unfurling a *preview*
+            root shows production's card — which is the
+            intended posture, not a leak: preview serves `Disallow: /` and an
+            unconditional `X-Robots-Tag: noindex, nofollow`
+            (`apps/api/src/routes/robots.ts`). Don't "fix" it.
+
+            **No `og:url` and no `<link rel="canonical">` here.** Both are
+            per-page values and this file is ONE shell shared by every
+            exported route — a canonical of `https://keepsake.ing/` in it
+            tells a crawler that `/welcome`, `/give`, `/mine` and `/about`
+            are all duplicates of the homepage, which is worse than declaring
+            nothing. (Verified in `dist/` when it was briefly added: 17 pages
+            carried it.) `/item/:id` gets a real canonical and `og:url` from
+            the Worker's rewriter, and `apps/site`'s static pages carry their
+            own; the remaining routes are app screens with nothing to index.
+
+            `og:image` was relative (`/og-default.png`) until 2026-09-07.
+            Facebook and WhatsApp both want an absolute URL and mishandle a
+            relative one, which meant the bare domain — the single most
+            shared link this product has — unfurled with no image at all in
+            the two places it matters most. No CSP change is involved here;
+            these are `<meta>` tags, not scripts. */}
+        <meta property="og:type" content="website" />
         <meta property="og:site_name" content="Keepsake" />
+        <meta property="og:locale" content="en_US" />
         <meta property="og:title" content="Keepsake" />
         <meta property="og:description" content="Give a keepsake a second life." />
-        <meta property="og:image" content="/og-default.png" />
+        <meta property="og:image" content="https://keepsake.ing/og-default.png" />
+        <meta property="og:image:type" content="image/png" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta
+          property="og:image:alt"
+          content="A taped photographic print on a kraft table, reading “Give a keepsake a second life.”"
+        />
         <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:image" content="https://keepsake.ing/og-default.png" />
         {/*
           The marker below must be a literal HTML comment `<!--KEEPSAKE_OG-->`
           in the exported markup so the Worker's HTMLRewriter can find it on
@@ -213,6 +338,7 @@ export default function Root({ children }: { children: React.ReactNode }): React
 
         <style dangerouslySetInnerHTML={{ __html: ROOT_CSS }} />
         <script dangerouslySetInnerHTML={{ __html: PREHYDRATION_SCRIPT }} />
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: ROOT_JSON_LD }} />
 
         {/* Consent. `/consent.js` (source: `public/consent.js`) is the single
             shared implementation of the store, the banner and every

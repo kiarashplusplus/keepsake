@@ -2,7 +2,9 @@
   "name": "keepsake",
   "private": true,
   "packageManager": "pnpm@10.34.5",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "preflight": "node tools/preflight/preflight.mjs",
     "lint": "eslint .",
@@ -13,9 +15,11 @@
     "api": "pnpm --filter @keepsake/api dev"
   },
   "devDependencies": {
+    "@resvg/resvg-wasm": "2.6.2",
     "@types/node": "^22.19.0",
     "eslint": "^9.39.0",
     "eslint-config-expo": "~57.0.2",
+    "jpeg-js": "^0.4.4",
     "prettier": "^3.9.6",
     "typescript": "~5.9.2",
     "typescript-eslint": "^8.69.0"

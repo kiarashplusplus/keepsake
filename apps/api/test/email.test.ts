@@ -441,6 +441,33 @@ describe("POST /api/recover + POST /api/recover/exchange", () => {
     expect(secondExchange.status).toBe(401);
   });
 
+  it("allows exactly one of two concurrent exchanges to rotate the owner token", async () => {
+    const oldToken = freshOwnerToken();
+    const ownerId = await registerOwner(oldToken);
+    const recoverToken = randomTokenRaw();
+    const now = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO recovery_tokens (id, owner_id, purpose, token_hash, expires_at, created_at)
+       VALUES (?, ?, 'recover', ?, ?, ?)`,
+    )
+      .bind(ulid(), ownerId, await sha256Hex(recoverToken), now + RECOVER_TTL_MS, now)
+      .run();
+
+    const exchange = () =>
+      SELF.fetch("http://x/api/recover/exchange", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: recoverToken }),
+      });
+    const responses = await Promise.all([exchange(), exchange()]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 401]);
+    const winner = responses.find((response) => response.status === 200);
+    expect(winner).toBeTruthy();
+    const { ownerToken } = await readOk<{ ownerToken: string }>(winner as Response);
+    expect((await SELF.fetch("http://x/api/me", { headers: authHeaders(ownerToken) })).status).toBe(200);
+  });
+
   // Issue #182. Exchanging a recovery token rotates `owners.token_hash` —
   // full takeover of a giver's dashboard — and it used to travel as
   // `POST /api/recover/<token>`, a URL path segment. `index.ts`'s `onError`
@@ -490,14 +517,16 @@ describe("POST /api/recover + POST /api/recover/exchange", () => {
   // the "a D1 blip while a giver clicks their link" case the issue describes.
   it("logs the route pattern, not the request path, when a request throws", async () => {
     const secretish = "hQ2n0Xa9Vb7cD3eF5gH8iJ1kL4mN6oP0qR2sT4uV6wY";
+    const internalDetail = "D1_ERROR: simulated 7403; table=recovery_tokens; binding=DB";
     const logged: unknown[][] = [];
     const originalError = console.error;
     console.error = (...args: unknown[]) => {
       logged.push(args);
     };
     const prepare = vi.spyOn(env.DB, "prepare").mockImplementation(() => {
-      throw new Error("D1_ERROR: simulated 7403");
+      throw new Error(internalDetail);
     });
+    let responseBody = "";
     try {
       const res = await SELF.fetch("http://x/api/recover/exchange", {
         method: "POST",
@@ -505,6 +534,7 @@ describe("POST /api/recover + POST /api/recover/exchange", () => {
         body: JSON.stringify({ token: secretish }),
       });
       expect(res.status).toBe(500);
+      responseBody = await res.text();
     } finally {
       prepare.mockRestore();
       console.error = originalError;
@@ -517,6 +547,17 @@ describe("POST /api/recover + POST /api/recover/exchange", () => {
     // The field that carried the token is gone entirely, not merely cleaned.
     expect(fields).not.toHaveProperty("path");
     expect(JSON.stringify(fields)).not.toContain(secretish);
+
+    // Unexpected exception details belong in internal capture, never in the
+    // public response. The distinctive D1/backend-shaped value makes the
+    // regression prove the boundary rather than merely checking a status.
+    expect(fields.error).toBe(internalDetail);
+    expect(responseBody).not.toContain(internalDetail);
+    expect(responseBody).not.toContain(secretish);
+    expect(JSON.parse(responseBody)).toEqual({
+      ok: false,
+      error: { code: "internal", message: "Something went wrong. Please try again." },
+    });
   });
 
   // The email tells the reader when their link stops working. That sentence

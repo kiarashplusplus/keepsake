@@ -38,11 +38,12 @@ packages/contracts/ Zod schemas shared by the API and the web client, subpath ex
 packages/observability/  Workers Logs capture + redaction, subpath exports only
 tools/preflight/    Zero-dependency CI checks that don't need a running Worker
 tools/geodata/      Builds the bundled postal-code seed from GeoNames
+tools/seed/         Posts a demo catalogue through the real API (docs/runbooks/seed-catalogue.md)
 tools/readable-test-runner.mjs   Runs every package's tests, non-fail-fast, with a summary table
 docs/design/        Status of record for the build (milestones, per-topic docs)
 docs/runbooks/      deploy, restore, migrations, admin, incident, geodata, uk-block,
                     uk-reentry-checklist, issue-workflow, launch-audit, kiarash-checklist,
-                    verify-production
+                    verify-production, seed-catalogue
 ```
 
 ## Getting started
@@ -83,5 +84,6 @@ Full detail — including why this looks like a corrupt seed rather than a missi
 - [`docs/product-decisions.md`](./docs/product-decisions.md) — the product decisions this
   build rests on, each with what would change the answer. Read before reopening one.
 - [`docs/runbooks/`](./docs/runbooks/) — deploy, restore, migrations, admin, incident, geodata,
-  the UK block and its re-entry checklist, the issue workflow, and the post-deploy production
-  verification.
+  the UK block and its re-entry checklist, the issue workflow, the post-deploy production
+  verification, and [seeding a demo catalogue](./docs/runbooks/seed-catalogue.md) (what can and
+  cannot be filled in without a person solving a Turnstile challenge).

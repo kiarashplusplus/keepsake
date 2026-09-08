@@ -81,6 +81,20 @@ test("a giver walks the five steps and the keepsake goes live", async ({ page, r
   // default assertion timeout even though the pipeline itself is instant.
   await expect(page.getByText("It's live.")).toBeVisible({ timeout: 45_000 });
 
+  // The giver sees the card their friends will get. `getByAltText`, not
+  // `getByLabel`: `expo-image` renders an <img alt="…"> on web, so
+  // `accessibilityLabel` lands on `alt` and a label locator finds nothing.
+  const cardPreview = page.getByAltText("Preview of the link card your friends will see");
+  await expect(cardPreview).toBeVisible();
+  await expect(page.getByText("This is what your friends will see.")).toBeVisible();
+
+  // And it is the real card, not a broken image: `naturalWidth` is only
+  // non-zero once the browser has actually decoded the response, and 1200 is
+  // the card's own width. A 404 or an HTML error page would be 0.
+  await expect
+    .poll(async () => cardPreview.evaluate((el) => (el as HTMLImageElement).naturalWidth))
+    .toBe(1200);
+
   // "See it" is a full navigation to the canonical item URL, which is also
   // how this test learns the id the API minted.
   await onScreen(page, "See it").click();
@@ -108,4 +122,27 @@ test("a giver walks the five steps and the keepsake goes live", async ({ page, r
   const html = await shell.text();
   expect(html).toContain(`<title>${title} — Keepsake</title>`);
   expect(html).toContain(`<meta property="og:title" content="${title}">`);
+
+  // And the card that shell advertises really renders — against the real
+  // Worker, the real R2 object, and the photo this test actually uploaded.
+  // Everything below is asserted in unit tests too, on synthetic bytes; what
+  // this adds is the one thing a fixture cannot stand in for, the SIZE of a
+  // card built from a real image.
+  const cardUrl = /<meta property="og:image" content="([^"]+)">/.exec(html)?.[1];
+  expect(cardUrl).toBeTruthy();
+
+  const card = await request.get(new URL(cardUrl as string).pathname + new URL(cardUrl as string).search, {
+    headers: { "CF-Connecting-IP": freshClientIp() },
+  });
+  expect(card.status()).toBe(200);
+  expect(card.headers()["content-type"]).toBe("image/jpeg");
+
+  // The WhatsApp budget. A link preview image much past ~300 KB stops being
+  // rendered by some clients, and this is the assertion that holds the line
+  // as the card's design changes — the fibre texture and the photo window
+  // are both things a later change could make far more expensive. Measured
+  // headroom at the time of writing was roughly 3x.
+  const bytes = (await card.body()).length;
+  expect(bytes).toBeGreaterThan(1000); // not an empty or error body
+  expect(bytes).toBeLessThan(300_000);
 });

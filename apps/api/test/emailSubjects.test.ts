@@ -178,6 +178,7 @@ const HOSTILE_CASES: Record<string, () => EmailTemplate> = {
         mod_text: { used: 0, limit: 1 },
         mod_image: { used: 0, limit: 1 },
         suggest: { used: 0, limit: 1 },
+        embed: { used: 0, limit: 1 },
       },
       crons: [{ name: DIRTY, last_run_at: null, stale: true }],
     }),

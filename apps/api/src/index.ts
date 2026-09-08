@@ -7,6 +7,7 @@ import { assertBindings, isProduction, semanticSearchEnabled, type Env } from ".
 import { dailyDigest } from "./cron/dailyDigest.js";
 import { moderationRetry } from "./cron/moderationRetry.js";
 import { orphanSweep } from "./cron/orphanSweep.js";
+import { searchIndexRetry } from "./cron/searchIndexRetry.js";
 import { type CronJobName, writeCronHeartbeat } from "./cron/registry.js";
 import { ukBlock } from "./middleware/ukBlock.js";
 import { securityHeaders } from "./middleware/securityHeaders.js";
@@ -18,6 +19,7 @@ import { imageRoutes } from "./routes/images.js";
 import { feedRoutes } from "./routes/feed.js";
 import { itemRoutes } from "./routes/item.js";
 import { robotsRoutes } from "./routes/robots.js";
+import { ogCardRoutes } from "./routes/ogCard.js";
 import { sitemapRoutes } from "./routes/sitemap.js";
 import { recoverRoutes } from "./routes/recover.js";
 import { adminRoutes } from "./routes/admin.js";
@@ -174,7 +176,12 @@ app.onError((err, c) => {
   // `ERROR_CODES` — this is the catch-all for anything a route didn't
   // already turn into a proper `fail(...)` response via `src/lib/respond.ts`,
   // so "internal" (an unexpected failure) is the only honest code for it.
-  return c.json(apiErr("internal", err.message), status);
+  // Keep the exception itself in the log and capture above, but never copy
+  // its message into the public response: backend errors can contain SQL,
+  // binding names, provider details, or credentials. Routes with a message
+  // deliberately written for a giver return `fail(...)` before reaching
+  // this unexpected-error boundary.
+  return c.json(apiErr("internal", "Something went wrong. Please try again."), status);
 });
 
 app.get("/health", async (c) => {
@@ -323,6 +330,12 @@ app.route("/i", imageRoutes);
 // these exact paths, overriding the static-assets system that would
 // otherwise serve them as SPA-shell/404 before this Worker code ever runs.
 app.route("/item", itemRoutes);
+// The share card (`/og/item/:id/card.png`) — same `run_worker_first` caveat.
+// Without `/og/*` in production's list this returns the SPA shell as
+// `text/html`, which every unfurler renders as a broken image, and dev and
+// preview (`run_worker_first = true`) cannot reproduce it. Asserted by
+// `test/wranglerConfig.test.ts`, since miniflare ignores the setting.
+app.route("/og", ogCardRoutes);
 app.route("/sitemap.xml", sitemapRoutes);
 // Same deal as `/sitemap.xml`: reached only because `run_worker_first` lists
 // `/robots.txt`, so this handler answers instead of the static asset that
@@ -425,6 +438,9 @@ async function scheduled(controller: ScheduledController, env: Env, ctx: Executi
   switch (controller.cron) {
     case "*/5 * * * *":
       await runCron("moderationRetry", moderationRetry, env, ctx);
+      break;
+    case "23 * * * *":
+      await runCron("searchIndexRetry", searchIndexRetry, env, ctx);
       break;
     case "17 3 * * *":
       await runCron("orphanSweep", orphanSweep, env, ctx);
