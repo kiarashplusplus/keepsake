@@ -37,14 +37,9 @@ export function Sheet({
   const colors = useColors();
   const isBottomSheet =
     typeof window !== "undefined" && window.innerWidth < BOTTOM_SHEET_BREAKPOINT;
-  // `useWindowDimensions` tracks `window.innerWidth`/`innerHeight` (the
-  // layout viewport), which iOS Safari deliberately leaves unchanged when
-  // the on-screen keyboard opens — react-native-web's own `Dimensions`
-  // 'change' event doesn't fire there either (necolas/react-native-web#2430)
-  // — so it never reflects the keyboard. `visualViewport` is the one
-  // measurement that does, for both how tall the visible area is and where
-  // it currently sits — see `useVisualViewport`'s own comment for why this
-  // sheet needs both, not just the height.
+  // The sheet is deliberately rendered in normal document flow. Its
+  // `100dvh` container follows the visible viewport as the keyboard opens,
+  // without depending on WebKit's unreliable `visualViewport` coordinates.
   const panelRef = React.useRef<View>(null);
   // Callers routinely pass an inline `onClose` (a fresh function every
   // render), and typing into any field inside the sheet re-renders it. A ref
