@@ -36,6 +36,30 @@ describe("GET /sitemap.xml", () => {
     expect(body).toContain(`<loc>http://localhost:8787/item/${listingId}</loc>`);
   });
 
+  it("dates the listings from their own rows and leaves the static pages undated", async () => {
+    // The static four used to be stamped with `new Date()` — the moment the
+    // sitemap was built — so every fetch, ten minutes apart, told a crawler
+    // /about, /privacy and /terms had just changed. A `lastmod` that is
+    // always "now" is not a date, it is noise, and Google's guidance is that
+    // it disregards the field on a site that reports one it cannot trust —
+    // including on the listing URLs, where the dates are real.
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId, title: "A quiet teacup" });
+    const updatedAt = 1_757_000_000_000;
+    await env.DB.prepare("UPDATE listings SET updated_at = ? WHERE id = ?")
+      .bind(updatedAt, listingId)
+      .run();
+
+    const body = await (await SELF.fetch("http://x/sitemap.xml")).text();
+
+    for (const path of ["/", "/about", "/privacy", "/terms"]) {
+      expect(body).toContain(`<url><loc>http://localhost:8787${path}</loc></url>`);
+    }
+    expect(body).toContain(
+      `<url><loc>http://localhost:8787/item/${listingId}</loc><lastmod>${new Date(updatedAt).toISOString()}</lastmod></url>`,
+    );
+  });
+
   it("omits a given listing", async () => {
     const ownerId = await insertOwner();
     const listingId = await insertApprovedListing({ ownerId, title: "Already given" });

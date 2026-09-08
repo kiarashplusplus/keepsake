@@ -18,10 +18,45 @@
  * added it back, so every item page unfurled with no site name. It is in
  * `buildOgTags` now, and `test/item.test.ts` asserts it.
  *
+ * The same shape one tag over: until 2026-09-08 this route rewrote the title
+ * and every `og:`/`twitter:` tag but left `<meta name="description">` alone,
+ * so every listing page carried the shell's site-wide "Give a keepsake a
+ * second life." — the plain description a search engine reads, identical on
+ * every item URL in the sitemap. It is rewritten from the same
+ * `storyExcerpt` the OG description uses (one sentence, one source), and the
+ * selector below drops the shell's copy first for the same reason it drops
+ * the shell's title: the first one in `<head>` is the one that counts.
+ *
  * `HTMLRewriter` can't target an HTML comment (`<!--KEEPSAKE_OG-->` in the
  * exported shell's `<head>`) directly, so per the plan this appends the new
  * tags at the end of `<head>` instead and leaves the marker alone — both are
  * fine, since order within `<head>` doesn't matter for OG/Twitter tags.
+ *
+ * ## Which shell, and the listing that travels with it
+ *
+ * This used to read `/` — the feed's exported HTML — because every exported
+ * page's `<body>` was empty, so any of them would do. They are not empty any
+ * more (`apps/web/src/ui/theme.tsx` explains what was emptying them), so the
+ * shell has to be the one Expo Router exported for THIS route,
+ * `dist/item/[id].html`. Serving `/`'s HTML here would paint the feed —
+ * header, search, category chips, an empty grid — for the fraction of a
+ * second before hydration replaced it with a keepsake.
+ *
+ * The route already has the row and the photos in hand for the OG tags, so
+ * it also inlines the exact `PublicListing` JSON that
+ * `GET /api/listings/:id` would return, in a
+ * `<script type="application/json" id="ks-listing">`. The client reads it
+ * instead of making that request (`apps/web/app/item/[id].tsx`), which takes
+ * a whole round trip — browser to Worker to D1 and back — off the path
+ * between "the HTML arrived" and "the keepsake is on screen", on the one
+ * page this product exists to show. It is the *public* projection, the same
+ * `serializePublicListing` the API route uses: no owner id, no postcode, no
+ * contact anything. `test/item.test.ts` asserts that against the response
+ * bytes rather than trusting the serializer.
+ *
+ * The JSON is not executable (`type="application/json"` is a data block, the
+ * same reasoning the shell's `ld+json` records) so it needs no CSP hash, and
+ * `<` is escaped so nothing inside a story can close the tag early.
  *
  * Unknown/hidden/pending ids serve the exact same shell, unchanged, at 404 —
  * the SPA's own not-found route renders from there. This route never reveals
@@ -33,7 +68,8 @@ import { CATEGORY_LABELS, type Category } from "@keepsake/contracts/listing";
 import { CURRENCY_BY_COUNTRY, type Country as GeoCountry } from "@keepsake/contracts/geo";
 import { storyExcerpt } from "@keepsake/contracts/story";
 import type { Env } from "../env.js";
-import { fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
+import { fetchAspectRows, fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
+import { serializePublicListing } from "../lib/serialize.js";
 import { jsonLdScript, type JsonLdValue } from "../lib/jsonLd.js";
 import { CARD_HEIGHT, CARD_WIDTH } from "../og/card.js";
 import { RENDERABLE_COVER_TYPES } from "../og/render.js";
@@ -88,6 +124,7 @@ function buildOgTags(params: {
 
   return `
     <title>${title} — Keepsake</title>
+    <meta name="description" content="${description}">
     <link rel="canonical" href="${url}">
     <meta property="og:type" content="article">
     <meta property="og:site_name" content="Keepsake">
@@ -168,9 +205,29 @@ function buildProductJsonLd(params: {
   return jsonLdScript(product as JsonLdValue);
 }
 
+/**
+ * The exported HTML for the `item/[id]` route, from the assets binding.
+ *
+ * The literal square brackets are Expo Router's own filename for a dynamic
+ * route (`dist/item/[id].html`) and are percent-encoded here because they
+ * are not legal in a URL path unencoded; the assets binding decodes them
+ * before matching. If it ever fails to match, the binding's
+ * `single-page-application` not-found handling answers with `index.html` at
+ * 200 — the app still works, it just starts from the feed's markup, which is
+ * exactly the behaviour this route had before.
+ */
+const ITEM_SHELL_PATH = `/item/${encodeURIComponent("[id]")}`;
+
+/** JSON safe to sit inside a `<script>` element: `<` is the only character
+ * that can end the element early (`</script`, and `<!--` in the legacy
+ * parser path), and escaping it is invisible to `JSON.parse`. */
+function jsonForScript(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
 itemRoutes.get("/:id", burst("RL_READ"), async (c) => {
   const id = requireParam(c, "id");
-  const shellRequest = new Request(new URL("/", c.req.url), { headers: c.req.raw.headers });
+  const shellRequest = new Request(new URL(ITEM_SHELL_PATH, c.req.url), { headers: c.req.raw.headers });
   const shellResponse = await c.env.ASSETS.fetch(shellRequest);
 
   const row = await fetchListingRow(c.env, id);
@@ -185,6 +242,7 @@ itemRoutes.get("/:id", burst("RL_READ"), async (c) => {
   }
 
   const photos = await fetchPhotoRows(c.env, id);
+  const aspects = await fetchAspectRows(c.env, id);
   const firstPhoto = photos[0];
   const siteUrl = c.env.SITE_URL;
   const pageUrl = `${siteUrl}/item/${id}`;
@@ -245,11 +303,17 @@ itemRoutes.get("/:id", burst("RL_READ"), async (c) => {
     imageUrls: photos.map((photo) => `${siteUrl}/i/${photo.id}/full`),
   });
 
+  // The same bytes `GET /api/listings/:id` would have answered with, so the
+  // client can parse it through the identical schema and skip the request.
+  const inlineListing = `<script type="application/json" id="ks-listing" data-id="${escapeHtml(id)}">${jsonForScript(
+    serializePublicListing(row, photos, aspects),
+  )}</script>`;
+
   // Drop the shell's default title/OG/Twitter tags first: crawlers take the
   // first og:* they see, and the exported shell already carries the site-wide
   // defaults ahead of the marker.
   const rewriter = new HTMLRewriter()
-    .on('title, link[rel="canonical"], meta[property^="og:"], meta[name^="twitter:"]', {
+    .on('title, link[rel="canonical"], meta[name="description"], meta[property^="og:"], meta[name^="twitter:"]', {
       element(el) {
         el.remove();
       },
@@ -258,6 +322,7 @@ itemRoutes.get("/:id", burst("RL_READ"), async (c) => {
     element(el) {
       el.append(tags, { html: true });
       el.append(jsonLd, { html: true });
+      el.append(inlineListing, { html: true });
     },
   });
 

@@ -130,13 +130,125 @@ describe("GET /item/:id", () => {
     );
   });
 
+  it("replaces the shell's site-wide meta description with the listing's own", async () => {
+    // The plain `<meta name="description">` — the one a search result shows —
+    // was the last tag this rewriter left alone, so every listing page in the
+    // sitemap carried the shell's "Give a keepsake a second life.", identical
+    // on all of them. Both halves are asserted: the shell's copy is gone (the
+    // first description in <head> is the one that counts) and the listing's
+    // own is there.
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({
+      ownerId,
+      title: "A quiet teacup",
+      story: "She used it every single day for her first cup of tea.",
+    });
+
+    const html = await (await SELF.fetch(`http://x/item/${listingId}`)).text();
+
+    expect(html).toContain(
+      '<meta name="description" content="She used it every single day for her first cup of tea.">',
+    );
+    expect(html).not.toContain('content="Give a keepsake a second life."');
+    // Exactly one, not the shell's plus ours.
+    expect(html.match(/<meta name="description"/g)).toHaveLength(1);
+  });
+
+  it("serves the item route's own exported shell, not the feed's", async () => {
+    // Since the app's static export stopped shipping an empty <body> (see
+    // apps/web/src/ui/theme.tsx), `/`'s HTML is the FEED — header, search,
+    // category chips, an empty grid. This route used to read exactly that
+    // and rewrite its <head>, which would now paint the feed for the
+    // fraction of a second before hydration replaced it with a keepsake.
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId, title: "A quiet teacup" });
+
+    const html = await (await SELF.fetch(`http://x/item/${listingId}`)).text();
+
+    expect(html).toContain("item stub");
+    expect(html).not.toContain("keepsake test fixture");
+  });
+
+  it("inlines the same PublicListing the API would answer with", async () => {
+    // The round trip this removes is the browser asking the Worker for a row
+    // the Worker just read to build the tags above.
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({
+      ownerId,
+      title: "A quiet teacup",
+      story: "She used it every single day for her first cup of tea.",
+    });
+    await insertPhoto(ownerId, listingId);
+
+    const html = await (await SELF.fetch(`http://x/item/${listingId}`)).text();
+
+    const match = new RegExp(
+      `<script type="application/json" id="ks-listing" data-id="${listingId}">([\\s\\S]*?)</script>`,
+    ).exec(html);
+    expect(match).not.toBeNull();
+    const inlined = JSON.parse((match as RegExpExecArray)[1] as string) as Record<string, unknown>;
+
+    const fromApi = (await (await SELF.fetch(`http://x/api/listings/${listingId}`)).json()) as { data: unknown };
+    // The inlined value is the API's `data` — what `apiFetch` hands the
+    // screen after unwrapping the envelope — so the client parses one shape
+    // whichever path it came by. If these ever diverge, only one of the two
+    // paths is tested.
+    expect(inlined).toEqual(fromApi.data);
+  });
+
+  it("escapes the payload so a story cannot close the script tag", async () => {
+    // A story is a stranger's prose. `</script>` inside it, injected raw,
+    // ends the data block and starts executing whatever follows.
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({
+      ownerId,
+      title: "A quiet teacup",
+      story: "I wrote </script><script>alert(1)</script> on the box, as a joke.",
+    });
+
+    const html = await (await SELF.fetch(`http://x/item/${listingId}`)).text();
+
+    expect(html).not.toContain("</script><script>alert(1)");
+    expect(html).toContain("\\u003c/script\\u003e\\u003cscript\\u003ealert(1)");
+
+    const match = /<script type="application\/json" id="ks-listing"[^>]*>([\s\S]*?)<\/script>/.exec(html);
+    const inlined = JSON.parse((match as RegExpExecArray)[1] as string) as { story: string };
+    // Escaped for the parser, unchanged for the reader.
+    expect(inlined.story).toBe("I wrote </script><script>alert(1)</script> on the box, as a joke.");
+  });
+
+  it("never puts owner-only data in the inlined payload", async () => {
+    // The same rule the OG tags follow, asserted against the one new place a
+    // whole row now passes through on its way to the page.
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId, postalCode: "02144" });
+
+    const html = await (await SELF.fetch(`http://x/item/${listingId}`)).text();
+    const match = /<script type="application\/json" id="ks-listing"[^>]*>([\s\S]*?)<\/script>/.exec(html);
+    const inlined = JSON.parse((match as RegExpExecArray)[1] as string) as Record<string, unknown>;
+
+    expect(Object.keys(inlined)).not.toContain("postal_code");
+    expect(Object.keys(inlined)).not.toContain("owner_id");
+    expect(JSON.stringify(inlined)).not.toContain("02144");
+    expect(JSON.stringify(inlined)).not.toContain(ownerId);
+  });
+
   it("404s the unchanged shell for an unknown id", async () => {
     const res = await SELF.fetch("http://x/item/01UNKNOWNIDXXXXXXXXXXXXXXX");
     expect(res.status).toBe(404);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
     const html = await res.text();
-    expect(html).not.toContain("og:title");
-    expect(html).toContain("keepsake test fixture");
+    // The shell comes back as it is served everywhere else — its own title
+    // and its site-wide OG defaults intact — with nothing listing-specific
+    // added. (It used to assert `not.toContain("og:title")`, which only held
+    // because the fixture had no OG tags at all; the fixture now carries the
+    // ones the real export ships, so this has to name what "unchanged"
+    // means.)
+    expect(html).toContain("keepsake item fixture");
+    expect(html).toContain('<meta property="og:title" content="Keepsake" />');
+    expect(html).not.toContain("og:url");
+    expect(html).not.toContain('rel="canonical"');
+    expect(html).not.toContain("ks-listing");
   });
 
   it("404s the unchanged shell for a pending listing", async () => {
@@ -150,7 +262,13 @@ describe("GET /item/:id", () => {
     const res = await SELF.fetch(`http://x/item/${listingId}`);
     expect(res.status).toBe(404);
     const html = await res.text();
-    expect(html).not.toContain("og:title");
+    // The strongest form of "never confirm it exists": the row's own title
+    // appears nowhere in the response, and no per-listing tag was injected.
+    expect(html).not.toContain("Not public yet");
+    expect(html).not.toContain("ks-listing");
+    expect(html).not.toContain("og:url");
+    expect(html).not.toContain('rel="canonical"');
+    expect(html).toContain("keepsake item fixture");
   });
 });
 

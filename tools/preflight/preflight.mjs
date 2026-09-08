@@ -81,7 +81,17 @@ export function createContext(root) {
     return out;
   }
 
-  return { root, exists, readText, walk };
+  // Bytes, not text: the `fonts` check hashes font files, and reading a .ttf
+  // as UTF-8 would silently mangle it into a different (but stable) string.
+  function readBytes(relPath) {
+    try {
+      return readFileSync(abs(relPath));
+    } catch {
+      return null;
+    }
+  }
+
+  return { root, exists, readText, readBytes, walk };
 }
 
 // ── Small parsers, kept dependency-free on purpose ────────────────────────
@@ -156,29 +166,131 @@ export function parseEnvExample(text) {
 
 const HTML_PATH = "apps/web/app/+html.tsx";
 const FONTS_DIR = "apps/web/public/fonts";
+const SITE_CSS_PATH = "apps/site/public/site.css";
+
+/**
+ * The `?v=` token every `/fonts/*` URL must carry: a hash of the font bytes
+ * themselves — every `.ttf` AND every `.woff2` in the directory, so replacing
+ * either format changes it.
+ *
+ * `apps/web/public/_headers` serves `/fonts/*` `max-age=31536000, immutable`
+ * under filenames that carry no content hash. `immutable` is a promise a
+ * browser takes literally — it will not revalidate for a year, reload
+ * included — so a font replaced in place would keep rendering as the old one
+ * for every returning visitor, invisibly, with nothing anywhere reporting
+ * it. The token is what makes the URL change when the bytes do, and it is
+ * written by hand in two files (`FONT_VERSION` in `+html.tsx`, repeated in
+ * `site.css`, which is static and has no build step), so it can go stale
+ * exactly the way a CSP hash can. This recomputes it.
+ */
+export function fontVersionToken(files) {
+  const hash = createHash("sha256");
+  for (const [name, bytes] of [...files].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    // `null` is what `ctx.readBytes` answers for a file it could not read.
+    // `hash.update(null)` throws, and a check that throws is reported as
+    // "check itself threw" with a stack — true, and useless. `checkFonts`
+    // filters those out and names them before calling this; returning `null`
+    // here is the second line of defence for any other caller.
+    if (bytes === null || bytes === undefined) return null;
+    hash.update(name, "utf8");
+    hash.update("\0");
+    hash.update(bytes);
+    hash.update("\0");
+  }
+  return hash.digest("hex").slice(0, 8);
+}
+
+/** Every `/fonts/<file>.<ttf|woff2>[?v=<token>]` reference in a source text,
+ * with where it appears — the order matters (see `checkFonts`). */
+function fontRefs(text) {
+  const refs = [];
+  for (const match of text.matchAll(/\/fonts\/([A-Za-z0-9._-]+\.(?:ttf|woff2))(\?v=([^"'`)\s]*))?/g)) {
+    refs.push({ file: match[1], version: match[3], at: match.index ?? 0 });
+  }
+  return refs;
+}
+
+const fontStem = (file) => file.replace(/\.(ttf|woff2)$/, "");
 
 function checkFonts(ctx) {
   const html = ctx.readText(HTML_PATH);
   if (html === null) return { status: "skip", details: [`${HTML_PATH} not present`] };
   if (!ctx.exists(FONTS_DIR)) return { status: "skip", details: [`${FONTS_DIR} not present`] };
 
-  const referenced = new Set();
-  for (const match of html.matchAll(/url\(\s*["']?\/fonts\/([^"')]+)["']?\s*\)/g)) {
-    referenced.add(match[1]);
-  }
+  const fontPaths = ctx.walk(FONTS_DIR).filter((f) => f.endsWith(".ttf") || f.endsWith(".woff2"));
+  const onDisk = new Set(fontPaths.map((f) => path.posix.basename(f)));
 
-  const onDisk = new Set(
-    ctx.walk(FONTS_DIR)
-      .filter((f) => f.endsWith(".ttf"))
-      .map((f) => path.posix.basename(f)),
-  );
+  // A font this check can list but cannot read is a fail with a reason, not
+  // an exception: `readBytes` answers `null` for an unreadable file (a broken
+  // symlink, a permission, an LFS pointer that was never fetched — this repo
+  // has one of those already), and handing `null` to `hash.update()` throws.
+  // The runner would report that as "check itself threw" with a stack, which
+  // says nothing about which font it was.
+  const unreadable = [];
+  const fontBytes = [];
+  for (const file of fontPaths) {
+    const bytes = ctx.readBytes(file);
+    if (bytes === null) unreadable.push(file);
+    else fontBytes.push([path.posix.basename(file), bytes]);
+  }
+  if (unreadable.length > 0) {
+    return { status: "fail", details: unreadable.map((file) => `fail: ${file} could not be read, so the ?v= token cannot be computed`) };
+  }
+  const expected = fontVersionToken(fontBytes);
+
+  // `+html.tsx` interpolates the constant into a template literal, so the
+  // reference reads `?v=${FONT_VERSION}` in source — resolve it to the
+  // declared value before comparing, and fail on a reference that carries no
+  // token at all.
+  const declared = /const\s+FONT_VERSION\s*=\s*"([^"]*)"/.exec(html)?.[1] ?? null;
 
   const details = [];
-  for (const file of [...referenced].sort()) {
-    if (!onDisk.has(file)) {
-      details.push(`fail: ${HTML_PATH} references /fonts/${file}, not found under ${FONTS_DIR}/`);
+  const referenced = new Set();
+
+  const sources = [[HTML_PATH, html]];
+  const siteCss = ctx.readText(SITE_CSS_PATH);
+  if (siteCss !== null) sources.push([SITE_CSS_PATH, siteCss]);
+
+  for (const [source, text] of sources) {
+    for (const ref of fontRefs(text)) {
+      referenced.add(ref.file);
+      if (!onDisk.has(ref.file)) {
+        details.push(`fail: ${source} references /fonts/${ref.file}, not found under ${FONTS_DIR}/`);
+      }
+      const version = ref.version === "${FONT_VERSION}" ? declared : ref.version;
+      if (ref.version === undefined) {
+        details.push(`fail: ${source} references /fonts/${ref.file} with no ?v= token (see FONT_VERSION in ${HTML_PATH})`);
+      } else if (version !== expected) {
+        details.push(
+          `fail: ${source} references /fonts/${ref.file} at ?v=${version ?? "(unresolved)"}, but ${FONTS_DIR}/*.{ttf,woff2} hash to ${expected}`,
+        );
+      }
     }
   }
+
+  if (declared === null) {
+    details.push(`fail: ${HTML_PATH} declares no FONT_VERSION constant`);
+  } else if (declared !== expected) {
+    details.push(`fail: ${HTML_PATH}'s FONT_VERSION is ${declared}, but ${FONTS_DIR}/*.{ttf,woff2} hash to ${expected}`);
+  }
+
+  // Every `.ttf` reference must be preceded, in the same file, by the
+  // `.woff2` of the same face. The TTF is the fallback and the byte-source
+  // the OG card's fonts are compared against (apps/web/test/guards/
+  // ogCardFonts.test.ts); WOFF2 is what a browser should actually fetch, and
+  // `src:` is an ordered list — a browser takes the first format it supports,
+  // so listing the TTF first silently ships the big file to everyone.
+  for (const [source, text] of sources) {
+    const refs = fontRefs(text);
+    for (const ref of refs) {
+      if (!ref.file.endsWith(".ttf")) continue;
+      const woff2 = refs.find((other) => other.file === `${fontStem(ref.file)}.woff2` && other.at < ref.at);
+      if (woff2 === undefined) {
+        details.push(`fail: ${source} offers /fonts/${ref.file} with no /fonts/${fontStem(ref.file)}.woff2 ahead of it`);
+      }
+    }
+  }
+
   const unreferenced = [...onDisk].filter((f) => !referenced.has(f)).sort();
   for (const file of unreferenced) {
     details.push(`warn: ${FONTS_DIR}/${file} is not referenced by any @font-face in ${HTML_PATH}`);
@@ -187,7 +299,13 @@ function checkFonts(ctx) {
   const hasFail = details.some((d) => d.startsWith("fail:"));
   if (hasFail) return { status: "fail", details };
   if (details.length > 0) return { status: "warn", details };
-  return { status: "pass", details: [`${referenced.size} font(s) referenced, all present`] };
+  return {
+    status: "pass",
+    details: [
+      `${referenced.size} font file(s) referenced, all present, all at ?v=${expected}`,
+      `${[...referenced].filter((f) => f.endsWith(".woff2")).length} woff2 ahead of ${[...referenced].filter((f) => f.endsWith(".ttf")).length} ttf fallback(s)`,
+    ],
+  };
 }
 
 const MIGRATIONS_DIR = "apps/api/migrations";

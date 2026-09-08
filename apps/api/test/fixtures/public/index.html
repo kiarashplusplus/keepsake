@@ -4,10 +4,23 @@
   `[assets] directory = "../web/dist"` doesn't exist until apps/web is
   scaffolded and exported — this fixture keeps apps/api's own test suite
   self-contained (see vitest.config.ts's `assets.directory` override).
+
+  The head below carries the site-wide description meta and the default OG
+  tags that `apps/web/app/+html.tsx` really ships, because half of
+  `routes/item.ts`'s job on those tags is REMOVING them: a fixture head that
+  never had a description could not tell "the rewriter dropped the shell's
+  copy" from "there was nothing to drop", which is the shape of check this
+  repo keeps finding it cannot fail. Keep them in step with the shell's
+  defaults. (Written without naming the tags literally: test/item.test.ts
+  counts occurrences in the served bytes, and this comment is served too.)
 -->
 <html>
   <head>
     <title>keepsake test fixture</title>
+    <meta name="description" content="Give a keepsake a second life." />
+    <meta property="og:title" content="Keepsake" />
+    <meta property="og:description" content="Give a keepsake a second life." />
+    <meta property="og:image" content="https://keepsake.ing/og-default.png" />
     <!--KEEPSAKE_OG-->
   </head>
   <body>stub</body>

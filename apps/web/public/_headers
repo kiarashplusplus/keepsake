@@ -2,6 +2,19 @@
 # HTML shell and version.json are handled by the Worker (no-store).
 /_expo/static/*
   Cache-Control: public, max-age=31536000, immutable
+# The font filenames carry no content hash, so every URL that references one
+# carries a `?v=` content token instead (FONT_VERSION in apps/web/app/+html.tsx,
+# repeated in apps/site/public/site.css, recomputed from the font bytes by
+# preflight's `fonts` check). Both formats live here: the `.woff2` every
+# browser actually fetches, and the `.ttf` behind it as the fallback and as
+# the byte-source apps/web/test/guards/ogCardFonts.test.ts compares the OG
+# card's fonts against. WOFF2 is already Brotli-compressed, so there is
+# nothing for the edge to compress on the file that actually ships.
+#
+# Without the token, `immutable` means a browser that has cached
+# Fraunces-VF.woff2 will not revalidate it for a year, not even on a reload —
+# so replacing a font in place would leave returning visitors rendering the
+# old one, invisibly, while new visitors got the new one.
 /fonts/*
   Cache-Control: public, max-age=31536000, immutable
 /site.css
@@ -20,7 +33,7 @@
 # `<script>` tags that actually ship in the exported HTML (confirmed by
 # running `expo export` twice and diffing the hashes — both matched a
 # byte-for-byte second run, so these are stable, not export-run-dependent):
-#   - sha256-0+1/dyhem/DQyJcleu1QSKhUVK/gq5R519iI9mtWheM= is
+#   - sha256-Xrcu2vG2x+FPB1xtg6DFrNGNiO3x0AQ6vK5XstpOJM8= is
 #     apps/web/app/+html.tsx's PREHYDRATION_SCRIPT — the no-flash dark-mode
 #     script that must run before hydration, plus (issue #44) the root
 #     redirect that sends a first-time visitor from `/` to `/welcome` before
@@ -86,7 +99,7 @@
 # only honor the older header) stops the give flow and the admin page from
 # being framed at all — the concrete risk named in the issue.
 /*
-  Content-Security-Policy: default-src 'self'; connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org https://cloudflareinsights.com; script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com 'sha256-0+1/dyhem/DQyJcleu1QSKhUVK/gq5R519iI9mtWheM=' 'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' 'sha256-d6qbtEYff/sB38YyzuzhASbVmmOidU/UFC9mNit47j4='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
+  Content-Security-Policy: default-src 'self'; connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org https://cloudflareinsights.com; script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com 'sha256-Xrcu2vG2x+FPB1xtg6DFrNGNiO3x0AQ6vK5XstpOJM8=' 'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' 'sha256-d6qbtEYff/sB38YyzuzhASbVmmOidU/UFC9mNit47j4='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; frame-src https://challenges.cloudflare.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
   X-Frame-Options: DENY
   Referrer-Policy: strict-origin-when-cross-origin
   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload

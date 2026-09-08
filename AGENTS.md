@@ -323,6 +323,10 @@ cannot pass by having scanned the light palette twice.
   rejected as generic; do not drift back to cream-and-serif cards.
 - `docs/design/moderation.md` — how moderation works and two measured model weaknesses.
 - `docs/runbooks/launch-audit.md` — 18 findings, several still open.
+- `docs/runbooks/seo-audit.md` — what a crawler, an unfurler and a returning visitor get from
+  the shell, `/item/:id`, the sitemap and the cache headers (2026-09-08). Includes the one
+  check it could not make from a container, and why the escaped-looking `<script>` in a saved
+  copy of production is a capture artifact rather than a live bug.
 - `docs/legal-considerations.md` — compliance research, with eight questions marked for a lawyer.
 - `docs/legal-entity-and-insurance.md` — why Keepsake is a sole proprietorship and not an LLC
   (#108), what has to be bought and filed because of that, and what would reverse it.

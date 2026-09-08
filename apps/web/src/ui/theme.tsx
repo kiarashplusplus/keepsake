@@ -1,12 +1,41 @@
 // Theme provider + hooks. Ported from finderly-monorepo
 // `frontend/src/design-system/theme.tsx`: light/dark/system mode, persisted
-// preference, hydration-gated so there is no flash of the wrong theme
-// before the stored value is read (the `app/+html.tsx` pre-hydration script
-// handles the *pre-JS* flash by setting `data-theme` synchronously; this
-// provider handles the *post-hydration* React-tree render).
+// preference, and — on the web — a palette that does not depend on which
+// theme is in force at all.
+//
+// ## This provider used to render nothing until it had read localStorage
+//
+// It returned `null` while `hydrated` was false, so that the tree could not
+// paint in the wrong palette before the stored preference arrived. On the
+// web that was the single most expensive line in the app: `expo export`
+// static-renders every route at build time, effects do not run there, so
+// `hydrated` was false for the whole render and **every exported page
+// shipped an empty `<body>`** — `<div id="root">` with a Suspense comment
+// inside it and nothing else, on a product whose landing page is a feed of
+// other people's things. Nothing was visible until the JS bundle had
+// downloaded, parsed and hydrated, and any crawler or unfurler that does not
+// run JavaScript saw an empty document. (`app/+html.tsx`'s own comment
+// recorded the symptom — "expo export's per-route HTML ships an EMPTY body"
+// — as a fact about Expo. It was this gate.)
+//
+// It is gone, and nothing takes its place, because the flash it was
+// protecting against cannot happen any more: on the web the palette is
+// `colorsWeb`, whose eight theme-dependent tokens are CSS custom properties
+// resolved by the `data-theme` attribute the pre-hydration script in
+// `app/+html.tsx` sets before the first paint. Server markup and client
+// markup are byte-identical in both themes, so there is nothing to gate and
+// nothing to mismatch. See `@keepsake/tokens/colors`' `colorsWeb`.
+//
+// `hydrated` still exists, and still means "the stored preference has been
+// read". It gates exactly one thing now: writing `data-theme` back to the
+// document. Until the read lands, `selectedMode` is "system" — which is what
+// the static render assumed too, so the theme control's own markup matches —
+// and `data-theme` is left exactly as the pre-hydration script set it from
+// that same localStorage key. Overwriting it from an unread preference is
+// the one way this could still flash.
 import * as React from "react";
-import { useColorScheme as useRNColorScheme } from "react-native";
-import { colorsFor, type ColorMode, type ColorTokens } from "@keepsake/tokens/colors";
+import { Platform, useColorScheme as useRNColorScheme } from "react-native";
+import { colorsFor, colorsWeb, type ColorMode, type ColorTokens } from "@keepsake/tokens/colors";
 import { prefStore } from "@/lib/prefStore";
 
 export type ThemeMode = "light" | "dark" | "system";
@@ -17,7 +46,7 @@ function isThemeMode(value: string | null): value is ThemeMode {
   return value === "light" || value === "dark" || value === "system";
 }
 
-function applyDomTheme(effective: ColorMode, colors: ColorTokens): void {
+function applyDomTheme(effective: ColorMode): void {
   if (typeof document === "undefined") return;
   document.documentElement.dataset.theme = effective;
   document.documentElement.style.colorScheme = effective;
@@ -27,7 +56,10 @@ function applyDomTheme(effective: ColorMode, colors: ColorTokens): void {
     meta.setAttribute("name", "theme-color");
     document.head.appendChild(meta);
   }
-  meta.setAttribute("content", colors.bg);
+  // A REAL colour, not the `var(--ks-bg)` the tree renders with: this value
+  // is read by the browser to paint its own chrome, outside any stylesheet,
+  // where a custom property means nothing.
+  meta.setAttribute("content", colorsFor(effective).bg);
 }
 
 type ThemeContextValue = {
@@ -83,25 +115,27 @@ export function ThemeProvider({
   const chosenMode: ThemeMode = mode ?? explicitMode;
   const effective: ColorMode = chosenMode === "system" ? (osScheme === "dark" ? "dark" : "light") : chosenMode;
 
-  const colors = colorsFor(effective);
+  // On the web this is the SAME object in both modes — the eight tokens that
+  // flip are `var(--ks-…)` references, so nothing in the tree re-renders on a
+  // theme change and nothing depends on which theme rendered it. Native has
+  // no CSS and no server render, so it keeps the resolved palette.
+  const colors = Platform.OS === "web" ? colorsWeb : colorsFor(effective);
 
   React.useEffect(() => {
     if (!hydrated) return;
-    applyDomTheme(effective, colors);
-  }, [effective, colors, hydrated]);
+    applyDomTheme(effective);
+  }, [effective, hydrated]);
 
   const value = React.useMemo<ThemeContextValue>(
     () => ({ colors, mode: effective, selectedMode: chosenMode, setMode }),
     [colors, effective, chosenMode, setMode],
   );
 
-  if (!hydrated) return null;
-
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 
 const FALLBACK_CONTEXT: ThemeContextValue = {
-  colors: colorsFor("light"),
+  colors: Platform.OS === "web" ? colorsWeb : colorsFor("light"),
   mode: "light",
   selectedMode: "system",
   setMode: () => {},
