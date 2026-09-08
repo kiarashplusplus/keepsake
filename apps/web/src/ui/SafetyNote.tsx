@@ -27,7 +27,7 @@ import { Text } from "@/ui/Text";
  *    version of the same "this is the small print" signal.
  *
  * 2. `color="inkSoft"` (#3A332B) — **10.0:1** against the sheet's own fill
- *    (`surface #F1E6CC`, which is what `ui/Sheet.tsx` paints and is constant
+ *    (`surface #FAF6EE`, which is what `ui/Sheet.tsx` paints and is constant
  *    in light and dark, so this one number holds in both themes). Computed
  *    with `packages/tokens/src/contrast.ts`'s `contrastRatio()`. For
  *    comparison: the `textTertiary` it replaces is 4.9:1 on the same fill —
@@ -47,7 +47,7 @@ import { Text } from "@/ui/Text";
  *    it needs a visitor to actually read (`.ks-consent__note` in
  *    `public/consent.js`, a 2px stamp-red left border): it marks the block
  *    out without putting text on any new ground, so the 10.0:1 above is the
- *    only pair to verify. `accent #C4341C` is decorative here and carries no
+ *    only pair to verify. `accent #A9432E` is decorative here and carries no
  *    text, which is the only way this palette permits it to be used.
  *
  * Logical properties (`borderStartWidth`/`paddingStart`) per the design

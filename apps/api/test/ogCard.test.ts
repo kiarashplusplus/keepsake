@@ -167,11 +167,11 @@ describe("the rendered card", () => {
       return n;
     };
 
-    // Black ink (`colors.ink` #1B1815) where the title is set on the index card.
+    // Black ink (`colors.ink` #28231F) where the title is set on the index card.
     const titleInk = countWhere({ x0: 590, y0: 100, x1: 1080, y1: 200 }, ([r, g, b]) => r < 90 && g < 90 && b < 90);
     expect(titleInk).toBeGreaterThan(100);
 
-    // The stamp's red (`colors.stamp` #C4341C) in the lower right of the card.
+    // The stamp's red (`colors.stamp` #A9432E) in the lower right of the card.
     const stampRed = countWhere(
       { x0: 880, y0: 430, x1: 1080, y1: 530 },
       ([r, g, b]) => r > 130 && r - g > 60 && r - b > 60,

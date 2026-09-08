@@ -182,7 +182,7 @@ html {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
-body { margin: 0; background: #D2BC97; }
+body { margin: 0; background: #E4DDD1; }
 [data-theme="dark"] body { background: #2B2119; }
 
 /* Focus ring: the \`focus\` token, 2px, offset 3px — the same treatment the
@@ -247,7 +247,7 @@ export default function Root({ children }: { children: React.ReactNode }): React
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <meta name="color-scheme" content="light dark" />
-        <meta name="theme-color" content="#D2BC97" media="(prefers-color-scheme: light)" />
+        <meta name="theme-color" content="#E4DDD1" media="(prefers-color-scheme: light)" />
         <meta name="theme-color" content="#2B2119" media="(prefers-color-scheme: dark)" />
 
         <title>Keepsake</title>

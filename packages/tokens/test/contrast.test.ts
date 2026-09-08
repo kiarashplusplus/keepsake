@@ -64,6 +64,12 @@ describe("colour contrast (WCAG AA) — Polaroids on a table", () => {
   it("ink on the chrome surface (index cards, sheets, inputs) >= 4.5:1", () => {
     expect(contrastRatio(colorsLight.ink, colorsLight.surface)).toBeGreaterThanOrEqual(AA);
   });
+
+  it("control boundaries and focus indicators remain visible on paper", () => {
+    expect(contrastRatio(colorsLight.border, colorsLight.surface)).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(colorsLight.focus, colorsLight.surface)).toBeGreaterThanOrEqual(3);
+    expect(contrastRatio(colorsLight.focus, colorsLight.print)).toBeGreaterThanOrEqual(3);
+  });
 });
 
 describe("motionSafe", () => {
