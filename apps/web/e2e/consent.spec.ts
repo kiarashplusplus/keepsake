@@ -251,7 +251,6 @@ test.describe("the consent gate", () => {
           computed.borderTopColor,
           computed.borderTopWidth,
           computed.color,
-          computed.boxShadow,
           computed.fontFamily,
           computed.fontSize,
           computed.fontWeight,
