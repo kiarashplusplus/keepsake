@@ -155,7 +155,18 @@ CREATE TABLE upload_batch_photos (
   id TEXT PRIMARY KEY,
   batch_id TEXT NOT NULL REFERENCES upload_batches(id) ON DELETE CASCADE,
   client_photo_id TEXT NOT NULL,
-  photo_id TEXT NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+  -- Nullable: this row is reserved, under the client-key unique index below,
+  -- *before* admission is debited and before the photo it will eventually
+  -- name has been stored. `photos.id` is deterministic
+  -- (`reservedPhotoId(batchId, clientPhotoId)` in `routes/bulk.ts`) but that
+  -- alone doesn't make a retry safe — a `photos` row not existing yet cannot
+  -- tell "never attempted" apart from "debited, evicted before storing", and
+  -- either one looks identical to a naive re-check. This row is what tells
+  -- them apart: it is written *in the same D1 transaction as the debit*, so
+  -- a retry that finds it (`photo_id IS NULL`) knows admission was already
+  -- spent and must not spend it again, and resumes at "store the bytes".
+  -- See `routes/bulk.ts`'s header on the PUT handler for the full sequence.
+  photo_id TEXT REFERENCES photos(id) ON DELETE CASCADE,
   -- Nullable: a photo can sit in the batch's tray before the giver decides
   -- which object it belongs to. `ON DELETE SET NULL` so splitting an item
   -- returns its photos to the tray rather than destroying them.
@@ -168,7 +179,11 @@ CREATE TABLE upload_batch_photos (
 CREATE UNIQUE INDEX upload_batch_photos_client_key ON upload_batch_photos(batch_id, client_photo_id);
 -- A photo belongs to at most one draft, anywhere — stronger and cheaper than
 -- scoping it per batch. Two items cannot claim the same bytes, so no
--- submission race can attach one photo to two listings.
+-- submission race can attach one photo to two listings. SQLite treats NULLs
+-- as distinct in a unique index, so the many unresolved reservations
+-- (`photo_id IS NULL`, before a photo has actually been stored) never
+-- collide with each other here — only two rows naming the same real photo id
+-- would, and that's exactly the case this index exists to refuse.
 CREATE UNIQUE INDEX upload_batch_photos_photo ON upload_batch_photos(photo_id);
 CREATE INDEX upload_batch_photos_item ON upload_batch_photos(item_id, position);
 

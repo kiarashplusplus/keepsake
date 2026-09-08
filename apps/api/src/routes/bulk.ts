@@ -438,6 +438,47 @@ bulkRoutes.delete("/batches/:id/items/:clientItemId", ownerAuth(), async (c) => 
 // ---------------------------------------------------------------------------
 // PUT /batches/:id/photos/:clientPhotoId
 // ---------------------------------------------------------------------------
+// A lost response resolves through the `upload_batch_photos_client_key` D1
+// unique index, same as every other write in this file — never the KV
+// replay cache in `middleware/idempotency.ts`.
+//
+// `photoId` is deterministic (`reservedPhotoId`, a pure function of
+// `(batchId, clientPhotoId)`), which makes a retried *store* safe on its own
+// — `storePhotoUpload`'s `ON CONFLICT(id) DO UPDATE` (see `photos/store.ts`)
+// overwrites the same row and the same R2 keys rather than duplicating. It
+// does NOT, by itself, make a retried *debit* safe: whether a `photos` row
+// with that id exists cannot tell "never attempted" apart from "debited,
+// then the Worker was evicted before storing" — both look like "no row
+// yet", and re-checking only that on every retry spends admission twice for
+// the second case. So the reservation itself — a `upload_batch_photos` row
+// with `photo_id IS NULL` — is the durable record of "admission already
+// spent for this client key", written in the *same* `env.DB.batch()` call
+// as the debit:
+//   1. reserve + debit — one transaction, skipped entirely when either the
+//      reservation or the photo it would name already exists (see below).
+//      `upload_batch_photos_client_key` guards a concurrent double-reserve
+//      the same way the item path's insert does; `settleDebit` corrects the
+//      rare case where only one of the grant/usage statements fired.
+//   2. store — `storePhotoUpload` under the deterministic id. Always run,
+//      even on a resumed retry that may have already stored once: the
+//      upsert makes that redundant, never wrong.
+//   3. finalize — link `photo_id` and stamp `retain_until`, an upsert
+//      guarded by `photo_id IS NULL` on conflict so a concurrent finalize of
+//      the same reservation is a no-op the second time. `retain_until` stays
+//      unset until here on purpose: if the Worker is evicted before this
+//      step, the stored photo is a bare orphan (`listing_id IS NULL`,
+//      `retain_until IS NULL`) that `cron/orphanSweep.ts` already knows how
+//      to reclaim in 24 hours, rather than bytes protected for a week with
+//      nothing pointing at them.
+//
+// Debit is skipped when *either* a reservation for this client key already
+// exists (the eviction-after-debit case step 1 exists for) *or* a `photos`
+// row already exists under the deterministic id with no reservation at all
+// — the mapping row can be deleted out from under a finished upload (e.g. by
+// a client retrying `DELETE` on a client key it had already re-used, or any
+// other path that clears `upload_batch_photos` without touching `photos`),
+// and re-linking that already-paid-for photo must not charge a second time
+// either.
 bulkRoutes.put("/batches/:id/photos/:clientPhotoId", burst("RL_UPLOAD"), ownerAuth(), requireGrant(), async (c) => {
   const owner = c.get("owner");
   const grant = c.get("grant");
@@ -447,15 +488,18 @@ bulkRoutes.put("/batches/:id/photos/:clientPhotoId", burst("RL_UPLOAD"), ownerAu
   const batch = await findBatchById(c.env, batchId, owner.id);
   if (!batch) return fail(c, "not_found", "Batch not found.", 404);
 
-  // Phase 1: this is how a lost response resolves — a D1 unique index
-  // (`upload_batch_photos_client_key`), not the KV replay cache in
-  // `middleware/idempotency.ts`.
-  const existingMapping = await findBatchPhotoByClientId(c.env, batchId, clientPhotoId);
-  if (existingMapping) {
+  const respondWithSavedPhoto = async (): Promise<Response> => {
     const detail = await loadBatchDetail(c.env, batchId, owner.id);
     const photo = detail?.photos.find((p) => p.client_photo_id === clientPhotoId);
     if (!photo) return fail(c, "internal", "Photo failed to save.", 500);
     return ok(c, photo);
+  };
+
+  const existingMapping = await findBatchPhotoByClientId(c.env, batchId, clientPhotoId);
+  if (existingMapping?.photo_id) {
+    // Fully finished on a previous attempt — replay with no R2 work and no
+    // second debit.
+    return respondWithSavedPhoto();
   }
 
   let form: FormData;
@@ -468,49 +512,87 @@ bulkRoutes.put("/batches/:id/photos/:clientPhotoId", burst("RL_UPLOAD"), ownerAu
   const now = Date.now();
   const day = todayISO();
   const photoId = await reservedPhotoId(batchId, clientPhotoId);
-  const retainedPhoto = await c.env.DB.prepare("SELECT id FROM photos WHERE id = ? AND owner_id = ?")
-    .bind(photoId, owner.id)
-    .first<{ id: string }>();
 
-  // Admission is checked, and spent, *before* a single byte reaches R2 —
-  // fail closed on an exhausted grant or ceiling with nothing written
-  // anywhere. `settleDebit` corrects the one case where only one of the two
-  // guarded statements below actually fired (see its own doc comment).
-  if (!retainedPhoto) {
+  // Recovery fallback for a missing (not merely unresolved) mapping row —
+  // see the header above. Only consulted when there is no reservation at
+  // all; an unresolved reservation (`existingMapping` truthy, `photo_id`
+  // still null) already proves admission was spent without this lookup.
+  const retainedPhoto = existingMapping
+    ? null
+    : await c.env.DB.prepare("SELECT id FROM photos WHERE id = ? AND owner_id = ?").bind(photoId, owner.id).first<{ id: string }>();
+
+  if (!existingMapping && !retainedPhoto) {
+    // Step 1: reserve and debit atomically. Admission is checked, and spent,
+    // *before* a single byte reaches R2 or a `photos` row exists — fail
+    // closed on an exhausted grant or ceiling with nothing durable left
+    // behind (the reservation this call just inserted is deleted below on
+    // that path).
+    const reservationId = ulid(now);
     const debit = buildPhotoDebitStatements(c.env, { grant, ownerId: owner.id, day, limit: bulkOwnerDailyPhotos(c.env), now });
-    const debitResults = await c.env.DB.batch(debit.statements);
-    const grantOk = (debitResults[debit.grantResultIndex]?.meta.changes ?? 0) > 0;
-    const usageOk = (debitResults[debit.usageResultIndex]?.meta.changes ?? 0) > 0;
+    const statements = [
+      c.env.DB.prepare(
+        `INSERT INTO upload_batch_photos (id, batch_id, client_photo_id, photo_id, item_id, position, created_at, updated_at)
+         SELECT ?, ?, ?, NULL, NULL, 0, ?, ?
+          WHERE NOT EXISTS (SELECT 1 FROM upload_batch_photos WHERE batch_id = ? AND client_photo_id = ?)`,
+      ).bind(reservationId, batchId, clientPhotoId, now, now, batchId, clientPhotoId),
+      ...debit.statements,
+    ];
+    const results = await c.env.DB.batch(statements);
+    const insertChanges = results[0]?.meta.changes ?? 0;
+    const grantOk = (results[1 + debit.grantResultIndex]?.meta.changes ?? 0) > 0;
+    const usageOk = (results[1 + debit.usageResultIndex]?.meta.changes ?? 0) > 0;
     const admitted = await settleDebit(c.env, { grantId: grant.id, ownerId: owner.id, day, kind: "photos", grantOk, usageOk });
-    if (!admitted) {
+
+    if (insertChanges === 0) {
+      // A concurrent identical request reserved this slot first — not
+      // reachable by a sequential retry (that would have seen
+      // `existingMapping` above), only a genuine race. `settleDebit` already
+      // corrected this request's own charge; resolve to whichever row won,
+      // the same narrow-race shape the item path's own comment above names.
+      const winner = await findBatchPhotoByClientId(c.env, batchId, clientPhotoId);
+      if (!winner) return fail(c, "internal", "Photo failed to save.", 500);
+      if (winner.photo_id) return respondWithSavedPhoto();
+      // Else: winner reserved (and debited) but hasn't stored yet — fall
+      // through to step 2 with the same deterministic id.
+    } else if (!admitted) {
+      // We own the reservation and admission refused — delete it so an
+      // exhausted grant fails closed with zero storage side effects: no R2
+      // bytes (never attempted), no `photos` row (never attempted), and now
+      // no mapping row either.
+      await c.env.DB.prepare(`DELETE FROM upload_batch_photos WHERE id = ?`).bind(reservationId).run();
       const message = grantOk
         ? "Today's photo limit for this account has been reached."
         : "Your admission grant has no photos left — ask the operator for a fresh one.";
       return fail(c, "rate_limited", message, 429, grantOk ? { retryAfter: secondsUntilMidnightUTC() } : {});
     }
   }
+  // Else: either `existingMapping` was already reserved (and, atomically,
+  // already debited) by a previous attempt, or `retainedPhoto` shows this
+  // client key already paid for a stored photo with no reservation left to
+  // prove it — either way, resume at step 2 with no second debit.
 
-  if (!retainedPhoto) {
-    const stored = await storePhotoUpload(c.env, { ownerId: owner.id, form, photoId });
-    if (!stored.ok) {
-      return fail(c, stored.code, stored.message, stored.status, stored.issues ? { issues: stored.issues } : {});
-    }
+  // Step 2: store the bytes under the deterministic id.
+  const stored = await storePhotoUpload(c.env, { ownerId: owner.id, form, photoId });
+  if (!stored.ok) {
+    return fail(c, stored.code, stored.message, stored.status, stored.issues ? { issues: stored.issues } : {});
   }
 
+  // Step 3: finalize, now that the FK's target exists. An upsert rather than
+  // a bare `UPDATE` because the recovery fallback above can reach here with
+  // no mapping row at all (`retainedPhoto`, mapping row missing) as well as
+  // with an unresolved one (`existingMapping`, `photo_id IS NULL`) — the
+  // `WHERE photo_id IS NULL` on the conflict branch is what keeps a
+  // concurrent finalize of the same reservation a no-op the second time.
   const { updatedAt, lastActivityAt, expiresAt } = activityBump(c.env, now);
   const retainUntil = now + bulkDraftRetentionDays(c.env) * MS_PER_DAY;
-
-  // Phase 2, now that the FK's target exists: link the photo into this
-  // batch's tray and protect it from the sweep, in one transaction. Guarded
-  // by `NOT EXISTS` so a genuine concurrent race on the same client key
-  // still can't produce two mapping rows for one `client_photo_id`.
   await c.env.DB.batch([
     c.env.DB.prepare(`UPDATE photos SET retain_until = ? WHERE id = ?`).bind(retainUntil, photoId),
     c.env.DB.prepare(
       `INSERT INTO upload_batch_photos (id, batch_id, client_photo_id, photo_id, item_id, position, created_at, updated_at)
-       SELECT ?, ?, ?, ?, NULL, 0, ?, ?
-        WHERE NOT EXISTS (SELECT 1 FROM upload_batch_photos WHERE batch_id = ? AND client_photo_id = ?)`,
-    ).bind(ulid(now), batchId, clientPhotoId, photoId, now, now, batchId, clientPhotoId),
+       VALUES (?, ?, ?, ?, NULL, 0, ?, ?)
+       ON CONFLICT(batch_id, client_photo_id) DO UPDATE SET photo_id = excluded.photo_id, updated_at = excluded.updated_at
+        WHERE upload_batch_photos.photo_id IS NULL`,
+    ).bind(ulid(now), batchId, clientPhotoId, photoId, now, now),
     c.env.DB.prepare(
       `UPDATE upload_batches SET revision = revision + 1, updated_at = ?, last_activity_at = ?, expires_at = ? WHERE id = ?`,
     ).bind(updatedAt, lastActivityAt, expiresAt, batchId),
@@ -546,8 +628,12 @@ bulkRoutes.delete("/batches/:id/photos/:clientPhotoId", ownerAuth(), async (c) =
     // separate delete of the mapping needed.
     await deletePhotoAndObjects(c.env, photoRow);
   } else {
-    // The mapping outlived its photo somehow (shouldn't happen given the
-    // FK, but this route must not 500 over it) — clear the mapping directly.
+    // Either the mapping outlived its photo somehow (shouldn't happen given
+    // the FK, but this route must not 500 over it), or — now that a mapping
+    // can exist with `photo_id IS NULL`, see the migration's comment on that
+    // column — this is an unresolved reservation whose upload never finished
+    // storing. Either way there is no `photos` row to delete, only the
+    // mapping.
     await c.env.DB.prepare(`DELETE FROM upload_batch_photos WHERE id = ?`).bind(mapping.id).run();
   }
 
@@ -557,5 +643,7 @@ bulkRoutes.delete("/batches/:id/photos/:clientPhotoId", ownerAuth(), async (c) =
     .bind(updatedAt, lastActivityAt, expiresAt, batchId)
     .run();
 
-  return ok(c, { id: mapping.photo_id });
+  // `photo_id` can be null for an unresolved reservation (see above); the
+  // client key still names *something* to report back.
+  return ok(c, { id: mapping.photo_id ?? mapping.id });
 });
