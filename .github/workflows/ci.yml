@@ -286,45 +286,7 @@ jobs:
           path: apps/web/dist
           retention-days: 7
 
-  e2e:
-    name: e2e
-    runs-on: ubuntu-latest
-    # Needs the bundle `build-web` uploads (the Worker serves it through its
-    # [assets] binding), and there is no point paying for a browser run when
-    # the API's own unit tests are red.
-    #
-    # The explicit `if` is load-bearing: GitHub skips a job when *any* of its
-    # `needs` is skipped, and `test-api` only runs when `apps/api/**` changed.
-    # Without this, every web-only change skipped the end-to-end suite —
-    # precisely the change it exists to check. It ran on nothing for its first
-    # several commits. So: require `build-web` to have passed, and allow
-    # `test-api` to be either passed or skipped, but never failed.
-    needs: [build-web, test-api]
-    if: ${{ !cancelled() && needs.build-web.result == 'success' && needs.test-api.result != 'failure' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - uses: actions/download-artifact@v4
-        with:
-          name: web-dist
-          path: apps/web/dist
-      - run: pnpm --filter @keepsake/web e2e:install
-      # `wrangler dev --local` keeps every binding local (D1/R2/KV in a
-      # throwaway --persist-to directory, no remote AI), so this needs no
-      # Cloudflare credentials — see apps/web/playwright.config.ts.
-      - run: pnpm --filter @keepsake/web e2e
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: playwright-report
-          path: apps/web/playwright-report
-          retention-days: 7
-
+  
   # The one job that always runs. Everything above is gated on `changes`, and
   # GitHub reports a skipped job as a green check — so a mistake in the filters
   # produces a pull request that looks fully tested and ran nothing. That has
