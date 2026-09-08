@@ -78,8 +78,14 @@ describe("SafetyNote", () => {
     const replaced = contrastRatio(colorsLight.textTertiary, colorsLight.surface);
 
     expect(chosen).toBeGreaterThan(replaced);
-    // The number quoted in `SafetyNote.tsx`'s header comment.
-    expect(chosen).toBeCloseTo(10.0, 1);
-    expect(replaced).toBeCloseTo(4.9, 1);
+    // Both operands clear AA (4.5) on their own now — the Linen & Rust
+    // refresh (#256) lightened `inkSoft` and darkened `textTertiary`, which
+    // is what moved these from 10.0/4.9 — so the assertion that carries
+    // #224's argument is the *gap*, not the floor: the note is set a clear
+    // step stronger than the small print it was rescued from.
+    expect(chosen / replaced).toBeGreaterThan(1.4);
+    // The numbers quoted in `SafetyNote.tsx`'s header comment.
+    expect(chosen).toBeCloseTo(9.2, 1);
+    expect(replaced).toBeCloseTo(6.2, 1);
   });
 });

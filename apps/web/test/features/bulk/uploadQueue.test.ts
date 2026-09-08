@@ -107,6 +107,50 @@ describe("RateLimiter", () => {
     await waiter;
     expect(granted).toBe(true);
   });
+
+  it("rejects an already-aborted signal without consuming a slot, even when one is free", async () => {
+    // The free-slot case is the one that bites: `addEventListener("abort")`
+    // never fires for a signal that aborted before the listener existed, so
+    // an acquire that only checked on the waiting path handed cancelled
+    // work a slot and let it start.
+    const limiter = new RateLimiter({ maxConcurrent: 2, maxPerMinute: 10 });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(limiter.acquire(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+
+    // Both slots are still there: two fresh acquires resolve.
+    await limiter.acquire();
+    await limiter.acquire();
+    let thirdGranted = false;
+    void limiter.acquire().then(() => {
+      thirdGranted = true;
+    });
+    await Promise.resolve();
+    expect(thirdGranted).toBe(false);
+  });
+
+  it("detaches the abort listener from a signal once its waiter is granted", async () => {
+    // A batch-wide signal would otherwise collect one listener per photo:
+    // `{ once: true }` clears a listener when it fires, not when the wait it
+    // guards ends.
+    const limiter = new RateLimiter({ maxConcurrent: 1, maxPerMinute: 10 });
+    const controller = new AbortController();
+    const removeSpy = jest.spyOn(controller.signal, "removeEventListener");
+
+    const releaseFirst = await limiter.acquire();
+    const second = limiter.acquire(controller.signal);
+    await Promise.resolve();
+    releaseFirst();
+    await second;
+
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+
+    // And the granted acquire is not disturbed by a later abort of that
+    // same signal — no unhandled rejection, no double release.
+    controller.abort();
+    await Promise.resolve();
+  });
 });
 
 describe("UploadQueue", () => {

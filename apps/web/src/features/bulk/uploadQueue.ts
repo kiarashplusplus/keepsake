@@ -135,7 +135,16 @@ const WINDOW_MS = 60_000;
 /** A slot gate for the upload stage: at most `maxConcurrent` acquisitions
  * outstanding, and at most `maxPerMinute` *starts* in any trailing 60s
  * window. Time source is injectable so tests don't need real 60-second
- * waits. */
+ * waits.
+ *
+ * Deliberately has no pause of its own. An earlier `pauseUntil()` here held
+ * `maxConcurrent` at 0 and restored it after a sleep, which had no call
+ * sites and could not have grown one safely: a concurrent `updateConfig()`
+ * either lost its patch to the restore or unpaused the queue early, since
+ * both wrote the same field. `UploadQueue.pauseFor` owns the `"throttled"`
+ * pause instead, one level up, where the photo that hit the 429 is put back
+ * on `pending` in the same step — a pause is a queue decision, not a
+ * counting one. */
 export class RateLimiter {
   private config: RateLimiterConfig;
   private readonly now: () => number;
@@ -182,9 +191,21 @@ export class RateLimiter {
   }
 
   /** Resolves once a slot is available, having reserved it (call `release()`
-   * when the operation finishes). Rejects if `signal` aborts first. */
+   * when the operation finishes). Rejects if `signal` aborts first, or is
+   * already aborted when this is called. */
   acquire(signal?: AbortSignal): Promise<() => void> {
     return new Promise((resolve, reject) => {
+      // Checked before the fast path, not only on the waiting path. An
+      // `abort` listener never fires on a signal that aborted before it was
+      // attached, so without this an already-cancelled photo either started
+      // an upload anyway (slot free) or waited forever holding one (slot
+      // busy) — `processOne`'s `catch { return }` around this call is what
+      // makes the rejection the right answer in both cases.
+      if (signal?.aborted === true) {
+        reject(new DOMException("Aborted", "AbortError"));
+        return;
+      }
+
       const release = (): void => {
         this.inFlight = Math.max(0, this.inFlight - 1);
         this.pump();
@@ -198,11 +219,21 @@ export class RateLimiter {
         return;
       }
 
-      const waiter = (): void => grant();
+      let onAbort: (() => void) | undefined;
+      const waiter = (): void => {
+        // Detach on the way through. `{ once: true }` only clears the
+        // listener after it *fires*, so a granted waiter otherwise left one
+        // attached for the life of the signal — harmless per photo (each
+        // has its own controller), but this class is a general gate and a
+        // caller passing one long-lived signal for a whole batch would
+        // accumulate 300 of them.
+        if (onAbort !== undefined && signal !== undefined) signal.removeEventListener("abort", onAbort);
+        grant();
+      };
       this.waiters.push(waiter);
 
       if (signal !== undefined) {
-        const onAbort = (): void => {
+        onAbort = (): void => {
           const index = this.waiters.indexOf(waiter);
           if (index !== -1) this.waiters.splice(index, 1);
           reject(new DOMException("Aborted", "AbortError"));
@@ -210,19 +241,6 @@ export class RateLimiter {
         signal.addEventListener("abort", onAbort, { once: true });
       }
     });
-  }
-
-  /** Forces every waiter to stand down until `resumeAt` — used for a
-   * `"throttled"` pause. Not a queue of its own; it just stops `pump` from
-   * granting anything until the clock passes `resumeAt`, by holding
-   * `maxConcurrent` at 0 and restoring it after. */
-  async pauseUntil(resumeAt: number, sleep: (ms: number) => Promise<void>): Promise<void> {
-    const saved = this.config.maxConcurrent;
-    this.config = { ...this.config, maxConcurrent: 0 };
-    const wait = Math.max(0, resumeAt - this.now());
-    await sleep(wait);
-    this.config = { ...this.config, maxConcurrent: saved };
-    this.pump();
   }
 }
 
