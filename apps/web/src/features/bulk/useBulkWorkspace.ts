@@ -129,7 +129,10 @@ export type UseBulkWorkspaceResult = {
   // photos
   addPhotos: (files: File[]) => Promise<void>;
   removePhoto: (clientPhotoId: string) => Promise<void>;
-  retryPhoto: (clientPhotoId: string, file: File) => void;
+  /** `file` is only needed when the photo's source didn't survive
+   * (`needsReselection`); omitted, this retries against the resident
+   * source the queue kept in IndexedDB for exactly this case (#293). */
+  retryPhoto: (clientPhotoId: string, file?: File) => void;
 
   // grouping
   groupAsOneItem: (photoClientIds: string[]) => Promise<{ ok: boolean; error?: string; itemClientId?: string }>;
@@ -307,6 +310,18 @@ export function useBulkWorkspace(clientBatchKey: string): UseBulkWorkspaceResult
       uploadPhoto: ({ clientPhotoId, full, thumb, width, height, blurhash, signal }) =>
         bulkApi.uploadBatchPhoto(batchId, clientPhotoId, { full, thumb, width, height, blurhash }, { signal }),
       onPhotoUpdate: (clientPhotoId, patch) => {
+        // The queue clears `localPreviewUrl` once a photo no longer needs
+        // it (upload complete — see uploadQueue.ts's success patch); revoke
+        // the object URL and drop it from `objectUrlsRef` at the same
+        // point, the same cleanup `removePhoto` below does on removal
+        // (#287).
+        if (patch.localPreviewUrl === null) {
+          const before = stateRef.current.photos[clientPhotoId];
+          if (before?.localPreviewUrl != null) {
+            URL.revokeObjectURL(before.localPreviewUrl);
+            objectUrlsRef.current.delete(before.localPreviewUrl);
+          }
+        }
         dispatchSync({ type: "update_photo", clientPhotoId, patch });
         const photo = stateRef.current.photos[clientPhotoId];
         if (photo !== undefined) void savePhotoMeta(driver, clientBatchKey, { ...photo, ...patch });
@@ -446,9 +461,9 @@ export function useBulkWorkspace(clientBatchKey: string): UseBulkWorkspaceResult
     [clientBatchKey, driver, pushItemToServer],
   );
 
-  const retryPhoto = React.useCallback((clientPhotoId: string, file: File) => {
+  const retryPhoto = React.useCallback((clientPhotoId: string, file?: File) => {
     dispatchSync({ type: "update_photo", clientPhotoId, patch: { status: "queued", error: null, errorCode: null, canRetry: false } });
-    uploadQueueRef.current?.retry(clientPhotoId, file);
+    void uploadQueueRef.current?.retry(clientPhotoId, file);
   }, []);
 
   // ---------------------------------------------------------------------
@@ -762,40 +777,93 @@ export function useBulkWorkspace(clientBatchKey: string): UseBulkWorkspaceResult
     return result;
   }, []);
 
-  return {
-    status,
-    state,
-    markers,
-    markerFor: (itemClientId) => markerFor(markers, itemClientId),
-    isSuggestionStale: (itemClientId) => isSuggestionStale(markers, itemClientId, state.items[itemClientId]?.photoClientIds[0] ?? null),
-    suggestionLoading,
-    uploadPausedUntil,
-    updateBatchMeta,
-    cancelBatch: cancelBatchFn,
-    addPhotos,
-    removePhoto,
-    retryPhoto,
-    groupAsOneItem,
-    groupOnePerPhoto,
-    addPhotosToItem,
-    removePhotoFromItem,
-    setCoverPhoto,
-    dissolveItem,
-    setItemTitle,
-    setItemStory,
-    setItemCategory,
-    setItemLabels,
-    saveItem,
-    requestSuggestion,
-    suggestionForPhoto,
-    applyRoomLabelToSelected,
-    applyLotLabelToSelected,
-    previewSharedStoryApplication,
-    applySharedStoryToSelected,
-    operations,
-    refreshOperations,
-    submitItems,
-  };
+  // Bound versions of the two free functions imported from `itemMarkers.ts`
+  // — named apart from them so the assignment below can't shadow-recurse —
+  // memoized against their real dependencies so the returned object below
+  // gets a stable function identity across renders that don't touch
+  // `markers`/`state.items` (#295).
+  const getMarkerFor = React.useCallback((itemClientId: string) => markerFor(markers, itemClientId), [markers]);
+  const getIsSuggestionStale = React.useCallback(
+    (itemClientId: string) => isSuggestionStale(markers, itemClientId, state.items[itemClientId]?.photoClientIds[0] ?? null),
+    [markers, state.items],
+  );
+
+  // Every value below is itself either plain state or a `useCallback` with
+  // stable dependencies, so memoizing the object they're assembled into
+  // gives `BulkWorkspaceContext.Provider`'s `value` a stable identity
+  // across renders that change none of them — otherwise every consumer
+  // under the provider re-renders on every progress tick from the upload
+  // queue, at up to 300 photos in flight (#295).
+  return React.useMemo<UseBulkWorkspaceResult>(
+    () => ({
+      status,
+      state,
+      markers,
+      markerFor: getMarkerFor,
+      isSuggestionStale: getIsSuggestionStale,
+      suggestionLoading,
+      uploadPausedUntil,
+      updateBatchMeta,
+      cancelBatch: cancelBatchFn,
+      addPhotos,
+      removePhoto,
+      retryPhoto,
+      groupAsOneItem,
+      groupOnePerPhoto,
+      addPhotosToItem,
+      removePhotoFromItem,
+      setCoverPhoto,
+      dissolveItem,
+      setItemTitle,
+      setItemStory,
+      setItemCategory,
+      setItemLabels,
+      saveItem,
+      requestSuggestion,
+      suggestionForPhoto,
+      applyRoomLabelToSelected,
+      applyLotLabelToSelected,
+      previewSharedStoryApplication,
+      applySharedStoryToSelected,
+      operations,
+      refreshOperations,
+      submitItems,
+    }),
+    [
+      status,
+      state,
+      markers,
+      getMarkerFor,
+      getIsSuggestionStale,
+      suggestionLoading,
+      uploadPausedUntil,
+      updateBatchMeta,
+      cancelBatchFn,
+      addPhotos,
+      removePhoto,
+      retryPhoto,
+      groupAsOneItem,
+      groupOnePerPhoto,
+      addPhotosToItem,
+      removePhotoFromItem,
+      setCoverPhoto,
+      dissolveItem,
+      setItemTitle,
+      setItemStory,
+      setItemCategory,
+      setItemLabels,
+      saveItem,
+      requestSuggestion,
+      suggestionForPhoto,
+      applyRoomLabelToSelected,
+      applyLotLabelToSelected,
+      previewSharedStoryApplication,
+      applySharedStoryToSelected,
+      operations,
+      refreshOperations,
+      submitItems,
+    ],
+  );
 }
 
 /** Test/UI convenience: drops every local record for a batch and clears its

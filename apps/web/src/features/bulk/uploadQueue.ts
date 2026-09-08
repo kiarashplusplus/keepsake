@@ -339,17 +339,34 @@ export class UploadQueue {
     this.limiter.updateConfig(patch);
   }
 
-  /** Enqueues a freshly picked file — the intake path, not a resume. */
+  /** Enqueues a freshly picked file — the intake path, not a resume.
+   * Deduped against `pending`: `track` already replaces a stale source and
+   * controller for an id enqueued twice, but `pump` drains the array
+   * synchronously, so two entries for the same id resolve to the same
+   * tracked object and launch two concurrent `processOne` runs sharing one
+   * `AbortController` (#292) — most reachable when a photo is re-enqueued
+   * (a manual retry) while the queue is paused after a 429 and `pending`
+   * is still accumulating. */
   enqueue(clientPhotoId: string, source: Blob): void {
     this.track(clientPhotoId, source);
-    this.pending.push(clientPhotoId);
+    if (!this.pending.includes(clientPhotoId)) this.pending.push(clientPhotoId);
     this.pump();
   }
 
-  /** Re-arms a photo that failed (retryable) or needed reselection, with
-   * either its still-resident source or a freshly picked replacement. */
-  retry(clientPhotoId: string, source: Blob): void {
-    this.enqueue(clientPhotoId, source);
+  /** Re-arms a photo that failed (retryable) or needed reselection. Pass a
+   * freshly picked `source` when the giver had to re-select the file
+   * (`needsReselection`); omit it to retry against whatever this batch's
+   * IndexedDB still holds for this id — the resident-source path
+   * `handleFailure`'s `savePhotoSource` call exists for (#293). If neither
+   * a source nor a resident one exists, this reports `needsReselection`
+   * again rather than silently doing nothing. */
+  async retry(clientPhotoId: string, source?: Blob): Promise<void> {
+    const resolved = source ?? (await getPhotoSource(this.driver, this.batchKey, clientPhotoId));
+    if (resolved === null) {
+      this.onPhotoUpdate(clientPhotoId, { needsReselection: true, hasLocalSource: false });
+      return;
+    }
+    this.enqueue(clientPhotoId, resolved);
   }
 
   /** Seeds the queue from whatever `storage.ts` has left over from a prior
@@ -441,6 +458,14 @@ export class UploadQueue {
           canRetry: false,
           hasLocalSource: false,
           needsReselection: false,
+          // The queue's decode already produced the real thumb by this
+          // point, so the local preview's job is done — clear it here so
+          // `photoSource.ts`'s ladder falls through to the server thumb
+          // instead of pinning this session's full-resolution File for the
+          // rest of the batch (#287). The caller (`useBulkWorkspace.ts`)
+          // is what actually owns and revokes the object URL; this patch
+          // is its cue.
+          localPreviewUrl: null,
         });
         this.onPhotoSynced?.(result.data);
         return;
