@@ -273,12 +273,26 @@ test.describe("the consent gate", () => {
     await page.goto("/");
     await expect(banner(page)).toBeVisible();
 
-    // The hero CTA is what a stranger is here to press. Playwright's own
-    // actionability check refuses a click that another element would
-    // intercept, so this asserts coverage rather than merely geometry.
-    const cta = page.getByRole("button", { name: "Give something" }).first();
+    // Playwright's own actionability check refuses a click that another
+    // element would intercept, so both of these assert coverage rather than
+    // merely geometry.
+    //
+    // The Give control, by either label: #219 dropped the hero's own button
+    // at phone width (the header already carries one) and the narrow header
+    // calls it "Give", so naming only "Give something" made this test fail
+    // for a reason that had nothing to do with consent.
+    const cta = page.getByRole("button", { name: /^Give( something)?$/ }).first();
     await expect(cta).toBeVisible();
     await cta.click({ trial: true, timeout: 5000 });
+
+    // And the category chips, which is the stronger half now that #223 has
+    // docked the banner to the bottom edge. The Give control lives in the
+    // header, at the top of the page, so a bottom-docked banner passes that
+    // check whatever it does; the chips are the row the issue actually
+    // reported the floating banner landing on top of.
+    const chip = page.getByRole("button", { name: "All", exact: true }).first();
+    await expect(chip).toBeVisible();
+    await chip.click({ trial: true, timeout: 5000 });
     await context.close();
   });
 });

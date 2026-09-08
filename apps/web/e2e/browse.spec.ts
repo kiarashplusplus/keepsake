@@ -10,7 +10,13 @@ test.describe("browse", () => {
 
     await expect(page.getByText("Give a keepsake a second life.")).toBeVisible();
     await expect(page.getByLabel("Search")).toBeVisible();
-    await expect(page.getByLabel("Give something").first()).toBeVisible();
+    // Width-agnostic on purpose: since #219 the phone-width feed drops the
+    // hero's own Give button (the header already carries one, and the deck
+    // plus a second button was most of why no keepsake fit on the first
+    // screenful), and the narrow header labels it "Give" rather than "Give
+    // something". What this test is actually about is that there is a way to
+    // give from the feed, not which of the two renders at this width.
+    await expect(page.getByRole("button", { name: /^Give( something)?$/ }).first()).toBeVisible();
   });
 
   test("an approved listing shows up as a print on the table", async ({ page, request }) => {

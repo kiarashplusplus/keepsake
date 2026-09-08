@@ -77,15 +77,34 @@ test.describe("scroll", () => {
     for (let index = 0; index < 16; index += 1) {
       listings.push(await createApprovedListing(request, { title: `${prefix} ${index}` }));
     }
-    const lastListing = listings[listings.length - 1];
-    if (lastListing === undefined) throw new Error("expected at least one seeded listing");
+    // The FIRST one seeded, not the last. The feed is newest-first, so the
+    // last listing created is the card at the top of the table — and until
+    // #219 that card was itself below the fold on a phone, which is the only
+    // reason this assertion used to hold. It was passing on the defect: the
+    // feed's own hero and filters filled the whole viewport, so "the newest
+    // keepsake is off screen" was true and read as proof that scrolling
+    // worked. With keepsakes on the first screenful it is 49% in view, and
+    // the check has to point at something genuinely far down the table
+    // instead. Sixteen listings up the page is unambiguous.
+    const deepListing = listings[0];
+    if (deepListing === undefined) throw new Error("expected at least one seeded listing");
 
     await page.goto("/");
-    const lastCard = page.getByLabel(lastListing.title, { exact: true });
+    const lastCard = page.getByLabel(deepListing.title, { exact: true });
     await expect(lastCard).toBeAttached();
 
+    // Polled, not measured once. `toBeAttached()` above resolves as soon as
+    // the node exists, which is before the prints below it have laid out, so
+    // a single read can catch the feed at a moment when nothing overflows
+    // yet and report "no scrolling container" — a race that was always here
+    // and that #219 made likelier by taking ~300px of hero and filters off
+    // the top of the phone feed.
+    await expect
+      .poll(async () => (await scrollableAncestorMetrics(lastCard)) !== null, {
+        message: "the feed should sit inside a real scrolling container",
+      })
+      .toBe(true);
     const metrics = await scrollableAncestorMetrics(lastCard);
-    expect(metrics, "the feed should sit inside a real scrolling container").not.toBeNull();
     expect(metrics?.scrollHeight ?? 0).toBeGreaterThan(metrics?.clientHeight ?? 0);
 
     // Below the fold until scrolled to: this is the check a
