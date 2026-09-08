@@ -25,16 +25,23 @@ test.describe("browse", () => {
     await expect(card.getByText(/^“/)).toBeVisible();
   });
 
-  test("choosing a category writes it into the query string", async ({ page }) => {
+  test("choosing and clearing a category keeps the query string in sync", async ({ page }) => {
     await page.goto("/");
     // The feed only starts reflecting state into the URL once the stored
     // location preference has been merged in, so wait for the controls to be
     // live rather than racing that first `router.setParams`.
     await expect(page.getByLabel("Search")).toBeVisible();
 
-    await page.getByLabel("Jewelry & watches", { exact: true }).click();
+    const category = page.getByLabel("Jewelry & watches", { exact: true });
+    await category.click();
 
     await expect(page).toHaveURL(/[?&]category=jewelry_watches\b/);
+
+    await category.click();
+    await expect(page).not.toHaveURL(/[?&]category=/);
+
+    await page.reload();
+    await expect(page.getByLabel("Jewelry & watches", { exact: true })).toHaveAttribute("aria-pressed", "false");
   });
 
   test("searching narrows the feed to matching keepsakes", async ({ page, request }) => {
