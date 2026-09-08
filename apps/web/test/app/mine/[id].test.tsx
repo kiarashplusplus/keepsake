@@ -72,6 +72,7 @@ function detailWithOpenRequest(): OwnerListingDetail {
     updated_at: 0,
     held: false,
     category_chosen_at: null,
+    staleness: { reasons: [], waiting_since: null },
     requests: [
       {
         id: "req-1",
@@ -205,6 +206,51 @@ describe("mine/[id] choose flow", () => {
     });
 
     expect(JSON.stringify(instance.toJSON())).toContain("We couldn't reach them to say you chose them");
+  });
+});
+
+describe("mine/[id] staleness", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  beforeEach(() => {
+    jest.mocked(getMyListing).mockReset();
+  });
+
+  async function renderDetail(staleness: OwnerListingDetail["staleness"]) {
+    jest.mocked(getMyListing).mockResolvedValueOnce({ ...detailWithOpenRequest(), staleness });
+    const instance = render(
+      <ToastProvider>
+        <MineDetail />
+      </ToastProvider>,
+    );
+    await act(async () => {
+      await flush();
+    });
+    return JSON.stringify(instance.toJSON());
+  }
+
+  it("heads nothing when the listing needs nothing", async () => {
+    expect(await renderDetail({ reasons: [], waiting_since: null })).not.toContain("Needs you");
+  });
+
+  it("names every reason at once, and offers the fix for the mailbox half", async () => {
+    const shown = await renderDetail({
+      reasons: ["requests_unanswered", "email_missing"],
+      waiting_since: Date.now() - 9 * DAY,
+    });
+
+    expect(shown).toContain("Needs you");
+    expect(shown).toContain("waiting 9 days");
+    expect(shown).toContain("No email on this device");
+    expect(shown).toContain("Add an email");
+  });
+
+  it("offers no email button when the only problem is the unanswered ask", async () => {
+    const shown = await renderDetail({ reasons: ["requests_unanswered"], waiting_since: Date.now() - 4 * DAY });
+
+    expect(shown).toContain("waiting 4 days");
+    expect(shown).not.toContain("Add an email");
+    expect(shown).not.toContain("Verify email");
   });
 });
 

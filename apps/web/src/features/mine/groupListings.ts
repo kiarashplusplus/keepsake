@@ -19,7 +19,12 @@ export const LISTING_GROUP_LABELS: Record<ListingGroupKey, string> = {
   withdrawn: "Withdrawn",
 };
 
-export type GroupedListings = Record<ListingGroupKey, OwnerListing[]>;
+export type GroupedListings<T extends Groupable = OwnerListing> = Record<ListingGroupKey, T[]>;
+
+/** The only field grouping reads. Generic over it (rather than over
+ * `OwnerListing` itself) so the dashboard's richer `OwnerDashboardListing`
+ * groups without a cast and without this file knowing what staleness is. */
+export type Groupable = { status: ListingStatus };
 
 function groupKeyFor(status: ListingStatus): ListingGroupKey {
   switch (status) {
@@ -38,8 +43,8 @@ function groupKeyFor(status: ListingStatus): ListingGroupKey {
   }
 }
 
-export function groupListings(listings: readonly OwnerListing[]): GroupedListings {
-  const groups: GroupedListings = { reviewing: [], live: [], needs_attention: [], given: [], withdrawn: [] };
+export function groupListings<T extends Groupable>(listings: readonly T[]): GroupedListings<T> {
+  const groups: GroupedListings<T> = { reviewing: [], live: [], needs_attention: [], given: [], withdrawn: [] };
   for (const listing of listings) {
     groups[groupKeyFor(listing.status)].push(listing);
   }

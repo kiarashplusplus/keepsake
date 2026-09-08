@@ -1,6 +1,6 @@
-// Dashboard detail: photos, story, status/moderation copy, and the owner
-// actions (Edit, Mark given, Withdraw/Relist, Delete). Requests are M3 —
-// this always shows the "share the link" empty state for now.
+// Dashboard detail: photos, story, what this listing needs from its giver,
+// status/moderation copy, its requests, and the owner actions (Edit, Mark
+// given, Withdraw/Relist, Delete).
 import * as React from "react";
 import { View } from "react-native";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
@@ -23,6 +23,7 @@ import { chooseRequest, getMyListing, type OwnerListingDetail } from "@/api/me";
 import { deleteListing, markGiven, relistListing, setListingCategory, withdrawListing } from "@/api/listings";
 import { ApiError } from "@/api/client";
 import { CategorySection } from "@/features/mine/CategorySection";
+import { StaleNotice } from "@/features/mine/StaleNotice";
 import { RequestList } from "@/features/mine/RequestList";
 import { HandoffSheet } from "@/features/mine/HandoffSheet";
 import { track } from "@/lib/analytics";
@@ -164,6 +165,19 @@ export default function MineDetail(): React.ReactElement {
             {listing.story}
           </Text>
         </View>
+
+        {/* Above Status, because it outranks it: "Live" is what moderation
+            decided, and this is a person left waiting or a listing whose
+            asks have nowhere to go. Both are invisible to the status label
+            and both need the giver today. */}
+        {listing.staleness.reasons.length > 0 ? (
+          <View style={{ gap: space.sm }}>
+            <View style={rule}>
+              <Eyebrow color="dangerText">Needs you</Eyebrow>
+            </View>
+            <StaleNotice staleness={listing.staleness} />
+          </View>
+        ) : null}
 
         <View style={{ gap: space.sm }}>
           <View style={rule}>

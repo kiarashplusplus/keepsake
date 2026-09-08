@@ -125,6 +125,7 @@ describe("give/review", () => {
       status: "approved",
       held: false,
       requests: [],
+      staleness: { reasons: [], waiting_since: null },
       moderation: { status: "approved", held: false },
     });
 
@@ -170,6 +171,7 @@ describe("give/review", () => {
       moderation_reason: "contact_in_story",
       held: false,
       requests: [],
+      staleness: { reasons: [], waiting_since: null },
       moderation: { status: "rejected", reason: "contact_in_story", held: false },
     });
 
