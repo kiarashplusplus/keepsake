@@ -155,12 +155,19 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
               palette has, i.e. set exactly like a disclaimer, on the one
               screen where the reader has just committed to meeting a
               stranger. `SafetyNote` carries the argument and the contrast
-              number; the wording below is unchanged to the character. */}
+              number.
+
+              Issue #308 added the last sentence: `terms.html`'s "Meeting up
+              safely" list has always carried permission to back out, and
+              this screen — the moment the reader has already said yes to a
+              stranger — is exactly where that pressure lives and exactly
+              where the product had never said it. */}
           <SafetyNote>
             {"If you're chosen: meet somewhere public and well-lit, bring a friend or tell " +
               "someone the plan, and keep working out the details here in Keepsake rather than " +
               "switching to text. Leaving it on a porch instead of meeting face to face is always " +
-              "fine too — just say so."}
+              "fine too — just say so. And if anything feels off, you can back out — that's worth " +
+              "more than any obligation you feel to a stranger you agreed to meet."}
           </SafetyNote>
           <Button label="Done" onPress={handleClose} />
         </View>
@@ -191,13 +198,20 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
 
           <AgeGateField value={dateOfBirth} onChangeText={setDateOfBirth} touched={touched} onBlur={() => setTouched(true)} />
 
-          {/* The same change on the form itself (#224 item 2) — the two
-              paragraphs are the same guidance at two moments, so they are set
-              the same way. Wording unchanged. */}
+          {/* The same setting change as the form's other note (#224 item 2)
+              — the two paragraphs are the same guidance at two moments, so
+              they are set the same way.
+
+              Issue #308: this note's only fallback used to be "bring a
+              friend if you can", which has nothing for a reader who has
+              nobody free that afternoon — most people. `terms.html`'s own
+              list offers telling someone the time and place as the
+              alternative; this note now does too. */}
           <SafetyNote>
             {"A note before you send this: if you two meet up, pick a public spot, bring a " +
-              "friend if you can, and keep talking here in Keepsake rather than trading numbers " +
-              "early. A porch handoff works too, if you'd both rather skip meeting in person."}
+              "friend if you can — or tell someone else the time and place — and keep talking " +
+              "here in Keepsake rather than trading numbers early. A porch handoff works too, " +
+              "if you'd both rather skip meeting in person."}
           </SafetyNote>
 
           <Turnstile ref={turnstileRef} onStatus={setTurnstileStatus} />
