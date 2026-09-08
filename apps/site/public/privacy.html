@@ -43,7 +43,12 @@
       } catch (e) {}
     </script>
   </head>
-  <body>
+  <!-- `data-ks-consent-quiet`: this page is the disclosure the consent bar
+     points at, so the bar does not auto-open on top of it. Nothing is
+     recorded by being here and nothing non-essential loads; the footer's
+     "Privacy choices" button below opens it on demand, and every other
+     page still asks normally. See `boot()` in /consent.js. -->
+<body data-ks-consent-quiet>
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header">
       <div class="wrap">

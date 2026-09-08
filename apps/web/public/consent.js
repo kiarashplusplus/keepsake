@@ -787,6 +787,7 @@
       if (open) el.panel.removeAttribute('hidden');
       else el.panel.setAttribute('hidden', '');
       el.more.setAttribute('aria-expanded', open ? 'true' : 'false');
+      measure();
     });
     el.sale.addEventListener('change', function () {
       if (el.sale.checked) {
@@ -832,6 +833,58 @@
    * link promising choices should land on the choices, not on a two-button
    * bar they have already answered once.
    */
+  // ── Reserving the space the bar covers ───────────────────────────────────
+  //
+  // `.ks-consent` is `position:fixed;bottom:0` at up to `78vh`, so it is out
+  // of flow and sits ON TOP of whatever the page ends with. Nothing reserved
+  // room for it, which meant the tail of every page was unreachable while a
+  // decision was outstanding — including, on `/privacy`, the policy text the
+  // banner is pointing people at AND the `[data-ks-consent]` reopen button in
+  // that page's own footer.
+  //
+  // The two surfaces cannot consume that measurement the same way, so this
+  // publishes the number and lets each one apply it:
+  //
+  //   * `--ks-consent-inset` on <html>, which `apps/site/public/site.css`
+  //     turns into `body`'s bottom padding. The static pages are ordinary
+  //     document flow, so padding the body is all it takes.
+  //   * `window.__ksConsent.inset` plus a `ks-consent-inset` event on window,
+  //     which the app reads through `useConsentInset()`. It cannot use the
+  //     custom property: `app/+html.tsx` sets `html, body, #root{height:100%}`
+  //     and expo-router's `ScrollViewStyleReset` sets `body{overflow:hidden}`,
+  //     handing scrolling to React Native `ScrollView`s (see `src/ui/Page.tsx`
+  //     for the full reset), so padding `body` there moves nothing and risks
+  //     the fixed-height flex shell instead.
+  //
+  // Both are 0 whenever the bar is hidden, so a page that has already been
+  // answered reserves nothing.
+  let inset = 0;
+
+  function publishInset(next) {
+    if (next === inset) return;
+    inset = next;
+    api.inset = next;
+    document.documentElement.style.setProperty('--ks-consent-inset', next + 'px');
+    // A plain CustomEvent rather than `subscribe()`: that list is the consent
+    // DECISION channel, and a listener there re-runs provider logic. Height is
+    // not a decision.
+    window.dispatchEvent(new CustomEvent('ks-consent-inset', { detail: next }));
+  }
+
+  function measure() {
+    publishInset(root && !root.hasAttribute('hidden') ? Math.ceil(root.getBoundingClientRect().height) : 0);
+  }
+
+  // The bar's height is not fixed: opening the panel adds four rows, and a
+  // rotation or a resize reflows the copy. `ResizeObserver` catches the first,
+  // `resize` the second in browsers that lack it.
+  function watchSize() {
+    if (!root || watchSize.done) return;
+    watchSize.done = true;
+    if (typeof ResizeObserver === 'function') new ResizeObserver(measure).observe(root);
+    window.addEventListener('resize', measure);
+  }
+
   function open(expanded) {
     build();
     syncControls();
@@ -840,10 +893,15 @@
       el.more.setAttribute('aria-expanded', 'true');
     }
     root.removeAttribute('hidden');
+    watchSize();
+    measure();
   }
 
   function close() {
     if (root) root.setAttribute('hidden', '');
+    // Back to 0 the moment it is answered, so the page reclaims the space in
+    // the same frame the bar leaves.
+    publishInset(0);
   }
 
   function boot() {
@@ -853,7 +911,21 @@
     // a page footer must be styled from first paint, not from the first time
     // somebody clicks it.
     build();
-    if (!read()) open(false);
+    // `data-ks-consent-quiet` suppresses the AUTO-open on one page: the page
+    // that is itself the disclosure. `/privacy` used to open the bar over its
+    // own policy text, so the answer to "what does each one do" was covered by
+    // the thing asking the question — and arriving there from a search engine
+    // did it just as surely as following the banner's own link, which is why
+    // this is a property of the PAGE and not of how you got to it.
+    //
+    // It suppresses a prompt, never a gate. No decision is recorded here —
+    // reading a policy is not consent, and it is not refusal either — and
+    // because everything non-essential stays off until something is stored,
+    // nothing loads on a quiet page that would not have loaded anyway. The
+    // bar is still built (styles, `[data-ks-consent]` delegation), so the
+    // footer's own "Privacy choices" button opens it expanded on demand, and
+    // the next page with no attribute asks normally.
+    if (!read() && !document.querySelector('[data-ks-consent-quiet]')) open(false);
     // Delegated so any surface — a static <button data-ks-consent> in a
     // footer, or a React <Pressable> that renders long after this script ran —
     // reopens the same banner with no registration step.
@@ -870,7 +942,10 @@
     });
   }
 
-  window.__ksConsent = {
+  // Named so `publishInset` can write `api.inset` before this is assigned to
+  // `window.__ksConsent` below — `boot()` runs after, so the property is
+  // always present by the time anything can read it.
+  const api = {
     version: CONSENT_VERSION,
     storageKey: STORAGE_KEY,
     providers: PROVIDERS,
@@ -881,8 +956,13 @@
     gpc: gpc,
     subscribe: subscribe,
     open: open,
-    close: close
+    close: close,
+    // Pixels the bar currently covers at the bottom of the viewport; 0 when
+    // hidden. Mirrors `--ks-consent-inset`. See the reserving-space comment.
+    inset: 0
   };
+
+  window.__ksConsent = api;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', boot);
