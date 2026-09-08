@@ -2,9 +2,9 @@
  * Estate bulk upload — the first real-browser pass over `/bulk`. Everything
  * here was, until this spec, only ever driven by vitest and by hand against
  * `wrangler dev` (see PR #263's "What is still unverified"). This walks the
- * actual screens: land on the batch list, start a batch (which needs an
- * admission grant — `support/bulk.ts` mints one the same way an operator
- * would), add real photos, exercise grouping (merge into one item, split one
+ * actual screens: land on the batch list, start a batch (self-serve now
+ * that the admission code is gone — no operator step to stand in for),
+ * add real photos, exercise grouping (merge into one item, split one
  * out per photo, and reassign a photo from one item to another), fill in
  * enough for two items to become "ready", submit, and watch the operation
  * finish. It also checks My Keepsakes' "Give several items" entry and its
@@ -16,7 +16,6 @@
  */
 import type { Page } from "@playwright/test";
 import { test, expect, onScreen } from "./support/fixtures";
-import { mintBulkGrant } from "./support/bulk";
 import { mintOwnerToken, uniqueTitle } from "./support/api";
 import { makePng } from "./support/png";
 
@@ -40,15 +39,16 @@ function waitForItemPut(page: Page): Promise<unknown> {
   );
 }
 
-// Both tests below mint a grant through `support/bulk.ts`'s `mintBulkGrant`,
-// which shells out to `wrangler d1 execute` against the one local SQLite
-// file this whole suite shares — running them in parallel workers hammers
-// that file with concurrent CLI processes for no benefit either test needs.
+// Kept serial: these two are the heaviest writers in the suite (real photo
+// uploads, a submission that runs the whole moderation pipeline) against the
+// one local `wrangler dev`/D1 the whole suite shares, and nothing either
+// test does needs them concurrent. The original reason — each shelling out
+// to `wrangler d1 execute` to mint an admission grant — is gone with the
+// admission code.
 test.describe.configure({ mode: "serial" });
 
-test("a giver prepares an estate batch across photos, review and submit", async ({ page, request, context, isMobile }) => {
+test("a giver prepares an estate batch across photos, review and submit", async ({ page, context, isMobile }) => {
   const ownerToken = mintOwnerToken();
-  const grant = await mintBulkGrant(request, ownerToken);
 
   // Seeded the same way `fixtures.ts`'s `seedOwnerToken` does for the give
   // flow: land on this device as an existing owner rather than walking a
@@ -70,7 +70,6 @@ test("a giver prepares an estate batch across photos, review and submit", async 
   await page.getByLabel("Batch name").fill(batchName);
   await page.getByLabel("Postcode").fill("02144");
   await expect(page.getByText("Somerville, MA")).toBeVisible();
-  await page.getByLabel("Admission code").fill(grant.id);
   await onScreen(page, "Start this batch").click();
 
   await page.waitForURL(/\/bulk\/[^/]+\/photos$/);
@@ -223,9 +222,8 @@ test("a giver prepares an estate batch across photos, review and submit", async 
   await expect(page.getByRole("button", { name: "Give several items" }).first()).toBeVisible();
 });
 
-test("My Keepsakes shows a private draft-batches section for an unsubmitted batch", async ({ page, request, context }) => {
+test("My Keepsakes shows a private draft-batches section for an unsubmitted batch", async ({ page, context }) => {
   const ownerToken = mintOwnerToken();
-  const grant = await mintBulkGrant(request, ownerToken);
   await context.addInitScript(
     ([key, value]) => window.localStorage.setItem(key as string, value as string),
     ["keepsake.ownerToken.v1", ownerToken],
@@ -237,7 +235,6 @@ test("My Keepsakes shows a private draft-batches section for an unsubmitted batc
   await page.getByLabel("Batch name").fill(batchName);
   await page.getByLabel("Postcode").fill("02144");
   await expect(page.getByText("Somerville, MA")).toBeVisible();
-  await page.getByLabel("Admission code").fill(grant.id);
   await onScreen(page, "Start this batch").click();
   await page.waitForURL(/\/bulk\/[^/]+\/photos$/);
 

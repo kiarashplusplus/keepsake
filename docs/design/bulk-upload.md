@@ -1,7 +1,8 @@
 # Estate bulk upload
 
 Status: `[TODO]` — API, schema and the web workspace's screens are written, but **nothing here has
-been driven from a real browser by a real person**. Read "What is not built" before believing any
+been driven from a real browser by a real person**. The admission code is gone (2026-09-08, status
+entry at the bottom), so `/bulk` is now self-serve wherever `BULK_UPLOAD` is `"1"` — preview only. Read "What is not built" before believing any
 part of this is usable. The status line at the bottom is the one that is kept current.
 
 Someone clearing a house has fifty objects and one evening at a time. The give flow is five steps
@@ -63,7 +64,7 @@ card, and none of them should ever learn that batches exist.
 its owner's token and 404s everyone else (`routes/images.ts`). A bulk-specific read route would
 have been a second access-control implementation for the same bytes.
 
-## Admission: why a grant exists
+## What bounds a batch (there is no admission code)
 
 A Turnstile token is single-use and expires in 300 seconds. Mounting `turnstile()` on the bulk
 routes would mean one challenge per photo — three hundred challenges for a hundred-item estate. And
@@ -71,22 +72,43 @@ the ordinary per-IP daily ceilings cannot help either: 20 listings and 60 upload
 because there is no account to ration against, which is exactly the thing a bulk caller does have.
 Inheriting them would refuse the 61st photo of a 300-photo batch.
 
-So a **grant**: an allowance row, minted by an operator for the pilot, naming a finite number of
-items and photos, bound to one batch on first use, extended (never refilled) by a fresh challenge.
+This feature's first answer to that was a **grant**: an allowance row minted by an operator, whose
+id the giver pasted into an "Admission code" field on `/bulk/new` and every write then carried as
+`X-Bulk-Grant`. **It is gone** (`20260908094215_bulk_drop_grants.sql` drops the table). It made the
+first step of giving away a houseful of keepsakes "wait for a human to issue you a code", for a
+bound that a per-owner ceiling already provides. Two things replace it, and between them nothing the
+grant bounded is unbounded now:
 
-It is deliberately **not a bearer secret**. The id travels in a plain `X-Bulk-Grant` header and says
-only *how much*; who the caller is remains the owner token in `Authorization`, checked first. There
-is no new secret material to leak into a log, a URL or an image request, and a leaked grant id is
-worth nothing without the device token it is bound to.
+- **Per batch** — `BULK_MAX_ITEMS_PER_BATCH` / `BULK_MAX_PHOTOS_PER_BATCH`, enforced by
+  `routes/bulk.ts` as *a predicate on the item and photo inserts themselves*
+  (`AND (SELECT COUNT(*) …) < ?`), so a full batch refuses inside the same transaction that would
+  have written the row and two concurrent creates at the boundary cannot both pass. Because these
+  vars can never exceed the contract's `MAX_BATCH_ITEMS`/`MAX_BATCH_PHOTOS`
+  (`test/bulkCaps.test.ts` asserts that from the real config), anything admitted is something a
+  submission can still publish — the "400s *after* the work" failure the caps exist to prevent.
+- **Per owner per day** — `bulk_owner_usage`, one row per owner per day, which the grant always sat
+  under anyway and which (unlike a per-batch grant) survives a giver starting a second batch. Its
+  third column, `suggestions_used`, is new: cover suggestions had no ceiling outside the grant, and
+  a vision call costs real money.
 
-Above the grant sits `bulk_owner_usage`, one row per owner per day. The grant is per-batch and
-finite; this row survives both a new batch and a renewed grant, which is what makes "creating
-another batch does not reset the allowance" true rather than merely intended.
+`POST /api/bulk/batches` now carries `ownerAuth({ createIfMissing: true })`, the same as
+`POST /api/listings` and `PUT /api/photos`. Starting a batch became a giver's possible *first*
+request the moment the operator step went away, and a 401 there would have been this removal's own
+footgun.
 
 **Say the quiet part:** `turnstile()` soft-passes whenever `TURNSTILE_SECRET` is unset, which is
 every local run and every test. The challenge is therefore *not* what bounds a batch. These D1
 counters are. They are exact guarded updates, never KV — the KV budgets are eventually consistent
 by their own documentation and cannot be a lock.
+
+**One guard was found broken while removing the grant, and it is the shape `AGENTS.md`'s table
+collects.** The `bulk_owner_usage` debit was an upsert whose ceiling lived in
+`ON CONFLICT … DO UPDATE … WHERE`, with a comment claiming that guard covered the insert branch
+too. It does not — `ON CONFLICT` guards only the update, so an owner's *first* write of a day was
+admitted whatever the ceiling said. It never showed because the grant's own `> 0`-guarded `UPDATE`
+ran in the same transaction and refused first; removing the grant removed the thing covering for
+it. `test/bulkCeilings.test.ts`'s exhausted-allowance case is what caught it, and the insert branch
+now carries the ceiling as `SELECT … WHERE ? > 0`.
 
 ## Exactly once, under retries
 
@@ -176,7 +198,7 @@ Two facts worth knowing before touching it:
   the same cover.
 
 Screens: `app/bulk/index.tsx` (every batch this device knows, "Start a new batch"), `app/bulk/
-new.tsx` (name/country-postcode/shared-story/admission-code, plus a local-only pickup-deadline
+new.tsx` (name/email/country-postcode/shared-story, plus a local-only pickup-deadline
 reminder — see below), `app/bulk/[batchKey]/photos.tsx` (add + explicit "group as one item" /
 "one item per photo" + per-photo cover/remove, no drag required for anything), `.../review.tsx`
 (one card per item — compact list on desktop, one expanded card with Prev/Next on a phone — plus
@@ -186,13 +208,20 @@ items, one age check for the whole submission, separate saved/pending/live/faile
 mine/index.tsx` gained a "Give several items" entry and a private "Estate batches" section listing
 this device's draft batches.
 
-**The admission code and the pickup deadline are both local, not wire fields** — see
-`docs/product-decisions.md`'s two new rows. There is no `GET` for a giver's own grant, so a
-`?grant=` link or a pasted code is the only way one reaches the browser, and the workspace can only
-react to a write being refused ("no admission left"), never show a running total. The pickup
-deadline has no field in `CreateBatchInput` at all — it is a personal reminder in `localStorage`
-(`pickupDeadline.ts`), on purpose: this feature does not promise every item goes live together or
-before any date, and a client-invented wire field would have implied otherwise.
+**The pickup deadline is local, not a wire field.** It has no field in `CreateBatchInput` at all —
+it is a personal reminder in `localStorage` (`pickupDeadline.ts`), on purpose: this feature does not
+promise every item goes live together or before any date, and a client-invented wire field would
+have implied otherwise.
+
+**The email is saved on this screen, not on another one.** `/bulk/new` used to end with a
+paragraph and an "Add your email →" link to `/mine/email`, which asked someone about to spend an
+evening photographing a house to leave the form first. The field now sits inline, directly under the
+batch name it pairs with (a batch is found again by name, and reachable from another browser only by
+email), and saves through the same `POST /api/me/email` that screen calls. It runs *after* the batch
+is created, because that route 401s a device with no `owners` row and `POST /api/bulk/batches` is
+what creates one; the batch's client key is minted once per visit, so a refused address leaves the
+giver on the form and pressing again retries the email against the same batch rather than starting
+a second one.
 
 ## What is not built
 
@@ -230,7 +259,7 @@ repo's rule that a passing test is not evidence:
    `expected 120 to be less than or equal to 100`.
 2. Removing the `retain_until` predicate from the orphan sweep — a retained
    photo's row was gone, and a live batch's photo lost its retention.
-3. An unconditional grant debit, dropping `items_remaining > 0`.
+3. An unconditional allowance debit, dropping the guard on the counter.
 4. `owner_id` dropped from the batch fetch.
 5. `bulkUploadEnabled` forced true.
 
@@ -295,3 +324,101 @@ above for the two most load-bearing ones written out in full:
 7. The manual-suggestion-retry `force` flag removed — a giver's own "Suggest again" after an
    automatic attempt had already failed for the same cover became a silent no-op;
    `appliedSuggestionPhotoId` stayed `null` where the retry's own cover id was expected.
+
+**2026-09-08 — the admission code removed, and the email moved onto the form that needs it.**
+
+Kiarash asked for both from his phone, looking at `/bulk/new` on the live-ish site: the admission
+code had to go, and "Add your email" was a link that took him to another page instead of letting
+him add an email, sitting at the very end of the form and off-brand.
+
+What changed:
+
+| | |
+|---|---|
+| Removed | `bulk_grants` (dropped by `20260908094215_bulk_drop_grants.sql`), `requireGrant()`, `src/bulk/grants.ts`, `POST /api/admin/bulk/grants`, `BULK_GRANT_HEADER`/`BulkGrantSummary`/`AdminMintBulkGrantInput`, `BULK_GRANT_TTL_HOURS`, the web's `lib/bulkGrant.ts`, the `?grant=` link handling, and the workspace's whole `grantId` plumbing |
+| Added | `src/bulk/usage.ts` (the `bulk_owner_usage` debits, one guarded statement each), `bulk_owner_usage.suggestions_used` + `BULK_OWNER_DAILY_SUGGESTIONS` (225), the per-batch caps as predicates on the item/photo inserts, `ownerAuth({ createIfMissing: true })` on `POST /batches`, an inline optional email field on `/bulk/new`, and an Observatory **Usage today** panel (with `owners_at_limit`) where the Grants panel was |
+
+What was actually run, and what it proves:
+
+| Check | Result |
+|---|---|
+| `pnpm --filter @keepsake/api test` | 77 files, 768 passing, 3 skipped (the pre-existing `REAL_AI` gate) |
+| `pnpm --filter @keepsake/web test` | 82 files, 686 passing |
+| `pnpm lint` | 0 errors, 60 warnings — all the pre-existing zod const+type idiom |
+| `pnpm -r typecheck` | clean **except** one pre-existing failure this change did not cause and did not fix: `app/bulk/[batchKey]/photos.tsx` uses `icon="star-outline"`, which #264's Ionicons subset (7 glyphs) does not include. It is red on `main` at 51f2056 too, and it is a real product bug — that "make this the cover" button renders a missing glyph — but fixing it means regenerating a binary font subset, which belongs with whoever owns #264 |
+| `node tools/preflight/preflight.mjs` | every check passes except `lfs-pointers` (git-lfs is not installed in an agent container); `backup-tables` re-derived the restore runbook's `--table` list and agrees `bulk_grants` is gone |
+
+**Not run: the Playwright suite.** `e2e/bulk.spec.ts` and `e2e/ux.spec.ts` were updated for the
+removed field (and `e2e/support/bulk.ts`, which existed only to mint grants, was deleted), but the
+run was stopped at Kiarash's request, so **no browser has driven `/bulk/new` since this change** and
+the UX baseline frames in `docs/qa/baseline/` still show the admission code. Both of those need a
+pass before this is believed.
+
+Six guards were deliberately broken and watched fail, then restored:
+
+1. The per-batch item cap dropped from the insert's `WHERE` — `expected 201 to be 429` on the
+   eleventh item into a batch capped at ten.
+2. The per-batch photo cap dropped the same way — `expected 201 to be 429`.
+3. `ownerAuth({ createIfMissing: true })` reverted to a plain `ownerAuth()` on `POST /batches` —
+   `expected 401 to be 201` for a device whose first ever request is starting a batch.
+4. The usage debit's insert-branch ceiling loosened back to what it was — `expected 201 to be 429`
+   with the daily photo allowance at zero.
+5. `/bulk/new`'s per-visit client batch key minted per press instead — the retry after a refused
+   email started a second batch (`Expected: "batch-…-if2bx5r1" / Received: "batch-…-q9hmmro3"`).
+6. The Observatory's `owners_at_limit` compared against a number no owner can reach —
+   `expected +0 to be 1`.
+
+And one defect was found this way rather than by reasoning, the same shape as `AGENTS.md`'s table:
+**the `bulk_owner_usage` upsert's ceiling never applied to an owner's first write of the day.**
+`ON CONFLICT … DO UPDATE … WHERE` guards only the update branch; the comment above it claimed
+otherwise. It could not be observed while the grant existed, because the grant's own guarded
+`UPDATE` sat in the same transaction and refused first — so removing the admission code is what
+exposed it, and the exhausted-allowance test is what caught it. Fixed by putting the ceiling on the
+insert branch too (`SELECT … WHERE ? > 0`).
+
+**Follow-up on the same day, from Copilot's review of #269: a 429 with `Retry-After` no longer
+means one thing.** `src/api/bulk.ts`'s `classifyBulkError` treated *any* `Retry-After` as
+`"throttled"`, which `uploadQueue.pauseFor` sleeps through — correct while the only such 429 was the
+router's per-minute burst brake. The per-owner daily ceilings answer 429 with
+`secondsUntilMidnightUTC()`, up to 86,400, so a giver hitting today's photo limit would have parked
+the whole queue until UTC midnight with no failed tile and nothing on screen to say why. That was
+reachable before this change too (the ceiling has always answered that way) but only *past* an
+exhausted grant, which normally refused first; removing the grant makes it the ordinary path.
+
+The split is now by size — `MAX_PAUSE_SECONDS` (300), comfortably above the burst window and far
+below any daily ceiling. It is a client-side policy about what a giver will sit through, not a
+mirror of a server constant: the API still says exactly when the ceiling lifts. Two tests pin it
+(`test/api/bulk.test.ts`'s boundary case, `test/features/bulk/uploadQueue.test.ts`'s "fails the
+photo rather than pausing for hours"), and both were watched fail with the old rule restored —
+`expected false to be true` on the queue pausing, and the 33,000-second 429 classifying as
+`throttled`.
+
+**And a second one the CI e2e run caught, same shape as the API's own footgun.** `/bulk` listed
+batches with `GET /api/bulk/batches`, whose plain `ownerAuth()` 401s a device the server has never
+seen — and the screen turned any non-404 failure into a full-page "Couldn't load your batches",
+taking "Start a new batch" with it. That state was unreachable while the admission code existed
+(an operator had already minted a grant against an existing `owners` row), and it is now the
+ordinary first visit: a token minted locally, no row yet, nothing to list. `e2e/bulk.spec.ts` hit
+it the moment it stopped minting a grant — the button resolved, then detached mid-click as the
+401 landed, which is what a 90-second Playwright timeout looks like from the outside.
+
+A 401 is now read as what it is — an empty list — and a genuine failure renders *under* the card
+rather than instead of it, so the one thing this screen is for is never the thing an error hides.
+Three tests in `test/app/bulk/index.test.tsx` cover the 401, the 500 and the 404 (feature off,
+where an empty list would be a lie and the honest answer is still the "not open on this build"
+state). Verified the way the rule asks: the failure reproduced locally first
+(`playwright test e2e/bulk.spec.ts` — same timeout, same detached button), then passed on both
+projects with the fix.
+
+**The UX baseline was captured and then deliberately thrown away.** `pnpm --filter @keepsake/web
+e2e:ux` runs fine in an agent container — but only against the Chromium build the container has
+(141.0.7390.37, symlinked under the name the pinned `@playwright/test` asks for, per `AGENTS.md`'s
+own workaround). That is fine for the functional suite, which asserts on the DOM. It is not fine
+for *images*: all 77 frames came back changed, including screens this branch never touches, because
+the mono chip labels render fractionally wider on that build — `feed.jpg`'s category row reflows
+with nothing in the diff to explain it. Committing them would have written this container's font
+rendering into the repo's baseline and called it the product.
+
+So the frames stay stale for now, and `docs/qa/baseline/ux-mobile/bulk-new.jpg` still shows an
+admission-code field that no longer exists. The capture is a two-minute job in an environment with
+the pinned browser. Worth doing there, not here.

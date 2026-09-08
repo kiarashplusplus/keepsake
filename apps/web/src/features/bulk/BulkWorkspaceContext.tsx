@@ -7,22 +7,12 @@
  * `giveDraft.ts`, per `batchStore.ts`'s own header.
  */
 import * as React from "react";
-import { getStoredGrantId, setStoredGrantId } from "@/lib/bulkGrant";
 import { useBulkWorkspace, type UseBulkWorkspaceResult } from "@/features/bulk/useBulkWorkspace";
 
 const BulkWorkspaceContext = React.createContext<UseBulkWorkspaceResult | undefined>(undefined);
 
 export function BulkWorkspaceProvider({ clientBatchKey, children }: { clientBatchKey: string; children: React.ReactNode }): React.ReactElement {
-  const workspace = useBulkWorkspace(clientBatchKey, getStoredGrantId());
-
-  // Every write in this workspace reads `grantId` off the hook's own state
-  // (via `grantIdRef`, see `useBulkWorkspace.ts`), not off storage directly
-  // — this effect is what keeps the persisted copy in sync so the *next*
-  // batch (or a reload of this one) starts from whatever the giver last
-  // entered, without every call site needing to know storage exists.
-  React.useEffect(() => {
-    setStoredGrantId(workspace.grantId);
-  }, [workspace.grantId]);
+  const workspace = useBulkWorkspace(clientBatchKey);
 
   return <BulkWorkspaceContext.Provider value={workspace}>{children}</BulkWorkspaceContext.Provider>;
 }

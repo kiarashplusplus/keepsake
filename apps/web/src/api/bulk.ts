@@ -6,21 +6,20 @@
  * loudly and locally instead of shipping a malformed value into a screen.
  *
  * Every call here is owner-authenticated (`owner: true` — see
- * `src/api/client.ts`). Every *write* also carries the caller's admission
- * grant id in `BULK_GRANT_HEADER` (`x-bulk-grant`) — the grant proves *how
- * much* work has been admitted, `Authorization` proves *whose* batch it is;
- * `apps/api/src/middleware/bulkGrant.ts`'s header comment explains why the
- * grant id itself travels unencrypted. Reads never need it: `GET` routes on
- * `bulkRoutes` mount no `requireGrant()`.
+ * `src/api/client.ts`), and that is the whole of a bulk caller's identity.
+ * There is no admission code: the `x-bulk-grant` header, and the operator
+ * step behind it, were removed — see `apps/api/src/bulk/usage.ts` for what
+ * bounds a batch now.
  *
  * ## Typed outcomes instead of generic throws
  *
  * A screen driving 100 items and 300 photos needs to tell three situations
  * apart, and a caught `ApiError` alone can't: was this edited elsewhere
- * (409, reload and retry), has this account run out of admission (403/429
- * with no `retryAfter` — needs a fresh grant from the operator, no amount of
- * waiting fixes it), or is this a resumable pause (429 *with* `retryAfter` —
- * the per-minute burst ceiling, wait and go again)? Every mutating call
+ * (409, reload and retry), has this account hit a ceiling that only lifts at
+ * UTC midnight — or filled a batch, which no wait empties — or is this a
+ * resumable pause, the per-minute burst ceiling? The last two are both 429s
+ * carrying `Retry-After`, so it is the *size* of that wait that separates
+ * them; see `MAX_PAUSE_SECONDS`. Every mutating call
  * below returns a `BulkResult<T>` rather than throwing for any of those
  * three cases, via `classifyBulkError`. A response the API was never meant
  * to send — a validation bug, a 500, a client-side zod mismatch — still
@@ -31,13 +30,11 @@ import { z } from "zod";
 import { PhotoSuggestionSchema, type PhotoSuggestion } from "@keepsake/contracts/photo";
 import { UlidSchema } from "@keepsake/contracts/common";
 import {
-  BULK_GRANT_HEADER,
   BatchDetail,
   BatchItemSummary,
   BatchPhotoSummary,
   BatchStateSchema,
   BatchSummary,
-  BulkGrantSummary,
   BulkOperationSummary,
   CreateBatchInput as CreateBatchInputSchema,
   SubmitBatchInput as SubmitBatchInputSchema,
@@ -64,18 +61,16 @@ export type BulkWriteError =
   /** 409 — `expected_revision` (or the item's own revision-on-update path)
    * didn't match. Reload the batch/item and let the giver reconcile. */
   | { kind: "conflict"; message: string }
-  /** 403 from `requireGrant()` — no `x-bulk-grant` header reached the
-   * server, or the grant it named isn't usable (expired, revoked, someone
-   * else's). Not the same as running out of admission *within* a valid
-   * grant — see `"admission_exhausted"`. */
-  | { kind: "no_grant"; message: string }
-  /** 429 with no `Retry-After` — the grant (or the account's daily
-   * ceiling with no grant-side room behind it) has nothing left. Waiting
-   * doesn't help; the giver needs a fresh grant from the operator. */
-  | { kind: "admission_exhausted"; message: string }
-  /** 429 *with* `Retry-After` — a burst ceiling, not exhaustion. The caller
-   * (`uploadQueue.ts`) treats this as a pause: stop issuing new writes until
-   * `retryAfterSeconds` has passed, then resume the same request. */
+  /** 429 that no realistic wait fixes: this account's daily ceiling for the
+   * kind of write attempted (its `Retry-After` counts down to UTC midnight,
+   * which can be most of a day), or a batch that already holds all it can
+   * (no `Retry-After` at all — waiting never empties a batch). The API's own
+   * message says which, and what to do about it. */
+  | { kind: "limit_reached"; message: string }
+  /** 429 with a *short* `Retry-After` — the per-minute burst ceiling, not
+   * exhaustion. The caller (`uploadQueue.ts`) treats this as a pause: stop
+   * issuing new writes until `retryAfterSeconds` has passed, then resume the
+   * same request. See `MAX_PAUSE_SECONDS` for where the line is drawn. */
   | { kind: "throttled"; message: string; retryAfterSeconds: number }
   /** `fetch` itself failed — offline, DNS, CORS. Nothing reached the
    * server, so this is unambiguously retryable once connectivity returns. */
@@ -88,6 +83,27 @@ export type BulkWriteError =
 
 export type BulkResult<T> = { ok: true; data: T } | { ok: false; error: BulkWriteError };
 
+/**
+ * The longest `Retry-After` this module will call a *pause*.
+ *
+ * A 429 carrying `Retry-After` used to mean exactly one thing here — the
+ * router-level burst brake, whose window is a minute — so any `Retry-After`
+ * was safe to sleep through. It no longer does: a per-owner daily ceiling
+ * (`bulk_owner_usage`, `apps/api/src/bulk/usage.ts`) answers 429 with
+ * `secondsUntilMidnightUTC()`, up to 86,400. Classifying that as
+ * `"throttled"` hands it to `uploadQueue.pauseFor`, which would park the
+ * whole queue — no failed tile, no message, just a "paused" workspace — for
+ * the rest of the UTC day.
+ *
+ * Five minutes is comfortably above the burst window and far below any
+ * daily ceiling, so the two never collide. The number is a *client-side
+ * policy about what a giver will sit through*, not a mirror of any server
+ * constant: the API stays honest and keeps saying exactly when the ceiling
+ * lifts; this only decides whether waiting is something to do silently or
+ * something to tell them about.
+ */
+export const MAX_PAUSE_SECONDS = 300;
+
 /** Exported so `uploadQueue.ts` (and tests) can classify an `ApiError` the
  * same way without re-deriving this table. Rethrows anything that isn't an
  * `ApiError` — a zod `.parse()` failure on a request we built ourselves, for
@@ -96,12 +112,11 @@ export type BulkResult<T> = { ok: true; data: T } | { ok: false; error: BulkWrit
 export function classifyBulkError(error: unknown): BulkWriteError {
   if (!(error instanceof ApiError)) throw error;
   if (error.code === "conflict") return { kind: "conflict", message: error.message };
-  if (error.code === "forbidden") return { kind: "no_grant", message: error.message };
   if (error.code === "rate_limited") {
-    if (error.retryAfter !== undefined) {
+    if (error.retryAfter !== undefined && error.retryAfter <= MAX_PAUSE_SECONDS) {
       return { kind: "throttled", message: error.message, retryAfterSeconds: error.retryAfter };
     }
-    return { kind: "admission_exhausted", message: error.message };
+    return { kind: "limit_reached", message: error.message };
   }
   if (error.code === "unavailable") return { kind: "network", message: error.message };
   return { kind: "unexpected", message: error.message, code: error.code, status: error.status };
@@ -116,32 +131,20 @@ async function asBulkResult<T>(run: () => Promise<T>): Promise<BulkResult<T>> {
 }
 
 export type BulkWriteOptions = {
-  /** The admission grant this write should be charged against — sent as
-   * `x-bulk-grant`. Required on every function in this module for
-   * uniformity (`bulkRoutes`' own `DELETE`s don't currently spend a grant,
-   * but sending the header costs nothing and keeps one calling convention
-   * for every write here rather than a per-route exception a screen has to
-   * remember). */
-  grantId: string;
   signal?: AbortSignal;
 };
-
-function grantHeaders(grantId: string): Record<string, string> {
-  return { [BULK_GRANT_HEADER]: grantId };
-}
 
 // ---------------------------------------------------------------------------
 // Batches
 // ---------------------------------------------------------------------------
 
-export async function createBatch(input: CreateBatchInput, options: BulkWriteOptions): Promise<BulkResult<BatchSummary>> {
+export async function createBatch(input: CreateBatchInput, options: BulkWriteOptions = {}): Promise<BulkResult<BatchSummary>> {
   const body = CreateBatchInputSchema.parse(input);
   return asBulkResult(async () => {
     const data = await apiFetch<unknown>("/api/bulk/batches", {
       method: "POST",
       body,
       owner: true,
-      headers: grantHeaders(options.grantId),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
     return BatchSummary.parse(data);
@@ -169,14 +172,13 @@ export async function getBatch(id: string, signal?: AbortSignal): Promise<BatchD
   return BatchDetail.parse(fixPhotoUrls(data));
 }
 
-export async function updateBatch(id: string, input: UpdateBatchInput, options: BulkWriteOptions): Promise<BulkResult<BatchSummary>> {
+export async function updateBatch(id: string, input: UpdateBatchInput, options: BulkWriteOptions = {}): Promise<BulkResult<BatchSummary>> {
   const body = UpdateBatchInputSchema.parse(input);
   return asBulkResult(async () => {
     const data = await apiFetch<unknown>(`/api/bulk/batches/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body,
       owner: true,
-      headers: grantHeaders(options.grantId),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
     return BatchSummary.parse(data);
@@ -193,15 +195,13 @@ const CancelBatchResult = z.object({
 });
 export type CancelBatchResult = z.infer<typeof CancelBatchResult>;
 
-/** `DELETE /api/bulk/batches/:id` — cancel. No grant is spent by a cancel
- * (`bulkRoutes`' `DELETE /batches/:id` mounts no `requireGrant()`), but see
- * `BulkWriteOptions`'s comment for why the header is still sent. */
-export async function cancelBatch(id: string, options: BulkWriteOptions): Promise<BulkResult<CancelBatchResult>> {
+/** `DELETE /api/bulk/batches/:id` — cancel. Never unwinds a listing this
+ * batch already published; see `CancelBatchResult.listing_ids`. */
+export async function cancelBatch(id: string, options: BulkWriteOptions = {}): Promise<BulkResult<CancelBatchResult>> {
   return asBulkResult(async () => {
     const data = await apiFetch<unknown>(`/api/bulk/batches/${encodeURIComponent(id)}`, {
       method: "DELETE",
       owner: true,
-      headers: grantHeaders(options.grantId),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
     return CancelBatchResult.parse(data);
@@ -216,7 +216,7 @@ export async function upsertBatchItem(
   batchId: string,
   clientItemId: string,
   input: UpsertBatchItemInput,
-  options: BulkWriteOptions,
+  options: BulkWriteOptions = {},
 ): Promise<BulkResult<BatchItemSummary>> {
   const body = UpsertBatchItemInputSchema.parse(input);
   return asBulkResult(async () => {
@@ -226,8 +226,7 @@ export async function upsertBatchItem(
         method: "PUT",
         body,
         owner: true,
-        headers: grantHeaders(options.grantId),
-        ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
       },
     );
     return BatchItemSummary.parse(data);
@@ -239,7 +238,7 @@ const DeleteItemResult = z.object({ id: UlidSchema });
 export async function deleteBatchItem(
   batchId: string,
   clientItemId: string,
-  options: BulkWriteOptions,
+  options: BulkWriteOptions = {},
 ): Promise<BulkResult<{ id: string }>> {
   return asBulkResult(async () => {
     const data = await apiFetch<unknown>(
@@ -247,8 +246,7 @@ export async function deleteBatchItem(
       {
         method: "DELETE",
         owner: true,
-        headers: grantHeaders(options.grantId),
-        ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
       },
     );
     return DeleteItemResult.parse(data);
@@ -276,7 +274,7 @@ export async function uploadBatchPhoto(
   batchId: string,
   clientPhotoId: string,
   input: UploadBatchPhotoInput,
-  options: BulkWriteOptions,
+  options: BulkWriteOptions = {},
 ): Promise<BulkResult<BatchPhotoSummary>> {
   const form = new FormData();
   form.append("full", input.full, "full.jpg");
@@ -292,8 +290,7 @@ export async function uploadBatchPhoto(
         method: "PUT",
         body: form,
         owner: true,
-        headers: grantHeaders(options.grantId),
-        ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
       },
     );
     return BatchPhotoSummary.parse(fixPhotoUrls(data));
@@ -305,7 +302,7 @@ const DeletePhotoResult = z.object({ id: UlidSchema });
 export async function deleteBatchPhoto(
   batchId: string,
   clientPhotoId: string,
-  options: BulkWriteOptions,
+  options: BulkWriteOptions = {},
 ): Promise<BulkResult<{ id: string }>> {
   return asBulkResult(async () => {
     const data = await apiFetch<unknown>(
@@ -313,8 +310,7 @@ export async function deleteBatchPhoto(
       {
         method: "DELETE",
         owner: true,
-        headers: grantHeaders(options.grantId),
-        ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
       },
     );
     return DeletePhotoResult.parse(data);
@@ -324,25 +320,25 @@ export async function deleteBatchPhoto(
 const SuggestBatchPhotoResult = z.object({ suggestion: PhotoSuggestionSchema.nullable() });
 
 /**
- * `POST /api/bulk/batches/:id/photos/:clientPhotoId/suggest` — spends the
- * grant's own `suggestions_remaining` (`BulkGrantSummary`, separate from
- * `items_remaining`/`photos_remaining`), so running out of suggestions is a
- * `BulkResult` outcome here, not a thrown `ApiError` the way `src/api/
+ * `POST /api/bulk/batches/:id/photos/:clientPhotoId/suggest` — spends this
+ * owner's daily suggestion allowance (`bulk_owner_usage.suggestions_used`,
+ * counted separately from items and photos), so running out of suggestions
+ * is a `BulkResult` outcome here, not a thrown `ApiError` the way `src/api/
  * photos.ts`'s `suggestPhoto` treats every request failure — this is a
- * *write* on `bulkRoutes` (metered, and gated the same as the item/photo
- * admission paths) even though it reads like a query. `ok:true, data:null`
+ * *write* on `bulkRoutes` (metered, and charged the same way the item and
+ * photo paths are) even though it reads like a query. `ok:true, data:null`
  * still covers the model itself declining (timed out, hit the daily model
- * budget) — that was never an admission problem and isn't one now.
+ * budget) — that was never a ceiling problem and isn't one now.
  *
- * Screens are expected to treat `"admission_exhausted"`/`"throttled"` here
- * as "no suggestion this time", never as a reason to block the item or the
- * batch: a giver can title, categorize, and submit every item by hand with
- * zero suggestions spent, same as the ordinary give flow always could.
+ * Screens are expected to treat `"limit_reached"`/`"throttled"` here as "no
+ * suggestion this time", never as a reason to block the item or the batch:
+ * a giver can title, categorize, and submit every item by hand with zero
+ * suggestions spent, same as the ordinary give flow always could.
  */
 export async function suggestBatchPhoto(
   batchId: string,
   clientPhotoId: string,
-  options: BulkWriteOptions,
+  options: BulkWriteOptions = {},
 ): Promise<BulkResult<PhotoSuggestion | null>> {
   return asBulkResult(async () => {
     const data = await apiFetch<unknown>(
@@ -350,8 +346,7 @@ export async function suggestBatchPhoto(
       {
         method: "POST",
         owner: true,
-        headers: grantHeaders(options.grantId),
-        ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
       },
     );
     return SuggestBatchPhotoResult.parse(data).suggestion;
@@ -367,7 +362,7 @@ export async function suggestBatchPhoto(
 export async function submitBatch(
   batchId: string,
   input: SubmitBatchInput,
-  options: BulkWriteOptions,
+  options: BulkWriteOptions = {},
 ): Promise<BulkResult<BulkOperationSummary>> {
   const body = SubmitBatchInputSchema.parse(input);
   return asBulkResult(async () => {
@@ -375,7 +370,6 @@ export async function submitBatch(
       method: "POST",
       body,
       owner: true,
-      headers: grantHeaders(options.grantId),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
     return BulkOperationSummary.parse(data);
@@ -398,12 +392,11 @@ export async function listBatchOperations(batchId: string, signal?: AbortSignal)
   return z.object({ items: z.array(BulkOperationSummary) }).parse(data).items;
 }
 
-export async function retryOperation(id: string, options: BulkWriteOptions): Promise<BulkResult<BulkOperationSummary>> {
+export async function retryOperation(id: string, options: BulkWriteOptions = {}): Promise<BulkResult<BulkOperationSummary>> {
   return asBulkResult(async () => {
     const data = await apiFetch<unknown>(`/api/bulk/operations/${encodeURIComponent(id)}/retry`, {
       method: "POST",
       owner: true,
-      headers: grantHeaders(options.grantId),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
     return BulkOperationSummary.parse(data);
@@ -412,39 +405,13 @@ export async function retryOperation(id: string, options: BulkWriteOptions): Pro
 
 const DeleteOperationResult = z.object({ id: UlidSchema });
 
-export async function deleteOperation(id: string, options: BulkWriteOptions): Promise<BulkResult<{ id: string }>> {
+export async function deleteOperation(id: string, options: BulkWriteOptions = {}): Promise<BulkResult<{ id: string }>> {
   return asBulkResult(async () => {
     const data = await apiFetch<unknown>(`/api/bulk/operations/${encodeURIComponent(id)}`, {
       method: "DELETE",
       owner: true,
-      headers: grantHeaders(options.grantId),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
     return DeleteOperationResult.parse(data);
   });
-}
-
-// ---------------------------------------------------------------------------
-// Admission grant
-// ---------------------------------------------------------------------------
-
-/** Re-exported so a caller holding a `BulkGrantSummary` (handed to a giver
- * by the operator who minted it — no route here fetches one; the pilot's
- * `POST /api/admin/bulk/grants` is admin-only) can type it without a second
- * import from `@keepsake/contracts/bulk`. */
-export type { BulkGrantSummary };
-
-/**
- * Three independent ceilings, not one — `items_remaining`,
- * `photos_remaining`, and `suggestions_remaining` are spent by different
- * writes and can each hit zero on their own schedule. A screen must not
- * read `hasAdmission(grant, "suggestions") === false` as "this batch is
- * stuck": every other kind of work continues normally, and a giver can
- * title, categorize, and submit an entire batch by hand with zero
- * suggestions ever spent, the same as the ordinary give flow always could.
- */
-export function hasAdmission(grant: BulkGrantSummary, kind: "items" | "photos" | "suggestions"): boolean {
-  if (kind === "items") return grant.items_remaining > 0;
-  if (kind === "photos") return grant.photos_remaining > 0;
-  return grant.suggestions_remaining > 0;
 }

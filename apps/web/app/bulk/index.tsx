@@ -73,12 +73,24 @@ export default function BulkBatchList(): React.ReactElement {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        // A 404 here means the feature is off for this build, or this
-        // device holds no usable admission — not that anything is broken.
-        // Degrading honestly (per this feature's plan) beats a spinner that
-        // never resolves or a raw error banner.
+        // A 404 means the feature is off for this build — not that anything
+        // is broken. Degrading honestly (per this feature's plan) beats a
+        // spinner that never resolves or a raw error banner.
         if (err instanceof ApiError && err.code === "not_found") {
           setUnavailable(true);
+          return;
+        }
+        // A 401 means this device minted an owner token locally but the
+        // server has never seen it — no give, no batch, nothing to list.
+        // That is an ordinary new visitor, not a failure: the honest answer
+        // is an empty list, and `POST /api/bulk/batches` creates the row the
+        // moment they start one (`ownerAuth({ createIfMissing: true })`).
+        // Before the admission code was removed this state was unreachable
+        // here — an operator had already minted a grant against an existing
+        // `owners` row — so it read as an error and took the whole screen,
+        // "Start a new batch" included.
+        if (err instanceof ApiError && err.code === "unauthorized") {
+          setBatches([]);
           return;
         }
         setError(err instanceof ApiError ? err.message : "Couldn't load your batches.");
@@ -101,14 +113,6 @@ export default function BulkBatchList(): React.ReactElement {
     );
   }
 
-  if (error !== null) {
-    return (
-      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
-        <EmptyState eyebrow="Give several items" title="Couldn't load your batches" line={error} />
-      </Page>
-    );
-  }
-
   return (
     <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: sectionRhythm.tight }}>
       <Card style={{ gap: sectionRhythm.tight, transform: [{ rotate: "0.2deg" }] }}>
@@ -124,7 +128,14 @@ export default function BulkBatchList(): React.ReactElement {
         </View>
       </Card>
 
-      {!hasOwnerToken ? null : batches === null ? (
+      {error !== null ? (
+        // Under the card, never instead of it: whatever went wrong listing
+        // batches that already exist, starting a new one is still possible
+        // and is the one thing this screen is for.
+        <Text variant="body" color="dangerText">
+          {`Couldn't load your batches. ${error}`}
+        </Text>
+      ) : !hasOwnerToken ? null : batches === null ? (
         <View style={{ gap: space.md }}>
           <Skeleton height={96} />
           <Skeleton height={96} />

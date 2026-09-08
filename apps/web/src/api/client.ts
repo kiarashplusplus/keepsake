@@ -53,12 +53,11 @@ export type ApiFetchOptions = {
    * caller can't be surprised into overriding auth by accident. On a
    * `FormData` body a colliding `Content-Type` is dropped rather than
    * overwritten, because there the correct value is the one only `fetch`
-   * can write (it carries the multipart boundary). Added for
-   * `src/api/bulk.ts`'s `x-bulk-grant` header (`BULK_GRANT_HEADER` in
-   * `@keepsake/contracts/bulk`): a bulk write needs a header no other
-   * domain module has ever needed, and the alternative — a bespoke fetch
-   * wrapper duplicating this file's envelope handling — is the exact drift
-   * this module exists to prevent.
+   * can write (it carries the multipart boundary). Added for a bulk-write
+   * header that has since been removed with the admission code, and kept
+   * because the alternative for the next caller that needs one — a bespoke
+   * fetch wrapper duplicating this file's envelope handling — is the exact
+   * drift this module exists to prevent.
    */
   headers?: Record<string, string>;
   signal?: AbortSignal;

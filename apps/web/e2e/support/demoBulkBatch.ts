@@ -5,15 +5,14 @@
  * to last month's screenshot if it shows the same batch, the same items,
  * the same words.
  *
- * Estate bulk upload needs one thing `demoCatalog.ts` never did: admission.
- * There is no self-serve path onto `/bulk` — `POST /api/admin/bulk/grants`
- * (`apps/api/src/routes/admin.ts`) mints a grant for one `owner_id` by hand,
- * exactly as an operator would, and needs that owner's id, which no
- * owner-authed response ever hands back (see `support/bulk.ts`'s header on
- * why that reads the local D1 file directly). This module mints its own
- * grant the same way `e2e/bulk.spec.ts` does, for `DEMO_OWNER_TOKEN` — the
- * same fixed device `demoCatalog.ts` already uses, so the bulk screens and
- * the ordinary ones are captured as one giver's device, not two.
+ * This used to need one thing `demoCatalog.ts` never did: an admission
+ * grant, minted by hand through the admin API for `DEMO_OWNER_TOKEN`
+ * because there was no self-serve path onto `/bulk`. The admission code is
+ * gone, so seeding is now the plain owner-authed calls below —
+ * `POST /api/bulk/batches` creates the `owners` row on sight, the same way
+ * a photo upload does. `DEMO_OWNER_TOKEN` is the same fixed device
+ * `demoCatalog.ts` uses, so the bulk screens and the ordinary ones are
+ * captured as one giver's device, not two.
  *
  * Every field here is set directly through `PUT .../items/:clientItemId`
  * rather than by grouping photos and waiting on `MOCK_AI`'s suggestion —
@@ -26,7 +25,6 @@ import type { APIRequestContext } from "@playwright/test";
 import { DEMO_OWNER_TOKEN } from "./demoCatalog";
 import { readDemoPhoto, readDemoThumb, DEMO_PHOTOS } from "./demoPhotos";
 import { freshClientIp, ownerHeaders } from "./api";
-import { mintBulkGrant } from "./bulk";
 
 const BATCH_NAME = "UX baseline — estate batch";
 const CLIENT_BATCH_KEY = "ux-baseline-batch";
@@ -59,14 +57,12 @@ interface BatchDetailLite {
 export interface DemoBulkBatch {
   id: string;
   clientBatchKey: string;
-  grantId: string;
 }
 
 /**
- * Seeds the fixed batch if this run hasn't yet, and hands back its id and a
- * usable grant either way. Idempotent the same way `ensureDemoCatalog` is:
- * both baseline projects can call this and the second one finds the first
- * one's work.
+ * Seeds the fixed batch if this run hasn't yet, and hands back its id
+ * either way. Idempotent the same way `ensureDemoCatalog` is: both baseline
+ * projects can call this and the second one finds the first one's work.
  */
 export async function ensureDemoBulkBatch(request: APIRequestContext): Promise<DemoBulkBatch> {
   const headers = ownerHeaders(DEMO_OWNER_TOKEN);
@@ -75,21 +71,14 @@ export async function ensureDemoBulkBatch(request: APIRequestContext): Promise<D
     const body = await readJson<{ ok: boolean; data?: { items: BatchSummaryLite[] } }>(list);
     const existing = body.data?.items.find((b) => b.client_batch_key === CLIENT_BATCH_KEY);
     if (existing && existing.item_count > 0 && existing.ready_count > 0) {
-      // Still need a fresh, usable grant for this run's writes even when the
-      // batch itself already exists — a grant from a previous capture run
-      // may have since expired, and nothing here re-touches server state
-      // for an already-complete batch anyway (see the caller side: the
-      // screens driven against this fixture are read-mostly navigations).
-      const grant = await mintBulkGrant(request, DEMO_OWNER_TOKEN);
-      return { id: existing.id, clientBatchKey: CLIENT_BATCH_KEY, grantId: grant.id };
+      return { id: existing.id, clientBatchKey: CLIENT_BATCH_KEY };
     }
   }
 
-  const grant = await mintBulkGrant(request, DEMO_OWNER_TOKEN, { items: 10, photos: 20 });
-  const grantHeaders = { ...headers, "x-bulk-grant": grant.id, "CF-Connecting-IP": freshClientIp() };
+  const writeHeaders = { ...headers, "CF-Connecting-IP": freshClientIp() };
 
   const createRes = await request.post("/api/bulk/batches", {
-    headers: grantHeaders,
+    headers: writeHeaders,
     data: { client_batch_key: CLIENT_BATCH_KEY, name: BATCH_NAME, country: "US", postal_code: "02144" },
   });
   const created = await readJson<{ ok: boolean; data?: { id: string } }>(createRes);
@@ -97,7 +86,7 @@ export async function ensureDemoBulkBatch(request: APIRequestContext): Promise<D
 
   async function uploadPhoto(clientPhotoId: string, photo: (typeof DEMO_PHOTOS)[keyof typeof DEMO_PHOTOS]): Promise<void> {
     await request.put(`/api/bulk/batches/${batchId}/photos/${clientPhotoId}`, {
-      headers: grantHeaders,
+      headers: writeHeaders,
       multipart: {
         full: { name: `${photo.key}.jpg`, mimeType: "image/jpeg", buffer: readDemoPhoto(photo) },
         thumb: { name: `${photo.key}.thumb.jpg`, mimeType: "image/jpeg", buffer: readDemoThumb(photo) },
@@ -117,7 +106,7 @@ export async function ensureDemoBulkBatch(request: APIRequestContext): Promise<D
   await uploadPhoto("ux-photo-c", UNGROUPED_PHOTO);
 
   await request.put(`/api/bulk/batches/${batchId}/items/${GROUPED_ITEM_KEY}`, {
-    headers: grantHeaders,
+    headers: writeHeaders,
     data: {
       fields: GROUPED_ITEM_FIELDS,
       room_label: "Attic",
@@ -133,5 +122,5 @@ export async function ensureDemoBulkBatch(request: APIRequestContext): Promise<D
     throw new Error("ensureDemoBulkBatch: seeded item never reached ready — check GROUPED_ITEM_FIELDS against CreateListingInput");
   }
 
-  return { id: batchId, clientBatchKey: CLIENT_BATCH_KEY, grantId: grant.id };
+  return { id: batchId, clientBatchKey: CLIENT_BATCH_KEY };
 }

@@ -3,7 +3,7 @@
  * Stage 5. Same floor as `./appMetrics.ts`: no Cloudflare credential, always
  * present, works locally. Kept in its own module rather than folded into
  * `appMetrics.ts` because it reads four tables (`upload_batches`,
- * `upload_batch_items`, `upload_batch_photos`, `bulk_grants`,
+ * `upload_batch_items`, `upload_batch_photos`, `bulk_owner_usage`,
  * `bulk_operations`) none of the give flow's own metrics touch, and because
  * the whole thing collapses to `{ enabled: false }` in most environments —
  * see `ObservatoryBulk`'s own doc comment for why.
@@ -20,12 +20,13 @@ import type {
   ObservatoryBulkBatches,
   ObservatoryBulkDrafts,
   ObservatoryBulkFunnel,
-  ObservatoryBulkGrants,
+  ObservatoryBulkUsage,
   ObservatoryBulkOperations,
 } from "@keepsake/contracts/observatory";
 import { BATCH_ITEM_STATES, BATCH_STATES, BULK_OPERATION_STATUSES } from "@keepsake/contracts/bulk";
 import type { Env } from "../env.js";
-import { bulkUploadEnabled } from "../env.js";
+import { bulkOwnerDailyItems, bulkOwnerDailyPhotos, bulkOwnerDailySuggestions, bulkUploadEnabled } from "../env.js";
+import { todayISO } from "../lib/day.js";
 import { LATENCY_SAMPLE_LIMIT, medianOf, windowStartMs } from "./appMetrics.js";
 
 /** Every state/status bucket seeded at zero, same reason
@@ -124,36 +125,40 @@ async function fetchOperations(env: Env, now: number): Promise<ObservatoryBulkOp
   };
 }
 
-interface GrantRow {
-  active: number | null;
-  expired: number | null;
-  revoked: number | null;
-  items_remaining: number | null;
-  photos_remaining: number | null;
-  suggestions_remaining: number | null;
+interface UsageRow {
+  owners_today: number | null;
+  items_used: number | null;
+  photos_used: number | null;
+  suggestions_used: number | null;
+  owners_at_limit: number | null;
 }
 
-async function fetchGrants(env: Env, now: number): Promise<ObservatoryBulkGrants> {
+/**
+ * Today's `bulk_owner_usage`, and how many callers are already being
+ * refused. The three limits are read from the env rather than restated
+ * here, so raising `BULK_OWNER_DAILY_PHOTOS` moves this panel with it
+ * instead of leaving it quietly reporting against a number nobody uses any
+ * more.
+ */
+async function fetchUsage(env: Env): Promise<ObservatoryBulkUsage> {
   const row = await env.DB.prepare(
     `SELECT
-       SUM(CASE WHEN revoked_at IS NULL AND expires_at > ? THEN 1 ELSE 0 END) AS active,
-       SUM(CASE WHEN revoked_at IS NULL AND expires_at <= ? THEN 1 ELSE 0 END) AS expired,
-       SUM(CASE WHEN revoked_at IS NOT NULL THEN 1 ELSE 0 END) AS revoked,
-       SUM(CASE WHEN revoked_at IS NULL AND expires_at > ? THEN items_remaining ELSE 0 END) AS items_remaining,
-       SUM(CASE WHEN revoked_at IS NULL AND expires_at > ? THEN photos_remaining ELSE 0 END) AS photos_remaining,
-       SUM(CASE WHEN revoked_at IS NULL AND expires_at > ? THEN suggestions_remaining ELSE 0 END) AS suggestions_remaining
-     FROM bulk_grants`,
+       COUNT(*) AS owners_today,
+       SUM(items_used) AS items_used,
+       SUM(photos_used) AS photos_used,
+       SUM(suggestions_used) AS suggestions_used,
+       SUM(CASE WHEN items_used >= ? OR photos_used >= ? OR suggestions_used >= ? THEN 1 ELSE 0 END) AS owners_at_limit
+     FROM bulk_owner_usage WHERE day = ?`,
   )
-    .bind(now, now, now, now, now)
-    .first<GrantRow>();
+    .bind(bulkOwnerDailyItems(env), bulkOwnerDailyPhotos(env), bulkOwnerDailySuggestions(env), todayISO())
+    .first<UsageRow>();
 
   return {
-    active: row?.active ?? 0,
-    expired: row?.expired ?? 0,
-    revoked: row?.revoked ?? 0,
-    items_remaining: row?.items_remaining ?? 0,
-    photos_remaining: row?.photos_remaining ?? 0,
-    suggestions_remaining: row?.suggestions_remaining ?? 0,
+    owners_today: row?.owners_today ?? 0,
+    items_used: row?.items_used ?? 0,
+    photos_used: row?.photos_used ?? 0,
+    suggestions_used: row?.suggestions_used ?? 0,
+    owners_at_limit: row?.owners_at_limit ?? 0,
   };
 }
 
@@ -255,13 +260,13 @@ async function fetchFunnel(env: Env, now: number, windowDays: number): Promise<O
 export async function buildBulkMetrics(env: Env, windowDays: number, now: number = Date.now()): Promise<ObservatoryBulk> {
   if (!bulkUploadEnabled(env)) return { enabled: false };
 
-  const [batches, drafts, operations, grants, funnel] = await Promise.all([
+  const [batches, drafts, operations, usage, funnel] = await Promise.all([
     fetchBatches(env, now),
     fetchDrafts(env),
     fetchOperations(env, now),
-    fetchGrants(env, now),
+    fetchUsage(env),
     fetchFunnel(env, now, windowDays),
   ]);
 
-  return { enabled: true, batches, drafts, operations, grants, funnel };
+  return { enabled: true, batches, drafts, operations, usage, funnel };
 }

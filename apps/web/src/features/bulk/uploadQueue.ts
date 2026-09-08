@@ -83,10 +83,8 @@ function classifyBulkWriteFailure(error: BulkWriteError): PhotoUploadFailure {
   switch (error.kind) {
     case "network":
       return { message: error.message, errorCode: "network", canRetry: true };
-    case "no_grant":
-      return { message: error.message, errorCode: "no_grant", canRetry: false };
-    case "admission_exhausted":
-      return { message: error.message, errorCode: "admission_exhausted", canRetry: false };
+    case "limit_reached":
+      return { message: error.message, errorCode: "limit_reached", canRetry: false };
     case "conflict":
       // Not reachable through the photo route today (no revision on a
       // photo upsert), but classified rather than left to fall through to
@@ -310,7 +308,6 @@ export class UploadQueue {
   private tracked = new Map<string, TrackedPhoto>();
   private paused: Promise<void> | null = null;
   private destroyed = false;
-  private grantId = "";
 
   constructor(options: UploadQueueOptions) {
     this.batchKey = options.batchKey;
@@ -340,13 +337,6 @@ export class UploadQueue {
    * ceiling is known, or a screen wants to back off after seeing pauses. */
   updateLimits(patch: Partial<RateLimiterConfig>): void {
     this.limiter.updateConfig(patch);
-  }
-
-  /** Updates the grant id sent with each upload — needed after
-   * `"admission_exhausted"`/`"no_grant"` once the giver has a fresh grant,
-   * without recreating the whole queue and losing its pending work. */
-  setGrantId(grantId: string): void {
-    this.grantId = grantId;
   }
 
   /** Enqueues a freshly picked file — the intake path, not a resume. */

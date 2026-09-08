@@ -235,7 +235,7 @@ export type ObservatorySearchIndex =
 //
 // A pilot cannot be run on a feature whose only failure signal is a giver
 // complaining, and until this existed nothing watched `upload_batches`,
-// `upload_batch_items`, `upload_batch_photos`, `bulk_grants` or
+// `upload_batch_items`, `upload_batch_photos`, `bulk_owner_usage` or
 // `bulk_operations` at all — four tables a submission depends on, zero of
 // them observed.
 // ---------------------------------------------------------------------------
@@ -286,7 +286,7 @@ export type ObservatoryBulkDrafts = {
    * The work still outstanding across every batch, regardless of that
    * batch's own state. */
   items_outstanding: number;
-  /** `upload_batch_photos` rows with `photo_id IS NULL` — admission was
+  /** `upload_batch_photos` rows with `photo_id IS NULL` — the allowance was
    * charged and the row was written, but the bytes never finished landing in
    * R2 (see `20260908063000_bulk_photo_reservation.sql`'s header). A retry
    * resumes these; a reservation that sits here for a long time without one
@@ -331,21 +331,29 @@ export type ObservatoryBulkOperations = {
 };
 
 /**
- * `bulk_grants` — how much admission is outstanding right now, and how it
- * broke down the last time a grant's clock ran out.
+ * `bulk_owner_usage` — how hard today's callers are pushing against the
+ * per-owner daily ceilings (`BULK_OWNER_DAILY_ITEMS`, `_PHOTOS`,
+ * `_SUGGESTIONS`).
  *
- * `items_remaining`/`photos_remaining`/`suggestions_remaining` sum only the
- * `active` grants (not revoked, not expired) — the same "state now" framing
- * `ObservatoryModerationLatency` uses, not a historical total of everything
- * ever minted.
+ * Scoped to `todayISO()`, because that is the row a write is actually
+ * charged against right now — a historical total would answer a question
+ * nobody is asking while a giver is stuck. `owners_at_limit` is the one
+ * number here worth an alert: it counts callers whose next item, photo or
+ * suggestion will be refused until UTC midnight, which is the shape of "a
+ * giver emailed asking why their upload stopped".
+ *
+ * This replaced a `bulk_grants` panel when the admission code was removed.
+ * Same question — is anything being refused — asked of the ceiling that is
+ * still there.
  */
-export type ObservatoryBulkGrants = {
-  active: number;
-  expired: number;
-  revoked: number;
-  items_remaining: number;
-  photos_remaining: number;
-  suggestions_remaining: number;
+export type ObservatoryBulkUsage = {
+  /** Owners with a `bulk_owner_usage` row for today. */
+  owners_today: number;
+  items_used: number;
+  photos_used: number;
+  suggestions_used: number;
+  /** Owners who have hit at least one of the three ceilings today. */
+  owners_at_limit: number;
 };
 
 /**
@@ -421,7 +429,7 @@ export type ObservatoryBulk =
       batches: ObservatoryBulkBatches;
       drafts: ObservatoryBulkDrafts;
       operations: ObservatoryBulkOperations;
-      grants: ObservatoryBulkGrants;
+      usage: ObservatoryBulkUsage;
       funnel: ObservatoryBulkFunnel;
     };
 

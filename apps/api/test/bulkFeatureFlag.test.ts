@@ -4,14 +4,12 @@
  * and answers a disabled feature with `not_found`, never `forbidden` — see
  * `src/middleware/featureFlag.ts`'s own comment on why.
  */
-import { env, SELF } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { bulkRoutes } from "../src/routes/bulk.js";
 import { ulid } from "../src/lib/ids.js";
 import { sha256Hex } from "../src/lib/digest.js";
-import { authHeaders, fakeFile, fakeJpegBytes, freshClientIp, freshOwnerToken, readOk, seedStandardPostalCodes, setTestEnvVar } from "./helpers.js";
-
-const ADMIN_TOKEN = "test-admin-token-bulk-feature-flag";
+import { authHeaders, fakeFile, fakeJpegBytes, freshOwnerToken, readOk, seedStandardPostalCodes, setTestEnvVar } from "./helpers.js";
 
 async function seedOwner(token: string): Promise<string> {
   const id = ulid();
@@ -23,18 +21,8 @@ async function seedOwner(token: string): Promise<string> {
   return id;
 }
 
-interface GrantSummary {
-  id: string;
-}
-
-async function mintGrant(ownerId: string): Promise<GrantSummary> {
-  setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
-  const res = await SELF.fetch("http://x/api/admin/bulk/grants", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json", "CF-Connecting-IP": freshClientIp() },
-    body: JSON.stringify({ owner_id: ownerId }),
-  });
-  return readOk<GrantSummary>(res);
+function bulkHeaders(token: string): Record<string, string> {
+  return { ...authHeaders(token), "Content-Type": "application/json" };
 }
 
 async function bulk(path: string, init: RequestInit = {}): Promise<Response> {
@@ -58,8 +46,7 @@ describe("BULK_UPLOAD feature flag", () => {
   it("404s every bulk route when BULK_UPLOAD is off — reads included, and never 403", async () => {
     await seedStandardPostalCodes();
     const token = freshOwnerToken();
-    const ownerId = await seedOwner(token);
-    const grant = await mintGrant(ownerId);
+    await seedOwner(token);
 
     // Create a real batch/item/photo while the flag is still on, so the
     // routes below are refusing a request that *would* otherwise have
@@ -67,7 +54,7 @@ describe("BULK_UPLOAD feature flag", () => {
     // reason.
     const createRes = await bulk("/batches", {
       method: "POST",
-      headers: { ...authHeaders(token), "Content-Type": "application/json", "x-bulk-grant": grant.id },
+      headers: bulkHeaders(token),
       body: JSON.stringify({ client_batch_key: "flag-check", name: "Estate", country: "US", postal_code: "02144" }),
     });
     expect(createRes.status).toBe(201);
@@ -75,7 +62,7 @@ describe("BULK_UPLOAD feature flag", () => {
 
     setTestEnvVar("BULK_UPLOAD", "0");
 
-    const headers = { ...authHeaders(token), "Content-Type": "application/json", "x-bulk-grant": grant.id };
+    const headers = bulkHeaders(token);
 
     const routes: { method: string; path: string; init?: RequestInit }[] = [
       { method: "POST", path: "/batches", init: { method: "POST", headers, body: JSON.stringify({ client_batch_key: "x", name: "x", country: "US", postal_code: "02144" }) } },
@@ -92,7 +79,7 @@ describe("BULK_UPLOAD feature flag", () => {
       {
         method: "PUT",
         path: `/batches/${batch.id}/photos/p1`,
-        init: { method: "PUT", headers: { ...authHeaders(token), "x-bulk-grant": grant.id }, body: photoForm() },
+        init: { method: "PUT", headers: authHeaders(token), body: photoForm() },
       },
       { method: "DELETE", path: `/batches/${batch.id}/photos/p1`, init: { method: "DELETE", headers } },
     ];
@@ -110,16 +97,15 @@ describe("BULK_UPLOAD feature flag", () => {
     await seedStandardPostalCodes();
     setTestEnvVar("BULK_UPLOAD", "0");
     const token = freshOwnerToken();
-    const ownerId = await seedOwner(token);
+    await seedOwner(token);
 
     const disabledRes = await bulk("/batches", { headers: authHeaders(token) });
     expect(disabledRes.status).toBe(404);
 
     setTestEnvVar("BULK_UPLOAD", "1");
-    const grant = await mintGrant(ownerId);
     const enabledRes = await bulk("/batches", {
       method: "POST",
-      headers: { ...authHeaders(token), "Content-Type": "application/json", "x-bulk-grant": grant.id },
+      headers: bulkHeaders(token),
       body: JSON.stringify({ client_batch_key: "re-enabled", name: "Estate", country: "US", postal_code: "02144" }),
     });
     expect(enabledRes.status).toBe(201);

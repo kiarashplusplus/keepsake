@@ -114,7 +114,7 @@ function ListingRow({ listing }: { listing: OwnerListing }): React.ReactElement 
  * The batches this owner is still preparing — draft ones only, a private
  * filter over `GET /api/bulk/batches` (that route already returns every
  * state; this is the one narrowing "Continue preparing" ever needs). A 404
- * (feature off, or no admission ever granted on this device) degrades to
+ * (feature off, or no batch ever started on this device) degrades to
  * simply not showing the section — Mine's whole point is the ordinary give
  * flow, and a pilot feature being off is not something to alarm a visitor
  * with here.

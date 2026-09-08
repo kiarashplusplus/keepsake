@@ -1,6 +1,6 @@
 /**
  * `/api/bulk/*` — estate bulk upload: batch drafts, their photos, and the
- * admission grants that bound them. Route table per the plan; house style
+ * ceilings that bound them. Route table per the plan; house style
  * (router-level burst brake, `ownerAuth()`, `validateBody`, `ok`/`fail`)
  * copied from `routes/listings.ts`.
  *
@@ -22,14 +22,26 @@
  * `UPLOAD_IP_DAILY_BUDGET`, …) exist because an anonymous `PUT /api/photos`
  * caller has no account to ration against — an IP address is the only
  * handle available, and `moderation/budget.ts`'s own header explains why
- * that handle is loose. A bulk caller has something better: admission,
- * proved by `requireGrant()` and spent exactly, in D1, by
- * `bulk/grants.ts`'s debit statements. Inheriting `dailyBudget({kind:
+ * that handle is loose. A bulk caller has something better: an owner token,
+ * and a per-owner-per-day counter spent exactly, in D1, by
+ * `bulk/usage.ts`'s debit statements. Inheriting `dailyBudget({kind:
  * "upload", ...})` here would ration a 300-photo estate against the same
- *60-photos-a-day ceiling a single anonymous giver gets, and refuse the
- * 61st photo of a batch an operator admitted for exactly this. `burst(...)`
- * stays mounted below — IP burst protection is orthogonal to admission, and
- * a caller who has been admitted still shouldn't be able to hammer the edge.
+ * 60-photos-a-day ceiling a single anonymous giver gets, and refuse the
+ * 61st photo of a batch this feature exists to make possible. `burst(...)`
+ * stays mounted below — IP burst protection is orthogonal to a daily
+ * ceiling, and a caller under the ceiling still shouldn't be able to hammer
+ * the edge.
+ *
+ * ## No admission code
+ *
+ * A batch used to need an operator-minted grant id, pasted in by the giver
+ * as an "admission code" and sent as `X-Bulk-Grant`. It is gone, along with
+ * the `bulk_grants` table and `requireGrant()`. Nothing it bounded is
+ * unbounded now: per-batch volume is `BULK_MAX_ITEMS_PER_BATCH` /
+ * `BULK_MAX_PHOTOS_PER_BATCH`, enforced *as a predicate on the insert
+ * itself* so a full batch refuses in the same transaction that would have
+ * written the row, and total volume is `bulk_owner_usage`, which — unlike a
+ * per-batch grant — survives a giver starting a second batch.
  *
  * ## Two-phase writes
  *
@@ -46,8 +58,11 @@ import { CreateBatchInput, SubmitBatchInput, UpdateBatchInput, UpsertBatchItemIn
 import type { Env } from "../env.js";
 import {
   bulkDraftRetentionDays,
+  bulkMaxItemsPerBatch,
+  bulkMaxPhotosPerBatch,
   bulkOwnerDailyItems,
   bulkOwnerDailyPhotos,
+  bulkOwnerDailySuggestions,
   bulkUploadEnabled,
   DEFAULT_SUGGEST_DAILY_BUDGET,
   parseIntVar,
@@ -59,19 +74,12 @@ import { todayISO } from "../lib/day.js";
 import { sha256Hex } from "../lib/digest.js";
 import { checkAndBump, secondsUntilMidnightUTC } from "../moderation/budget.js";
 import { ownerAuth, type OwnerRow } from "../middleware/ownerAuth.js";
-import { requireGrant, type GrantVariables } from "../middleware/bulkGrant.js";
 import { featureFlag } from "../middleware/featureFlag.js";
 import { burst } from "../middleware/rateLimit.js";
 import { validateBody } from "../middleware/validate.js";
 import { lookupPostalCode } from "../geo/lookup.js";
 import { deletePhotoAndObjects, storePhotoUpload } from "../photos/store.js";
-import {
-  bindGrantToBatch,
-  buildItemDebitStatements,
-  buildPhotoDebitStatements,
-  buildSuggestionDebitStatements,
-  settleDebit,
-} from "../bulk/grants.js";
+import { buildUsageDebitStatement, refundUsage } from "../bulk/usage.js";
 import { cancelOperation, getOperationSummary, listOperationsForBatch, retryOperation, runBulkOperation, startSubmission } from "../bulk/submit.js";
 import { suggestFromPhoto } from "../suggest/suggest.js";
 import {
@@ -88,7 +96,7 @@ import {
   toBatchSummary,
 } from "../bulk/batches.js";
 
-type Vars = { owner: OwnerRow; validatedBody: unknown } & GrantVariables;
+type Vars = { owner: OwnerRow; validatedBody: unknown };
 export const bulkRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 bulkRoutes.use("*", featureFlag(bulkUploadEnabled));
@@ -106,9 +114,18 @@ async function reservedPhotoId(batchId: string, clientPhotoId: string): Promise<
 // ---------------------------------------------------------------------------
 // POST /batches
 // ---------------------------------------------------------------------------
-bulkRoutes.post("/batches", ownerAuth(), requireGrant(), validateBody(CreateBatchInput), async (c) => {
+// `createIfMissing: true`, the same as `POST /api/listings` and
+// `PUT /api/photos` — the two other endpoints that can be a giver's very
+// first request (`middleware/ownerAuth.ts`'s own words). Starting a batch
+// became one the moment the admission code went away: it used to be
+// impossible to reach this route without an operator having already minted
+// a grant against an existing `owners` row, so a plain `ownerAuth()` was
+// enough. Now someone clearing a house can land on `/bulk/new` as their
+// first act on the site, and a 401 there would be the removal's own
+// footgun. Every *other* bulk route keeps the plain `ownerAuth()`: there is
+// no batch to reach without having created one first.
+bulkRoutes.post("/batches", ownerAuth({ createIfMissing: true }), validateBody(CreateBatchInput), async (c) => {
   const owner = c.get("owner");
-  const grant = c.get("grant");
   const input = c.get("validatedBody") as CreateBatchInput;
 
   // Resolved once, here, through the same `lookupPostalCode` every listing
@@ -135,11 +152,6 @@ bulkRoutes.post("/batches", ownerAuth(), requireGrant(), validateBody(CreateBatc
   // to the same batch.
   const batch = await findBatchByClientKey(c.env, owner.id, input.client_batch_key);
   if (!batch) return fail(c, "internal", "Batch failed to save.", 500);
-
-  // First use only — `bindGrantToBatch`'s own `WHERE batch_id IS NULL`
-  // guard is what makes a retry of this same request a no-op the second
-  // time.
-  await bindGrantToBatch(c.env, grant.id, batch.id);
 
   const detail = await assembleBatchDetail(c.env, batch);
   return ok(c, toBatchSummary(detail), 201);
@@ -170,7 +182,7 @@ bulkRoutes.get("/batches/:id", burst("RL_READ"), ownerAuth(), async (c) => {
 // ---------------------------------------------------------------------------
 // PATCH /batches/:id
 // ---------------------------------------------------------------------------
-bulkRoutes.patch("/batches/:id", ownerAuth(), requireGrant(), validateBody(UpdateBatchInput), async (c) => {
+bulkRoutes.patch("/batches/:id", ownerAuth(), validateBody(UpdateBatchInput), async (c) => {
   const owner = c.get("owner");
   const id = requireParam(c, "id");
   const input = c.get("validatedBody") as UpdateBatchInput;
@@ -272,11 +284,9 @@ bulkRoutes.delete("/batches/:id", ownerAuth(), async (c) => {
 bulkRoutes.put(
   "/batches/:id/items/:clientItemId",
   ownerAuth(),
-  requireGrant(),
   validateBody(UpsertBatchItemInput),
   async (c) => {
     const owner = c.get("owner");
-    const grant = c.get("grant");
     const batchId = requireParam(c, "id");
     const clientItemId = requireParam(c, "clientItemId");
     const input = c.get("validatedBody") as UpsertBatchItemInput;
@@ -340,12 +350,21 @@ bulkRoutes.put(
       return ok(c, item);
     }
 
-    // Create path: the one place a new client_item_id spends the batch's
-    // per-item admission — see grants.ts's header for why the debit runs in
-    // the same env.DB.batch() as the insert it pays for.
+    // Create path: the one place a new client_item_id spends this owner's
+    // daily item allowance — see usage.ts's header for why the debit runs
+    // in the same env.DB.batch() as the insert it pays for.
+    //
+    // The insert carries the per-batch cap as its own second predicate, so
+    // a full batch refuses in the same statement that would have written
+    // the row: `BULK_MAX_ITEMS_PER_BATCH` must never exceed the contract's
+    // `MAX_BATCH_ITEMS` (`test/bulkCaps.test.ts` asserts that from the real
+    // config), so an item that lands here is always one a submission can
+    // still publish. Counting inside the statement rather than in a
+    // `SELECT COUNT(*)` beforehand is what makes two concurrent creates at
+    // the boundary unable to both pass.
     const itemId = ulid(now);
     const day = todayISO();
-    const debit = buildItemDebitStatements(c.env, { grant, ownerId: owner.id, day, limit: bulkOwnerDailyItems(c.env), now });
+    const debit = buildUsageDebitStatement(c.env, { kind: "items", ownerId: owner.id, day, limit: bulkOwnerDailyItems(c.env) });
 
     const photoRepoint =
       input.photo_client_ids !== undefined && input.photo_client_ids.length > 0
@@ -357,7 +376,8 @@ bulkRoutes.put(
         `INSERT INTO upload_batch_items
            (id, batch_id, client_item_id, title, story, category, aspects_json, room_label, lot_label, created_at, updated_at)
          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-          WHERE NOT EXISTS (SELECT 1 FROM upload_batch_items WHERE batch_id = ? AND client_item_id = ?)`,
+          WHERE NOT EXISTS (SELECT 1 FROM upload_batch_items WHERE batch_id = ? AND client_item_id = ?)
+            AND (SELECT COUNT(*) FROM upload_batch_items WHERE batch_id = ?) < ?`,
       ).bind(
         itemId,
         batchId,
@@ -372,8 +392,10 @@ bulkRoutes.put(
         now,
         batchId,
         clientItemId,
+        batchId,
+        bulkMaxItemsPerBatch(c.env),
       ),
-      ...debit.statements,
+      debit,
       c.env.DB.prepare(
         `UPDATE upload_batches SET revision = revision + 1, updated_at = ?, last_activity_at = ?, expires_at = ? WHERE id = ?`,
       ).bind(updatedAt, lastActivityAt, expiresAt, batchId),
@@ -382,35 +404,38 @@ bulkRoutes.put(
 
     const results = await c.env.DB.batch(statements);
     const insertChanges = results[0]?.meta.changes ?? 0;
-    const grantOk = (results[1 + debit.grantResultIndex]?.meta.changes ?? 0) > 0;
-    const usageOk = (results[1 + debit.usageResultIndex]?.meta.changes ?? 0) > 0;
-    const admitted = await settleDebit(c.env, { grantId: grant.id, ownerId: owner.id, day, kind: "items", grantOk, usageOk });
+    const usageOk = (results[1]?.meta.changes ?? 0) > 0;
 
     if (insertChanges === 0) {
-      // A concurrent identical retry landed first — not reachable by a
-      // sequential retry (which would have seen `existing` above and taken
-      // the update branch), only a genuine race. `settleDebit` above still
-      // ran, so this request's own charge (if any) was corrected for
-      // whichever half disagreed; the tiny remaining window — both halves
-      // agreeing to admit twice for one logical create — is the same one
-      // `routes/bulk.ts`'s header on the photo path already names.
+      // Nothing was written, but the debit beside it may have charged, so
+      // give it back before answering. Two ways to get here: a concurrent
+      // identical retry landed first (not reachable by a sequential retry,
+      // which would have seen `existing` above and taken the update
+      // branch), or the batch is full. The row's existence is what tells
+      // them apart.
+      if (usageOk) await refundUsage(c.env, { kind: "items", ownerId: owner.id, day });
+
       const detail = await loadBatchDetail(c.env, batchId, owner.id);
       const item = detail?.items.find((i) => i.client_item_id === clientItemId);
-      if (!item) return fail(c, "internal", "Item failed to save.", 500);
-      return ok(c, item);
+      if (item) return ok(c, item);
+      return fail(
+        c,
+        "rate_limited",
+        `This batch is full — it can hold ${bulkMaxItemsPerBatch(c.env)} items. Submit what's ready, then start another batch.`,
+        429,
+      );
     }
 
-    if (!admitted) {
+    if (!usageOk) {
       // The insert above landed unconditionally in the same transaction as
       // the refused debit. Compensate rather than leave a free item behind
       // — deleting it also releases any photo this request just re-pointed
       // onto it, via `upload_batch_photos.item_id ON DELETE SET NULL`, the
       // same FK the migration relies on for a giver splitting a group.
       await c.env.DB.prepare(`DELETE FROM upload_batch_items WHERE id = ?`).bind(itemId).run();
-      const message = grantOk
-        ? "Today's item limit for this account has been reached."
-        : "Your admission grant has no items left — ask the operator for a fresh one.";
-      return fail(c, "rate_limited", message, 429, grantOk ? { retryAfter: secondsUntilMidnightUTC() } : {});
+      return fail(c, "rate_limited", "Today's item limit for this account has been reached.", 429, {
+        retryAfter: secondsUntilMidnightUTC(),
+      });
     }
 
     const detail = await loadBatchDetail(c.env, batchId, owner.id);
@@ -457,7 +482,7 @@ bulkRoutes.delete("/batches/:id/items/:clientItemId", ownerAuth(), async (c) => 
 // `[[ratelimits]]` comment for why a 300-photo estate needs its own burst
 // binding sized for roughly two uploads in flight, and this file's header
 // for why burst protection stays mounted here even though total volume is
-// already bounded exactly by the grant.
+// already bounded exactly by this owner's daily photo ceiling.
 //
 // A lost response resolves through the `upload_batch_photos_client_key` D1
 // unique index, same as every other write in this file — never the KV
@@ -470,16 +495,16 @@ bulkRoutes.delete("/batches/:id/items/:clientItemId", ownerAuth(), async (c) => 
 // does NOT, by itself, make a retried *debit* safe: whether a `photos` row
 // with that id exists cannot tell "never attempted" apart from "debited,
 // then the Worker was evicted before storing" — both look like "no row
-// yet", and re-checking only that on every retry spends admission twice for
-// the second case. So the reservation itself — a `upload_batch_photos` row
-// with `photo_id IS NULL` — is the durable record of "admission already
-// spent for this client key", written in the *same* `env.DB.batch()` call
-// as the debit:
+// yet", and re-checking only that on every retry charges the allowance
+// twice for the second case. So the reservation itself — a
+// `upload_batch_photos` row with `photo_id IS NULL` — is the durable record
+// of "already paid for this client key", written in the *same*
+// `env.DB.batch()` call as the debit:
 //   1. reserve + debit — one transaction, skipped entirely when either the
 //      reservation or the photo it would name already exists (see below).
 //      `upload_batch_photos_client_key` guards a concurrent double-reserve
-//      the same way the item path's insert does; `settleDebit` corrects the
-//      rare case where only one of the grant/usage statements fired.
+//      the same way the item path's insert does, and the same statement
+//      carries the per-batch photo cap as its own predicate.
 //   2. store — `storePhotoUpload` under the deterministic id. Always run,
 //      even on a resumed retry that may have already stored once: the
 //      upsert makes that redundant, never wrong.
@@ -500,9 +525,8 @@ bulkRoutes.delete("/batches/:id/items/:clientItemId", ownerAuth(), async (c) => 
 // other path that clears `upload_batch_photos` without touching `photos`),
 // and re-linking that already-paid-for photo must not charge a second time
 // either.
-bulkRoutes.put("/batches/:id/photos/:clientPhotoId", burst("RL_BULK_UPLOAD"), ownerAuth(), requireGrant(), async (c) => {
+bulkRoutes.put("/batches/:id/photos/:clientPhotoId", burst("RL_BULK_UPLOAD"), ownerAuth(), async (c) => {
   const owner = c.get("owner");
-  const grant = c.get("grant");
   const batchId = requireParam(c, "id");
   const clientPhotoId = requireParam(c, "clientPhotoId");
 
@@ -537,54 +561,61 @@ bulkRoutes.put("/batches/:id/photos/:clientPhotoId", burst("RL_BULK_UPLOAD"), ow
   // Recovery fallback for a missing (not merely unresolved) mapping row —
   // see the header above. Only consulted when there is no reservation at
   // all; an unresolved reservation (`existingMapping` truthy, `photo_id`
-  // still null) already proves admission was spent without this lookup.
+  // still null) already proves the allowance was spent without this lookup.
   const retainedPhoto = existingMapping
     ? null
     : await c.env.DB.prepare("SELECT id FROM photos WHERE id = ? AND owner_id = ?").bind(photoId, owner.id).first<{ id: string }>();
 
   if (!existingMapping && !retainedPhoto) {
-    // Step 1: reserve and debit atomically. Admission is checked, and spent,
-    // *before* a single byte reaches R2 or a `photos` row exists — fail
-    // closed on an exhausted grant or ceiling with nothing durable left
-    // behind (the reservation this call just inserted is deleted below on
-    // that path).
+    // Step 1: reserve and debit atomically. The ceiling is checked, and
+    // spent, *before* a single byte reaches R2 or a `photos` row exists —
+    // fail closed with nothing durable left behind (the reservation this
+    // call just inserted is deleted below on that path).
     const reservationId = ulid(now);
-    const debit = buildPhotoDebitStatements(c.env, { grant, ownerId: owner.id, day, limit: bulkOwnerDailyPhotos(c.env), now });
+    const photoLimit = bulkMaxPhotosPerBatch(c.env);
+    const debit = buildUsageDebitStatement(c.env, { kind: "photos", ownerId: owner.id, day, limit: bulkOwnerDailyPhotos(c.env) });
     const statements = [
       c.env.DB.prepare(
         `INSERT INTO upload_batch_photos (id, batch_id, client_photo_id, photo_id, item_id, position, created_at, updated_at)
          SELECT ?, ?, ?, NULL, NULL, 0, ?, ?
-          WHERE NOT EXISTS (SELECT 1 FROM upload_batch_photos WHERE batch_id = ? AND client_photo_id = ?)`,
-      ).bind(reservationId, batchId, clientPhotoId, now, now, batchId, clientPhotoId),
-      ...debit.statements,
+          WHERE NOT EXISTS (SELECT 1 FROM upload_batch_photos WHERE batch_id = ? AND client_photo_id = ?)
+            AND (SELECT COUNT(*) FROM upload_batch_photos WHERE batch_id = ?) < ?`,
+      ).bind(reservationId, batchId, clientPhotoId, now, now, batchId, clientPhotoId, batchId, photoLimit),
+      debit,
     ];
     const results = await c.env.DB.batch(statements);
     const insertChanges = results[0]?.meta.changes ?? 0;
-    const grantOk = (results[1 + debit.grantResultIndex]?.meta.changes ?? 0) > 0;
-    const usageOk = (results[1 + debit.usageResultIndex]?.meta.changes ?? 0) > 0;
-    const admitted = await settleDebit(c.env, { grantId: grant.id, ownerId: owner.id, day, kind: "photos", grantOk, usageOk });
+    const usageOk = (results[1]?.meta.changes ?? 0) > 0;
 
     if (insertChanges === 0) {
-      // A concurrent identical request reserved this slot first — not
-      // reachable by a sequential retry (that would have seen
-      // `existingMapping` above), only a genuine race. `settleDebit` already
-      // corrected this request's own charge; resolve to whichever row won,
-      // the same narrow-race shape the item path's own comment above names.
+      // Nothing was reserved, so refund whatever the debit beside it
+      // charged, then work out which of the two guards refused: a
+      // concurrent identical request that reserved this slot first (not
+      // reachable by a sequential retry — that would have seen
+      // `existingMapping` above), or a full batch.
+      if (usageOk) await refundUsage(c.env, { kind: "photos", ownerId: owner.id, day });
+
       const winner = await findBatchPhotoByClientId(c.env, batchId, clientPhotoId);
-      if (!winner) return fail(c, "internal", "Photo failed to save.", 500);
+      if (!winner) {
+        return fail(
+          c,
+          "rate_limited",
+          `This batch is full — it can hold ${photoLimit} photos. Submit what's ready, then start another batch.`,
+          429,
+        );
+      }
       if (winner.photo_id) return respondWithSavedPhoto();
       // Else: winner reserved (and debited) but hasn't stored yet — fall
       // through to step 2 with the same deterministic id.
-    } else if (!admitted) {
-      // We own the reservation and admission refused — delete it so an
-      // exhausted grant fails closed with zero storage side effects: no R2
-      // bytes (never attempted), no `photos` row (never attempted), and now
-      // no mapping row either.
+    } else if (!usageOk) {
+      // We own the reservation and the ceiling refused — delete it so an
+      // exhausted allowance fails closed with zero storage side effects: no
+      // R2 bytes (never attempted), no `photos` row (never attempted), and
+      // now no mapping row either.
       await c.env.DB.prepare(`DELETE FROM upload_batch_photos WHERE id = ?`).bind(reservationId).run();
-      const message = grantOk
-        ? "Today's photo limit for this account has been reached."
-        : "Your admission grant has no photos left — ask the operator for a fresh one.";
-      return fail(c, "rate_limited", message, 429, grantOk ? { retryAfter: secondsUntilMidnightUTC() } : {});
+      return fail(c, "rate_limited", "Today's photo limit for this account has been reached.", 429, {
+        retryAfter: secondsUntilMidnightUTC(),
+      });
     }
   }
   // Else: either `existingMapping` was already reserved (and, atomically,
@@ -693,18 +724,18 @@ interface BulkSuggestPhotoRow {
  *    `findBatchPhotoByClientId` — so naming a batch or photo id that isn't
  *    the caller's, or isn't in this batch, 404s exactly like one that
  *    doesn't exist, matching every other lookup in this router (never 403).
- *  - **Admission.** Charged against `bulk_grants.suggestions_remaining` with
- *    a guarded D1 decrement (`buildSuggestionDebitStatements`), not the give
+ *  - **The ceiling.** Charged against `bulk_owner_usage.suggestions_used`
+ *    with a guarded D1 upsert (`buildUsageDebitStatement`), not the give
  *    flow's per-IP KV `suggest` budget — see this file's header for why a
- *    bulk caller's admission lives in D1, never KV: `SUGGEST_IP_DAILY_BUDGET`
+ *    bulk caller's ceiling lives in D1, never KV: `SUGGEST_IP_DAILY_BUDGET`
  *    defaults to 30/day, which a 100-item estate exhausts on item 31, and a
  *    KV counter is eventually consistent by its own documentation so it
  *    could not bound a batch exactly at any size.
  *
  * The **global** `SUGGEST_DAILY_BUDGET` runaway ceiling still applies, and
  * that is a deliberate choice, not an oversight: unlike the per-IP KV budget
- * (which rations *one caller*, a job the grant already does exactly and
- * exactly once per batch), the global counter protects the shared Workers AI
+ * (which rations *one caller*, a job `bulk_owner_usage` already does
+ * exactly), the global counter protects the shared Workers AI
  * allocation the whole account draws from — the same reason
  * `search/reembed.ts`'s `embed` kind checks the global ceiling with no
  * `ipDailyLimit` even though its only caller is an already-authenticated
@@ -713,9 +744,8 @@ interface BulkSuggestPhotoRow {
  * that protects it; only the per-caller half of `checkAndBump` is skipped
  * here, not both.
  */
-bulkRoutes.post("/batches/:id/photos/:clientPhotoId/suggest", ownerAuth(), requireGrant(), async (c) => {
+bulkRoutes.post("/batches/:id/photos/:clientPhotoId/suggest", ownerAuth(), async (c) => {
   const owner = c.get("owner");
-  const grant = c.get("grant");
   const batchId = requireParam(c, "id");
   const clientPhotoId = requireParam(c, "clientPhotoId");
 
@@ -740,15 +770,21 @@ bulkRoutes.post("/batches/:id/photos/:clientPhotoId/suggest", ownerAuth(), requi
     });
   }
 
-  // Admission is checked, and spent, *before* the AI call — fail closed on
-  // an exhausted grant with no vision call made. One guarded statement, no
-  // `settleDebit`: see `buildSuggestionDebitStatements`'s own comment for
-  // why there is no second constraint here for it to disagree with.
-  const debit = buildSuggestionDebitStatements(c.env, { grant });
-  const debitResults = await c.env.DB.batch(debit.statements);
-  const grantOk = (debitResults[debit.grantResultIndex]?.meta.changes ?? 0) > 0;
-  if (!grantOk) {
-    return fail(c, "rate_limited", "Your admission grant has no suggestions left — ask the operator for a fresh one.", 429);
+  // The ceiling is checked, and spent, *before* the AI call — fail closed
+  // on an exhausted allowance with no vision call made. Nothing to
+  // compensate here, unlike the item and photo paths: this write creates no
+  // row of its own for the debit to be paired with.
+  const debit = buildUsageDebitStatement(c.env, {
+    kind: "suggestions",
+    ownerId: owner.id,
+    day: todayISO(),
+    limit: bulkOwnerDailySuggestions(c.env),
+  });
+  const usageOk = ((await debit.run()).meta.changes ?? 0) > 0;
+  if (!usageOk) {
+    return fail(c, "rate_limited", "Today's suggestion limit for this account has been reached.", 429, {
+      retryAfter: secondsUntilMidnightUTC(),
+    });
   }
 
   const result = await suggestFromPhoto(c.env, photo);
@@ -758,11 +794,10 @@ bulkRoutes.post("/batches/:id/photos/:clientPhotoId/suggest", ownerAuth(), requi
 // ---------------------------------------------------------------------------
 // POST /batches/:id/submit
 // ---------------------------------------------------------------------------
-// No `requireGrant()` here, deliberately: `startSubmission` spends no
-// admission of its own — the items and photos it publishes already paid for
-// themselves, one at a time, at `PUT /batches/:id/items/:clientItemId` and
-// `PUT /batches/:id/photos/:clientPhotoId`. `DELETE /batches/:id` is the
-// existing precedent for a bulk write that needs no grant.
+// `startSubmission` spends no allowance of its own — the items and photos
+// it publishes already paid for themselves, one at a time, at
+// `PUT /batches/:id/items/:clientItemId` and
+// `PUT /batches/:id/photos/:clientPhotoId`.
 bulkRoutes.post("/batches/:id/submit", ownerAuth(), validateBody(SubmitBatchInput), async (c) => {
   const owner = c.get("owner");
   const batchId = requireParam(c, "id");

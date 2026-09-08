@@ -276,7 +276,7 @@ describe("Observatory: bulk upload (plan Stage 5)", () => {
     expect(text).not.toContain("Batches started");
   });
 
-  it("renders batch/draft/operation/grant/funnel numbers when enabled", async () => {
+  it("renders batch/draft/operation/usage/funnel numbers when enabled", async () => {
     jest.mocked(getObservatory).mockResolvedValue(
       observatory({
         app: {
@@ -296,7 +296,7 @@ describe("Observatory: bulk upload (plan Stage 5)", () => {
               oldest_active_age_ms: 4 * 60 * 60 * 1000 + 12 * 60 * 1000,
               active_stale_lease_recoveries: 2,
             },
-            grants: { active: 3, expired: 1, revoked: 0, items_remaining: 40, photos_remaining: 120, suggestions_remaining: 10 },
+            usage: { owners_today: 3, items_used: 40, photos_used: 120, suggestions_used: 10, owners_at_limit: 1 },
             funnel: {
               window_days: 7,
               batches_started: 5,
@@ -339,7 +339,7 @@ describe("Observatory: bulk upload (plan Stage 5)", () => {
               oldest_active_age_ms: null,
               active_stale_lease_recoveries: 0,
             },
-            grants: { active: 0, expired: 0, revoked: 0, items_remaining: 0, photos_remaining: 0, suggestions_remaining: 0 },
+            usage: { owners_today: 0, items_used: 0, photos_used: 0, suggestions_used: 0, owners_at_limit: 0 },
             funnel: {
               window_days: 7,
               batches_started: 0,

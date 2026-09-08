@@ -349,12 +349,11 @@ test.describe("ux baseline", () => {
   });
 
   test("the estate bulk workspace", async ({ page, context, request }, testInfo) => {
-    // New with the bulk-upload pilot (PR #263) — `ensureDemoBulkBatch` mints
-    // its own admission grant for `DEMO_OWNER_TOKEN` (see that module's
-    // header on why there's no self-serve path onto `/bulk` to walk instead)
-    // and seeds one batch: two photos grouped into a filled-in, ready item,
-    // and a third left unassigned in the tray, so Photos shows both halves
-    // of "add and group" at once rather than an empty or an all-grouped tray.
+    // New with the bulk-upload pilot (PR #263) — `ensureDemoBulkBatch`
+    // seeds one batch for `DEMO_OWNER_TOKEN`: two photos grouped into a
+    // filled-in, ready item, and a third left unassigned in the tray, so
+    // Photos shows both halves of "add and group" at once rather than an
+    // empty or an all-grouped tray.
     const batch = await ensureDemoBulkBatch(request);
     await seedOwnerToken(context, DEMO_OWNER_TOKEN);
 
@@ -363,9 +362,9 @@ test.describe("ux baseline", () => {
     await expect(page.getByText("UX baseline — estate batch", { exact: true })).toBeVisible();
     await shot(page, testInfo, "bulk-batches");
 
-    // Started, not submitted: a filled admission code and postcode, one tap
-    // from creating a *second* batch — which this frame deliberately never
-    // does, so the fixture stays idempotent across runs.
+    // Started, not submitted: a filled name and postcode, one tap from
+    // creating a *second* batch — which this frame deliberately never does,
+    // so the fixture stays idempotent across runs.
     await page.goto("/bulk/new");
     await expect(page.getByText("Start clearing a house.")).toBeVisible();
     await page.getByLabel("Batch name").fill("Dad's workshop — October");
@@ -376,7 +375,6 @@ test.describe("ux baseline", () => {
     // baseline look like it had a stuck "0/2000" counter — it was
     // correctly counting the actually-empty field.
     await page.getByLabel("Shared household story (optional)").fill("Everything here belonged to my grandmother, who lived in this house for sixty years.");
-    await page.getByLabel("Admission code").fill(batch.grantId);
     await shot(page, testInfo, "bulk-new");
 
     await page.goto(`/bulk/${batch.clientBatchKey}/photos`);

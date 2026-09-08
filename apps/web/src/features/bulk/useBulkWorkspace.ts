@@ -97,7 +97,7 @@ export type BulkWorkspaceStatus =
   /** Nothing on this device or the server knows this batch. */
   | "not_found"
   /** The API answered every read with `not_found` — `BULK_UPLOAD` is off,
-   * or this device holds no usable grant/owner token for it. Screens must
+   * or this device holds no usable owner token for it. Screens must
    * degrade honestly here rather than looking broken (see this feature's
    * plan). */
   | "unavailable";
@@ -116,8 +116,6 @@ export type SuggestionPreview = {
 export type UseBulkWorkspaceResult = {
   status: BulkWorkspaceStatus;
   state: BulkBatchState;
-  grantId: string;
-  setGrantId: (grantId: string) => void;
   markers: ItemMarkers;
   markerFor: (clientItemId: string) => ItemMarker;
   isSuggestionStale: (clientItemId: string) => boolean;
@@ -200,7 +198,7 @@ async function persistWholeState(driver: BulkStorageDriver, state: BulkBatchStat
   for (const photo of Object.values(state.photos)) await savePhotoMeta(driver, state.batch.clientBatchKey, photo);
 }
 
-export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string): UseBulkWorkspaceResult {
+export function useBulkWorkspace(clientBatchKey: string): UseBulkWorkspaceResult {
   const driver = React.useMemo(() => getDefaultBulkStorageDriver(), []);
   const [status, setStatus] = React.useState<BulkWorkspaceStatus>("loading");
   const [state, dispatch] = React.useReducer(
@@ -208,7 +206,6 @@ export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string)
     clientBatchKey,
     (key) => emptyBulkBatchState(makeBulkBatchMeta(key, { name: "", country: "US", postalCode: "" })),
   );
-  const [grantId, setGrantIdState] = React.useState(initialGrantId);
   const [markers, setMarkers] = React.useState<ItemMarkers>(() => loadItemMarkers(clientBatchKey));
   const [suggestions, setSuggestions] = React.useState<Record<string, PhotoSuggestion>>({});
   const [suggestionLoading, setSuggestionLoading] = React.useState<Record<string, boolean>>({});
@@ -241,12 +238,6 @@ export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string)
     markersRef.current = markers;
     saveItemMarkers(clientBatchKey, markers);
   }, [clientBatchKey, markers]);
-  const grantIdRef = React.useRef(grantId);
-  React.useEffect(() => {
-    grantIdRef.current = grantId;
-    uploadQueueRef.current?.setGrantId(grantId);
-  }, [grantId]);
-
   const attemptedSuggestionRef = React.useRef<Set<string>>(new Set());
   const objectUrlsRef = React.useRef<Set<string>>(new Set());
   const uploadQueueRef = React.useRef<UploadQueue | null>(null);
@@ -314,7 +305,7 @@ export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string)
       batchKey: clientBatchKey,
       driver,
       uploadPhoto: ({ clientPhotoId, full, thumb, width, height, blurhash, signal }) =>
-        bulkApi.uploadBatchPhoto(batchId, clientPhotoId, { full, thumb, width, height, blurhash }, { grantId: grantIdRef.current, signal }),
+        bulkApi.uploadBatchPhoto(batchId, clientPhotoId, { full, thumb, width, height, blurhash }, { signal }),
       onPhotoUpdate: (clientPhotoId, patch) => {
         dispatchSync({ type: "update_photo", clientPhotoId, patch });
         const photo = stateRef.current.photos[clientPhotoId];
@@ -324,7 +315,6 @@ export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string)
       onPause: (resumeAt) => setUploadPausedUntil(resumeAt),
       onResume: () => setUploadPausedUntil(null),
     });
-    queue.setGrantId(grantIdRef.current);
     uploadQueueRef.current = queue;
     void queue.resume(pendingUploadPhotos(stateRef.current));
     return () => {
@@ -336,8 +326,6 @@ export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string)
     // tear down and rebuild the whole pipeline mid-upload.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, state.batch.id, clientBatchKey]);
-
-  const setGrantId = React.useCallback((next: string) => setGrantIdState(next), []);
 
   // ---------------------------------------------------------------------
   // Batch meta
@@ -351,7 +339,7 @@ export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string)
         ...(patch.name !== undefined ? { name: patch.name } : {}),
         ...(patch.sharedStory !== undefined ? { shared_story: patch.sharedStory } : {}),
       };
-      const result = await bulkApi.updateBatch(meta.id, input, { grantId: grantIdRef.current });
+      const result = await bulkApi.updateBatch(meta.id, input);
       if (result.ok) {
         const nextMeta = batchMetaFromSummary(clientBatchKey, result.data);
         dispatchSync({ type: "batch_synced", summary: result.data });
@@ -366,7 +354,7 @@ export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string)
   const cancelBatchFn = React.useCallback(async (): Promise<BulkResult<{ id: string }>> => {
     const meta = stateRef.current.batch;
     if (meta.id === null) return { ok: false, error: { kind: "unexpected", message: "Nothing to cancel yet.", code: "not_found", status: 404 } };
-    const result = await bulkApi.cancelBatch(meta.id, { grantId: grantIdRef.current });
+    const result = await bulkApi.cancelBatch(meta.id);
     if (result.ok) {
       dispatchSync({ type: "patch_batch_meta", patch: { state: "cancelled" } });
       await saveBatchMeta(driver, { ...stateRef.current.batch, state: "cancelled" });
@@ -392,7 +380,7 @@ export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string)
         ...(item.revision !== null ? { expected_revision: item.revision } : {}),
         ...(extra?.photoClientIds !== undefined ? { photo_client_ids: extra.photoClientIds } : {}),
       };
-      const result = await bulkApi.upsertBatchItem(meta.id, clientItemId, input, { grantId: grantIdRef.current });
+      const result = await bulkApi.upsertBatchItem(meta.id, clientItemId, input);
       if (result.ok) {
         dispatchSync({ type: "item_synced", summary: result.data });
         await persistItemRecord(driver, clientBatchKey, itemFromSummary(result.data));
@@ -447,7 +435,7 @@ export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string)
       await deletePhotoRecord(driver, clientBatchKey, clientPhotoId);
       const meta = stateRef.current.batch;
       if (meta.id !== null && photo !== undefined) {
-        await bulkApi.deleteBatchPhoto(meta.id, clientPhotoId, { grantId: grantIdRef.current });
+        await bulkApi.deleteBatchPhoto(meta.id, clientPhotoId);
       }
     },
     // `applyLocalPlan` is a plain function declaration below (not a
@@ -577,7 +565,7 @@ export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string)
       dispatchSync({ type: "remove_item", clientItemId: itemClientId });
       await deleteItemRecord(driver, clientBatchKey, itemClientId);
       const meta = stateRef.current.batch;
-      if (meta.id !== null) await bulkApi.deleteBatchItem(meta.id, itemClientId, { grantId: grantIdRef.current });
+      if (meta.id !== null) await bulkApi.deleteBatchItem(meta.id, itemClientId);
     },
     // See `removePhoto`'s identical comment: `persistPhotoOwnerPatches` only
     // closes over stable values.
@@ -640,7 +628,7 @@ export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string)
     attemptedSuggestionRef.current.add(attemptKey);
 
     setSuggestionLoading((s) => ({ ...s, [itemClientId]: true }));
-    const result = await bulkApi.suggestBatchPhoto(meta.id, coverClientPhotoId, { grantId: grantIdRef.current });
+    const result = await bulkApi.suggestBatchPhoto(meta.id, coverClientPhotoId);
     setSuggestionLoading((s) => ({ ...s, [itemClientId]: false }));
     // A failed or unavailable suggestion (kind !== "ok", or ok with a null
     // model answer) must never block review/submission — the item is left
@@ -769,7 +757,7 @@ export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string)
     if (items.length === 0) {
       return { ok: false, error: { kind: "unexpected", message: "Nothing selected is ready to submit.", code: "bad_request", status: 400 } };
     }
-    const result = await bulkApi.submitBatch(meta.id, { op_key: makeBulkClientId("submit"), date_of_birth: dateOfBirth, items }, { grantId: grantIdRef.current });
+    const result = await bulkApi.submitBatch(meta.id, { op_key: makeBulkClientId("submit"), date_of_birth: dateOfBirth, items });
     if (result.ok) setOperations((ops) => [result.data, ...ops]);
     return result;
   }, []);
@@ -777,8 +765,6 @@ export function useBulkWorkspace(clientBatchKey: string, initialGrantId: string)
   return {
     status,
     state,
-    grantId,
-    setGrantId,
     markers,
     markerFor: (itemClientId) => markerFor(markers, itemClientId),
     isSuggestionStale: (itemClientId) => isSuggestionStale(markers, itemClientId, state.items[itemClientId]?.photoClientIds[0] ?? null),

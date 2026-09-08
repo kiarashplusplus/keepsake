@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import type { Observatory } from "@keepsake/contracts/observatory";
 import { runBulkOperation } from "../src/bulk/submit.js";
 import { ulid } from "../src/lib/ids.js";
+import { todayISO } from "../src/lib/day.js";
 import { insertOwner, readOk, setTestEnvVar } from "./helpers.js";
 
 const ADMIN_TOKEN = "test-admin-token-observatory-bulk";
@@ -129,35 +130,23 @@ async function insertBatchPhoto(options: InsertPhotoRowOptions): Promise<string>
   return id;
 }
 
-interface InsertGrantOptions {
+interface InsertUsageOptions {
   ownerId: string;
-  itemsRemaining?: number;
-  photosRemaining?: number;
-  suggestionsRemaining?: number;
-  expiresAt?: number;
-  revokedAt?: number | null;
+  day?: string;
+  itemsUsed?: number;
+  photosUsed?: number;
+  suggestionsUsed?: number;
 }
 
-async function insertGrant(options: InsertGrantOptions): Promise<string> {
-  const id = ulid();
-  const now = Date.now();
+/** One `bulk_owner_usage` row — the ceiling the Observatory's usage panel
+ * reports against, and the only place bulk spending is recorded now that
+ * the admission grant is gone. */
+async function insertUsage(options: InsertUsageOptions): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO bulk_grants
-       (id, owner_id, batch_id, items_remaining, photos_remaining, suggestions_remaining, issued_by, expires_at, revoked_at, created_at)
-     VALUES (?, ?, NULL, ?, ?, ?, 'admin', ?, ?, ?)`,
+    `INSERT INTO bulk_owner_usage (owner_id, day, items_used, photos_used, suggestions_used) VALUES (?, ?, ?, ?, ?)`,
   )
-    .bind(
-      id,
-      options.ownerId,
-      options.itemsRemaining ?? 10,
-      options.photosRemaining ?? 30,
-      options.suggestionsRemaining ?? 5,
-      options.expiresAt ?? now + 72 * 3_600_000,
-      options.revokedAt ?? null,
-      now,
-    )
+    .bind(options.ownerId, options.day ?? todayISO(), options.itemsUsed ?? 0, options.photosUsed ?? 0, options.suggestionsUsed ?? 0)
     .run();
-  return id;
 }
 
 interface InsertOperationOptions {
@@ -290,23 +279,33 @@ describe("GET /api/admin/observatory: app.bulk", () => {
     expect(data.drafts.photos_stored).toBeGreaterThanOrEqual(2);
   });
 
-  it("sums grant admission by lifecycle state: active, expired, revoked", async () => {
+  it("sums today's usage, and counts an owner who has hit a ceiling", async () => {
     setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
-    const ownerId = await insertOwner();
-    const now = Date.now();
-
     const before = await bulk();
-    await insertGrant({ ownerId, itemsRemaining: 7, photosRemaining: 21, suggestionsRemaining: 3 });
-    await insertGrant({ ownerId, expiresAt: now - 3_600_000 }); // expired
-    await insertGrant({ ownerId, revokedAt: now - 60_000 }); // revoked
+
+    await insertUsage({ ownerId: await insertOwner(), itemsUsed: 7, photosUsed: 21, suggestionsUsed: 3 });
+    // At the item ceiling (`BULK_OWNER_DAILY_ITEMS`, pinned at 150 by
+    // `vitest.config.ts`) — the one number on this panel worth an alert,
+    // because this caller's next item is refused until UTC midnight.
+    await insertUsage({ ownerId: await insertOwner(), itemsUsed: 150 });
 
     const after = await bulk();
-    expect(after.grants.active).toBe(before.grants.active + 1);
-    expect(after.grants.expired).toBe(before.grants.expired + 1);
-    expect(after.grants.revoked).toBe(before.grants.revoked + 1);
-    expect(after.grants.items_remaining).toBe(before.grants.items_remaining + 7);
-    expect(after.grants.photos_remaining).toBe(before.grants.photos_remaining + 21);
-    expect(after.grants.suggestions_remaining).toBe(before.grants.suggestions_remaining + 3);
+    expect(after.usage.owners_today).toBe(before.usage.owners_today + 2);
+    expect(after.usage.items_used).toBe(before.usage.items_used + 157);
+    expect(after.usage.photos_used).toBe(before.usage.photos_used + 21);
+    expect(after.usage.suggestions_used).toBe(before.usage.suggestions_used + 3);
+    expect(after.usage.owners_at_limit).toBe(before.usage.owners_at_limit + 1);
+  });
+
+  it("ignores another day's usage — the panel answers 'today', not 'ever'", async () => {
+    setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+    const before = await bulk();
+
+    await insertUsage({ ownerId: await insertOwner(), day: "2001-01-01", itemsUsed: 99, photosUsed: 99, suggestionsUsed: 99 });
+
+    const after = await bulk();
+    expect(after.usage.owners_today).toBe(before.usage.owners_today);
+    expect(after.usage.items_used).toBe(before.usage.items_used);
   });
 
   // Ordered before every other `bulk_operations` test in this file: D1

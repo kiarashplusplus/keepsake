@@ -24,8 +24,6 @@ export function makeWorkspaceFixture(overrides: Partial<UseBulkWorkspaceResult> 
   return {
     status: "ready",
     state: fixtureBatchState(),
-    grantId: "grant-1",
-    setGrantId: jest.fn(),
     markers: {},
     markerFor: jest.fn(() => EMPTY_ITEM_MARKER),
     isSuggestionStale: jest.fn(() => false),

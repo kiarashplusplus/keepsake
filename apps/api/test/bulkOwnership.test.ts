@@ -10,9 +10,8 @@ import { describe, expect, it } from "vitest";
 import { bulkRoutes } from "../src/routes/bulk.js";
 import { ulid } from "../src/lib/ids.js";
 import { sha256Hex } from "../src/lib/digest.js";
-import { authHeaders, fakeFile, fakeJpegBytes, freshClientIp, freshOwnerToken, readOk, seedStandardPostalCodes, setTestEnvVar } from "./helpers.js";
+import { authHeaders, fakeFile, fakeJpegBytes, freshClientIp, freshOwnerToken, readOk, seedStandardPostalCodes } from "./helpers.js";
 
-const ADMIN_TOKEN = "test-admin-token-bulk-ownership";
 const VALID_STORY = "This belonged to my grandmother, and I would love for it to find a new home.";
 
 async function seedOwner(token: string): Promise<string> {
@@ -25,22 +24,8 @@ async function seedOwner(token: string): Promise<string> {
   return id;
 }
 
-interface GrantSummary {
-  id: string;
-}
-
-async function mintGrant(ownerId: string): Promise<GrantSummary> {
-  setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
-  const res = await SELF.fetch("http://x/api/admin/bulk/grants", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json", "CF-Connecting-IP": freshClientIp() },
-    body: JSON.stringify({ owner_id: ownerId }),
-  });
-  return readOk<GrantSummary>(res);
-}
-
-function bulkHeaders(token: string, grantId?: string): Record<string, string> {
-  return { ...authHeaders(token), "Content-Type": "application/json", ...(grantId ? { "x-bulk-grant": grantId } : {}) };
+function bulkHeaders(token: string): Record<string, string> {
+  return { ...authHeaders(token), "Content-Type": "application/json" };
 }
 
 async function bulk(path: string, init: RequestInit = {}): Promise<Response> {
@@ -74,16 +59,14 @@ describe("estate bulk upload: ownership", () => {
     await seedStandardPostalCodes();
 
     const tokenA = freshOwnerToken();
-    const ownerA = await seedOwner(tokenA);
-    const grantA = await mintGrant(ownerA);
+    await seedOwner(tokenA);
 
     const tokenB = freshOwnerToken();
-    const ownerB = await seedOwner(tokenB);
-    const grantB = await mintGrant(ownerB);
+    await seedOwner(tokenB);
 
     const createRes = await bulk("/batches", {
       method: "POST",
-      headers: bulkHeaders(tokenA, grantA.id),
+      headers: bulkHeaders(tokenA),
       body: JSON.stringify({ client_batch_key: "owner-a-estate", name: "Owner A's estate", country: "US", postal_code: "02144" }),
     });
     expect(createRes.status).toBe(201);
@@ -91,7 +74,7 @@ describe("estate bulk upload: ownership", () => {
 
     const createItemRes = await bulk(`/batches/${batch.id}/items/item-1`, {
       method: "PUT",
-      headers: bulkHeaders(tokenA, grantA.id),
+      headers: bulkHeaders(tokenA),
       body: JSON.stringify({ fields: { title: "A quiet teacup", story: VALID_STORY, category: "home_kitchen" } }),
     });
     expect(createItemRes.status).toBe(201);
@@ -99,26 +82,26 @@ describe("estate bulk upload: ownership", () => {
 
     const uploadRes = await bulk(`/batches/${batch.id}/photos/photo-1`, {
       method: "PUT",
-      headers: { ...authHeaders(tokenA), "x-bulk-grant": grantA.id },
+      headers: authHeaders(tokenA),
       body: photoForm(),
     });
     expect(uploadRes.status).toBe(201);
     const photo = await readOk<PhotoBody>(uploadRes);
 
-    // --- Owner B, holding their own valid grant, reaches for A's batch ---
+    // --- Owner B, with their own owner token, reaches for A's batch ---
     const getAsB = await bulk(`/batches/${batch.id}`, { headers: bulkHeaders(tokenB) });
     expect(getAsB.status).toBe(404);
 
     const patchAsB = await bulk(`/batches/${batch.id}`, {
       method: "PATCH",
-      headers: bulkHeaders(tokenB, grantB.id),
+      headers: bulkHeaders(tokenB),
       body: JSON.stringify({ expected_revision: 1, name: "Hijacked" }),
     });
     expect(patchAsB.status).toBe(404);
 
     const putItemAsB = await bulk(`/batches/${batch.id}/items/item-2`, {
       method: "PUT",
-      headers: bulkHeaders(tokenB, grantB.id),
+      headers: bulkHeaders(tokenB),
       body: JSON.stringify({ fields: { title: "Stolen item", story: VALID_STORY, category: "other" } }),
     });
     expect(putItemAsB.status).toBe(404);
@@ -128,7 +111,7 @@ describe("estate bulk upload: ownership", () => {
 
     const uploadAsB = await bulk(`/batches/${batch.id}/photos/photo-2`, {
       method: "PUT",
-      headers: { ...authHeaders(tokenB), "x-bulk-grant": grantB.id },
+      headers: authHeaders(tokenB),
       body: photoForm(),
     });
     expect(uploadAsB.status).toBe(404);
@@ -166,12 +149,11 @@ describe("estate bulk upload: ownership", () => {
     await seedStandardPostalCodes();
 
     const token = freshOwnerToken();
-    const ownerId = await seedOwner(token);
-    const grant = await mintGrant(ownerId);
+    await seedOwner(token);
 
     const createRes = await bulk("/batches", {
       method: "POST",
-      headers: bulkHeaders(token, grant.id),
+      headers: bulkHeaders(token),
       body: JSON.stringify({ client_batch_key: "feed-check", name: "Estate", country: "US", postal_code: "02144" }),
     });
     const batch = await readOk<BatchBody>(createRes);
@@ -179,7 +161,7 @@ describe("estate bulk upload: ownership", () => {
     const uniqueTitle = `Never in the feed ${ulid()}`;
     const itemRes = await bulk(`/batches/${batch.id}/items/only-item`, {
       method: "PUT",
-      headers: bulkHeaders(token, grant.id),
+      headers: bulkHeaders(token),
       body: JSON.stringify({ fields: { title: uniqueTitle, story: VALID_STORY, category: "other" } }),
     });
     expect(itemRes.status).toBe(201);
