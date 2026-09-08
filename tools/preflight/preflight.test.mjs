@@ -9,11 +9,12 @@
 // Run with: node --test tools/preflight/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { brotliCompressSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -39,6 +40,9 @@ import {
   callArguments,
   extractWorkflowRunBlocks,
   fontVersionToken,
+  parseIconGlyphs,
+  parseHtmlIconCodepoints,
+  woff2Codepoints,
 } from "./preflight.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -2135,4 +2139,480 @@ jobs:
 test("gh-repo-context skips a tree with no workflows rather than passing it", () => {
   const result = runOne("gh-repo-context", { "README.md": "# nothing here\n" });
   assert.equal(result.status, "skip");
+});
+
+// ── workflow-validity ────────────────────────────────────────────────────
+//
+// Issue #270: five commits merged and deployed to preview off a `ci.yml` run
+// with zero jobs, because `ci-complete`'s `needs` list named an `e2e` job a
+// prior commit had deleted. GitHub rejects that at workflow start — the run
+// never produces a single job, so nothing job-level (ci-complete included)
+// can ever see it. This check parses every workflow file for the classes of
+// invalidity that produce that shape, without a YAML parser (this module is
+// zero-dependency on purpose — see `splitWorkflowJobs`'s own comment).
+
+const GOOD_TWO_JOB_WORKFLOW = `name: Two
+on:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo building
+  test:
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - run: echo testing
+`;
+
+test("workflow-validity: passes for a well-formed multi-job workflow", () => {
+  const result = runOne("workflow-validity", { ".github/workflows/two.yml": GOOD_TWO_JOB_WORKFLOW });
+  assert.equal(result.status, "pass");
+  assert.match(result.details[0], /1 workflow file\(s\), 2 job\(s\)/);
+});
+
+test("workflow-validity: this repository's real workflows are all valid", () => {
+  const result = runChecks(["workflow-validity"], REPO_ROOT)[0];
+  assert.equal(result.status, "pass", JSON.stringify(result.details));
+});
+
+test("workflow-validity: reproduces #270 — needs names a job deleted from the same file", () => {
+  const broken = GOOD_TWO_JOB_WORKFLOW.replace("needs: [build]", "needs: [build, e2e]");
+  const result = runOne("workflow-validity", { ".github/workflows/two.yml": broken });
+  assert.equal(result.status, "fail");
+  assert.match(result.details[0], /job "test" `needs:` "e2e", which is not a job in this file/);
+  assert.match(result.details[0], /#270/);
+});
+
+test("workflow-validity: goes red when ci-complete's real needs list outlives a deleted e2e job", () => {
+  // The actual incident, replayed against this repository's real ci.yml: cut
+  // the e2e job (the same edit 058d4e6 made) and leave ci-complete's `needs`
+  // naming it.
+  const real = readFileSync(path.join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
+  const lines = real.split("\n");
+  const start = lines.findIndex((l) => /^ {2}e2e:\s*$/.test(l));
+  assert.ok(start !== -1, "fixture assumption: real ci.yml has a top-level `e2e:` job");
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^ {2}[A-Za-z_][A-Za-z0-9_-]*:\s*$/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  const withoutE2e = [...lines.slice(0, start), ...lines.slice(end)].join("\n");
+
+  const good = runOne("workflow-validity", { ".github/workflows/ci.yml": real });
+  assert.equal(good.status, "pass");
+
+  const brokenResult = runOne("workflow-validity", { ".github/workflows/ci.yml": withoutE2e });
+  assert.equal(brokenResult.status, "fail");
+  assert.match(brokenResult.details.join("\n"), /job "ci-complete" `needs:` "e2e"/);
+});
+
+test("workflow-validity: fails when a job has neither runs-on nor uses", () => {
+  const result = runOne("workflow-validity", {
+    ".github/workflows/bad.yml": `name: Bad
+on: [push]
+jobs:
+  ghost:
+    steps:
+      - run: echo hi
+`,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details[0], /job "ghost" has neither `runs-on:` nor `uses:`/);
+});
+
+test("workflow-validity: a reusable-workflow-call job (uses:, no runs-on:) is fine", () => {
+  const result = runOne("workflow-validity", {
+    ".github/workflows/caller.yml": `name: Caller
+on: [push]
+jobs:
+  call:
+    uses: ./.github/workflows/two.yml
+`,
+  });
+  assert.equal(result.status, "pass");
+});
+
+test("workflow-validity: fails when jobs: is missing entirely", () => {
+  const result = runOne("workflow-validity", {
+    ".github/workflows/nojobs.yml": `name: NoJobs
+on: [push]
+`,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details[0], /no top-level `jobs:`/);
+});
+
+test("workflow-validity: fails when on: is missing entirely", () => {
+  const result = runOne("workflow-validity", {
+    ".github/workflows/noon.yml": `name: NoOn
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi
+`,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details[0], /no top-level `on:`/);
+});
+
+test("workflow-validity: fails on a duplicate top-level key", () => {
+  const result = runOne("workflow-validity", {
+    ".github/workflows/dup.yml": `name: Dup
+on: [push]
+on:
+  push:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi
+`,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details[0], /top-level key "on" is declared 2 times/);
+});
+
+test("workflow-validity: fails on a duplicate job name", () => {
+  const result = runOne("workflow-validity", {
+    ".github/workflows/dupjob.yml": `name: DupJob
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo one
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo two
+`,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /job "build" is declared more than once/);
+});
+
+test("workflow-validity: fails on a duplicate key within one job", () => {
+  const result = runOne("workflow-validity", {
+    ".github/workflows/dupkey.yml": `name: DupKey
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    steps:
+      - run: echo hi
+`,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /job "build" declares "runs-on" 2 times/);
+});
+
+test("workflow-validity: fails on a tab used for indentation", () => {
+  const result = runOne("workflow-validity", {
+    ".github/workflows/tabbed.yml": "name: Tabbed\non: [push]\njobs:\n  build:\n\t\truns-on: ubuntu-latest\n",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details[0], /indented with a tab/);
+});
+
+test("workflow-validity: needs accepts the scalar and block-list forms too, not just flow", () => {
+  const scalar = runOne("workflow-validity", {
+    ".github/workflows/scalar.yml": `name: Scalar
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps: [{ run: echo hi }]
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    steps: [{ run: echo hi }]
+`,
+  });
+  assert.equal(scalar.status, "pass");
+
+  const blockList = runOne("workflow-validity", {
+    ".github/workflows/block.yml": `name: Block
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps: [{ run: echo hi }]
+  lint:
+    runs-on: ubuntu-latest
+    steps: [{ run: echo hi }]
+  test:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - lint
+    steps: [{ run: echo hi }]
+`,
+  });
+  assert.equal(blockList.status, "pass");
+
+  const brokenBlock = runOne("workflow-validity", {
+    ".github/workflows/block-broken.yml": `name: BlockBroken
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps: [{ run: echo hi }]
+  test:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - ghost
+    steps: [{ run: echo hi }]
+`,
+  });
+  assert.equal(brokenBlock.status, "fail");
+  assert.match(brokenBlock.details[0], /job "test" `needs:` "ghost"/);
+});
+
+test("workflow-validity: skips a tree with no workflow files", () => {
+  const result = runOne("workflow-validity", { "README.md": "# nothing here\n" });
+  assert.equal(result.status, "skip");
+});
+
+test("workflow-validity: skips when .github/workflows is not present", () => {
+  const result = runOne("workflow-validity", {});
+  assert.equal(result.status, "skip");
+});
+
+// ── icon-glyphs ────────────────────────────────────────────────────────
+//
+// Issue #277: `Icon.tsx`'s `GLYPHS` map and `Ionicons-subset.woff2`'s actual
+// `cmap` have to agree, and only one direction was ever checked (`tsc` on an
+// `icon="…"` name missing from `GLYPHS`). A name *in* `GLYPHS` whose
+// codepoint was never subset into the font typechecks, lints and exports
+// clean, and renders a tofu box — it already shipped once (`star-outline`,
+// #263/#265), caught only by luck of PR ordering.
+//
+// No real font binary is fixture-committed: these build a minimal, real
+// WOFF2 file (Brotli-compressed, spec-shaped table directory, a genuine
+// `cmap` format-4 subtable) with `node:zlib`'s `brotliCompressSync`, so the
+// tests exercise the exact decode path `woff2Codepoints` (Brotli-decompress,
+// then parse) uses against the real font in production.
+
+/** WOFF2's UIntBase128 (spec §5.2), the encoder side of the decoder
+ * `readUIntBase128` inside preflight.mjs implements. */
+function encodeUIntBase128(value) {
+  let v = value;
+  const chunks = [v & 0x7f];
+  v = Math.floor(v / 128);
+  while (v > 0) {
+    chunks.push(v & 0x7f);
+    v = Math.floor(v / 128);
+  }
+  chunks.reverse();
+  return Buffer.from(chunks.map((c, i) => (i < chunks.length - 1 ? c | 0x80 : c)));
+}
+
+/** A `cmap` table containing exactly one format-4 subtable (platform 3,
+ * encoding 1 — Windows BMP, the form pyftsubset actually emits) that maps
+ * each of `codepoints` to a distinct nonzero glyph id, plus the required
+ * `0xffff` terminator segment. */
+function buildCmapFormat4(codepointsIn) {
+  const cps = [...new Set(codepointsIn)].sort((a, b) => a - b);
+  const segCount = cps.length + 1;
+  const segCountX2 = segCount * 2;
+  const endCodes = [...cps, 0xffff];
+  const startCodes = [...cps, 0xffff];
+  const idDeltas = [...cps.map((cp, i) => (i + 1 - cp) & 0xffff), 1];
+  const idRangeOffsets = new Array(segCount).fill(0);
+
+  const length = 16 + 8 * segCount;
+  const buf = Buffer.alloc(length);
+  buf.writeUInt16BE(4, 0); // format
+  buf.writeUInt16BE(length, 2);
+  buf.writeUInt16BE(0, 4); // language
+  buf.writeUInt16BE(segCountX2, 6);
+  for (let s = 0; s < segCount; s += 1) buf.writeUInt16BE(endCodes[s], 14 + s * 2);
+  // 14 + segCountX2 is reservedPad, left zero.
+  for (let s = 0; s < segCount; s += 1) buf.writeUInt16BE(startCodes[s], 16 + segCountX2 + s * 2);
+  for (let s = 0; s < segCount; s += 1) buf.writeInt16BE(idDeltas[s], 16 + 2 * segCountX2 + s * 2);
+  for (let s = 0; s < segCount; s += 1) buf.writeUInt16BE(idRangeOffsets[s], 16 + 3 * segCountX2 + s * 2);
+
+  const cmapHeader = Buffer.alloc(12);
+  cmapHeader.writeUInt16BE(0, 0); // version
+  cmapHeader.writeUInt16BE(1, 2); // numTables (encoding records)
+  cmapHeader.writeUInt16BE(3, 4); // platformID
+  cmapHeader.writeUInt16BE(1, 6); // encodingID
+  cmapHeader.writeUInt32BE(12, 8); // subtable offset (right after this one record)
+  return Buffer.concat([cmapHeader, buf]);
+}
+
+/** A minimal, real WOFF2 file carrying exactly one table — `cmap` — mapping
+ * `codepoints`. Good enough to exercise `woff2Codepoints`'s whole decode
+ * path (header, table directory, Brotli, cmap parse) without a real font. */
+function buildTestWoff2(codepoints) {
+  const cmapTable = buildCmapFormat4(codepoints);
+  const compressed = brotliCompressSync(cmapTable);
+  const dirEntry = Buffer.concat([Buffer.from([0x00]), encodeUIntBase128(cmapTable.length)]); // flags=0x00: known tag index 0 ("cmap"), transform version 0 (irrelevant for cmap)
+  const header = Buffer.alloc(48);
+  header.write("wOF2", 0, "ascii");
+  header.write("true", 4, "ascii"); // flavor: unused by the decoder
+  header.writeUInt32BE(48 + dirEntry.length + compressed.length, 8); // length
+  header.writeUInt16BE(1, 12); // numTables
+  header.writeUInt32BE(compressed.length, 20); // totalCompressedSize
+  header.writeUInt16BE(1, 24); // majorVersion
+  return Buffer.concat([header, dirEntry, compressed]);
+}
+
+const ICON_CODEPOINTS = [0xf229, 0xf23b, 0xf24a, 0xf5f6, 0xf5ad, 0xf460, 0xf28c, 0xf599];
+
+function iconTsxGood({ entries = null } = {}) {
+  const glyphLines = (
+    entries ?? [
+      ["chevron-back", 0xf229],
+      ["chevron-forward", 0xf23b],
+      ["close", 0xf24a],
+      ["trash-outline", 0xf5f6],
+      ["sunny", 0xf5ad],
+      ["moon", 0xf460],
+      ["contrast", 0xf28c],
+      ["star-outline", 0xf599],
+    ]
+  )
+    .map(([name, cp]) => `  "${name}": "\\u${cp.toString(16)}",`)
+    .join("\n");
+  return `const GLYPHS = {\n${glyphLines}\n} as const;\n`;
+}
+
+// Double-quoted, not a template literal: the real comment's escaped
+// backticks (`` \`f229\` ``, literal in +html.tsx because that comment sits
+// inside a JS template literal there) would otherwise collide with this
+// file's own backtick-delimited strings.
+const HTML_ICON_COMMENT_GOOD =
+  "/* The app's only icon glyphs — chevron-back/-forward, close, trash-outline,\n" +
+  "   sunny, moon, contrast, star-outline (src/ui/Icon.tsx) — subset with\n" +
+  "   (\\`f229\\`, \\`f23b\\`, \\`f24a\\`, \\`f5f6\\`, \\`f5ad\\`, \\`f460\\`, \\`f28c\\`, \\`f599\\`)\n" +
+  "*/\n";
+
+test("woff2Codepoints: decodes a real (synthetic) WOFF2 file's cmap", () => {
+  const buf = buildTestWoff2(ICON_CODEPOINTS);
+  const cps = woff2Codepoints(buf);
+  assert.deepEqual([...cps].sort((a, b) => a - b), [...ICON_CODEPOINTS].sort((a, b) => a - b));
+});
+
+test("woff2Codepoints: this repository's real Ionicons-subset.woff2 carries exactly Icon.tsx's 8 codepoints", () => {
+  const buf = readFileSync(path.join(REPO_ROOT, "apps/web/public/fonts/Ionicons-subset.woff2"));
+  const cps = woff2Codepoints(buf);
+  assert.deepEqual([...cps].sort((a, b) => a - b), [...ICON_CODEPOINTS].sort((a, b) => a - b));
+});
+
+test("woff2Codepoints: throws with a reason on a non-WOFF2 buffer rather than misreading it", () => {
+  assert.throws(() => woff2Codepoints(Buffer.from("not a font")), /bad signature/);
+});
+
+test("parseIconGlyphs: reads name -> codepoint out of the GLYPHS block", () => {
+  const glyphs = parseIconGlyphs(iconTsxGood());
+  assert.equal(glyphs.size, 8);
+  assert.equal(glyphs.get("chevron-back"), 0xf229);
+  assert.equal(glyphs.get("star-outline"), 0xf599);
+});
+
+test("parseIconGlyphs: null when there's no GLYPHS block at all", () => {
+  assert.equal(parseIconGlyphs("export const NOTHING = 1;\n"), null);
+});
+
+test("parseHtmlIconCodepoints: reads the backslash-escaped-backtick codepoint list", () => {
+  const codepoints = parseHtmlIconCodepoints(HTML_ICON_COMMENT_GOOD);
+  assert.deepEqual(codepoints.sort((a, b) => a - b), [...ICON_CODEPOINTS].sort((a, b) => a - b));
+});
+
+test("parseHtmlIconCodepoints: null when the anchor comment is gone", () => {
+  assert.equal(parseHtmlIconCodepoints("/* some other comment */\n"), null);
+});
+
+test("icon-glyphs: passes when every GLYPHS codepoint is in the font and the html comment matches", () => {
+  const result = runOne("icon-glyphs", {
+    "apps/web/src/ui/Icon.tsx": iconTsxGood(),
+    "apps/web/public/fonts/Ionicons-subset.woff2": buildTestWoff2(ICON_CODEPOINTS),
+    "apps/web/app/+html.tsx": HTML_ICON_COMMENT_GOOD,
+  });
+  assert.equal(result.status, "pass", JSON.stringify(result.details));
+  assert.match(result.details[0], /8 GLYPHS entry\(ies\)/);
+});
+
+test("icon-glyphs: this repository's real Icon.tsx and font agree", () => {
+  const result = runChecks(["icon-glyphs"], REPO_ROOT)[0];
+  assert.equal(result.status, "pass", JSON.stringify(result.details));
+});
+
+test("icon-glyphs: reproduces #277 — a ninth GLYPHS entry with no matching codepoint in the font", () => {
+  const entries = [
+    ["chevron-back", 0xf229],
+    ["chevron-forward", 0xf23b],
+    ["close", 0xf24a],
+    ["trash-outline", 0xf5f6],
+    ["sunny", 0xf5ad],
+    ["moon", 0xf460],
+    ["contrast", 0xf28c],
+    ["star-outline", 0xf599],
+    ["settings-outline", 0xf4a9], // never subset into the font — the incident's shape
+  ];
+  const result = runOne("icon-glyphs", {
+    "apps/web/src/ui/Icon.tsx": iconTsxGood({ entries }),
+    "apps/web/public/fonts/Ionicons-subset.woff2": buildTestWoff2(ICON_CODEPOINTS),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details[0], /GLYPHS\["settings-outline"\].*U\+F4A9/);
+  assert.match(result.details[0], /tofu box/);
+});
+
+test("icon-glyphs: warns (does not fail) when the font carries a codepoint nothing declares", () => {
+  const result = runOne("icon-glyphs", {
+    "apps/web/src/ui/Icon.tsx": iconTsxGood({ entries: [["close", 0xf24a]] }),
+    "apps/web/public/fonts/Ionicons-subset.woff2": buildTestWoff2([0xf24a, 0xf000]),
+  });
+  assert.equal(result.status, "warn");
+  assert.match(result.details[0], /maps U\+F000, which nothing.*declares/);
+});
+
+test("icon-glyphs: fails when +html.tsx's hand-written codepoint list has drifted from GLYPHS", () => {
+  const staleHtml =
+    "/* The app's only icon glyphs — subset with\n" +
+    "   (\\`f229\\`, \\`f23b\\`, \\`f24a\\`)\n" +
+    "*/\n";
+  const result = runOne("icon-glyphs", {
+    "apps/web/src/ui/Icon.tsx": iconTsxGood({
+      entries: [
+        ["chevron-back", 0xf229],
+        ["chevron-forward", 0xf23b],
+        ["close", 0xf24a],
+        ["star-outline", 0xf599],
+      ],
+    }),
+    "apps/web/public/fonts/Ionicons-subset.woff2": buildTestWoff2([0xf229, 0xf23b, 0xf24a, 0xf599]),
+    "apps/web/app/+html.tsx": staleHtml,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /hand-written codepoint list has drifted.*missing f599/);
+});
+
+test("icon-glyphs: skips when Icon.tsx is not present", () => {
+  const result = runOne("icon-glyphs", {});
+  assert.equal(result.status, "skip");
+});
+
+test("icon-glyphs: skips when the font file is not present", () => {
+  const result = runOne("icon-glyphs", { "apps/web/src/ui/Icon.tsx": iconTsxGood() });
+  assert.equal(result.status, "skip");
+});
+
+test("icon-glyphs: fails rather than passes when GLYPHS cannot be found at all", () => {
+  const result = runOne("icon-glyphs", {
+    "apps/web/src/ui/Icon.tsx": "export const NOTHING = 1;\n",
+    "apps/web/public/fonts/Ionicons-subset.woff2": buildTestWoff2(ICON_CODEPOINTS),
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details[0], /could not find a non-empty/);
 });

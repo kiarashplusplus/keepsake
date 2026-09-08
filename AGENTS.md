@@ -128,7 +128,7 @@ environment secrets, which no session can read back (the GitHub secrets API retu
 
 **A passing test is not evidence. Verify the artifact.**
 
-This project has shipped eleven separate checks that could not fail:
+This project has shipped twelve separate checks that could not fail:
 
 | What looked fine | What was actually true |
 |---|---|
@@ -143,6 +143,7 @@ This project has shipped eleven separate checks that could not fail:
 | `PASS cron-triggers  3 cron(s) valid` | It read `wrangler.toml` and `index.ts`. `cron/registry.ts` — the file `/api/admin/health` and the daily digest actually read, and which two documents said this check tied to the other two — was never opened. Renaming a job and moving its schedule in the registry alone still reported three valid crons, naming the *old* schedules (#176). |
 | A documented, executed, verified D1 backup | The `--table` list was hard-coded and went stale when `0006_aspects.sql` landed, so no export contained any listing's aspects — and because `listings.aspects_backfilled_at` *is* in the export, every restored listing said "already done" and its aspects could never be re-derived. The restore closed its own recovery path. The runbook glob-loops the *migrations* to avoid exactly this, one paragraph away (#164). |
 | `[verify-public-env] 4 value(s) present in the bundle` | It built its expectation set by filtering `process.env`, so a variable `deploy.yml` forgot to pass was absent from the expectations too and could never be reported missing. It could only verify what had already been passed correctly — structurally blind to the shape of the bot-check incident two rows above. Three Google Ads ids shipped as `""` in every deployed bundle, and a legal document asserted the tag was live (#175). |
+| Five commits merged to `main` and deployed to preview, nothing job-level ever ran | Not a job going red — a workflow that failed to *start*. `058d4e6` deleted `ci.yml`'s `e2e` job but left `ci-complete`'s `needs` list still naming it, and a `needs` entry naming a job that does not exist is invalid before GitHub runs a single job: the run's conclusion was `failure`, but it carried **zero jobs**, so `ci-complete` — the one job meant to catch exactly this family of thing — never executed, because a run with no jobs runs no guard. `deploy.yml` has no `needs:` on CI at all, so all five shipped to preview anyway. The tell was easy to miss: GitHub labels a startup-failed run by the workflow *path* (`.github/workflows/ci.yml`) rather than its `name:` (`CI`), which only shows up if you already know to look for it. Fixed by a new preflight check, `workflow-validity`, that parses every `.github/workflows/*.yml` for the classes of invalidity GitHub rejects at start — a `needs` entry naming a nonexistent job foremost among them — so the broken file cannot merge in the first place (#270). |
 
 So: when you add a guard, **break the code and watch the guard fail**, then restore. Say in the
 issue comment which one you broke. This applies to observability too, and is why

@@ -14,6 +14,7 @@
 // the build), 1 if any check fails.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { brotliDecompressSync } from "node:zlib";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -304,6 +305,299 @@ function checkFonts(ctx) {
     details: [
       `${referenced.size} font file(s) referenced, all present, all at ?v=${expected}`,
       `${[...referenced].filter((f) => f.endsWith(".woff2")).length} woff2 ahead of ${[...referenced].filter((f) => f.endsWith(".ttf")).length} ttf fallback(s)`,
+    ],
+  };
+}
+
+// ── icon-glyphs ────────────────────────────────────────────────────────
+//
+// Issue #277. `Icon.tsx`'s own header says it: "this map is the one place
+// both have to agree" — `GLYPHS` and `Ionicons-subset.woff2`'s actual glyph
+// set. Only one direction was ever checked: `tsc` catches an `icon="…"` name
+// missing from `GLYPHS`, because that is a type error. Nothing caught the
+// other direction — a name *in* `GLYPHS` whose codepoint was never subset
+// into the font. That typechecks, lints, unit-tests and exports clean, and
+// renders a tofu box in the browser. It already shipped once (`star-outline`,
+// #263/#265) and was only caught because the *other* check happened to fail
+// first, by luck of PR ordering.
+//
+// This decodes the real WOFF2 file the same way a browser does — Brotli-
+// decompress the collectively-compressed table data (`node:zlib`'s
+// `brotliDecompressSync`, a builtin; still no external dependency) and walk
+// its `cmap` — and fails if any codepoint `GLYPHS` declares is missing from
+// it. Worth catching in the same pass, so it is: a codepoint the font maps
+// that nothing in `GLYPHS` declares is dead bytes shipped on every page
+// load, and the codepoint list restated by hand in `+html.tsx`'s comment
+// (a third copy, next to `GLYPHS` and the font itself) is asserted against
+// `GLYPHS` rather than left to drift unnoticed a second way.
+
+const ICON_TSX_PATH = "apps/web/src/ui/Icon.tsx";
+const IONICONS_WOFF2_PATH = `${FONTS_DIR}/Ionicons-subset.woff2`;
+const HTML_ICON_COMMENT_ANCHOR = "The app's only icon glyphs";
+
+/** The `GLYPHS` map's `name -> codepoint` entries, read out of the object
+ * literal itself (not by `eval`) so a fixture can hand this a whole file.
+ * Returns `null` when no `const GLYPHS = { … }` block is found at all. */
+export function parseIconGlyphs(text) {
+  const start = text.indexOf("const GLYPHS");
+  if (start === -1) return null;
+  const braceStart = text.indexOf("{", start);
+  if (braceStart === -1) return null;
+  let depth = 0;
+  let end = -1;
+  for (let i = braceStart; i < text.length; i += 1) {
+    if (text[i] === "{") depth += 1;
+    else if (text[i] === "}") {
+      depth -= 1;
+      if (depth === 0) { end = i + 1; break; }
+    }
+  }
+  if (end === -1) return null;
+  const block = text.slice(braceStart, end);
+
+  const entries = new Map();
+  const entryRe = /(?:"([^"]+)"|'([^']+)'|([A-Za-z_$][\w$]*))\s*:\s*"\\u([0-9a-fA-F]{4,6})"/g;
+  for (const m of block.matchAll(entryRe)) {
+    entries.set(m[1] ?? m[2] ?? m[3], Number.parseInt(m[4], 16));
+  }
+  return entries;
+}
+
+/** The codepoint list `+html.tsx`'s `@font-face` comment restates by hand
+ * (`` \`f229\`, \`f23b\`, … `` — backslash-escaped because the comment lives
+ * inside a JS template literal). `null` when the anchor comment itself is
+ * gone, so a restructured comment fails loudly instead of silently checking
+ * nothing. */
+export function parseHtmlIconCodepoints(text) {
+  const start = text.indexOf(HTML_ICON_COMMENT_ANCHOR);
+  if (start === -1) return null;
+  const end = text.indexOf("*/", start);
+  const region = end === -1 ? text.slice(start) : text.slice(start, end);
+  const codepoints = [];
+  for (const m of region.matchAll(/\\`([0-9a-fA-F]{4,6})\\`/g)) {
+    codepoints.push(Number.parseInt(m[1], 16));
+  }
+  return codepoints;
+}
+
+// WOFF2's 63 "known" table tags, index order fixed by the spec (§5.1) — a
+// table directory entry names one of these by index instead of spelling out
+// its 4-byte tag, unless it's tag 63 ("arbitrary").
+const WOFF2_KNOWN_TABLE_TAGS = [
+  "cmap", "head", "hhea", "hmtx", "maxp", "name", "OS/2", "post",
+  "cvt ", "fpgm", "glyf", "loca", "prep", "CFF ", "VORG", "EBDT",
+  "EBLC", "gasp", "hdmx", "kern", "LTSH", "PCLT", "VDMX", "vhea",
+  "vmtx", "BASE", "GDEF", "GPOS", "GSUB", "EBSC", "JSTF", "MATH",
+  "CBDT", "CBLC", "COLR", "CPAL", "SVG ", "sbix", "acnt", "avar",
+  "bdat", "bloc", "bsln", "cvar", "fdsc", "feat", "fmtx", "fvar",
+  "gvar", "hsty", "just", "lcar", "mort", "morx", "opbd", "prop",
+  "trak", "Zapf", "Silf", "Glat", "Gloc", "Feat", "Sill",
+];
+
+/** WOFF2's variable-length integer (spec §5.2): base-128, big-endian, 7
+ * payload bits per byte, high bit set on every byte but the last. Returns
+ * `[value, nextPos]`; throws rather than looping forever on a truncated or
+ * malformed buffer. */
+function readUIntBase128(buf, pos) {
+  let value = 0;
+  for (let i = 0; i < 5; i += 1) {
+    if (pos + i >= buf.length) throw new Error("UIntBase128 runs past the end of the file");
+    const byte = buf[pos + i];
+    if (i === 0 && byte === 0x80) throw new Error("UIntBase128 has a leading zero byte");
+    value = value * 128 + (byte & 0x7f);
+    if ((byte & 0x80) === 0) return [value, pos + i + 1];
+  }
+  throw new Error("UIntBase128 is longer than 5 bytes");
+}
+
+/** Table tag -> raw bytes, decoded the way a browser would: parse the header
+ * and table directory (spec §5), Brotli-decompress the one collectively-
+ * compressed block those tables live in, then slice it by each entry's
+ * declared length. `glyf`/`loca` are the only tables whose *stored* length
+ * can differ from their original length (the subset transform), which is
+ * why they alone carry a second, explicit length in the directory — every
+ * other table, `cmap` included, is stored as-is. */
+function decodeWoff2Tables(buf) {
+  if (buf.length < 48 || buf.toString("ascii", 0, 4) !== "wOF2") {
+    throw new Error("not a WOFF2 file (bad signature)");
+  }
+  const numTables = buf.readUInt16BE(12);
+  const totalCompressedSize = buf.readUInt32BE(20);
+
+  let pos = 48;
+  const dir = [];
+  for (let i = 0; i < numTables; i += 1) {
+    if (pos >= buf.length) throw new Error("table directory runs past the end of the file");
+    const flags = buf[pos];
+    pos += 1;
+    const tagIndex = flags & 0x3f;
+    const transformVersion = (flags >> 6) & 0x3;
+    let tag;
+    if (tagIndex === 63) {
+      tag = buf.toString("ascii", pos, pos + 4);
+      pos += 4;
+    } else {
+      tag = WOFF2_KNOWN_TABLE_TAGS[tagIndex];
+    }
+    let storedLength;
+    [storedLength, pos] = readUIntBase128(buf, pos);
+    if ((tag === "glyf" || tag === "loca") && transformVersion === 0) {
+      [storedLength, pos] = readUIntBase128(buf, pos);
+    }
+    dir.push({ tag, storedLength });
+  }
+
+  const compressed = buf.subarray(pos, pos + totalCompressedSize);
+  const decompressed = brotliDecompressSync(compressed);
+
+  const tables = new Map();
+  let offset = 0;
+  for (const { tag, storedLength } of dir) {
+    tables.set(tag, decompressed.subarray(offset, offset + storedLength));
+    offset += storedLength;
+  }
+  return tables;
+}
+
+/** Every codepoint a `cmap` format-4 or format-12 subtable maps to an actual
+ * (nonzero) glyph — not just every codepoint a subtable's ranges *mention*,
+ * because format 4 can list a codepoint inside a segment and still map it to
+ * glyph 0 (`.notdef`, i.e. "not actually present"). */
+function cmapCodepoints(cmapBuf) {
+  const numTables = cmapBuf.readUInt16BE(2);
+  const codepoints = new Set();
+  for (let i = 0; i < numTables; i += 1) {
+    const subOffset = cmapBuf.readUInt32BE(4 + i * 8 + 4);
+    const format = cmapBuf.readUInt16BE(subOffset);
+    if (format === 4) {
+      const segCountX2 = cmapBuf.readUInt16BE(subOffset + 6);
+      const endCodeOff = subOffset + 14;
+      const startCodeOff = endCodeOff + segCountX2 + 2; // +2 skips reservedPad
+      const idDeltaOff = startCodeOff + segCountX2;
+      const idRangeOff = idDeltaOff + segCountX2;
+      for (let s = 0; s < segCountX2 / 2; s += 1) {
+        const startCode = cmapBuf.readUInt16BE(startCodeOff + s * 2);
+        const endCode = cmapBuf.readUInt16BE(endCodeOff + s * 2);
+        if (startCode === 0xffff && endCode === 0xffff) continue; // the required terminator segment
+        const idDelta = cmapBuf.readInt16BE(idDeltaOff + s * 2);
+        const idRangeOffset = cmapBuf.readUInt16BE(idRangeOff + s * 2);
+        for (let c = startCode; c <= endCode; c += 1) {
+          let glyphId;
+          if (idRangeOffset === 0) {
+            glyphId = (c + idDelta) & 0xffff;
+          } else {
+            const addr = idRangeOff + s * 2 + idRangeOffset + (c - startCode) * 2;
+            glyphId = cmapBuf.readUInt16BE(addr);
+            if (glyphId !== 0) glyphId = (glyphId + idDelta) & 0xffff;
+          }
+          if (glyphId !== 0) codepoints.add(c);
+        }
+      }
+    } else if (format === 12) {
+      const numGroups = cmapBuf.readUInt32BE(subOffset + 12);
+      for (let g = 0; g < numGroups; g += 1) {
+        const groupOff = subOffset + 16 + g * 12;
+        const startChar = cmapBuf.readUInt32BE(groupOff);
+        const endChar = cmapBuf.readUInt32BE(groupOff + 4);
+        for (let c = startChar; c <= endChar; c += 1) codepoints.add(c);
+      }
+    }
+  }
+  return codepoints;
+}
+
+/** Every codepoint a browser can actually render out of a WOFF2 file — its
+ * `cmap` table's mapped codepoints, decoded through the real Brotli/WOFF2
+ * pipeline rather than assumed. Exported so tests build a small synthetic
+ * WOFF2 rather than fixture-committing a real font binary. */
+export function woff2Codepoints(buf) {
+  const tables = decodeWoff2Tables(buf);
+  const cmap = tables.get("cmap");
+  if (!cmap) throw new Error("no cmap table in this WOFF2 file");
+  return cmapCodepoints(cmap);
+}
+
+function hex4(codepoint) {
+  return codepoint.toString(16).padStart(4, "0");
+}
+
+function checkIconGlyphs(ctx) {
+  const iconText = ctx.readText(ICON_TSX_PATH);
+  if (iconText === null) return { status: "skip", details: [`${ICON_TSX_PATH} not present`] };
+  if (!ctx.exists(IONICONS_WOFF2_PATH)) return { status: "skip", details: [`${IONICONS_WOFF2_PATH} not present`] };
+
+  const glyphs = parseIconGlyphs(iconText);
+  if (glyphs === null || glyphs.size === 0) {
+    return {
+      status: "fail",
+      details: [
+        `could not find a non-empty \`const GLYPHS = { … }\` map in ${ICON_TSX_PATH} — this check has nothing to ` +
+          "compare the font against, and must not report that as a pass",
+      ],
+    };
+  }
+
+  const fontBytes = ctx.readBytes(IONICONS_WOFF2_PATH);
+  if (fontBytes === null) return { status: "fail", details: [`${IONICONS_WOFF2_PATH} could not be read`] };
+
+  let fontCodepoints;
+  try {
+    fontCodepoints = woff2Codepoints(fontBytes);
+  } catch (error) {
+    return { status: "fail", details: [`${IONICONS_WOFF2_PATH} could not be decoded: ${error.message}`] };
+  }
+
+  const details = [];
+  const declared = new Set(glyphs.values());
+
+  for (const [name, codepoint] of glyphs) {
+    if (!fontCodepoints.has(codepoint)) {
+      details.push(
+        `fail: GLYPHS["${name}"] in ${ICON_TSX_PATH} is U+${hex4(codepoint).toUpperCase()}, which ` +
+          `${IONICONS_WOFF2_PATH}'s cmap does not map to a glyph — this name typechecks and lints clean and renders ` +
+          "a tofu box in the browser (#277)",
+      );
+    }
+  }
+  for (const codepoint of [...fontCodepoints].sort((a, b) => a - b)) {
+    if (!declared.has(codepoint)) {
+      details.push(
+        `warn: ${IONICONS_WOFF2_PATH}'s cmap maps U+${hex4(codepoint).toUpperCase()}, which nothing in ` +
+          `${ICON_TSX_PATH}'s GLYPHS declares — dead bytes shipped on every page load`,
+      );
+    }
+  }
+
+  const htmlText = ctx.readText(HTML_PATH);
+  if (htmlText !== null) {
+    const listed = parseHtmlIconCodepoints(htmlText);
+    if (listed === null) {
+      details.push(
+        `fail: ${HTML_PATH} no longer carries the "${HTML_ICON_COMMENT_ANCHOR}" comment this check reads the ` +
+          "codepoint list from — update this check alongside whatever replaced it",
+      );
+    } else {
+      const listedSet = new Set(listed);
+      const missingFromHtml = [...declared].filter((c) => !listedSet.has(c)).sort((a, b) => a - b);
+      const extraInHtml = listed.filter((c) => !declared.has(c));
+      if (missingFromHtml.length > 0 || extraInHtml.length > 0) {
+        details.push(
+          `fail: ${HTML_PATH}'s hand-written codepoint list has drifted from GLYPHS` +
+            (missingFromHtml.length > 0 ? `; missing ${missingFromHtml.map(hex4).join(", ")}` : "") +
+            (extraInHtml.length > 0 ? `; lists ${extraInHtml.map(hex4).join(", ")}, which GLYPHS no longer has` : ""),
+        );
+      }
+    }
+  }
+
+  const hasFail = details.some((d) => d.startsWith("fail:"));
+  if (hasFail) return { status: "fail", details };
+  if (details.length > 0) return { status: "warn", details };
+  return {
+    status: "pass",
+    details: [
+      `${glyphs.size} GLYPHS entry(ies) in ${ICON_TSX_PATH}, all present in ${IONICONS_WOFF2_PATH}'s cmap ` +
+        `(${fontCodepoints.size} mapped codepoint(s) total), ${HTML_PATH}'s comment matches`,
     ],
   };
 }
@@ -2542,6 +2836,187 @@ function checkGhRepoContext(ctx) {
   };
 }
 
+// ── workflow-validity ────────────────────────────────────────────────────
+//
+// Issue #270. A workflow file GitHub cannot even parse produces a run whose
+// conclusion is `failure` with **zero jobs** — not red in the way a failing
+// job is red, not `cancelled`, and invisible to `ci-complete` (or any other
+// job-level guard) because a run with no jobs runs no guard. Five commits
+// merged to `main` and deployed to preview with exactly this shape on
+// 2026-09-08: `058d4e6` deleted `ci.yml`'s `e2e` job but left
+// `ci-complete`'s `needs` list still naming it, and a `needs` entry naming a
+// job that does not exist is one of the handful of things GitHub validates
+// before a single job runs. `deploy.yml` has no `needs:` on CI at all, so
+// every one of those commits shipped anyway.
+//
+// This parses every workflow file for the classes of invalidity that produce
+// that shape — a job with neither `runs-on:` nor `uses:`, a `needs` entry
+// naming a job absent from the same file, a duplicate mapping key, and a tab
+// used for indentation (the single most common way a YAML file simply fails
+// to parse) — the same way `splitWorkflowJobs`/`extractWorkflowRunBlocks`
+// above do: by indentation, without a YAML parser, for the reason given at
+// `splitWorkflowJobs`'s own definition (this module is zero-dependency on
+// purpose).
+//
+// Known gap, stated rather than papered over: this is not a general YAML
+// validator (`bash -n`'s "gap" comment above makes the same trade for
+// `shell-syntax`). It catches the specific shapes GitHub's own front door
+// rejects at workflow start that a hand-rolled indentation walk can see
+// reliably; a YAML file broken in some other way — an unclosed flow
+// collection, an unknown anchor — is not guaranteed to be caught.
+
+/** Every top-level (column 0) mapping key in a workflow file, with every line
+ * it appears on — so a duplicate can be reported with both locations. */
+function workflowTopLevelKeys(text) {
+  const keys = new Map();
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = /^([A-Za-z_][A-Za-z0-9_.-]*):(?:\s.*)?$/.exec(lines[i]);
+    if (!m) continue;
+    if (!keys.has(m[1])) keys.set(m[1], []);
+    keys.get(m[1]).push(i + 1);
+  }
+  return keys;
+}
+
+/** Every key directly on one job — the same "2 deeper than the job header"
+ * indentation `splitWorkflowJobs` already trusts (job headers sit at column
+ * 2, so a job's own keys sit at column 4; anything nested further, like an
+ * `env:` map's entries, sits deeper still and is not a job key). Used both to
+ * find `runs-on`/`uses`/`needs` and to catch a job declaring the same key
+ * twice. */
+function workflowJobKeys(jobLines) {
+  const keys = new Map();
+  for (let i = 0; i < jobLines.length; i += 1) {
+    const m = /^ {4}([A-Za-z_][A-Za-z0-9_.-]*):(?:\s.*)?$/.exec(jobLines[i]);
+    if (!m) continue;
+    if (!keys.has(m[1])) keys.set(m[1], []);
+    keys.get(m[1]).push(i);
+  }
+  return keys;
+}
+
+/** `needs:` in any of the three forms GitHub accepts: a single job name
+ * (`needs: build`), a flow list (`needs: [a, b]`, tolerated across lines even
+ * though this repo's own workflows never wrap one), or a block list (`- a` /
+ * `- b`, one per line, indented two past `needs:` itself). Returns `[]` when
+ * the job carries no `needs:` at all. */
+function workflowJobNeeds(jobLines) {
+  for (let i = 0; i < jobLines.length; i += 1) {
+    const m = /^ {4}needs:[ \t]*(.*)$/.exec(jobLines[i]);
+    if (!m) continue;
+    const rest = m[1].trim();
+    if (rest.startsWith("[")) {
+      let flat = rest;
+      let j = i;
+      while (!flat.includes("]") && j + 1 < jobLines.length) {
+        j += 1;
+        flat += ` ${jobLines[j].trim()}`;
+      }
+      const close = flat.lastIndexOf("]");
+      const inner = close === -1 ? flat.slice(1) : flat.slice(1, close);
+      return inner.split(",").map((s) => unquoteYamlScalar(s.trim())).filter(Boolean);
+    }
+    if (rest === "") {
+      const items = [];
+      for (let j = i + 1; j < jobLines.length; j += 1) {
+        const item = /^ {6}-[ \t]*(.+)$/.exec(jobLines[j]);
+        if (!item) break;
+        items.push(unquoteYamlScalar(item[1].trim()));
+      }
+      return items;
+    }
+    return [unquoteYamlScalar(rest)];
+  }
+  return [];
+}
+
+function checkWorkflowValidity(ctx) {
+  if (!ctx.exists(WORKFLOWS_DIR)) return { status: "skip", details: [`${WORKFLOWS_DIR} not present`] };
+  const files = ctx.walk(WORKFLOWS_DIR).filter((f) => /\.ya?ml$/.test(f));
+  if (files.length === 0) return { status: "skip", details: [`no workflow files under ${WORKFLOWS_DIR}`] };
+
+  const details = [];
+  let jobCount = 0;
+
+  for (const file of files) {
+    const text = ctx.readText(file) ?? "";
+    const lines = text.split("\n");
+
+    // GitHub's YAML parser rejects a tab used for indentation outright —
+    // "found character '\t' that cannot start any token" — before it looks
+    // at a single key. Cheapest and most common real-world way a workflow
+    // file simply fails to parse, so it is checked first and short-circuits
+    // the rest: nothing below is trustworthy once the file cannot parse.
+    const tabAt = lines.findIndex((line) => /^[ ]*\t/.test(line));
+    if (tabAt !== -1) {
+      details.push(
+        `${file}:${tabAt + 1}: line is indented with a tab — YAML forbids tabs for indentation, so ` +
+          "GitHub cannot parse this file at all (a run with zero jobs, not a red one — #270)",
+      );
+      continue;
+    }
+
+    const topKeys = workflowTopLevelKeys(text);
+    for (const [key, atLines] of topKeys) {
+      if (atLines.length > 1) {
+        details.push(`${file}: top-level key "${key}" is declared ${atLines.length} times (lines ${atLines.join(", ")}) — a duplicate mapping key is invalid YAML`);
+      }
+    }
+    if (!topKeys.has("on")) details.push(`${file}: no top-level \`on:\` — GitHub cannot start this workflow`);
+    if (!topKeys.has("jobs")) {
+      details.push(`${file}: no top-level \`jobs:\` — GitHub cannot start this workflow`);
+      continue;
+    }
+
+    const jobs = splitWorkflowJobs(text);
+    if (jobs.length === 0) {
+      details.push(`${file}: \`jobs:\` has no job entries`);
+      continue;
+    }
+
+    const jobNames = new Set(jobs.map((j) => j.name));
+    const seenNames = new Set();
+    for (const job of jobs) {
+      if (seenNames.has(job.name)) {
+        details.push(`${file}: job "${job.name}" is declared more than once under \`jobs:\` — a duplicate mapping key is invalid YAML`);
+      }
+      seenNames.add(job.name);
+    }
+
+    for (const job of jobs) {
+      jobCount += 1;
+      const jobKeys = workflowJobKeys(job.lines);
+      for (const [key, atLines] of jobKeys) {
+        if (atLines.length > 1) {
+          details.push(`${file}: job "${job.name}" declares "${key}" ${atLines.length} times — a duplicate mapping key is invalid YAML`);
+        }
+      }
+      if (!jobKeys.has("runs-on") && !jobKeys.has("uses")) {
+        details.push(`${file}: job "${job.name}" has neither \`runs-on:\` nor \`uses:\` — GitHub cannot start this workflow`);
+      }
+      for (const needed of workflowJobNeeds(job.lines)) {
+        if (!jobNames.has(needed)) {
+          details.push(
+            `${file}: job "${job.name}" \`needs:\` "${needed}", which is not a job in this file — a \`needs\` entry ` +
+              'naming a nonexistent job is a startup failure GitHub rejects before any job runs, the exact shape of ' +
+              "#270 (ci-complete named a deleted e2e job and the whole run produced zero jobs)",
+          );
+        }
+      }
+    }
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+  return {
+    status: "pass",
+    details: [
+      `${files.length} workflow file(s), ${jobCount} job(s), all parse: \`on\`/\`jobs\` present, no duplicate keys, ` +
+        "every job has runs-on/uses, every `needs` names a real job",
+    ],
+  };
+}
+
 // ── verify-email-token ────────────────────────────────────────────────────
 //
 // Issue #202, the second half of #167. A `verify_email` token is the one
@@ -2617,6 +3092,7 @@ function checkVerifyEmailToken(ctx) {
 
 export const CHECKS = {
   fonts: { description: "@font-face url(/fonts/*) vs apps/web/public/fonts/*.ttf", run: checkFonts },
+  "icon-glyphs": { description: "Icon.tsx's GLYPHS vs Ionicons-subset.woff2's actual cmap (both directions)", run: checkIconGlyphs },
   migrations: { description: "apps/api/migrations/*.sql naming, apply order and terminators", run: checkMigrations },
   "migration-drift": { description: "no landed migration is renamed/edited/deleted (git)", run: checkMigrationDrift },
   "backup-tables": { description: "restore.md's `--table` list covers every table the migrations create", run: checkBackupTables },
@@ -2634,6 +3110,7 @@ export const CHECKS = {
   "public-env-passthrough": { description: ".env.example's EXPO_PUBLIC_* block vs what deploy.yml passes to the export", run: checkPublicEnvPassthrough },
   "csp-script-hash": { description: "CSP 'sha256-…' sources vs the inline scripts they authorise", run: checkCspScriptHash },
   "gh-repo-context": { description: "workflow steps running `gh` can resolve the repo", run: checkGhRepoContext },
+  "workflow-validity": { description: "every .github/workflows/*.yml parses: on/jobs present, no dup keys, every job has runs-on/uses, every needs names a real job", run: checkWorkflowValidity },
   "shell-syntax": { description: "bash -n on every workflow `run:` block and every *.sh under tools/ and .github/", run: checkShellSyntax },
 };
 
