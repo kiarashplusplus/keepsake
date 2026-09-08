@@ -46,6 +46,15 @@ const API_SRC = path.resolve(WEB_ROOT, "../api/src");
 const SUGGESTION_CONTRACT = path.resolve(WEB_ROOT, "../../packages/contracts/src/photo.ts");
 const AGE_GATE_DIR = path.resolve(WEB_ROOT, "src/features/ageGate");
 const LISTINGS_ROUTE = path.join(API_SRC, "routes/listings.ts");
+/**
+ * Every write path that binds `date_of_birth`. #306: the guard below used to
+ * scan `LISTINGS_ROUTE` alone — the *request* creation path — while the
+ * *listing* creation path (`listings/create.ts`) feeds the same input into
+ * two more `INSERT INTO listings` statements from a different file, unscanned
+ * and unproven. A list, not a second constant, so a third write path
+ * introduced later fails loudly instead of joining the unguarded set.
+ */
+const DATE_OF_BIRTH_WRITE_PATHS = [LISTINGS_ROUTE, path.join(API_SRC, "listings/create.ts")];
 const ME_ROUTE = path.join(API_SRC, "routes/me.ts");
 const RECOVER_ROUTE = path.join(API_SRC, "routes/recover.ts");
 const ORPHAN_SWEEP = path.join(API_SRC, "cron/orphanSweep.ts");
@@ -513,11 +522,13 @@ describe("privacy policy vs. the age gate (#64)", () => {
     expect(offending).toEqual([]);
   });
 
-  it("writes only the timestamp, never the date itself, on create", () => {
+  it.each(DATE_OF_BIRTH_WRITE_PATHS)("writes only the timestamp, never the date itself, on create (%s)", (file) => {
     // `age_attested_at` is the whole of what the policy promises is kept. Any
-    // other use of the submitted date in this route — binding it into the
-    // INSERT, say — turns that paragraph into a false statement.
-    const code = withoutComments(fs.readFileSync(LISTINGS_ROUTE, "utf8"));
+    // other use of the submitted date in this file — binding it into the
+    // INSERT, say — turns that paragraph into a false statement. Both the
+    // request path (`routes/listings.ts`) and the listing path
+    // (`listings/create.ts`) make this claim, so both are held to it (#306).
+    const code = withoutComments(fs.readFileSync(file, "utf8"));
     const uses = code.split("\n").filter((line) => line.includes("date_of_birth"));
     expect(uses.length).toBeGreaterThan(0);
     for (const line of uses) {
