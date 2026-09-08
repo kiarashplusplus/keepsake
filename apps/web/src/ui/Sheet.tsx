@@ -1,6 +1,6 @@
 import * as React from "react";
+import { createPortal } from "react-dom";
 import {
-  Modal,
   Pressable,
   ScrollView,
   useWindowDimensions,
@@ -10,9 +10,7 @@ import {
 import { radii, shadow } from "@keepsake/tokens/radii";
 import { space } from "@keepsake/tokens/spacing";
 import { useColors } from "@/ui/theme";
-import { useMotion } from "@/ui/MotionProvider";
 import { Text } from "@/ui/Text";
-import { useVisualViewport } from "@/ui/useVisualViewport";
 
 const BOTTOM_SHEET_BREAKPOINT = 720;
 const FOCUSABLE_SELECTOR =
@@ -39,17 +37,7 @@ export function Sheet({
   children,
 }: SheetProps): React.ReactElement | null {
   const colors = useColors();
-  const motion = useMotion();
-  const { width, height: windowHeight } = useWindowDimensions();
-  // `useWindowDimensions` tracks `window.innerWidth`/`innerHeight` (the
-  // layout viewport), which iOS Safari deliberately leaves unchanged when
-  // the on-screen keyboard opens — react-native-web's own `Dimensions`
-  // 'change' event doesn't fire there either (necolas/react-native-web#2430)
-  // — so it never reflects the keyboard. `visualViewport` is the one
-  // measurement that does, for both how tall the visible area is and where
-  // it currently sits — see `useVisualViewport`'s own comment for why this
-  // sheet needs both, not just the height.
-  const { height, offsetTop } = useVisualViewport(windowHeight);
+  const { width } = useWindowDimensions();
   const isBottomSheet = width < BOTTOM_SHEET_BREAKPOINT;
   const panelRef = React.useRef<View>(null);
   // Callers routinely pass an inline `onClose` (a fresh function every
@@ -112,13 +100,17 @@ export function Sheet({
   // several fields plus Turnstile) scrolls inside it instead of growing
   // taller than the viewport and clipping its own submit button, exactly
   // the invisible-overflow failure `src/ui/Page.tsx` fixes for full pages.
-  const maxHeight = height - space.xxl * 2;
+  // Keep the panel in the same dynamic-viewport layout as its backdrop.
+  // In particular, do not derive this bound from `visualViewport`: iOS 26
+  // can leave both its height and offsetTop stale after keyboard/scroll
+  // interactions (WebKit #297779).
+  const maxHeight = `calc(100dvh - ${space.xxl * 2}px)`;
 
   const panelStyle: ViewStyle = {
     backgroundColor: colors.surface,
     padding: space.lg,
     gap: space.md,
-    maxHeight,
+    maxHeight: maxHeight as unknown as number,
     ...(isBottomSheet
       ? ({
           borderTopLeftRadius: radii.md,
@@ -131,69 +123,70 @@ export function Sheet({
     } as ViewStyle),
   };
 
-  const animationType = motion.reduce ? "none" : isBottomSheet ? "slide" : "fade";
+  // Escape the route's ScrollView so its overflow and current scroll offset
+  // cannot clip or relocate the overlay. Unlike react-native-web's Modal,
+  // this portal contributes no fixed-position wrapper of its own.
+  const portalTarget = typeof document !== "undefined" ? document.getElementById("root") : null;
+  if (portalTarget === null) return null;
 
-  return (
-    <Modal visible={visible} transparent animationType={animationType} onRequestClose={onClose}>
+  return createPortal(
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Close"
+      onPress={onClose}
+      style={{
+        // `absolute`, not `fixed`, and it pins just as well from out here:
+        // the portal above put this at `#root`, where the nearest positioned
+        // ancestor is nothing at all, so the containing block is the initial
+        // one — and `body` is `overflow: hidden` (only inner containers
+        // scroll, never the document), so that block and the viewport
+        // coincide and stay coincident. `fixed` would buy nothing and cost
+        // the thing §3 is about: it is captured by any transformed ancestor,
+        // which inside a navigator is how an overlay ends up anchored to a
+        // screen rather than to the window.
+        //
+        // `100dvh` is then the whole keyboard story — it contracts because
+        // `app/+html.tsx` sets `interactive-widget=resizes-content` (see the
+        // comment there; without it the layout viewport ignores the keyboard
+        // and this height would be a lie). No `visualViewport` read, no
+        // translate, nothing to go stale under WebKit #297779.
+        position: "absolute",
+        top: 0,
+        left: 0,
+        right: 0,
+        height: "100dvh" as unknown as number,
+        zIndex: 100,
+        backgroundColor: colors.overlay,
+        justifyContent: isBottomSheet ? "flex-end" : "center",
+        alignItems: "center",
+      }}
+    >
       <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Close"
-        onPress={onClose}
-        style={{
-          // An explicit `height`, not `flex: 1`: this sits inside the
-          // `Modal`'s own `position: fixed` full-screen box, which (like
-          // `windowHeight` above) keeps its full height even once the
-          // keyboard covers its bottom portion. `flex: 1` would keep
-          // filling that whole box and `justifyContent: "flex-end"` would
-          // keep flushing the panel to ITS bottom edge — still under the
-          // keyboard — no matter how short `maxHeight` below makes the
-          // panel itself. Sizing this box to `height` is what actually
-          // moves the flush-bottom edge up to the visible area.
-          height,
-          // `translateY` by `offsetTop`: `position: fixed` (the `Modal`'s
-          // own box, one level up) pins this to the *layout* viewport's
-          // origin, which doesn't move when iOS pans the page to keep a
-          // focused input above the keyboard — only the *visual* viewport
-          // does. Without this, the box is the right height but sitting
-          // wherever the layout viewport's y=0 is, which drifts further
-          // from the visible window with every further pan (typing into a
-          // field that keeps pushing the caret down keeps re-triggering
-          // one) — built correctly for a screen that has since scrolled out
-          // from under it, which reads as the sheet sliding away rather
-          // than merely mis-sized.
-          transform: [{ translateY: offsetTop }],
-          width: "100%",
-          backgroundColor: colors.overlay,
-          justifyContent: isBottomSheet ? "flex-end" : "center",
-          alignItems: "center",
-        }}
+        ref={panelRef}
+        accessibilityViewIsModal
+        onPress={(event) => event.stopPropagation()}
+        style={panelStyle}
       >
-        <Pressable
-          ref={panelRef}
-          accessibilityViewIsModal
-          onPress={(event) => event.stopPropagation()}
-          style={panelStyle}
-        >
-          {title !== undefined ? (
-            <Text variant="title" color="ink" accessibilityRole="header">
-              {title}
-            </Text>
-          ) : null}
+        {title !== undefined ? (
+          <Text variant="title" color="ink" accessibilityRole="header">
+            {title}
+          </Text>
+        ) : null}
           {/* `flexShrink: 1` (not `flex: 1`) so the ScrollView only grows as
               tall as its content up to the panel's `maxHeight` above, rather
               than always claiming the full bound and stranding blank space
               under a short body. The focus trap in the effect above still
               works: react-native-web forwards this to a plain `<div>`
               descendant of `panelNode`, so `querySelectorAll` still finds it. */}
-          <ScrollView
-            style={{ flexShrink: 1 }}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator
-          >
-            {children}
-          </ScrollView>
-        </Pressable>
+        <ScrollView
+          style={{ flexShrink: 1 }}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator
+        >
+          {children}
+        </ScrollView>
       </Pressable>
-    </Modal>
+    </Pressable>,
+    portalTarget,
   );
 }

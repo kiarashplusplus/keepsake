@@ -432,7 +432,23 @@ export default function Root({ children }: { children: React.ReactNode }): React
     <html lang="en">
       <head>
         <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        {/* `interactive-widget=resizes-content` is load-bearing, not decoration.
+            Its default is `resizes-visual`, under which the on-screen keyboard
+            shrinks only the *visual* viewport and leaves the layout viewport
+            alone — so `100dvh` (and `vh`, and `useWindowDimensions`) keep
+            reporting the full, keyboard-covered screen, and the only number
+            that moves is `visualViewport.height`. That default is precisely
+            what forced the `visualViewport` corrections that
+            `docs/platform-differences.md` §3 warns off, and what made them
+            look necessary. Under `resizes-content` the keyboard resizes the
+            layout viewport instead, so `100dvh` contracts on its own and
+            `src/ui/Sheet.tsx` needs no JS position correction at all. Removing
+            the correction without setting this would just restore the original
+            bug (#336) — a focused field sitting under the keyboard. */}
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+        />
         <meta name="color-scheme" content="light dark" />
         <meta name="theme-color" content="#E4DDD1" media="(prefers-color-scheme: light)" />
         <meta name="theme-color" content="#2B2119" media="(prefers-color-scheme: dark)" />
