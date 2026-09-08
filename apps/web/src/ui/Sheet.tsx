@@ -130,10 +130,7 @@ export function Sheet({
   if (portalTarget === null) return null;
 
   return createPortal(
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Close"
-      onPress={onClose}
+    <View
       style={{
         // `absolute`, not `fixed`, and it pins just as well from out here:
         // the portal above put this at `#root`, where the nearest positioned
@@ -156,15 +153,48 @@ export function Sheet({
         right: 0,
         height: "100dvh" as unknown as number,
         zIndex: 100,
-        backgroundColor: colors.overlay,
         justifyContent: isBottomSheet ? "flex-end" : "center",
         alignItems: "center",
       }}
     >
+      {/* The backdrop is a *sibling* of the panel, never its ancestor, and
+          that is load-bearing rather than stylistic. It carries
+          `accessibilityRole="button"`, which react-native-web renders as a
+          real `<button>` — and a `<button>` wrapping the panel makes every
+          field in the sheet a descendant of it. Interactive content nested
+          inside a button is invalid HTML, and the browser acts on it: a
+          space typed into a field activates the enclosing button, so the
+          sheet closed and the keyboard dismissed on the first space of any
+          note or email address (#334 fixed a different cause of the same
+          visible symptom, which is why this survived it). Verified by
+          instrumenting the DOM: `KEYDOWN " "` on the textarea was followed
+          immediately by `CLICK` on the button labelled Close.
+
+          As siblings, a press on the panel simply never reaches the
+          backdrop, so the panel also no longer needs an `onPress` whose only
+          job was to stop propagation. */}
       <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Close"
+        onPress={onClose}
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: colors.overlay,
+        }}
+      />
+      {/* `tabIndex={-1}`: the focus trap above focuses this node when the
+          sheet opens, which a plain `<div>` will not accept. -1 keeps it
+          programmatically focusable without adding it to the tab order —
+          `FOCUSABLE_SELECTOR` deliberately excludes `[tabindex="-1"]`, so
+          the panel itself stays out of the cycle it contains. */}
+      <View
         ref={panelRef}
+        tabIndex={-1}
         accessibilityViewIsModal
-        onPress={(event) => event.stopPropagation()}
         style={panelStyle}
       >
         {title !== undefined ? (
@@ -185,8 +215,8 @@ export function Sheet({
         >
           {children}
         </ScrollView>
-      </Pressable>
-    </Pressable>,
+      </View>
+    </View>,
     portalTarget,
   );
 }
