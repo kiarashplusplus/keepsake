@@ -61,13 +61,13 @@ function hexOf(color: string): string {
 }
 
 const CONDITION = "a small chip near the handle";
-const NOTE_TEXT = `Your photo shows ${CONDITION}. Worth a line?`;
+const NOTE_TEXT = `From your photo: ${CONDITION}. Worth a line?`;
 
 /** A draft whose cover photo has a suggestion carrying a `condition`, and
  * whose `appliedSuggestionPhotoId` still points at that same cover — the
  * exact three-way agreement `story.tsx` requires before it will show the
  * photo-condition note at all. */
-function seedDraftWithConditionNote(): void {
+function seedDraftWithConditionNote(condition: string = CONDITION): void {
   const photoId = "01PHOTOAAAAAAAAAAAAAAAAAA";
   window.sessionStorage.setItem(
     GIVE_DRAFT_STORAGE_KEY,
@@ -94,7 +94,7 @@ function seedDraftWithConditionNote(): void {
           markings: "",
           title: "A hand-thrown mug",
           category: "home_kitchen",
-          condition: CONDITION,
+          condition,
           aspects: [],
         },
       },
@@ -173,5 +173,36 @@ describe("give/story", () => {
     // paper is measured once and holds in both themes, where a note in a
     // well has to clear two very different grounds and cleared neither.
     expect(hexOf(styleOf(ground).backgroundColor ?? "")).toBe(colorsLight.surface.toUpperCase());
+  });
+
+  /**
+   * The note's whole job is to hand the giver a detail worth telling. A
+   * model that answers "No visible damage" has told it nothing — and the
+   * step used to render that verbatim as "Your photo shows No visible
+   * damage. Worth a line?", a capital mid-sentence inviting a line about the
+   * absence of a thing. Observed on a real cover photo of a ceiling fan.
+   *
+   * Seeded through `sessionStorage`, which is the path that matters:
+   * `PhotoSuggestionSchema` now transforms this class of reply to `""` on
+   * the way in, but `deserializeGiveDraft` spreads a rehydrated draft's
+   * suggestions back in unparsed, so the *stored* value can still be the
+   * bad one. Drop the `normalizeCondition` call in `story.tsx` and this
+   * fails while the schema's own tests stay green.
+   */
+  it.each(["No visible damage", "none", "Good condition", "n/a"])("shows no note at all for %p", (condition) => {
+    seedDraftWithConditionNote(condition);
+    const nodes = renderStory();
+
+    const noted = nodes.filter((node) => (node.children ?? []).join("").includes("Worth a line"));
+    expect(noted).toHaveLength(0);
+  });
+
+  /** The complement: a real observation still gets its note, so the case
+   * above is proving a filter rather than a broken render. */
+  it("still shows the note for a real observation", () => {
+    seedDraftWithConditionNote();
+    const nodes = renderStory();
+
+    expect(nodes.filter((node) => (node.children ?? []).join("") === NOTE_TEXT)).toHaveLength(1);
   });
 });

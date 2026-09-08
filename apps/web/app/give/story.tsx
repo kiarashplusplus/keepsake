@@ -5,6 +5,7 @@ import { useWindowDimensions, View } from "react-native";
 import { useRouter } from "expo-router";
 import { z } from "zod";
 import { STORY_MAX, STORY_MIN } from "@keepsake/contracts/listing";
+import { normalizeCondition } from "@keepsake/contracts/photo";
 import { space } from "@keepsake/tokens/spacing";
 import { type } from "@keepsake/tokens/typography";
 import { Text } from "@/ui/Text";
@@ -83,9 +84,16 @@ export default function GiveStory(): React.ReactElement {
   // than guessed: if the cover has since changed, the note simply
   // disappears rather than showing something about a different photo.
   const cover = coverPhoto(draft);
-  const condition =
+  const suggested =
     cover !== null && cover.id !== null && draft.appliedSuggestionPhotoId === cover.id ? draft.suggestions[cover.id]?.condition : undefined;
-  const showConditionOpener = !conditionDismissed && condition !== undefined && condition !== "";
+  // Re-normalised here rather than trusted from the draft: `PhotoSuggestionSchema`
+  // already ran `normalizeCondition` on the way in, but `deserializeGiveDraft`
+  // spreads a rehydrated draft's `suggestions` back in as-is, so a session
+  // that started before this shipped can still be holding "No visible
+  // damage". Cheap, and it means the note has exactly one rule about what it
+  // will show.
+  const condition = normalizeCondition(suggested ?? "");
+  const showConditionOpener = !conditionDismissed && condition !== "";
 
   return (
     // See app/give/index.tsx's comment on why this step wraps itself in a
@@ -130,8 +138,19 @@ export default function GiveStory(): React.ReactElement {
               borderStartColor: colors.accent,
             }}
           >
+            {/* "From your photo:" rather than "Your photo shows …" (#224
+                follow-up). The clause is the model's own words and its
+                casing is the model's too — a mug comes back as "a small chip
+                near the handle", a labelled dish as "Pyrex lid, chipped
+                rim". Interpolated mid-sentence, exactly one of those two
+                reads correctly, and there is no safe way to case-fold the
+                other: lowercasing eats the proper noun, capitalising leaves
+                the article. After a colon both read as written, and the note
+                also stops *asserting* the observation in the app's own
+                voice, which is the honest framing for a guess a giver is
+                free to dismiss. */}
             <Text variant="body" color="inkSoft" style={{ flex: 1 }}>
-              Your photo shows {condition}. Worth a line?
+              From your photo: {condition}. Worth a line?
             </Text>
             <IconButton icon="close" label="Dismiss" size={16} onPress={() => setConditionDismissed(true)} />
           </View>

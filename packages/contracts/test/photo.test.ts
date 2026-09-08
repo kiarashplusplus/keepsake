@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_PHOTOS, PhotoSuggestionSchema, UploadPhotoFields } from "../src/photo";
+import { MAX_PHOTOS, PhotoSuggestionSchema, normalizeCondition, UploadPhotoFields } from "../src/photo";
 
 describe("UploadPhotoFields", () => {
   it("accepts a valid field set", () => {
@@ -85,6 +85,18 @@ describe("PhotoSuggestionSchema", () => {
     expect(PhotoSuggestionSchema.safeParse(validSuggestion({ condition: "x".repeat(161) })).success).toBe(false);
   });
 
+  // The length bound has to run *before* `normalizeCondition`, or an
+  // over-long "no visible damage, and …" would be transformed to "" and
+  // silently accepted instead of rejected. Reorder the two in src/photo.ts
+  // and the test above goes red, not this one — which is why both are here.
+  it("empties a condition that observes nothing, rather than passing it through", () => {
+    const result = PhotoSuggestionSchema.safeParse(validSuggestion({ condition: "No visible damage" }));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.condition).toBe("");
+    }
+  });
+
   describe("aspects", () => {
     it("defaults to [] when the model reply omits the key entirely", () => {
       const { subject, title, category, condition } = validSuggestion();
@@ -129,5 +141,72 @@ describe("PhotoSuggestionSchema", () => {
       const aspects = [{ name: "material", value: "" }];
       expect(PhotoSuggestionSchema.safeParse(validSuggestion({ aspects })).success).toBe(false);
     });
+  });
+});
+
+/**
+ * `condition` is the one field a giver reads verbatim: the story step spends
+ * it as "From your photo: <clause>. Worth a line?". The prompt asks for an
+ * observation and says to answer "" when there is nothing to observe, and
+ * the model does not always listen — a real ceiling-fan cover photo came
+ * back as "No visible damage", which the step rendered as an invitation to
+ * write a line about the absence of a thing.
+ *
+ * Guard validated by breaking it: make `normalizeCondition` return its
+ * argument unchanged and every "empties" case below fails, while the
+ * "keeps" cases stay green — so this measures the filter, not the plumbing.
+ */
+describe("normalizeCondition", () => {
+  it.each([
+    "No visible damage",
+    "no damage",
+    "No visible wear or damage",
+    "none",
+    "None visible",
+    "nothing notable",
+    "There is no obvious wear",
+    "Good condition",
+    "excellent condition",
+    "like new",
+    "Mint",
+    "unused",
+    "pristine condition overall",
+    "n/a",
+    "N / A",
+    "unknown",
+    "can't tell",
+    "not visible",
+    "   ",
+    "",
+  ])("empties %p", (raw) => {
+    expect(normalizeCondition(raw)).toBe("");
+  });
+
+  it.each([
+    "a small chip near the handle",
+    "worn gilt on the rim",
+    "Pyrex lid, chipped rim",
+    // Starts like a negation and is a real observation — the anchoring, and
+    // the comma the noise patterns disallow, are what keep it.
+    "no handle, and a chipped rim",
+    // "good" opens it, but the clause goes on to say something.
+    "good colour apart from a stain on the base",
+  ])("keeps %p", (raw) => {
+    expect(normalizeCondition(raw)).toBe(raw);
+  });
+
+  it("drops the trailing full stop the note supplies itself", () => {
+    expect(normalizeCondition("a small chip near the handle.")).toBe("a small chip near the handle");
+  });
+
+  it("collapses runs of whitespace", () => {
+    expect(normalizeCondition("  a small   chip\nnear the handle  ")).toBe("a small chip near the handle");
+  });
+
+  // Casing is the model's to choose: the note reads the clause after a colon
+  // precisely so "a small chip…" and "Pyrex lid…" both come out right, and
+  // any case-folding here would break one of them.
+  it("leaves casing exactly as written", () => {
+    expect(normalizeCondition("Pyrex lid, chipped rim")).toBe("Pyrex lid, chipped rim");
   });
 });
