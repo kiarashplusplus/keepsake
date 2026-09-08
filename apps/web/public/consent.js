@@ -716,7 +716,7 @@
       'ks-consent-advertising',
       'Advertising',
       false,
-      'Google Ads measurement, so we can tell which advert brought you here.'
+      'Nothing here today — Keepsake loads no advertising tag. The switch stays so you can refuse one in advance.'
     );
     let sale = categoryRow(
       'ks-consent-sale',

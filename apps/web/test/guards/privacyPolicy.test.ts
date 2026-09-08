@@ -327,12 +327,66 @@ function providers(): Provider[] {
   return found;
 }
 
+interface CategoryRow {
+  id: string;
+  name: string;
+  disabled: boolean;
+  description: string;
+}
+
+/**
+ * Every `categoryRow(...)` call in `consent.js`, in source order. Reads the
+ * FOURTH argument — the human-readable description a visitor actually reads
+ * before deciding — which `providers()` above never looks at: that parser
+ * only sees `PROVIDERS`' `name` / `host` / `beacon` fields. Issue #299 was
+ * the consequence: the banner told every visitor "Google Ads measurement, so
+ * we can tell which advert brought you here" — present tense, for a tag that
+ * has never loaded on any published build — and the one guard written for
+ * exactly this drift class (#175) was structurally blind to this file,
+ * because nothing here parsed this string.
+ */
+function categoryRows(): CategoryRow[] {
+  const found: CategoryRow[] = [];
+  const re = /categoryRow\(\s*'([^']*)',\s*'([^']*)',\s*(true|false),\s*'([^']*)'\s*\)/g;
+  for (const m of CONSENT_JS.matchAll(re)) {
+    found.push({ id: m[1] ?? "", name: m[2] ?? "", disabled: m[3] === "true", description: m[4] ?? "" });
+  }
+  return found;
+}
+
 describe("privacy policy vs. the code", () => {
   const declared = providers();
 
   it("finds the provider registry (positive control)", () => {
     expect(declared.length).toBeGreaterThan(0);
     expect(declared.map((p) => p.category).sort()).toEqual(["advertising", "analytics"]);
+  });
+
+  it("finds the category rows (positive control)", () => {
+    // Without this, the assertion below would pass vacuously against a
+    // banner that had lost its categoryRow(...) calls entirely.
+    expect(categoryRows().length).toBeGreaterThan(0);
+  });
+
+  it("no category description names a provider that has shipped with no loadable id (#299)", () => {
+    // A provider is DECLARED DEAD when its meta ships a literal, hardcoded
+    // `content=""` — the kill switch #175 put in place for Google Ads — as
+    // opposed to an unsubstituted `%EXPO_PUBLIC_*%` build-time placeholder,
+    // which may resolve to a real id once a deploy fills it in (Cloudflare
+    // Web Analytics ships that way, and its category description is allowed
+    // to describe it as live because it can become live). For a provider
+    // that is declared dead, the banner's own description of that category
+    // must not name it — naming a dead provider in a live-sounding
+    // description is exactly the #299 drift, and this is what makes that
+    // drift fail a test instead of only a launch-audit pass.
+    for (const provider of declared) {
+      const metaTag = new RegExp(`<meta name="${provider.meta}" content="([^"]*)"`).exec(PRIVACY_HTML);
+      const isDeclaredDead = metaTag?.[1] === "";
+      if (!isDeclaredDead) continue;
+      const row = categoryRows().find((r) => r.id === `ks-consent-${provider.category}`);
+      expect(row).toBeDefined();
+      expect(row?.description).not.toContain(provider.name);
+    }
   });
 
   it.each(declared)("privacy.html names $name and $host", ({ name, host }) => {
