@@ -226,6 +226,7 @@ with a named trigger that could plausibly fire. **due** — see the section abov
 | **Admin sees a request by id, never as a browsable list of notes** | #70 | a moderator needs an id from somewhere — a report, or a giver forwarding one | moderation volume making id-lookup impractical. Streaming every stranger's note into a queue by default would be a real privacy change | [admin.md](./runbooks/admin.md) — *settled* |
 | **No public postal address**, controller named instead | #26, 2026-09-06 | rests on the UK being blocked — UK GDPR Art. 13 is what wanted an address | lifting the UK block, which revives it | [legal-considerations.md](./legal-considerations.md) — *watch* |
 | **Both admin tokens committed to the repo** | 2026-09-07 | see [§2](#2-both-admin-tokens-are-committed-to-this-repository) | repo goes public, or gains a collaborator | `AGENTS.md` — **due** |
+| **"Your rights" promises no response deadline** — "we'll get you an answer," not a number of days | 2026-09-08 | a requester with no sense of when to expect a reply, beyond that plain sentence | Rhode Island's "commercial website" question (the one no-volume-floor statute that plausibly reaches Keepsake) resolving against it, or Keepsake growing into a state's volume threshold — either would make the underlying obligation real, which is the actual trigger for a real deadline, not "it would read better" | [legal-considerations.md](./legal-considerations.md) — *watch* |
 
 ### Safety and moderation
 
