@@ -21,6 +21,11 @@ import { isGpcActive, openConsentBanner } from "@/lib/consent";
  * text placed directly on `bg` would be near-black on walnut in dark mode —
  * a real contrast failure, and one `e2e/a11y.spec.ts` would catch. `AppHeader`
  * solves it the same way.
+ *
+ * Rendered by `ui/Page` at the end of each screen's scroller, not by
+ * `app/_layout.tsx` alongside the router — see `Page.tsx`'s header for why
+ * (#221). Being the last thing in the document is also why it, rather than
+ * the content above it, carries the safe-area bottom inset.
  */
 function NEVER_CHANGES(): () => void {
   return () => {};
@@ -31,7 +36,14 @@ function GPC_UNKNOWN_ON_SERVER(): boolean {
   return false;
 }
 
-export function AppFooter(): React.ReactElement {
+export type AppFooterProps = {
+  /** The device's bottom safe-area inset, passed down from `Page` (which
+   * already reads it) so this component stays usable outside a
+   * `SafeAreaProvider` in tests. */
+  safeAreaBottom?: number;
+};
+
+export function AppFooter({ safeAreaBottom = 0 }: AppFooterProps): React.ReactElement {
   const colors = useColors();
   // `useSyncExternalStore` rather than `useState` + `useEffect`: the static
   // export renders this in Node, where `navigator` does not exist, so the
@@ -59,9 +71,20 @@ export function AppFooter(): React.ReactElement {
           flexWrap: "wrap",
           alignItems: "center",
           gap: space.lg,
-          paddingVertical: space.md,
+          paddingTop: space.md,
+          paddingBottom: space.md + safeAreaBottom,
         }}
       >
+        {/* `/about` is a static page from `apps/site`, and until #224 it was
+            reachable only from the wide header — the narrow header drops it
+            for room, and this footer never carried it, so there was no path
+            to it at all from a phone. It is a plain anchor here for the same
+            reason as in `AppHeader`: not an expo-router route. */}
+        <View accessibilityRole="link" {...({ href: "/about" } as object)}>
+          <Text variant="caption" color="ink">
+            About
+          </Text>
+        </View>
         <View accessibilityRole="link" {...({ href: "/privacy" } as object)}>
           <Text variant="caption" color="ink">
             Privacy

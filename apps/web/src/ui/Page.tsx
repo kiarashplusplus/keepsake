@@ -2,6 +2,7 @@ import * as React from "react";
 import { Platform, ScrollView, View, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ReadableWidth } from "@/ui/ReadableWidth";
+import { AppFooter } from "@/ui/AppFooter";
 
 export type PageProps = {
   /**
@@ -15,12 +16,21 @@ export type PageProps = {
   /**
    * Carries the page's vertical rhythm (`paddingVertical`/`paddingTop`/
    * `gap`, etc.) — exactly what used to sit on `ReadableWidth`'s own `style`
-   * prop before every route grew a `Page` wrapper. A safe-area-aware bottom
-   * inset is always added on top of whatever `paddingBottom` is passed here,
-   * so content clears the iOS home indicator / Android gesture bar without
-   * every call site having to remember to add it.
+   * prop before every route grew a `Page` wrapper.
+   *
+   * The safe-area bottom inset used to be added here. It now sits on the
+   * `AppFooter` this component renders below the content instead: the footer
+   * is the last thing in the document, so it — not the content above it — is
+   * what has to clear the iOS home indicator / Android gesture bar.
    */
   contentContainerStyle?: ViewStyle;
+  /**
+   * The legal footer at the end of the document. On by default and there is
+   * currently no caller that turns it off: "Privacy choices" has to be
+   * reachable from every surface (see `AppFooter`), so opting out is a
+   * decision to make deliberately, not a convenience.
+   */
+  footer?: boolean;
   children: React.ReactNode;
   testID?: string;
 };
@@ -43,22 +53,25 @@ export type PageProps = {
  * Do not "simplify" this back to a `View` — that is precisely the bug this
  * fixes. `apps/web/e2e/scroll.spec.ts` asserts real pages scroll for the
  * same reason.
+ *
+ * It also renders the legal footer, INSIDE the scroller, as the last thing
+ * in the document (#221). That footer used to be a sibling of the router's
+ * `<Stack>` in `app/_layout.tsx`, which — under the same `flex: 1` shell
+ * described above — pinned it to the bottom edge of every viewport: 59px of
+ * an 844px phone screen spent permanently on three links nobody navigates
+ * by, with the page's own content scrolling underneath and being sliced
+ * mid-glyph by its top edge. Here it is ordinary document content: off
+ * screen until you reach the end of the page, and never covering anything.
  */
 export function Page({
   variant,
   contentContainerStyle,
+  footer = true,
   children,
   testID,
 }: PageProps): React.ReactElement {
   const insets = useSafeAreaInsets();
-  const basePaddingBottom =
-    typeof contentContainerStyle?.paddingBottom === "number"
-      ? contentContainerStyle.paddingBottom
-      : 0;
-  const rhythmStyle: ViewStyle = {
-    ...contentContainerStyle,
-    paddingBottom: basePaddingBottom + insets.bottom,
-  };
+  const rhythmStyle: ViewStyle = { ...contentContainerStyle };
 
   const content =
     variant !== undefined ? (
@@ -77,7 +90,11 @@ export function Page({
       keyboardShouldPersistTaps="handled"
       testID={testID}
     >
-      {content}
+      {/* `flex: 1` so a screen shorter than the viewport still pushes the
+          footer to the bottom edge, and a taller one leaves it below the
+          last thing on the page rather than over it. */}
+      <View style={{ flex: 1 }}>{content}</View>
+      {footer ? <AppFooter safeAreaBottom={insets.bottom} /> : null}
     </ScrollView>
   );
 }
