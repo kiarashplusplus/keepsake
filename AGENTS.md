@@ -71,6 +71,16 @@ conflicted files, and hid a live bug on `main` until the two finally met. The fu
 runs on a pull request, so an unmerged branch is also an untested one.
 `docs/runbooks/issue-workflow.md` has the detail.
 
+**Open the pull request early and let CI carry the repeat runs.** A `pull_request` run checks out
+the *merge* of your branch with `main` (`refs/pull/N/merge`), which is exactly the combination you
+would otherwise be re-proving by hand: after `git merge origin/main`, push and read the checks
+rather than re-exporting and re-running the full local suite for a third time. The PR runs lint,
+typecheck, preflight, every unit suite and the e2e suite on that merged tree, on a clean machine,
+in parallel, and it does it again on every push — so the loop is push, look at the checks, fix what
+is red. Verify locally once, on the change itself, because a local run is faster than a round trip
+and CI is not a substitute for having looked at your own work; but re-running e2e locally after each
+merge of `main` is re-doing work the PR already does, and it is the slowest way to learn nothing.
+
 ## Admin tokens
 
 `/api/admin/*` takes `Authorization: Bearer <token>`. **The tokens are written down here**, on
@@ -245,7 +255,8 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
     and is not one. That is the guard working: the bundle genuinely was built against a different
     commit. **Re-export before believing it** (`pnpm --filter @keepsake/web export`), then re-run;
     it cost one diagnosis cycle on 2026-09-07 doing exactly this, merging `main` in between the
-    export and the run.
+    export and the run. Better still, if the merge is all that changed: push it and let the pull
+    request's e2e job export and run against the merged tree for you.
   - `test/adminAuth.test.ts`'s brute-force case can time out at 30 s when the root runner fans API
     and web out concurrently on a loaded machine. Measured on both `main` and a feature branch with
     no difference, so it is load, not a regression — the flake its own comment and #65 describe.
