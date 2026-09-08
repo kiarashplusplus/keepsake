@@ -260,7 +260,7 @@ const FONT_VERSION = "798ad45b";
  */
 const THEME_CSS = `
 ${themeCssVariables()}
-:root { --ks-grain-blend: multiply; --ks-grain-opacity: 1; }
+:root { --ks-grain-blend: multiply; --ks-grain-opacity: 0.5; }
 [data-theme="dark"] { --ks-grain-blend: overlay; --ks-grain-opacity: 0.55; }
 `;
 
@@ -271,7 +271,7 @@ html {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
-body { margin: 0; background: var(--ks-bg, #D2BC97); }
+body { margin: 0; background: var(--ks-bg, #E4DDD1); }
 
 /* Focus ring: the \`focus\` token, 2px, offset 3px — the same treatment the
    marketing site uses. Inputs suppress this (their border is the ring). */
@@ -366,7 +366,7 @@ export default function Root({ children }: { children: React.ReactNode }): React
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <meta name="color-scheme" content="light dark" />
-        <meta name="theme-color" content="#D2BC97" media="(prefers-color-scheme: light)" />
+        <meta name="theme-color" content="#E4DDD1" media="(prefers-color-scheme: light)" />
         <meta name="theme-color" content="#2B2119" media="(prefers-color-scheme: dark)" />
 
         <title>Keepsake</title>

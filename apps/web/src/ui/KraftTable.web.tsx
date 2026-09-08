@@ -29,10 +29,10 @@ export function KraftTable(): React.ReactElement {
     backgroundColor: colors.table,
     backgroundImage: [
       `radial-gradient(ellipse 900px 480px at 50% -60px, ${colors.lampLight}, transparent 70%)`,
-      // Soft vignette: darkens toward the edges by ~8%, drawn as a CSS
+      // Soft vignette: darkens toward the edges by ~6%, drawn as a CSS
       // gradient (not the tile) so it scales with the viewport and never
       // repeats at any width.
-      "radial-gradient(ellipse 1400px 900px at 50% 45%, transparent 55%, rgba(0,0,0,0.08) 100%)",
+      "radial-gradient(ellipse 1400px 900px at 50% 45%, transparent 55%, rgba(40,35,31,0.06) 100%)",
     ].join(", "),
     backgroundRepeat: "no-repeat, no-repeat",
   } as unknown as ViewStyle;
@@ -49,9 +49,12 @@ export function KraftTable(): React.ReactElement {
     // into the static HTML at export time, where the theme is not knowable,
     // and a value that differs between that render and the visitor's first
     // client render is a hydration mismatch on the element that covers the
-    // whole page. The two values live in `app/+html.tsx`'s THEME_CSS.
+    // whole page. The two pairs of values live in `app/+html.tsx`'s
+    // THEME_CSS — including #256's "linen needs only a trace of fibre: half
+    // the former light-mode grain", which is what the light opacity there
+    // says.
     backgroundBlendMode: "var(--ks-grain-blend, multiply)",
-    opacity: "var(--ks-grain-opacity, 1)",
+    opacity: "var(--ks-grain-opacity, 0.5)",
   } as unknown as ViewStyle;
 
   return (

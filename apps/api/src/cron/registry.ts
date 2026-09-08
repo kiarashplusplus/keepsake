@@ -76,6 +76,23 @@ export const CRON_JOBS = [
     // documented as a signal (see `report/daily.ts`).
     staleAfterMs: 26 * HOUR,
   },
+  {
+    name: "bulkRunner",
+    // Every 3 minutes, deliberately NOT `*/5 * * * *`: `scheduled()` in
+    // `index.ts` switches on the literal cron string from `wrangler.toml`,
+    // so reusing moderationRetry's schedule here would make one of the two
+    // `case`s unreachable — whichever is dispatched to fires for both jobs'
+    // names depending on switch order, and the other's cron entry, though
+    // still registered with Cloudflare and firing on time, would hit
+    // nothing but the arm that ran first.
+    cron: "*/3 * * * *",
+    // Ten missed ticks (30 minutes). Past this, a giver's estate submission
+    // is stalled mid-publish — every item still assembled and validated, but
+    // nothing turning into a listing — which is a worse outage shape than a
+    // single stuck moderation retry, so it gets the same generous-but-real
+    // ceiling moderationRetry uses rather than a tighter one.
+    staleAfterMs: 30 * MINUTE,
+  },
 ] as const satisfies readonly CronJobSpec[];
 
 export type CronJobName = (typeof CRON_JOBS)[number]["name"];

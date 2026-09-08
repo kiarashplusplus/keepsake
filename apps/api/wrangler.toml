@@ -126,7 +126,7 @@ name = "EMAIL"
 # through to `default:`: a `console.warn` and no work, on an invocation the
 # platform records as successful.
 [triggers]
-crons = ["*/5 * * * *", "23 * * * *", "17 3 * * *", "7 0 * * *"]
+crons = ["*/5 * * * *", "23 * * * *", "17 3 * * *", "7 0 * * *", "*/3 * * * *"]
 
 # --- Share-card fonts (src/og/fonts.ts) ---
 #
@@ -352,6 +352,54 @@ CF_SCRIPT_NAME = ""
 # M1: flips the moderation pipeline to canned responses for local dev and
 # Playwright, so `give` works without live Workers AI calls.
 MOCK_AI = "0"
+
+# --- Estate bulk upload (packages/contracts/src/bulk.ts, migration
+# 20260908043946_bulk_upload.sql) ---
+#
+# `BULK_UPLOAD` is the kill switch, and it is "0" everywhere except
+# `[env.preview]`. Not caution for its own sake: nothing has yet prepared a
+# real batch through a real browser. Every draft, upload and submission this
+# feature can perform so far has only ever been exercised against
+# `wrangler dev`/vitest, which is a fine reason to build the plumbing and no
+# reason at all to let a giver reach it. Preview is where that first real
+# browser run has to happen before this can be considered for production.
+#
+# The grant counters below — `BULK_MAX_ITEMS_PER_BATCH`, `_PHOTOS_PER_BATCH`,
+# `BULK_OWNER_DAILY_ITEMS`, `_PHOTOS` — are what actually bounds a batch, not
+# Turnstile. Worth saying plainly, because it is what an audit would
+# otherwise go looking for and not find: `turnstile()`
+# (`src/middleware/turnstile.ts`) soft-passes whenever `TURNSTILE_SECRET` is
+# unset, which is every local run and every test, and a challenge is
+# single-use and expires in 300 seconds regardless — mounting one per photo
+# would mean 300 challenges for a 100-item estate. So admission is a grant
+# (`bulk_grants`, minted by an operator for the pilot) whose two counters are
+# exact D1 guarded updates, never KV: the KV budgets elsewhere on this page
+# are eventually consistent by their own documentation and cannot be a lock.
+# `BULK_GRANT_TTL_HOURS` is how long an unspent grant stays valid before it
+# needs renewing.
+#
+# `BULK_MAX_ITEMS_PER_BATCH` must never exceed `MAX_BATCH_ITEMS` and
+# `BULK_MAX_PHOTOS_PER_BATCH` must never exceed `MAX_BATCH_PHOTOS`, both from
+# `packages/contracts/src/bulk.ts` — those are the caps `SubmitBatchInput`
+# and `AdminMintBulkGrantInput` actually enforce, so raising the var past the
+# contract does not raise what the API will accept. Get that backwards and
+# the failure lands on exactly the person this feature exists to help: an
+# operator raises the var, a giver spends an evening photographing and
+# describing 120 items against the higher ceiling, and the submission 400s
+# *after* the work, not before it. `apps/api/test/bulkCaps.test.ts` asserts
+# the inequality against the real config text in every environment block, so
+# this cannot drift quietly the way a hand-checked pair of numbers would.
+# `BULK_DRAFT_RETENTION_DAYS` is how long an untouched draft batch survives
+# before `photos.retain_until` lets the orphan sweep reclaim its photos —
+# see the migration's header for why that lives on `photos` rather than a
+# join.
+BULK_UPLOAD = "0"
+BULK_GRANT_TTL_HOURS = "72"
+BULK_MAX_ITEMS_PER_BATCH = "100"
+BULK_MAX_PHOTOS_PER_BATCH = "300"
+BULK_OWNER_DAILY_ITEMS = "150"
+BULK_OWNER_DAILY_PHOTOS = "450"
+BULK_DRAFT_RETENTION_DAYS = "7"
 
 # --- D1 ---
 # Local placeholder id: `wrangler dev` (no --remote) creates a local SQLite
@@ -581,6 +629,16 @@ CF_ZONE_ID = "dcc1fb09eeeba27a343fc1d98aff9094"
 CF_ACCOUNT_ID = "dc6a87ed4a4269ed74c8f508b275b703"
 CF_SCRIPT_NAME = "keepsake-preview"
 MOCK_AI = "0"
+# On here, and only here — see the top-level [vars] comment. Preview is
+# where the estate bulk upload pilot gets its first real-browser run before
+# it can be considered for production.
+BULK_UPLOAD = "1"
+BULK_GRANT_TTL_HOURS = "72"
+BULK_MAX_ITEMS_PER_BATCH = "100"
+BULK_MAX_PHOTOS_PER_BATCH = "300"
+BULK_OWNER_DAILY_ITEMS = "150"
+BULK_OWNER_DAILY_PHOTOS = "450"
+BULK_DRAFT_RETENTION_DAYS = "7"
 
 [[env.preview.d1_databases]]
 binding = "DB"
@@ -797,6 +855,16 @@ CF_ZONE_ID = "dcc1fb09eeeba27a343fc1d98aff9094"
 CF_ACCOUNT_ID = "dc6a87ed4a4269ed74c8f508b275b703"
 CF_SCRIPT_NAME = "keepsake-production"
 MOCK_AI = "0"
+# "0" — see the top-level [vars] comment. The estate bulk upload pilot has
+# not run against a real browser anywhere yet, so it has not been approved
+# for production; preview is where that has to happen first.
+BULK_UPLOAD = "0"
+BULK_GRANT_TTL_HOURS = "72"
+BULK_MAX_ITEMS_PER_BATCH = "100"
+BULK_MAX_PHOTOS_PER_BATCH = "300"
+BULK_OWNER_DAILY_ITEMS = "150"
+BULK_OWNER_DAILY_PHOTOS = "450"
+BULK_DRAFT_RETENTION_DAYS = "7"
 
 [[env.production.d1_databases]]
 binding = "DB"

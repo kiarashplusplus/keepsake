@@ -215,6 +215,36 @@ describe("give draft serialization", () => {
     expect(rehydrated?.photos[0]).toMatchObject({ clientId: "a", id: "01PHOTO", status: "done" });
   });
 
+  // Guard validated by breaking it: dropping the `status === "uploading"`
+  // spread from `deserializeGiveDraft` made this fail on the first
+  // expectation — the tile came back `"uploading"`, which is what a giver
+  // who left mid-upload and came back used to meet: "uploading…" forever,
+  // no retry, `Continue` disabled. Restored afterward.
+  it("GUARD: a tile persisted mid-upload comes back as a failed one, not a stuck one", () => {
+    const state = giveDraftReducer(GIVE_DRAFT_INITIAL, {
+      type: "add_photo",
+      photo: photo("a", { status: "uploading", objectUrl: "blob:http://localhost/preview" }),
+    });
+
+    const rehydrated = deserializeGiveDraft(serializeGiveDraft(state));
+
+    expect(rehydrated?.photos[0]).toMatchObject({
+      clientId: "a",
+      status: "error",
+      errorCode: "interrupted",
+      error: expect.stringMatching(/didn't finish/),
+      // No source `File` survives the reload, so no retry is offered — the
+      // same reasoning `canRetry` already gets on every rehydrate.
+      canRetry: false,
+      objectUrl: null,
+    });
+  });
+
+  it("leaves a finished tile's status alone on rehydrate", () => {
+    const state = giveDraftReducer(GIVE_DRAFT_INITIAL, { type: "add_photo", photo: photo("a", { status: "done", id: "01PHOTO" }) });
+    expect(deserializeGiveDraft(serializeGiveDraft(state))?.photos[0]?.status).toBe("done");
+  });
+
   // Guard validated by breaking it: removing the `isCategory` narrowing in
   // `deserializeGiveDraft` (i.e. spreading `...parsed` over
   // `GIVE_DRAFT_INITIAL` unconditionally, the way every other field works)

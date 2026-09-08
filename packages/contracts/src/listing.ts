@@ -44,7 +44,10 @@ const TitleSchema = z
   .max(TITLE_MAX)
   .regex(/^[^\x00-\x1f\x7f]*$/, "No line breaks or control characters");
 const StorySchema = z.string().trim().min(STORY_MIN).max(STORY_MAX);
-const PostalCodeSchema = z.string().trim().min(1).max(16);
+/** Exported so `./bulk`'s draft batch schemas can hold a postcode without
+ * restating the bound — the same "one number, both sides" reasoning the
+ * `photo_ids` field below gives for `MAX_PHOTOS`. */
+export const PostalCodeSchema = z.string().trim().min(1).max(16);
 
 export const CreateListingInput = z.object({
   title: TitleSchema,

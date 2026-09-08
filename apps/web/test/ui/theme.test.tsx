@@ -54,7 +54,11 @@ describe("ThemeProvider on the web", () => {
       </ThemeProvider>,
     );
 
-    expect(dark).toContain("var(--ks-bg, #D2BC97)");
+    // The literal is the light value, read from the palette rather than
+    // typed here: a palette refresh (#256 moved the table from kraft to
+    // linen) must not be able to fail this test, which is about the shape of
+    // the value and not its colour.
+    expect(dark).toContain(`var(--ks-bg, ${colorsLight.bg})`);
     expect(dark).toContain("|dark");
     expect(light).toContain("|light");
     // The only difference between the two renders is the resolved mode the
@@ -83,6 +87,6 @@ describe("ThemeProvider on the web", () => {
         <Probe />
       </View>,
     );
-    expect(json).toContain("var(--ks-bg, #D2BC97)");
+    expect(json).toContain(`var(--ks-bg, ${colorsLight.bg})`);
   });
 });

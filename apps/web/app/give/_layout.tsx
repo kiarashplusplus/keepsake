@@ -6,14 +6,13 @@ import { View } from "react-native";
 import { Link, Stack, usePathname } from "expo-router";
 import { space } from "@keepsake/tokens/spacing";
 import { GiveDraftProvider } from "@/features/give/GiveDraftContext";
+import { GIVE_STEP_NAMES, GIVE_STEP_PATHS, giveStepIndex, previousGiveStep } from "@/features/give/steps";
 import { useEditHydration } from "@/features/give/useEditHydration";
 import { SuggestionFetcher } from "@/features/give/SuggestionFetcher";
 import { ReadableWidth } from "@/ui/ReadableWidth";
 import { StepNumerals } from "@/ui/StepNumerals";
 import { Card } from "@/ui/Surface";
 import { Text } from "@/ui/Text";
-
-const STEP_PATHS = ["/give", "/give/story", "/give/details", "/give/email", "/give/review"] as const;
 
 /**
  * The give flow's header (back link + step numerals) gets its own small
@@ -38,8 +37,11 @@ const STEP_PATHS = ["/give", "/give/story", "/give/details", "/give/email", "/gi
  */
 function StepShell({ children }: { children: React.ReactNode }): React.ReactElement {
   const pathname = usePathname();
-  const stepIndex = STEP_PATHS.findIndex((step) => step === pathname);
-  const current = stepIndex === -1 ? 0 : stepIndex;
+  const current = giveStepIndex(pathname);
+  // The previous step, or `null` on the first one — where "back" can only
+  // mean leaving the flow. It used to be the feed from every step, so
+  // stepping back from the story threw the giver out of the flow entirely.
+  const previous = previousGiveStep(pathname);
 
   return (
     <ReadableWidth variant="prose" style={{ flex: 1, paddingVertical: space.xxl, gap: space.xl }}>
@@ -51,12 +53,23 @@ function StepShell({ children }: { children: React.ReactNode }): React.ReactElem
           transform: [{ rotate: "0.3deg" }],
         }}
       >
-        <Link href="/" accessibilityRole="link" accessibilityLabel="Back to the feed">
+        {/* `dismissTo`, not a push: the earlier step is still mounted under
+            this one in the nested `<Stack>` (every step advances with
+            `router.push`), so this pops back to it with its state — the
+            photos screen's in-memory source files, for one — intact. After
+            a reload or a deep link, where nothing is underneath, `dismissTo`
+            replaces the current screen instead, which is the same place. */}
+        <Link
+          href={previous ?? "/"}
+          dismissTo={previous !== null}
+          accessibilityRole="link"
+          accessibilityLabel={previous === null ? "Back to the feed" : `Back to ${GIVE_STEP_NAMES[previous]}`}
+        >
           <Text variant="label" color="ink" style={{ fontSize: 12 }}>
             ← Back
           </Text>
         </Link>
-        <StepNumerals total={STEP_PATHS.length} current={current} />
+        <StepNumerals total={GIVE_STEP_PATHS.length} current={current} />
       </Card>
       <View style={{ flex: 1 }}>{children}</View>
     </ReadableWidth>

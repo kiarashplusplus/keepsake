@@ -6,6 +6,15 @@
  *    their two R2 objects, once they're more than 24h old — abandoned
  *    `give` flows and abuse probes both leave these behind. Deleted in
  *    batches of 100 so one run never holds a single giant transaction.
+ *    Since the estate bulk-upload migration (`20260908043946_bulk_upload.sql`)
+ *    a row can additionally carry `photos.retain_until`, a promise this sweep
+ *    honours by leaving the row alone until that time passes too — see the
+ *    comment on `sweepOrphanPhotos` for why that is a column and not a join.
+ *  - `upload_batches` rows whose `expires_at` has passed while still `draft`
+ *    or `submitting` — an estate nobody finished preparing. Marked
+ *    `cancelled`, and every photo still holding that batch's promise has its
+ *    `retain_until` cleared, which is what lets the bullet above collect the
+ *    bytes on a later run instead of never. See `sweepExpiredBatches`.
  *  - `recovery_tokens` more than 7 days past their own `expires_at` — an
  *    expired token is already useless the moment it expires; the extra week
  *    before deletion only exists so a support conversation about "did I
@@ -125,6 +134,14 @@ const PHOTO_BATCH_SIZE = 100;
  * whatever's left over is picked up by tomorrow night's run. */
 const MAX_PHOTO_BATCHES = 5000;
 
+const BATCH_EXPIRY_PAGE_SIZE = 100;
+/** Same safety bound as `MAX_PHOTO_BATCHES` above, and for the same reason:
+ * nothing else caps how many `upload_batches` rows can pile up past their own
+ * `expires_at` between runs, so this exists only so a pathological backlog
+ * can't turn one cron tick into an unbounded loop — whatever's left over is
+ * picked up by tomorrow night's run, same as everywhere else in this file. */
+const MAX_BATCH_EXPIRY_PAGES = 5000;
+
 interface OrphanPhotoRow {
   id: string;
   r2_key_full: string;
@@ -192,7 +209,36 @@ function warnIfUnguarded(env: Env): void {
   );
 }
 
-async function sweepOrphanPhotos(env: Env, cutoff: number): Promise<{ deleted: number; deferred: number }> {
+/**
+ * Estate bulk uploads (`migrations/20260908043946_bulk_upload.sql`) leave
+ * every photo in a batch with `listing_id IS NULL` for as long as the giver
+ * is still preparing it — which can be days, not the minutes an abandoned
+ * `give` flow leaves an orphan sitting for. Without an exception, this sweep
+ * would delete a giver's first evening of work overnight, on the same
+ * `WHERE` clause that is exactly right for an abuse probe.
+ *
+ * `retain_until` is that exception, and the added clause reads it the same
+ * way `created_at` already is: a plain column on `photos`, checked in this
+ * same `SELECT`, against `now` rather than `cutoff` — the promise is "not
+ * before this moment," not "not until 24h old," so it has to be compared to
+ * the wall clock this run is actually executing at.
+ *
+ * It is a column and deliberately not `AND NOT EXISTS (SELECT 1 FROM
+ * upload_batch_photos WHERE photo_id = photos.id AND ...)`. A join would
+ * make this sweep's correctness depend on a second table, written by a
+ * second code path (the bulk routes), agreeing with this one about what
+ * "still protected" means — and the moment the two disagree, the default
+ * here is deletion. A dropped `upload_batch_photos` row, a batch deleted out
+ * from under its photos, a future migration that changes what "belongs to a
+ * batch" means: any of those silently turns the join's `NOT EXISTS` back on,
+ * and a keepsake is gone with no record of why. `retain_until` is written by
+ * the same statement that creates the photo (`photos/store.ts`) and cleared
+ * by the same statement that either attaches it to a listing
+ * (`listings/create.ts`) or expires its batch (`sweepExpiredBatches` below),
+ * so the row always carries its own, current answer — this `SELECT` never
+ * has to ask a second table what it thinks.
+ */
+async function sweepOrphanPhotos(env: Env, cutoff: number, now: number): Promise<{ deleted: number; deferred: number }> {
   let deleted = 0;
   let deferred = 0;
   // Rows skipped for want of a backup copy stay in the table and would be
@@ -203,9 +249,11 @@ async function sweepOrphanPhotos(env: Env, cutoff: number): Promise<{ deleted: n
 
   for (let batch = 0; batch < MAX_PHOTO_BATCHES; batch++) {
     const { results: rows } = await env.DB.prepare(
-      `SELECT id, r2_key_full, r2_key_thumb FROM photos WHERE listing_id IS NULL AND created_at < ? LIMIT ? OFFSET ?`,
+      `SELECT id, r2_key_full, r2_key_thumb FROM photos
+        WHERE listing_id IS NULL AND created_at < ? AND (retain_until IS NULL OR retain_until < ?)
+        LIMIT ? OFFSET ?`,
     )
-      .bind(cutoff, PHOTO_BATCH_SIZE, offset)
+      .bind(cutoff, now, PHOTO_BATCH_SIZE, offset)
       .all<OrphanPhotoRow>();
 
     if (rows.length === 0) break;
@@ -237,6 +285,82 @@ async function sweepOrphanPhotos(env: Env, cutoff: number): Promise<{ deleted: n
   }
 
   return { deleted, deferred };
+}
+
+/**
+ * Estate bulk uploads (`migrations/20260908043946_bulk_upload.sql`): an
+ * `upload_batches` row nobody finished — still `draft` or `submitting` —
+ * once its own `expires_at` has passed. Marked `cancelled`, with
+ * `cancelled_at` set so a support conversation has a timestamp to point at,
+ * the same reason `recovery_tokens` keeps its own week of grace instead of
+ * vanishing outright.
+ *
+ * `state IN ('draft', 'submitting')`, never a bare `state != 'cancelled'`: a
+ * `closed` batch has already become real listings, and every one of its
+ * photos was claimed off `retain_until` the moment `listings/create.ts`
+ * attached it — there is nothing left on those rows for this to clear, and
+ * nothing here should ever touch a submitted estate regardless of how old
+ * its `expires_at` now reads.
+ *
+ * This is **all** it does to the photos: clear the column. It does not
+ * touch R2 and it does not delete the `photos` row itself. A photo that
+ * loses its `retain_until` has simply become an ordinary
+ * `listing_id IS NULL` orphan — indistinguishable, on the next run, from one
+ * an abandoned `give` flow left behind — and `sweepOrphanPhotos` above, with
+ * its existing 24-hour grace and existing backup guard, collects it exactly
+ * as it would any other. See that function's own comment for why a shared
+ * column and a shared deletion path, rather than a second one built here,
+ * is the point: this sweep would otherwise need its own opinion about
+ * `isBackedUp` and its own R2 calls, and a second implementation of "delete
+ * a photo safely" is the surest way for the two to eventually disagree.
+ *
+ * Paged like the photo sweeps, but without their `OFFSET`: a batch this
+ * page updates stops matching `state IN ('draft', 'submitting')`
+ * immediately, so the next page's identical query sees a smaller backlog on
+ * its own, and nothing here can select the same row twice.
+ */
+async function sweepExpiredBatches(env: Env, now: number): Promise<number> {
+  let expired = 0;
+
+  for (let page = 0; page < MAX_BATCH_EXPIRY_PAGES; page++) {
+    const { results: rows } = await env.DB.prepare(
+      `SELECT id FROM upload_batches WHERE expires_at < ? AND state IN ('draft', 'submitting') LIMIT ?`,
+    )
+      .bind(now, BATCH_EXPIRY_PAGE_SIZE)
+      .all<{ id: string }>();
+
+    if (rows.length === 0) break;
+
+    const ids = rows.map((row) => row.id);
+    const placeholders = ids.map(() => "?").join(",");
+
+    // Photos first, batch second. A crash between the two statements leaves
+    // a batch that still reads 'draft'/'submitting' with its photos'
+    // retain_until already cleared — the next run's WHERE clause still
+    // finds the batch and simply redoes both writes. The other order could
+    // leave a 'cancelled' batch whose photos still carry a promise, which
+    // nothing would ever look at again: this query is the only thing that
+    // reads `upload_batches.state` for this purpose.
+    await env.DB.prepare(
+      `UPDATE photos SET retain_until = NULL
+        WHERE retain_until IS NOT NULL
+          AND id IN (SELECT photo_id FROM upload_batch_photos WHERE batch_id IN (${placeholders}))`,
+    )
+      .bind(...ids)
+      .run();
+
+    await env.DB.prepare(
+      `UPDATE upload_batches SET state = 'cancelled', cancelled_at = ?, updated_at = ?
+        WHERE id IN (${placeholders}) AND state IN ('draft', 'submitting')`,
+    )
+      .bind(now, now, ...ids)
+      .run();
+
+    expired += ids.length;
+    if (rows.length < BATCH_EXPIRY_PAGE_SIZE) break;
+  }
+
+  return expired;
 }
 
 async function sweepExpiredRecoveryTokens(env: Env, now: number): Promise<number> {
@@ -489,7 +613,12 @@ export async function orphanSweep(env: Env): Promise<void> {
 
   warnIfUnguarded(env);
 
-  const orphanPhotos = await sweepOrphanPhotos(env, now - ORPHAN_PHOTO_AGE_MS);
+  // Before `sweepOrphanPhotos`, deliberately: a batch that expires here has
+  // its photos' `retain_until` cleared in this same statement, so a batch
+  // whose photos are already past the 24-hour orphan age is collected in
+  // this very run rather than waiting for tomorrow night to notice.
+  const batchesExpired = await sweepExpiredBatches(env, now);
+  const orphanPhotos = await sweepOrphanPhotos(env, now - ORPHAN_PHOTO_AGE_MS, now);
   const terminalPhotos = await sweepTerminalListingPhotos(env, now - TERMINAL_PHOTO_RETENTION_MS);
   const photosDeleted = orphanPhotos.deleted;
   const terminalPhotosDeleted = terminalPhotos.deleted;
@@ -561,6 +690,11 @@ export async function orphanSweep(env: Env): Promise<void> {
     emailDetailsExamined: emailDetails.examined,
     emailDetailsScrubbed: emailDetails.scrubbed,
     ownersDeleted,
+    // Estate bulk uploads: `upload_batches` rows expired out of 'draft' or
+    // 'submitting' into 'cancelled' this run. Each one also cleared
+    // `retain_until` on its photos, which is why `photosDeleted` above can
+    // rise on the very night a batch expires rather than 24h later.
+    batchesExpired,
   });
 
   // No heartbeat write here any more (#165): `runCron` in `index.ts` writes

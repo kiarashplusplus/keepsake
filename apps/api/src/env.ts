@@ -194,6 +194,121 @@ export function semanticSearchEnabled(env: Env): boolean {
 }
 
 /**
+ * Estate bulk upload's kill switch. "0" in every environment except
+ * `[env.preview]` (see `wrangler.toml`'s comment there): nothing has yet
+ * prepared a real batch through a real browser, so preview is where that
+ * first has to happen before this can be considered for production.
+ *
+ * A plain member access, not routed through `parseIntVar` or any helper —
+ * preflight's `var-usage` check (`tools/preflight/preflight.mjs`) resolves
+ * reads by looking for `env.NAME` (among a few other shapes), and this is
+ * the shape it needs to see for `BULK_UPLOAD` to count as read.
+ *
+ * Opt-in on the literal `"1"` only, same as `semanticSearchEnabled` above —
+ * an unset, empty, malformed or absent var reads as off, so no environment
+ * can enable this by accident or by omission.
+ *
+ * `as string`, same widening trick as `isMockAi` above: `wrangler types`
+ * narrows `BULK_UPLOAD` to whatever literal sits in the top-level `[vars]`
+ * (`"0"`), so a bare comparison against `"1"` would not type-check even
+ * though `[env.preview]` deploys the string `"1"`.
+ */
+export function bulkUploadEnabled(env: Env): boolean {
+  return (env.BULK_UPLOAD as string) === "1";
+}
+
+/**
+ * How long an admin-minted `bulk_grants` row stays valid before it needs
+ * renewing. "renew" grants reset only this, never the two counters below —
+ * otherwise a renewal loop would be unlimited admission (see the migration's
+ * comment on `bulk_grants.issued_by`).
+ */
+export const DEFAULT_BULK_GRANT_TTL_HOURS = 72;
+
+export function bulkGrantTtlHours(env: Env): number {
+  return parseIntVar(
+    "BULK_GRANT_TTL_HOURS",
+    env.BULK_GRANT_TTL_HOURS as string | undefined,
+    DEFAULT_BULK_GRANT_TTL_HOURS,
+  );
+}
+
+/**
+ * The per-batch ceilings a `bulk_grants` row is minted against. Not
+ * Turnstile — see `bulkUploadEnabled` and `wrangler.toml`'s comment for why
+ * these D1-guarded counters, not a challenge, are what actually bounds a
+ * batch.
+ *
+ * **Must never exceed `MAX_BATCH_ITEMS`/`MAX_BATCH_PHOTOS`**
+ * (`packages/contracts/src/bulk.ts`), which is what `SubmitBatchInput` and
+ * `AdminMintBulkGrantInput` actually enforce: raising this var past the
+ * contract's cap does not raise what the API will accept, so an operator
+ * raising it and a giver preparing more items than the contract allows ends
+ * with the submission 400ing after the work was already done.
+ * `apps/api/test/bulkCaps.test.ts` asserts the inequality against the real
+ * `wrangler.toml` text in every environment block.
+ */
+export const DEFAULT_BULK_MAX_ITEMS_PER_BATCH = 100;
+export const DEFAULT_BULK_MAX_PHOTOS_PER_BATCH = 300;
+
+export function bulkMaxItemsPerBatch(env: Env): number {
+  return parseIntVar(
+    "BULK_MAX_ITEMS_PER_BATCH",
+    env.BULK_MAX_ITEMS_PER_BATCH as string | undefined,
+    DEFAULT_BULK_MAX_ITEMS_PER_BATCH,
+  );
+}
+
+export function bulkMaxPhotosPerBatch(env: Env): number {
+  return parseIntVar(
+    "BULK_MAX_PHOTOS_PER_BATCH",
+    env.BULK_MAX_PHOTOS_PER_BATCH as string | undefined,
+    DEFAULT_BULK_MAX_PHOTOS_PER_BATCH,
+  );
+}
+
+/**
+ * The ceiling above the per-batch one: per owner per day, tracked in
+ * `bulk_owner_usage` and surviving both a new batch and a renewed grant —
+ * what makes "creating additional batches must not reset the allowance"
+ * actually true rather than merely intended.
+ */
+export const DEFAULT_BULK_OWNER_DAILY_ITEMS = 150;
+export const DEFAULT_BULK_OWNER_DAILY_PHOTOS = 450;
+
+export function bulkOwnerDailyItems(env: Env): number {
+  return parseIntVar(
+    "BULK_OWNER_DAILY_ITEMS",
+    env.BULK_OWNER_DAILY_ITEMS as string | undefined,
+    DEFAULT_BULK_OWNER_DAILY_ITEMS,
+  );
+}
+
+export function bulkOwnerDailyPhotos(env: Env): number {
+  return parseIntVar(
+    "BULK_OWNER_DAILY_PHOTOS",
+    env.BULK_OWNER_DAILY_PHOTOS as string | undefined,
+    DEFAULT_BULK_OWNER_DAILY_PHOTOS,
+  );
+}
+
+/**
+ * How long an untouched draft batch survives before `photos.retain_until`
+ * lets the orphan sweep collect its photos — see the migration's "Sweep
+ * protection" header for why that lives on `photos` rather than a join
+ * against `upload_batch_photos`.
+ */
+export const DEFAULT_BULK_DRAFT_RETENTION_DAYS = 7;
+
+export function bulkDraftRetentionDays(env: Env): number {
+  return parseIntVar(
+    "BULK_DRAFT_RETENTION_DAYS",
+    env.BULK_DRAFT_RETENTION_DAYS as string | undefined,
+    DEFAULT_BULK_DRAFT_RETENTION_DAYS,
+  );
+}
+
+/**
  * True in the two environments that run as a deployed Worker on Cloudflare —
  * `preview` and `production` — and false for local `wrangler dev`, `vitest`
  * and Playwright.

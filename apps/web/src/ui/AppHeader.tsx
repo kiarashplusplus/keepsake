@@ -125,7 +125,16 @@ export function AppHeader(): React.ReactElement {
           {narrow ? null : <NavLink href="/" label="Browse" active={pathname === "/"} />}
           <NavLink href="/mine" label="Mine" active={pathname.startsWith("/mine")} />
           {narrow ? null : <SiteLink href="/about" label="About" />}
-          <Link href="/give" asChild>
+          {/* `dangerouslySingular`: the root stack keeps the give flow
+              mounted (hidden) under whatever the giver navigated to from
+              inside it, and a plain push then stacked a *second* give flow
+              on top — two providers, two photos screens, and a hidden one
+              still holding an upload nobody could see. Singular keeps the
+              stack to one give flow: with one already mounted, this lands
+              the giver back on it — same provider, same previews, same
+              in-flight uploads — and only a fresh visit mounts a new one.
+              Same on the feed's own Give buttons (`app/index.tsx`). */}
+          <Link href="/give" dangerouslySingular asChild>
             <Button label={narrow ? "Give" : "Give something"} />
           </Link>
           <ThemeToggle />

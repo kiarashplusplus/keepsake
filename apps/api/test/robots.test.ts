@@ -54,9 +54,9 @@ describe("GET /robots.txt", () => {
     expect(res.status).toBe(200);
 
     const body = await res.text();
-    expect(body).toContain("Allow: /");
-    expect(body).toContain("Sitemap: https://keepsake.ing/sitemap.xml");
-    expect(body).not.toMatch(/^Disallow: \/$/m);
+    // Keep implementation notes in source and docs rather than exposing them
+    // to everyone who opens this public, user-visible file.
+    expect(body).toBe("User-agent: *\nAllow: /\n\nSitemap: https://keepsake.ing/sitemap.xml\n");
   });
 });
 

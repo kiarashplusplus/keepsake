@@ -6,9 +6,9 @@
   Rendered to ../public/og-default.png at 1200x630 with resvg-js-cli
   (fonts passed via font file flags, see apps/site/README.md).
 
-  Colors are the packages/tokens/src/colors.ts values — table kraft
-  #D2BC97, print #FBF9F4, ink #1B1815, pencil #5A524A, stamp red #C4341C /
-  stampText #8A2113, tape rgba(255,236,160,.55).
+  Colors are the packages/tokens/src/colors.ts values — table linen
+  #E4DDD1, print #FFFDF8, ink #28231F, pencil #635B53, stamp red #A9432E /
+  stampText #87301F, tape rgba(205,184,140,.42).
 -->
 <svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -38,43 +38,43 @@
     </filter>
   </defs>
 
-  <!-- the table: kraft, with a faint fibre texture and a darker edge -->
-  <rect width="1200" height="630" fill="#D2BC97" />
-  <rect width="1200" height="630" fill="#B89D74" filter="url(#fibre)" />
+  <!-- the table: linen, with a faint fibre texture and a darker edge -->
+  <rect width="1200" height="630" fill="#E4DDD1" />
+  <rect width="1200" height="630" fill="#C9C0B3" filter="url(#fibre)" />
 
   <!-- a second, smaller print peeking out from behind, taped and tilted -->
   <g transform="translate(838,150) rotate(6)">
-    <rect x="-190" y="-140" width="380" height="330" fill="#FBF9F4" />
-    <rect x="-175" y="-125" width="350" height="255" fill="#B89D74" />
+    <rect x="-190" y="-140" width="380" height="330" fill="#FFFDF8" />
+    <rect x="-175" y="-125" width="350" height="255" fill="#C9C0B3" />
   </g>
 
   <!-- the front print: wordmark + headline written on its frame -->
   <g transform="translate(600,315) rotate(-1.6)">
-    <rect x="-490" y="-255" width="980" height="510" fill="#FBF9F4" />
+    <rect x="-490" y="-255" width="980" height="510" fill="#FFFDF8" />
     <rect x="-490" y="-255" width="980" height="510" fill="none" stroke="rgba(0,0,0,0.08)" stroke-width="2" />
 
     <!-- tape corners -->
-    <rect x="-470" y="-275" width="90" height="40" fill="rgba(255,236,160,0.65)" transform="rotate(-14 -425 -255)" />
-    <rect x="380" y="-275" width="90" height="40" fill="rgba(255,236,160,0.65)" transform="rotate(11 425 -255)" />
+    <rect x="-470" y="-275" width="90" height="40" fill="rgba(205,184,140,0.42)" transform="rotate(-14 -425 -255)" />
+    <rect x="380" y="-275" width="90" height="40" fill="rgba(205,184,140,0.42)" transform="rotate(11 425 -255)" />
 
     <!-- wordmark -->
     <text x="-450" y="-150" font-family="Fraunces" font-style="italic" font-weight="600"
-          font-variation-settings="'opsz' 144, 'SOFT' 60, 'WONK' 1" font-size="88" fill="#1B1815">Keepsake</text>
+          font-variation-settings="'opsz' 144, 'SOFT' 60, 'WONK' 1" font-size="88" fill="#28231F">Keepsake</text>
 
     <!-- headline -->
     <text x="-452" y="-40" font-family="Fraunces" font-weight="600"
-          font-variation-settings="'opsz' 144, 'SOFT' 20, 'WONK' 1" font-size="58" letter-spacing="-1.6" fill="#1B1815">Give a keepsake</text>
+          font-variation-settings="'opsz' 144, 'SOFT' 20, 'WONK' 1" font-size="58" letter-spacing="-1.6" fill="#28231F">Give a keepsake</text>
     <text x="-452" y="30" font-family="Fraunces" font-weight="600"
-          font-variation-settings="'opsz' 144, 'SOFT' 20, 'WONK' 1" font-size="58" letter-spacing="-1.6" fill="#1B1815">a second life.</text>
+          font-variation-settings="'opsz' 144, 'SOFT' 20, 'WONK' 1" font-size="58" letter-spacing="-1.6" fill="#28231F">a second life.</text>
 
     <!-- deck line -->
     <text x="-450" y="90" font-family="Fraunces" font-style="italic"
-          font-variation-settings="'opsz' 12, 'SOFT' 20, 'WONK' 1" font-size="26" fill="#5A524A">No accounts. No money. Just the story, and someone who'll love it.</text>
+          font-variation-settings="'opsz' 12, 'SOFT' 20, 'WONK' 1" font-size="26" fill="#635B53">No accounts. No money. Just the story, and someone who'll love it.</text>
 
     <!-- the rubber stamp -->
     <g transform="translate(300,160) rotate(-7)">
-      <rect x="-110" y="-34" width="220" height="70" fill="none" stroke="#C4341C" stroke-width="5" />
-      <text x="0" y="14" font-family="Courier Prime" font-weight="700" font-size="30" letter-spacing="6" fill="#8A2113" text-anchor="middle">NEW</text>
+      <rect x="-110" y="-34" width="220" height="70" fill="none" stroke="#A9432E" stroke-width="5" />
+      <text x="0" y="14" font-family="Courier Prime" font-weight="700" font-size="30" letter-spacing="6" fill="#87301F" text-anchor="middle">NEW</text>
     </g>
 
     <!-- footer line, typewritten -->

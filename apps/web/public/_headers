@@ -9,8 +9,10 @@
 # browser actually fetches, and the `.ttf` behind it as the fallback and as
 # the byte-source apps/web/test/guards/ogCardFonts.test.ts compares the OG
 # card's fonts against. WOFF2 is already Brotli-compressed, so there is
-# nothing for the edge to compress on the file that ships. Without it, `immutable` means a browser that has
-# cached Fraunces-VF.ttf will not revalidate it for a year even on a reload —
+# nothing for the edge to compress on the file that actually ships.
+#
+# Without the token, `immutable` means a browser that has cached
+# Fraunces-VF.woff2 will not revalidate it for a year, not even on a reload —
 # so replacing a font in place would leave returning visitors rendering the
 # old one, invisibly, while new visitors got the new one.
 /fonts/*

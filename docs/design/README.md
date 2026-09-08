@@ -325,6 +325,7 @@ instead of before it.
 - [Images](./images.md)
 - [Design system](./design-system.md)
 - [Ops](./ops.md)
+- [Estate bulk upload](./bulk-upload.md) — API and schema only; no web UI exists yet
 
 Runbooks: [deploy](../runbooks/deploy.md) · [incident](../runbooks/incident.md) ·
 [admin](../runbooks/admin.md) · [geodata](../runbooks/geodata.md).

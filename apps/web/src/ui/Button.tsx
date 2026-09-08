@@ -97,9 +97,9 @@ export function Button({ label, onPress, variant = "primary", loading = false, d
           ...({ boxShadow: lifted ? "3px 5px 0px rgba(27,24,21,0.35)" : "2px 3px 0px rgba(27,24,21,0.3)" } as ViewStyle),
         };
       case "secondary":
-        // Issue #134. This used to fill `colors.print` (#FBF9F4) inside a 2px
+        // Issue #134. This used to fill `colors.print` (#FFFDF8) inside a 2px
         // ink outline. Against the card it sits on (`colors.surface`,
-        // #F1E6CC) that fill measures 1.18:1 — for practical purposes the
+        // #FAF6EE) that fill measures 1.18:1 — for practical purposes the
         // same colour as the paper — so the button read as an empty field
         // with a line round it rather than as an action. Reported from a
         // phone about "Use my location", which is the one affordance a giver

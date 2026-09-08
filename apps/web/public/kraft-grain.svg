@@ -7,7 +7,7 @@
     feFuncA keep the result a low-contrast alpha mask (fine fibre flecks),
     not a high-contrast pattern — the base colour and vignette are supplied
     by the caller (KraftTable.web.tsx / site.css), never baked in here, so
-    this file is reused unmodified for both the kraft (light) and walnut
+    this file is reused unmodified for both the linen (light) and walnut
     (dark) table.
   -->
   <filter id="fibre">

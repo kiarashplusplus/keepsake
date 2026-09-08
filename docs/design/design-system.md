@@ -117,12 +117,12 @@ sorting photos on a kitchen table, not a SaaS dashboard.
 **The one architectural decision everything else follows from.** A photograph, once printed, does
 not change colour when the room's lights go down — so almost nothing in `packages/tokens/src/colors.ts`
 flips between light and dark. `ink` (`#1B1815`), `pencil`/`textSecondary` (`#5A524A`), `print`
-(`#FBF9F4`), and the stamp red (`accent #C4341C` / `accentText #8A2113`) are **byte-identical** in
+(`#FBF9F4`), and the stamp red (`accent #C4341C` / `accentText #87301F`) are **byte-identical** in
 `colorsLight` and `colorsDark` — verified by a dedicated test in `contrast.test.ts` that asserts
 every key except `TABLE_TOKENS` (`bg`/`table`/`tableEdge`/`surfaceSunken`/`overlay`/`shadow*`/
 `lampLight`) is unchanged across the two objects. Only the table itself goes from kraft by day
 (`bg #D2BC97`) to walnut at night (`bg #2B2119`, with `lampLight` a warm radial glow), plus the
-`surface` chrome an input/sheet/chip/header is cut from (`#F1E6CC`, a lined index card — also
+`surface` chrome an input/sheet/chip/header is cut from (`#FAF6EE`, a lined index card — also
 constant). Because ink never inverts, every screen's real content (headlines, forms, dashboard
 rows) is wrapped in a `Card` (`src/ui/Surface.tsx`) or a `Print` (`src/ui/Print.tsx`) rather than
 sitting bare on the table — see those two components' header comments, and `EmptyState`/
@@ -136,19 +136,19 @@ constant there, matching "stamp red stays."
 
 | Token | Value | Flips? | Role | Contrast |
 |---|---|---|---|---|
-| `bg` / `table` | `#D2BC97` light, `#2B2119` dark | yes | the table itself | `ink` on light `bg` = 9.6:1 ✓ |
-| `tableEdge` / `surfaceSunken` | `#B89D74` light, `#1C140F` dark | yes | vignette / skeleton fill, decorative only | — |
-| `surface` | `#F1E6CC` | no | index-card chrome (inputs, sheets, chips, header) | `ink` on `surface` = 14.3:1 ✓ |
-| `print` | `#FBF9F4` | no | the photograph's own frame | `ink` on `print` = 16.8:1 ✓ |
-| `ink` | `#1B1815` | no | body/caption text | see above |
-| `pencil` / `textSecondary` | `#5A524A` | no | secondary text on the print | on `print` = 7.3:1 ✓ |
-| `textTertiary` | `#6C6150` | no | captions/metadata | on `print` = 5.8:1 ✓ |
-| `accent` / `stamp` | `#C4341C` | no | decorative stamp fill (not text-safe) | — |
-| `accentText` / `stampText` | `#8A2113` | no | the stamp's readable ink | on `print` = 8.7:1 ✓ |
-| `onAccent` | `#FBF9F4` (=`print`) | no | label on the stamp/primary-button fill | on `accent` = 5.2:1 ✓ |
-| `tape` | `rgba(255,236,160,.55)` | no | masking-tape corners | decorative |
-| `foil` / `foilText` | `#8A6D3F` / `#5C4726` | no | aged small labels (e.g. step numerals ahead) | `foilText` on `print` = 8.4:1 ✓ |
-| `focus` / `dangerText` | `#7A2515` | no | focus ring, error text | on `print` = 9.5:1 ✓ |
+| `bg` / `table` | `#E4DDD1` light, `#2B2119` dark | yes | the table itself | `ink` on light `bg` = 11.5:1 ✓ |
+| `tableEdge` / `surfaceSunken` | `#C9C0B3` light, `#1C140F` dark | yes | vignette / skeleton fill, decorative only | — |
+| `surface` | `#FAF6EE` | no | index-card chrome (inputs, sheets, chips, header) | `ink` on `surface` = 14.4:1 ✓ |
+| `print` | `#FFFDF8` | no | the photograph's own frame | `ink` on `print` = 15.3:1 ✓ |
+| `ink` | `#28231F` | no | body/caption text | see above |
+| `pencil` / `textSecondary` | `#635B53` | no | secondary text on the print | on `print` = 6.6:1 ✓ |
+| `textTertiary` | `#635B53` | no | captions/metadata | on `print` = 6.6:1 ✓ |
+| `accent` / `stamp` | `#A9432E` | no | decorative stamp fill (not text-safe) | — |
+| `accentText` / `stampText` | `#87301F` | no | the stamp's readable ink | on `print` = 8.7:1 ✓ |
+| `onAccent` | `#FFFDF8` (=`print`) | no | label on the stamp/primary-button fill | on `accent` = 5.9:1 ✓ |
+| `tape` | `rgba(205,184,140,.42)` | no | masking-tape corners | decorative |
+| `foil` / `foilText` | `#8A6D3F` / `#5C4726` | no | aged small labels (e.g. step numerals ahead) | `foilText` on `print` = 8.7:1 ✓ |
+| `focus` / `dangerText` | `#7A2515` | no | focus ring, error text | on `print` = 9.8:1 ✓ |
 
 **Type.** Two faces, nothing else visible: **Fraunces** (variable, self-hosted, unchanged from v2)
 for headlines/wordmark/story, pushed to a high `opsz` for display and low for prose; **Courier
@@ -198,7 +198,7 @@ every duration/loop and leaves `tiltRangeDeg` alone (a resting tilt is a static 
 an animation) — asserted in `contrast.test.ts`'s `motionSafe` block.
 
 **OG image / favicon.** `apps/site/og/og-default.svg` redrawn as a taped, tilted print carrying the
-wordmark/headline/stamp on kraft, regenerated to `apps/site/public/og-default.png` with
+wordmark/headline/stamp on linen, regenerated to `apps/site/public/og-default.png` with
 `npx -y @resvg/resvg-js-cli --font-file … og-default.svg og-default.png` (note: Courier Prime's own
 name-table family is "Courier Prime" with a space — the SVG's `font-family` attributes must match
 that, not the token name `CourierPrime`, or resvg silently falls back to its default font).
@@ -206,7 +206,7 @@ that, not the token name `CourierPrime`, or resvg silently falls back to its def
 print with a red stamp dot).
 
 **Per-listing share card.** `apps/api/src/og/card.ts` draws the same vocabulary per listing — a
-taped square print on the left, the story on a kraft index card on the right — and the Worker
+taped square print on the left, the story on a linen index card on the right — and the Worker
 rasterises it at `GET /og/item/:id/card.png` (`src/og/render.ts`). Chosen from three compositions
 by rendering all three and looking at them; `node tools/og/render-samples.mjs` still renders the
 shipped one across five fixtures and prints a byte table, and is the thing to run after any change
@@ -286,3 +286,21 @@ And the reason the baseline exists, demonstrated twice: `e2e/scroll.spec.ts` was
 #219 (it asserted the newest card was below the fold, which was true only because the feed's own
 hero filled the viewport), and the no-results heading's overflow on a long search term was
 invisible to every unit test and obvious in one frame.
+
+## Linen & Rust palette refinement (2026-09-08)
+
+The approved Linen & Rust refinement keeps v3's objects and composition intact while taking the
+yellow cast out of the room. In light mode the table is linen (`bg` / `table` `#E4DDD1`), index-card
+chrome is warmer paper (`surface` `#FAF6EE`), and the photograph frame is the cleanest paper
+(`print` `#FFFDF8`). That separation lets photographs carry more visual weight without changing
+card geometry, type, tape placement, or resting tilts. Ink is soft near-black (`#28231F`), pencil
+copy is `#635B53`, and the rubber stamp is rust (`#A9432E`). Readable stamp copy remains the
+separate, darker `accentText` / `stampText` (`#87301F`) rather than using decorative rust as small
+text.
+
+The architectural rule is unchanged: only `TABLE_TOKENS` differ between themes. Paper,
+photographs, ink, stamps, tape, and semantic colors are byte-identical when the walnut nighttime
+table appears; constant dark ink therefore still belongs on paper, never directly on walnut. The
+marketing site deliberately retains its established inversion for prose that sits directly on its
+table. Light-table grain is half its former strength, cast shadows are neutralized away from
+brown, and tape is translucent flax rather than yellow.
