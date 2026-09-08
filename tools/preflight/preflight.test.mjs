@@ -132,6 +132,18 @@ test("fonts: warns on an unreferenced ttf without failing", () => {
 // so a font replaced in place is invisible to every returning visitor. Each
 // mutation here is one a real change would make.
 
+test("fontVersionToken: a font it could not read is null, not a thrown hash", () => {
+  // `ctx.readBytes` answers `null` for a file it cannot read — a broken
+  // symlink, a permission, an LFS pointer nobody fetched (this repo already
+  // has one of those). Handing that to `hash.update()` throws, and the runner
+  // reports a thrown check as "check itself threw" with a stack that does not
+  // say which font. `checkFonts` filters and names them; this is the second
+  // line of defence.
+  assert.equal(fontVersionToken([["Fraunces.ttf", null]]), null);
+  assert.equal(fontVersionToken([["Fraunces.ttf", Buffer.from("x")], ["Inter.woff2", null]]), null);
+  assert.equal(typeof fontVersionToken([["Fraunces.ttf", Buffer.from("x")]]), "string");
+});
+
 test("fonts: fails when a font is replaced but FONT_VERSION is not bumped", () => {
   const result = runOne("fonts", {
     "apps/web/app/+html.tsx": htmlGood(),
