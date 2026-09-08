@@ -194,10 +194,12 @@ export function semanticSearchEnabled(env: Env): boolean {
 }
 
 /**
- * Estate bulk upload's kill switch. "0" in every environment except
- * `[env.preview]` (see `wrangler.toml`'s comment there): nothing has yet
- * prepared a real batch through a real browser, so preview is where that
- * first has to happen before this can be considered for production.
+ * Estate bulk upload's kill switch. "1" in `[env.preview]` and, since
+ * 2026-09-08, `[env.production]` too (see `wrangler.toml`'s comments there) —
+ * approved for production ahead of a real-browser end-to-end run (still
+ * outstanding as of that date, `docs/design/bulk-upload.md`'s "What has NOT
+ * been done"); this is still the switch to flip back to "0" if that surfaces
+ * a problem once real traffic hits it.
  *
  * A plain member access, not routed through `parseIntVar` or any helper —
  * preflight's `var-usage` check (`tools/preflight/preflight.mjs`) resolves

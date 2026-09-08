@@ -636,21 +636,29 @@ MOD_IMAGE_DAILY_BUDGET = "18000"
 SUGGEST_DAILY_BUDGET = "2500"
 EMBED_DAILY_BUDGET = "4000"
 SEMANTIC_SEARCH = "1"  # issue #38, on — see top-level [vars]
-LISTING_IP_DAILY_BUDGET = "20"
-REQUEST_IP_DAILY_BUDGET = "20"
-UPLOAD_IP_DAILY_BUDGET = "60"
-REPORT_IP_DAILY_BUDGET = "10"
-EMAIL_IP_DAILY_BUDGET = "10"
+# Per-IP ceilings raised 5x on 2026-09-08 (Kiarash's call): these are
+# anti-abuse, not cost — they don't spend the Workers AI allocation the way
+# the budgets above do — and 20/day for a shared household or CGNAT address
+# was landing on real givers, not just scripts. See the matching comment
+# under `[env.production.vars]` for the full reasoning.
+LISTING_IP_DAILY_BUDGET = "100"
+REQUEST_IP_DAILY_BUDGET = "100"
+UPLOAD_IP_DAILY_BUDGET = "300"
+REPORT_IP_DAILY_BUDGET = "50"
+EMAIL_IP_DAILY_BUDGET = "50"
 # Issue #188, and the odd one out on this page: every other ceiling here is
 # keyed by the *caller's* address and answers "how much may this client do?".
 # This one is keyed by the **recipient's** address and answers "how much mail
 # can arrive at one inbox today, from anyone?" — the only question a per-IP
 # number cannot answer, because the attacker and the person harmed are not the
-# same party and an attacker can always find more IPs. Three "did you ask for
-# this?" confirmations a day, per address, from everyone combined. See
+# same party and an attacker can always find more IPs. Left at 3 in the
+# 2026-09-08 pass above: raising it loosens how much a *stranger's* inbox can
+# be mailed by unrelated requesters, which is not the "crippling real users"
+# problem the other ceilings on this page had. Three "did you ask for this?"
+# confirmations a day, per address, from everyone combined. See
 # `DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET` in src/routes/listings.ts.
 REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET = "3"
-SUGGEST_IP_DAILY_BUDGET = "30"
+SUGGEST_IP_DAILY_BUDGET = "150"
 REPORT_AUTOHIDE_THRESHOLD = "3"
 SHELF_MIN_ITEMS = "3"
 MAX_PHOTO_BYTES = "5242880"
@@ -862,30 +870,52 @@ COMMIT_SHA = "dev"
 # why MOD_IMAGE_DAILY_BUDGET reads so much higher than the text one for the
 # same real capacity (it is charged per photo, not per listing).
 #
-# `[env.preview]` above is deliberately left at 2000/6000: preview is
+# `[env.preview]` above is deliberately left lower (6000/18000): preview is
 # allowlisted QA traffic, nobody's listing is stranded there in a way that
 # matters, and a low ceiling there is a cheap way to find out this code path
 # still works.
-MOD_TEXT_DAILY_BUDGET = "20000"
-MOD_IMAGE_DAILY_BUDGET = "60000"
-SUGGEST_DAILY_BUDGET = "1000"
-EMBED_DAILY_BUDGET = "2000"
+#
+# SUGGEST_DAILY_BUDGET and EMBED_DAILY_BUDGET raised 2026-09-08 alongside the
+# per-IP pass below — they had been left behind by the 2026-09-07 4x raise
+# above (SUGGEST/EMBED were never touched, so production sat *below*
+# preview's 2500/4000, backwards from every other budget on this page, which
+# scales up from preview to production). Same "runaway protection, not a
+# product tier" reasoning as MOD_TEXT/MOD_IMAGE: Workers AI meters its own
+# allocation regardless of what's set here, this is a paid Cloudflare account
+# where the actual spend is cheap (SUGGEST is ~$0.17/1000 calls per the
+# top-level `[vars]` comment), and the failure mode of a tight ceiling is an
+# outage-shaped one (autofill/search degrade silently), not a cost save.
+MOD_TEXT_DAILY_BUDGET = "40000"
+MOD_IMAGE_DAILY_BUDGET = "120000"
+SUGGEST_DAILY_BUDGET = "5000"
+EMBED_DAILY_BUDGET = "8000"
 SEMANTIC_SEARCH = "1"  # issue #38, on — see top-level [vars]
-LISTING_IP_DAILY_BUDGET = "20"
-REQUEST_IP_DAILY_BUDGET = "20"
-UPLOAD_IP_DAILY_BUDGET = "60"
-REPORT_IP_DAILY_BUDGET = "10"
-EMAIL_IP_DAILY_BUDGET = "10"
+# Per-IP ceilings raised 5x on 2026-09-08 (Kiarash's call): these are
+# anti-abuse, not cost — they don't spend the Workers AI allocation the way
+# the budgets above do — and 20/day for a shared household or CGNAT address
+# was landing on real givers, not just scripts. The old numbers (20/20/60,
+# reports and email at 10) were sized against zero real traffic; these give
+# real households room without opening the door any wider to an actual
+# scraper, which these ceilings were never the only defense against anyway
+# (`burst()` above and the moderation pipeline's own budget still apply).
+LISTING_IP_DAILY_BUDGET = "100"
+REQUEST_IP_DAILY_BUDGET = "100"
+UPLOAD_IP_DAILY_BUDGET = "300"
+REPORT_IP_DAILY_BUDGET = "50"
+EMAIL_IP_DAILY_BUDGET = "50"
 # Issue #188, and the odd one out on this page: every other ceiling here is
 # keyed by the *caller's* address and answers "how much may this client do?".
 # This one is keyed by the **recipient's** address and answers "how much mail
 # can arrive at one inbox today, from anyone?" — the only question a per-IP
 # number cannot answer, because the attacker and the person harmed are not the
-# same party and an attacker can always find more IPs. Three "did you ask for
-# this?" confirmations a day, per address, from everyone combined. See
+# same party and an attacker can always find more IPs. Left at 3 in the
+# 2026-09-08 pass above: raising it loosens how much a *stranger's* inbox can
+# be mailed by unrelated requesters, which is not the "crippling real users"
+# problem the other ceilings on this page had. Three "did you ask for this?"
+# confirmations a day, per address, from everyone combined. See
 # `DEFAULT_REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET` in src/routes/listings.ts.
 REQUEST_CONFIRM_ADDRESS_DAILY_BUDGET = "3"
-SUGGEST_IP_DAILY_BUDGET = "30"
+SUGGEST_IP_DAILY_BUDGET = "150"
 REPORT_AUTOHIDE_THRESHOLD = "3"
 SHELF_MIN_ITEMS = "3"
 MAX_PHOTO_BYTES = "5242880"
@@ -910,10 +940,11 @@ CF_ZONE_ID = "dcc1fb09eeeba27a343fc1d98aff9094"
 CF_ACCOUNT_ID = "dc6a87ed4a4269ed74c8f508b275b703"
 CF_SCRIPT_NAME = "keepsake-production"
 MOCK_AI = "0"
-# "0" — see the top-level [vars] comment. The estate bulk upload pilot has
-# not run against a real browser anywhere yet, so it has not been approved
-# for production; preview is where that has to happen first.
-BULK_UPLOAD = "0"
+# "1" — approved for production 2026-09-08 (Kiarash's call). See the
+# top-level [vars] comment for the admission mechanics (grant + D1-guarded
+# counters, not Turnstile) and `[env.preview]` above for the pilot this
+# graduates from.
+BULK_UPLOAD = "1"
 BULK_GRANT_TTL_HOURS = "72"
 BULK_MAX_ITEMS_PER_BATCH = "100"
 BULK_MAX_PHOTOS_PER_BATCH = "300"
