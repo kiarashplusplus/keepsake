@@ -370,6 +370,11 @@ test.describe("ux baseline", () => {
     await page.getByLabel("Batch name").fill("Dad's workshop — October");
     await page.getByLabel("Postcode").fill("02144");
     await expect(page.getByText("Somerville, MA")).toBeVisible();
+    // Filled, not left to the placeholder: the placeholder text reads as a
+    // real example household story at a glance, which made an earlier
+    // baseline look like it had a stuck "0/2000" counter — it was
+    // correctly counting the actually-empty field.
+    await page.getByLabel("Shared household story (optional)").fill("Everything here belonged to my grandmother, who lived in this house for sixty years.");
     await shot(page, testInfo, "bulk-new");
 
     await page.goto(`/bulk/${batch.clientBatchKey}/photos`);

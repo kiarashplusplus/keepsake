@@ -81,6 +81,63 @@ export type Aspect = z.infer<typeof AspectSchema>;
 export const MAX_ASPECTS = 6;
 
 /**
+ * Whole-clause replies that observe nothing, matched case-insensitively
+ * against a condition with its trailing punctuation removed.
+ *
+ * The prompt already tells the model to leave `condition` empty when the
+ * object looks unremarkable, and forbids claiming an object is new, unused
+ * or in perfect condition — a photo cannot show that. It does not always
+ * listen. A real cover photo of a ceiling fan came back as
+ * `"No visible damage"`, which the story step then rendered verbatim as
+ * "Your photo shows No visible damage. Worth a line?": a capital in the
+ * middle of a sentence, and an invitation to write a line about the absence
+ * of a thing. The note is meant to hand the giver a detail worth telling —
+ * "nothing to report" is the one answer that cannot do that, so it should
+ * leave no note at all rather than a badly-worded one.
+ *
+ * Every pattern is anchored end to end, and none of them allows a comma.
+ * That is what separates noise from an observation that merely *starts*
+ * like one: "no visible damage" is noise, "no handle, and a chipped rim" is
+ * a real thing to say about the object and survives.
+ */
+const EMPTY_CONDITION_PATTERNS: readonly RegExp[] = [
+  // A negation: "no visible damage", "none visible", "nothing notable",
+  // "there is no obvious wear".
+  /^(?:there (?:is|are) )?(?:no|not any|none|nothing)(?: [a-z-]+)*$/,
+  // A grade rather than an observation — the class the prompt bans outright.
+  /^(?:in )?(?:like[- ]new|brand[- ]new|as[- ]new|new|unused|never used|pristine|immaculate|flawless|mint|perfect|excellent|very good|good|fair|clean|intact|undamaged|unmarked|unremarkable|unblemished|great)(?: condition| shape)?(?: overall)?$/,
+  // "I cannot tell from this photo", in its many spellings.
+  /^(?:n ?\/? ?a|not applicable|unknown|unclear|unsure|indeterminate|cannot tell|can ?not be determined|cannot be determined|can'?t tell|hard to tell|difficult to tell|not (?:visible|determinable|assessable|discernible)|condition not visible)$/,
+];
+
+/**
+ * Cleans up the vision model's `condition` clause: collapses whitespace,
+ * drops the sentence-ending punctuation the note supplies itself, and
+ * returns `""` for a reply that observes nothing (see
+ * `EMPTY_CONDITION_PATTERNS`). Casing is left exactly as the model wrote it,
+ * so a clause opening on a proper noun — "Pyrex lid, chipped rim" — is not
+ * mangled; the note reads it after a colon rather than mid-sentence for
+ * that reason.
+ *
+ * Applied twice on purpose. `PhotoSuggestionSchema` runs it as a transform,
+ * which covers every suggestion the API returns *and* every one the client
+ * parses back off the wire; the story and bulk-review steps run it again on
+ * render, because a give draft rehydrated from `sessionStorage` is spread
+ * back in as-is and can still be carrying a value stored before this
+ * existed.
+ */
+export function normalizeCondition(raw: string): string {
+  const clause = raw
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[.!?\s]+$/, "")
+    .trim();
+  if (clause === "") return "";
+  const probe = clause.toLowerCase();
+  return EMPTY_CONDITION_PATTERNS.some((pattern) => pattern.test(probe)) ? "" : clause;
+}
+
+/**
  * `POST /api/photos/:id/suggest`'s successful shape — the vision model's
  * read of a photo's cover, turned into give-flow form fields. Constrained to
  * the *real* `CategorySchema`/title bounds (imported from `./category`, not
@@ -122,8 +179,14 @@ export const PhotoSuggestionSchema = z.object({
   category: CategorySchema,
   /** Visible wear/material/age cues, one short clause. Empty string when
    * nothing is notable — never stored on the listing (see Part 3 of the give
-   * flow plan); spent only as a dismissible opener on the story step. */
-  condition: z.string().trim().max(160),
+   * flow plan); spent only as a dismissible opener on the story step.
+   *
+   * `normalizeCondition` runs after the length bound, not before it: an
+   * over-long reply is still a schema failure rather than something the
+   * transform quietly rescues, and "no visible damage" still becomes `""`
+   * here so no caller has to know that a model asked for an observation can
+   * answer with the absence of one. */
+  condition: z.string().trim().max(160).transform(normalizeCondition),
   /**
    * eBay-style structured attributes read off the photo — `object`,
    * `brand`, `model`, `material`, `size`, `era`, `colour`, `pattern` are
