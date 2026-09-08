@@ -196,6 +196,89 @@ test("a request in flight when wrangler dies is named in the crash report", asyn
   }
 });
 
+/**
+ * A child that pings a control URL immediately before dying, so a test can
+ * anchor an event to the *actual* moment of death. Spawn overhead varies by
+ * tens of milliseconds on a loaded machine — more than the 100ms drain the
+ * event has to land inside — so a fixed delay from t0 would be a coin flip.
+ */
+const PINGING_DYING_CHILD = `
+import http from "node:http";
+process.stdout.write("fake wrangler ready\\n");
+setTimeout(() => {
+  const req = http.request(process.env.CONTROL_URL, () => {});
+  req.on("error", () => {});
+  req.end();
+  setTimeout(() => {
+    process.stderr.write("${CRASH_MARKER}\\n");
+    process.exit(1);
+  }, 5);
+}, 400);
+`;
+
+test("a request that lost its socket as wrangler died is still named in the crash report", async () => {
+  // The regression this covers, and why the black-hole test above cannot:
+  // the crash report used to read `inFlight` live, from inside the 100ms
+  // drain. A request whose socket died along with wrangler has already run
+  // its error handler by then, and that handler's first act is `settle()` —
+  // `inFlight.delete(requestId)`. So the report printed
+  // `0 request(s) in flight` in exactly the case the line exists to describe,
+  // while a request that merely hangs (never errors, never settles) was
+  // reported correctly. The passing test measured the harmless case.
+  //
+  // Observed for real on CI run 34175347984: eight requests reset within five
+  // milliseconds of the death, and the report claimed none were in flight.
+  //
+  // The upstream commits response headers first, so the failure lands on the
+  // `upstreamRes.on("error")` path, which settles WITHOUT retrying. A retry
+  // would enter `forward()` again and register a fresh `inFlight` entry,
+  // which would mask the bug by refilling the map.
+  let pending = null;
+  const upstream = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.write("partial");
+    pending = req.socket;
+  });
+  await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+
+  // Destroy the upstream socket 30ms after the child says it is about to die:
+  // after the `exit` event, comfortably inside the 100ms drain before the
+  // report is built.
+  const control = http.createServer((req, res) => {
+    res.end("ok");
+    setTimeout(() => pending?.destroy(), 30);
+  });
+  await new Promise((resolve) => control.listen(0, "127.0.0.1", resolve));
+
+  try {
+    const { output } = await runServe(
+      {
+        E2E_MAX_WRANGLER_RESTARTS: "0",
+        CONTROL_URL: `http://127.0.0.1:${control.address().port}/dying`,
+      },
+      {
+        child: PINGING_DYING_CHILD,
+        upstreamPort: upstream.address().port,
+        onListening: (port) => {
+          const req = http.request({ host: "127.0.0.1", port, path: "/lost-its-socket" });
+          req.on("error", () => {});
+          req.on("response", (res) => res.resume());
+          req.end();
+        },
+      },
+    );
+
+    // Proves the socket really did die, so this test cannot pass by the
+    // request having quietly succeeded instead.
+    assert.match(output, /upstream-response-error GET \/lost-its-socket/);
+    assert.match(output, /1 request\(s\) in flight to wrangler when it died/);
+    assert.match(output, /GET \/lost-its-socket \(\d+ms ago\)/);
+  } finally {
+    await new Promise((resolve) => upstream.close(resolve));
+    await new Promise((resolve) => control.close(resolve));
+  }
+});
+
 test("this proxy losing its own upstream socket is recorded, not swallowed", async () => {
   // Nothing is listening on the upstream port, so the forward fails the way
   // it would if wrangler's socket went away mid-request: the browser is

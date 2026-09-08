@@ -223,7 +223,7 @@ function tee(source, sink, streamName) {
   return flush;
 }
 
-function reportCrash(code, signal) {
+function reportCrash(code, signal, inFlightAtExit, exitAt) {
   const lines = [
     `[e2e:server] ---- wrangler dev exited unexpectedly (code=${code} signal=${signal}) ----`,
     `[e2e:server] last ${retained.length} line(s) of its output; "out|"/"err|" marks the stream:`,
@@ -239,9 +239,20 @@ function reportCrash(code, signal) {
       : "[e2e:server] wrangler printed no debug-log path before dying.",
   );
 
-  const now = Date.now();
-  const stillOpen = [...inFlight.values()].map(
-    ({ method, url, startedAt }) => `${method} ${url} (${now - startedAt}ms ago)`,
+  // `inFlightAtExit` is a snapshot taken synchronously in the `exit` listener,
+  // NOT a read of the live map. Reading `inFlight` here would always report
+  // zero: this runs behind the 100ms drain below, and every request that lost
+  // its socket to the dying wrangler has already run its `error` handler, whose
+  // first act is `settle()` — `inFlight.delete(requestId)`. So the map is
+  // guaranteed empty by the time this executes, in exactly the case the line
+  // exists to describe. That is not theoretical; it printed
+  // `0 request(s) in flight` on a crash with eight requests outstanding and
+  // sent a diagnosis of #104 down the wrong leg, because "nothing was in
+  // flight" reads as evidence that the client hang-up path was not involved.
+  // A signal that cannot report the state it was added to report is the exact
+  // failure this file's header is about.
+  const stillOpen = inFlightAtExit.map(
+    ({ method, url, startedAt }) => `${method} ${url} (${exitAt - startedAt}ms ago)`,
   );
   lines.push(
     `[e2e:server] ${stillOpen.length} request(s) in flight to wrangler when it died:`,
@@ -298,13 +309,19 @@ function startWrangler() {
     child = null;
     if (stopping) return;
     restarts += 1;
+    // Snapshot the in-flight requests NOW, synchronously, before anything
+    // awaits. The `error` handlers for every socket wrangler just dropped are
+    // already queued and each one calls `settle()`, so a read taken after the
+    // drain below sees an empty map however many requests were outstanding.
+    const inFlightAtExit = [...inFlight.values()];
+    const exitAt = Date.now();
     // `exit` can fire while the last bytes of a crash message are still in the
     // pipe, and those are precisely the lines this exists to keep. Give the
     // reader a beat to drain before reporting; a restart takes seconds anyway.
     setTimeout(() => {
       flushOut();
       flushErr();
-      reportCrash(code, signal);
+      reportCrash(code, signal, inFlightAtExit, exitAt);
       if (restarts > RESTART_LIMIT) {
         giveUp();
         return;
