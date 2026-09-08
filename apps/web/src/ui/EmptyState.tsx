@@ -25,7 +25,15 @@ export function EmptyState({ title, line, eyebrow, ornament, action }: EmptyStat
     <Card style={{ alignItems: "center", gap: space.md, paddingVertical: space.xxxl, alignSelf: "center", maxWidth: 560, width: "100%" }}>
       {ornament !== undefined ? <View style={{ marginBottom: space.sm }}>{ornament}</View> : null}
       {eyebrow !== undefined ? <Eyebrow align="center">{eyebrow}</Eyebrow> : null}
-      <Text variant="displayLg" style={{ textAlign: "center", maxWidth: 480 }}>
+      {/* `overflowWrap: "anywhere"` because a title is not always ours: the
+          feed's no-results state (#220) echoes the visitor's own search term
+          back at 40px, and a long word with nothing to break at ran off both
+          edges of this card. Web-only value, through the same `as` escape
+          hatch the codebase uses for `boxShadow`. */}
+      <Text
+        variant="displayLg"
+        style={{ textAlign: "center", maxWidth: 480, ...({ overflowWrap: "anywhere" } as object) }}
+      >
         {title}
       </Text>
       {line !== undefined ? (

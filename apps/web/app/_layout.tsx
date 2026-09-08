@@ -7,7 +7,6 @@ import { MotionProvider } from "@/ui/MotionProvider";
 import { ToastProvider } from "@/ui/Toast";
 import { KraftTable } from "@/ui/KraftTable";
 import { AppHeader } from "@/ui/AppHeader";
-import { AppFooter } from "@/ui/AppFooter";
 import { VersionSkewBanner } from "@/features/versionSkew/VersionSkewBanner";
 
 // expo-router's Stack renders each screen inside a React Navigation `Screen`
@@ -21,6 +20,13 @@ import { VersionSkewBanner } from "@/features/versionSkew/VersionSkewBanner";
 // actually lets the table show through every route's `contentStyle`.
 const TRANSPARENT_ROUTER_THEME = { ...RouterDefaultTheme, colors: { ...RouterDefaultTheme.colors, background: "transparent" } };
 
+/**
+ * The header stays here — it is chrome, and it is the only way back to the
+ * feed from a screen scrolled to its end. The FOOTER does not: `ui/Page`
+ * renders it inside each screen's own scroller so it sits at the end of the
+ * document rather than pinned over it (#221). Putting it back here would
+ * re-pin it, because of the `flex: 1` shell below.
+ */
 function Shell(): React.ReactElement {
   return (
     <SafeAreaProvider>
@@ -36,7 +42,6 @@ function Shell(): React.ReactElement {
             }}
           />
         </RouterThemeProvider>
-        <AppFooter />
       </View>
     </SafeAreaProvider>
   );

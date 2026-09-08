@@ -1,6 +1,7 @@
 import * as React from "react";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import type { OwnerListing } from "@keepsake/contracts/listing";
+import { clampCardAspectRatio } from "@/lib/masonry";
 import { ToastProvider } from "@/ui/Toast";
 import { GiveDraftProvider } from "@/features/give/GiveDraftContext";
 import { GIVE_DRAFT_INITIAL, GIVE_DRAFT_STORAGE_KEY, serializeGiveDraft } from "@/features/give/giveDraft";
@@ -23,6 +24,25 @@ jest.mock("@/api/listings", () => ({
 jest.mock("@/api/me", () => ({
   getMyListing: jest.fn(),
 }));
+
+/** react-native-web renders to DOM nodes whose dynamic styles land inline;
+ * these two read them back the way `test/ui/TableHeading.test.tsx` does. */
+type Node = { type: string; props: Record<string, unknown>; children: (Node | string)[] | null };
+
+function flatten(node: Node | Node[] | string | null | undefined): Node[] {
+  // Three shapes reach here. `null`/`undefined` children are real (`Print`
+  // renders its tape corners conditionally, and a branch that renders
+  // nothing still occupies a slot), and `toJSON()` itself returns an ARRAY
+  // when the tree has more than one root — which this one does, since
+  // `ToastProvider` renders the screen and the toast host as siblings.
+  if (node === null || node === undefined || typeof node === "string") return [];
+  if (Array.isArray(node)) return node.flatMap(flatten);
+  return [node, ...(node.children ?? []).flatMap(flatten)];
+}
+
+function styleOf(node: Node): Record<string, string | undefined> {
+  return ((node.props ?? {}).style ?? {}) as Record<string, string | undefined>;
+}
 
 const baseListing: OwnerListing = {
   id: "01LISTINGAAAAAAAAAAAAAAAA",
@@ -108,7 +128,7 @@ describe("give/review", () => {
       moderation: { status: "approved", held: false },
     });
 
-    const { toJSON, getByLabelText, UNSAFE_getByProps } = renderReview();
+    const { toJSON, getByLabelText } = renderReview();
 
     // Let Turnstile's no-site-key effect report `unconfigured` so Submit's
     // Turnstile gate is satisfied.
@@ -118,7 +138,10 @@ describe("give/review", () => {
 
     fireEvent.changeText(getByLabelText("Date of birth"), "1990-01-01");
 
-    const submitButton = UNSAFE_getByProps({ accessibilityRole: "button" });
+    // By label, not by `accessibilityRole: "button"`: since #221 moved the
+    // legal footer inside `ui/Page`, every screen renders a second button
+    // ("Privacy choices") and the role alone stopped identifying this one.
+    const submitButton = getByLabelText("Give it");
     await act(async () => {
       fireEvent.press(submitButton);
       await Promise.resolve();
@@ -150,7 +173,7 @@ describe("give/review", () => {
       moderation: { status: "rejected", reason: "contact_in_story", held: false },
     });
 
-    const { toJSON, getByLabelText, UNSAFE_getByProps } = renderReview();
+    const { toJSON, getByLabelText } = renderReview();
 
     await act(async () => {
       await Promise.resolve();
@@ -158,7 +181,10 @@ describe("give/review", () => {
 
     fireEvent.changeText(getByLabelText("Date of birth"), "1990-01-01");
 
-    const submitButton = UNSAFE_getByProps({ accessibilityRole: "button" });
+    // By label, not by `accessibilityRole: "button"`: since #221 moved the
+    // legal footer inside `ui/Page`, every screen renders a second button
+    // ("Privacy choices") and the role alone stopped identifying this one.
+    const submitButton = getByLabelText("Give it");
     await act(async () => {
       fireEvent.press(submitButton);
       await Promise.resolve();
@@ -172,5 +198,35 @@ describe("give/review", () => {
     });
 
     expect(JSON.stringify(toJSON())).toContain("Keep contact details out of the story");
+  });
+
+  /**
+   * Issue #218. The review print used to render the cover as a fixed 96x96
+   * thumbnail pinned to the top-left of a full-width frame, with most of the
+   * print empty beside it — so the one screen whose entire job is "this is
+   * what you are about to publish" was the one screen that did not look like
+   * the published card.
+   *
+   * This asserts the geometry, not the words: the photo's box fills the
+   * print's width and carries the cover's own clamped aspect ratio, exactly
+   * as `src/features/feed/ListingCard.tsx` does. Put the 96x96 square back
+   * and both halves fail — the width is a pixel count again and the ratio is
+   * gone. `clampCardAspectRatio` is imported rather than restated so this
+   * cannot quietly agree with a copy of the rule that has since drifted.
+   */
+  it("renders the cover the way the feed card will: full width, at the photo's own aspect ratio", () => {
+    seedDraft();
+    const { toJSON } = renderReview();
+
+    // The seeded cover is 800x600 — a 4:3 landscape, inside the band
+    // `clampCardAspectRatio` allows, so it survives the clamp unchanged.
+    const expected = clampCardAspectRatio(800, 600);
+    expect(expected).toBeCloseTo(4 / 3, 6);
+
+    const photoBox = flatten(toJSON() as unknown as Node).find((node) => styleOf(node).aspectRatio !== undefined);
+    if (photoBox === undefined) throw new Error("no node in the review print carries an aspectRatio");
+
+    expect(Number(styleOf(photoBox).aspectRatio)).toBeCloseTo(expected, 6);
+    expect(styleOf(photoBox).width).toBe("100%");
   });
 });

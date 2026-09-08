@@ -2,6 +2,7 @@ import * as React from "react";
 import { TextInput } from "react-native";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import { RequestSheet } from "@/features/request/RequestSheet";
+import { SafetyNote } from "@/ui/SafetyNote";
 import { createRequest } from "@/api/requests";
 import { ApiError } from "@/api/client";
 
@@ -122,5 +123,50 @@ describe("RequestSheet", () => {
     await fillAndSubmit(instance, "Tell them why it should be mine, please and thank you.", "person@keepsake.ing");
 
     expect(JSON.stringify(instance.toJSON())).toContain("This keepsake was just given to someone else.");
+  });
+
+  // Issue #224 item 2. Both safety paragraphs were `caption`/`textTertiary` —
+  // 12px CourierPrime in the faintest colour the palette has — which set the
+  // most consequential copy in the product like something people are meant to
+  // skip. `test/ui/SafetyNote.test.tsx` owns the typographic and contrast
+  // assertions; these two own the two things only this file can see: that the
+  // sheet reaches for that component on BOTH phases, and that the wording it
+  // hands over is unchanged to the character.
+  //
+  // Asserted through `UNSAFE_getAllByType`, which reads the composite
+  // element's authored props before react-native-web's host translation, for
+  // the same reason `test/ui/Button.test.tsx` explains at length. A
+  // whole-tree string match is not usable here: the form is full of
+  // legitimate 12px mono — every field label, the character counter, the
+  // age-gate hint — so "no caption anywhere" would fail on copy that is
+  // correctly set as small print.
+  const FORM_COPY =
+    "A note before you send this: if you two meet up, pick a public spot, bring a " +
+    "friend if you can, and keep talking here in Keepsake rather than trading numbers " +
+    "early. A porch handoff works too, if you'd both rather skip meeting in person.";
+
+  const SENT_COPY =
+    "If you're chosen: meet somewhere public and well-lit, bring a friend or tell " +
+    "someone the plan, and keep working out the details here in Keepsake rather than " +
+    "switching to text. Leaving it on a porch instead of meeting face to face is always " +
+    "fine too — just say so.";
+
+  it("sets the form's safety guidance as a note, not as small print", () => {
+    const instance = render(<RequestSheet visible onClose={jest.fn()} listingId="listing-1" />);
+
+    const notes = instance.UNSAFE_getAllByType(SafetyNote);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.props.children).toBe(FORM_COPY);
+  });
+
+  it("sets the sent state's safety guidance as a note too", async () => {
+    jest.mocked(createRequest).mockResolvedValue({ id: "req-1", created_at: Date.now() });
+    const instance = render(<RequestSheet visible onClose={jest.fn()} listingId="listing-1" />);
+
+    await fillAndSubmit(instance, "Tell them why it should be mine, please and thank you.", "person@keepsake.ing");
+
+    const notes = instance.UNSAFE_getAllByType(SafetyNote);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.props.children).toBe(SENT_COPY);
   });
 });

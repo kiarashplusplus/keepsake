@@ -229,6 +229,41 @@ test.describe("the consent gate", () => {
     expect(Math.abs((rejectBox?.y ?? 0) - (acceptBox?.y ?? 0))).toBeLessThanOrEqual(1);
     // Reject comes first in reading and tab order.
     expect(rejectBox?.x ?? 0).toBeLessThan(acceptBox?.x ?? 0);
+
+    // ...and the same TREATMENT, not merely the same box (#223). This test
+    // measured geometry only, and geometry was never the defect: the two were
+    // always the same size in the same row, while `Accept all` wore the
+    // filled stamp red that every primary action in the product wears and
+    // `Reject all` wore a near-white outline. Equal size, unequal weight —
+    // which is the half of "symmetry in choice" a bounding box cannot see, so
+    // this guard could not have failed on the thing the issue was about.
+    //
+    // Asserted as an equality between the two buttons rather than against
+    // hard-coded hexes: the point is that they match each other, and a
+    // palette change that moves both together is not a regression.
+    // `public/consent.js` is where the chosen pair and its contrast ratio are
+    // written down.
+    const treatment = (locator: ReturnType<typeof page.locator>) =>
+      locator.evaluate((node) => {
+        const computed = getComputedStyle(node as Element);
+        return [
+          computed.backgroundColor,
+          computed.borderTopColor,
+          computed.borderTopWidth,
+          computed.color,
+          computed.boxShadow,
+          computed.fontFamily,
+          computed.fontSize,
+          computed.fontWeight,
+          computed.letterSpacing,
+          computed.textTransform,
+        ].join(" | ");
+      });
+
+    expect(await treatment(accept)).toBe(await treatment(reject));
+    // The bluntest form of the same statement, and the one that fails first
+    // if someone re-introduces a per-button modifier class.
+    expect(await accept.getAttribute("class")).toBe(await reject.getAttribute("class"));
     await context.close();
   });
 
@@ -238,12 +273,26 @@ test.describe("the consent gate", () => {
     await page.goto("/");
     await expect(banner(page)).toBeVisible();
 
-    // The hero CTA is what a stranger is here to press. Playwright's own
-    // actionability check refuses a click that another element would
-    // intercept, so this asserts coverage rather than merely geometry.
-    const cta = page.getByRole("button", { name: "Give something" }).first();
+    // Playwright's own actionability check refuses a click that another
+    // element would intercept, so both of these assert coverage rather than
+    // merely geometry.
+    //
+    // The Give control, by either label: #219 dropped the hero's own button
+    // at phone width (the header already carries one) and the narrow header
+    // calls it "Give", so naming only "Give something" made this test fail
+    // for a reason that had nothing to do with consent.
+    const cta = page.getByRole("button", { name: /^Give( something)?$/ }).first();
     await expect(cta).toBeVisible();
     await cta.click({ trial: true, timeout: 5000 });
+
+    // And the category chips, which is the stronger half now that #223 has
+    // docked the banner to the bottom edge. The Give control lives in the
+    // header, at the top of the page, so a bottom-docked banner passes that
+    // check whatever it does; the chips are the row the issue actually
+    // reported the floating banner landing on top of.
+    const chip = page.getByRole("button", { name: "All", exact: true }).first();
+    await expect(chip).toBeVisible();
+    await chip.click({ trial: true, timeout: 5000 });
     await context.close();
   });
 });

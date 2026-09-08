@@ -240,3 +240,49 @@ They are **not in the repo** — this line named `apps/web/screenshots/v4-*.png`
 under `docs/qa/`, whose own README caps them at one change's worth of evidence and records that
 the directory was emptied on 2026-09-07; re-shoot from the local stack
 (`pnpm --filter @keepsake/web e2e`) rather than looking for these.
+
+## UX polish pass (2026-09-08) — #216–#224
+
+Nine issues off one review of `docs/qa/baseline/`. Recorded here because six of them
+established a rule rather than moved a pixel, and the rules are the part worth keeping.
+
+**Text never sits bare on the table — and now there is a component for when it must.** The
+palette's central claim (see `colors.ts`'s header) is that only the table flips, which is safe
+*only* while every word in the product rests on paper. Three section headings did not, and
+`/mine`'s "LIVE" measured **1.12:1** in dark mode. `ui/TableHeading` prints such a heading on
+its own small strip — 14.25:1 on `surface`, in both themes. The alternative, giving the eyebrow a
+dark value, would have made it the only inverting text in the system and would have dragged the
+rule beneath it along too. Reach for `TableHeading` for any label that belongs on the tabletop
+rather than inside a card.
+
+**`Sunken` is a shape, not a surface for words.** It fills with `tableEdge`, which *does* flip, so
+constant ink on it measures 2.96:1 light and 2.37:1 dark. Its one text-bearing caller (the give
+flow's photo-suggestion chip) moved onto the card's own `surface` behind a stamp-red rule.
+
+**The footer is document content, not chrome.** `ui/Page` renders it at the end of each screen's
+scroller. In `app/_layout.tsx` — beside the router, inside the `flex: 1` shell — it was pinned
+over the bottom 59px of every viewport and sliced scrolling content mid-glyph.
+
+**Button rank is per *surface*, and a sheet is its own surface.** Stamp-red marks the one action
+that completes what is in front of you. An action that repeats down a list can never be that, so
+it is ink — which is why `Choose` on `/mine/:id` is ink and the sheet's confirm is red. There are
+two filled ranks and no third; the outline button that made it look like three was
+`public/consent.js`'s, and it is gone.
+
+**Equal weight is a legal requirement, not a preference.** The consent banner's two answers are
+now the same button differing only in label, and it is docked to the bottom edge rather than
+floating. Deliberately *not* a modal scrim: a scrim that blocks the page until someone answers is
+a consent wall, a worse posture than the unequal prominence it would be fixing.
+
+**Two things about testing this layer, both learned the hard way here:**
+
+- jsdom reports `documentElement.clientWidth` as **0**, so every render test in
+  `test/app/item/` and `test/app/index.test.tsx` had silently been exercising the narrow branch
+  only. Set the viewport explicitly (both files now have a helper) or you are testing one column.
+- A contrast test that renders in light mode only cannot fail on the bug that matters. The new
+  tests read the *rendered* colour out of the tree and run `contrastRatio()` in **both** themes.
+
+And the reason the baseline exists, demonstrated twice: `e2e/scroll.spec.ts` was *passing on*
+#219 (it asserted the newest card was below the fold, which was true only because the feed's own
+hero filled the viewport), and the no-results heading's overflow on a long search term was
+invisible to every unit test and obvious in one frame.

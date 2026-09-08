@@ -1,5 +1,6 @@
 /**
- * axe-core over the four pages a stranger actually lands on, plus `/admin` —
+ * axe-core over the four pages a stranger actually lands on, plus the giver's
+ * own `/mine` (issue #216, see below) and `/admin` —
  * Kiarash's own, not a stranger's, but the one he's most likely to be using
  * at 3am with the queue at 200 items, so its keyboard/bulk path (issue #11)
  * gets the same zero-exclusions bar as everything else here. The bar is zero
@@ -28,13 +29,22 @@
  *    no scan had ever run under it. The "dark mode" block below does, and
  *    asserts `data-theme` really is `dark` before scanning, so it cannot
  *    quietly pass by having scanned the light palette twice.
+ *
+ * And a third, the same shape again, from issue #216: `/mine` — the giver's
+ * own dashboard, the screen a giver returns to more than any other — was on
+ * neither list, light or dark. The heading above its listing rows was
+ * `1.12:1` on the dark table, which is invisible rather than merely hard to
+ * read, and this suite could not have seen it: it had never opened the page.
+ * `openDashboard()` below now scans it in both modes, seeded with an owner
+ * token AND a listing, because an empty `/mine` renders no group heading at
+ * all and would have scanned past the very thing #216 was filed about.
  */
 import { AxeBuilder } from "@axe-core/playwright";
-import { test, expect } from "./support/fixtures";
-import { ADMIN_TOKEN, createApprovedListing, freshClientIp, hideListingAsAdmin, uniqueTitle } from "./support/api";
+import { test, expect, seedOwnerToken } from "./support/fixtures";
+import { ADMIN_TOKEN, createApprovedListing, freshClientIp, hideListingAsAdmin, mintOwnerToken, uniqueTitle } from "./support/api";
 import { seedVisited } from "./support/visited";
 import { BASE_URL } from "./support/constants";
-import type { Browser, Page } from "@playwright/test";
+import type { APIRequestContext, Browser, BrowserContext, Page } from "@playwright/test";
 
 // axe reads computed colours at one instant, and both codebases fade content
 // in on load (`apps/site`'s `.fade-up`, the app's own `MotionProvider`), so a
@@ -79,6 +89,49 @@ test("an item page has no serious or critical accessibility violations", async (
 
   // No exclusions: the Worker gives this page a real title, and nothing on it
   // fails contrast.
+  expect(await blockingViolations(page)).toEqual([]);
+});
+
+/**
+ * `/mine` as a giver who has actually given something, which is the only
+ * version of that screen worth scanning.
+ *
+ * A device with no owner token gets the "you haven't given anything yet"
+ * empty state, and one with a token but no listings gets the same — neither
+ * renders a single group heading. Issue #216 was a group heading, so a scan
+ * of the empty dashboard would have walked straight past the thing it is
+ * here for: the check that cannot fail, one more time. The listing
+ * `createApprovedListing()` makes is `approved`, so `groupListings()` files
+ * it under "Live" and the heading on screen is the exact one the issue
+ * measured at 1.12:1 on the dark table.
+ */
+async function openDashboard(
+  page: Page,
+  context: BrowserContext,
+  request: APIRequestContext,
+  title: string,
+): Promise<void> {
+  const ownerToken = mintOwnerToken();
+  const listing = await createApprovedListing(request, { title: uniqueTitle(title), ownerToken });
+
+  // Before the app boots — `src/lib/ownerToken.ts` is read synchronously on
+  // mount. See `seedOwnerToken`'s comment in `support/fixtures.ts`.
+  await seedOwnerToken(context, ownerToken);
+  await page.goto("/mine");
+
+  // Both halves, and not just the row: the heading is the element under
+  // test, and `first()` because "Live" is also the row's own status label.
+  await expect(page.getByText(listing.title, { exact: true })).toBeVisible();
+  await expect(page.getByText("Live", { exact: true }).first()).toBeVisible();
+}
+
+test("the giver's dashboard has no serious or critical accessibility violations", async ({
+  page,
+  context,
+  request,
+}) => {
+  await openDashboard(page, context, request, "Tin whistle");
+
   expect(await blockingViolations(page)).toEqual([]);
 });
 
@@ -263,6 +316,23 @@ test.describe("dark mode", () => {
   test("the new-visitor explainer has no serious or critical accessibility violations in dark mode", async ({ page }) => {
     await page.goto("/welcome");
     await expect(page.getByText("No accounts. No money.")).toBeVisible();
+    await expectDark(page);
+
+    expect(await blockingViolations(page)).toEqual([]);
+  });
+
+  // The one page this block does NOT mirror from the light scans for the
+  // sake of symmetry: `/mine` is where issue #216 was reported, and it was
+  // reported precisely because no scan in this file had ever loaded it —
+  // "adding the route to the dark scan would have failed the build on it".
+  // With the group heading still a bare `Eyebrow` on the table this fails on
+  // `color-contrast` (serious) at 1.12:1; with `TableHeading` it passes.
+  test("the giver's dashboard has no serious or critical accessibility violations in dark mode", async ({
+    page,
+    context,
+    request,
+  }) => {
+    await openDashboard(page, context, request, "Brass sextant");
     await expectDark(page);
 
     expect(await blockingViolations(page)).toEqual([]);

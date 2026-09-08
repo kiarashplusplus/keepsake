@@ -14,6 +14,7 @@ import { Button } from "@/ui/Button";
 import { Print } from "@/ui/Print";
 import { Card } from "@/ui/Surface";
 import { PencilRule } from "@/ui/PencilRule";
+import { TableHeading } from "@/ui/TableHeading";
 import { Text, type TextColor } from "@/ui/Text";
 import { Skeleton } from "@/ui/Skeleton";
 import { Stamp } from "@/ui/Stamp";
@@ -108,7 +109,6 @@ function ListingRow({ listing }: { listing: OwnerListing }): React.ReactElement 
 }
 
 export default function Mine(): React.ReactElement {
-  const colors = useColors();
   useVerifiedToast();
   const [hasOwnerToken] = React.useState(() => getOwnerToken() !== null);
   const [listings, setListings] = React.useState<OwnerListing[] | null>(null);
@@ -211,9 +211,16 @@ export default function Mine(): React.ReactElement {
           if (group.length === 0) return null;
           return (
             <View key={key} style={{ gap: space.lg }}>
-              <View style={{ paddingBottom: space.sm, borderBottomWidth: 2, borderBottomColor: colors.ink }}>
-                <Eyebrow>{LISTING_GROUP_LABELS[key]}</Eyebrow>
-              </View>
+              {/* Issue #216: this was a bare `Eyebrow` under a 2px
+                  `colors.ink` rule, both sitting straight on the table. `ink`
+                  and `accent2Text` are constant by design (a print does not
+                  change colour when the lights go down), so on the walnut
+                  dark table the "Live" heading measured 1.12:1 and the rule
+                  under it was equally gone. `TableHeading` prints the same
+                  words on their own paper strip instead — 14.25:1 in both
+                  themes, and the strip's own edge is the section break the
+                  rule used to draw. */}
+              <TableHeading>{LISTING_GROUP_LABELS[key]}</TableHeading>
               <View style={{ gap: space.lg }}>
                 {group.map((listing) => (
                   <ListingRow key={listing.id} listing={listing} />

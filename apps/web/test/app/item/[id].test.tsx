@@ -1,8 +1,11 @@
 import * as React from "react";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import type { PublicListing } from "@keepsake/contracts/listing";
+import { measure, sectionRhythm } from "@keepsake/tokens/spacing";
+import * as typography from "@keepsake/tokens/typography";
 import { ToastProvider } from "@/ui/Toast";
 import { getListing } from "@/api/listings";
+import { ApiError } from "@/api/client";
 import Item from "../../../app/item/[id]";
 
 jest.mock("expo-router", () => {
@@ -59,9 +62,36 @@ async function flush(): Promise<void> {
   }
 }
 
+/**
+ * Drives `useWindowDimensions()`, which is what #222's two-column branch is
+ * keyed on. react-native-web's `Dimensions` reads
+ * `document.documentElement.clientWidth/Height` and re-reads them on every
+ * `window` `resize` event; jsdom does no layout, so those are a flat 0 and
+ * every test in this file has always been rendering the narrow branch without
+ * saying so. Defining the two properties and firing a real `resize` is enough
+ * — no module mock, no fake `visualViewport`, and `Dimensions` picks the
+ * values up through its own public path rather than us reaching into its
+ * module state.
+ *
+ * `configurable: true` so the next call can redefine them; `beforeEach` puts
+ * the phone width back so a test that forgets to set one is narrow, which is
+ * the default this page had before the split existed.
+ */
+function setViewport(width: number, height: number): void {
+  Object.defineProperty(document.documentElement, "clientWidth", { value: width, configurable: true });
+  Object.defineProperty(document.documentElement, "clientHeight", { value: height, configurable: true });
+  window.dispatchEvent(new Event("resize"));
+}
+
+/** The issue's own narrow frame, `docs/qa/baseline/ux-mobile/*`. */
+const PHONE = [390, 844] as const;
+/** The issue's own desktop frame — the one the title was cut by the fold on. */
+const DESKTOP = [1280, 800] as const;
+
 describe("item/[id]", () => {
   beforeEach(() => {
     jest.mocked(getListing).mockReset();
+    setViewport(...PHONE);
   });
 
   /**
@@ -132,5 +162,186 @@ describe("item/[id]", () => {
 
     expect(JSON.stringify(toJSON())).toContain("Given");
     expect(UNSAFE_queryAllByProps({ accessibilityLabel: "I'd love this" })).toHaveLength(0);
+  });
+
+  /**
+   * Issue #222. At 1280x800 the print filled the viewport, so the title was
+   * cut by the fold and the story sat below it — on a page whose whole
+   * proposition is a photograph and the story attached to it, you could not
+   * see both at once. Desktop now splits into print-left / story-right.
+   *
+   * These assert on the rendered tree, so what they can prove is structural:
+   * which measure the page is on, that the two blocks are in one row and in
+   * that order, and that the print's own width cap is out of the way inside
+   * its column. That the result *looks* right at 1280x800 is a job for
+   * `e2e/ux.spec.ts`'s desktop frame, not for react-test-renderer.
+   */
+  describe("desktop two-column layout (#222)", () => {
+    type Node = { props?: { style?: Record<string, unknown> }; children?: unknown };
+
+    /** Depth-first walk of a `toJSON()` tree (whose root is an array). */
+    function find(node: unknown, predicate: (n: Node) => boolean): Node | null {
+      if (Array.isArray(node)) {
+        for (const entry of node) {
+          const hit = find(entry, predicate);
+          if (hit !== null) return hit;
+        }
+        return null;
+      }
+      if (node === null || typeof node !== "object") return null;
+      const candidate = node as Node;
+      if (predicate(candidate)) return candidate;
+      return find(candidate.children, predicate);
+    }
+
+    function styleOf(node: Node): Record<string, unknown> {
+      return node.props?.style ?? {};
+    }
+
+    /** react-native-web serialises lengths with units, so 1100 -> "1100px". */
+    function px(value: number): string {
+      return `${value}px`;
+    }
+
+    /**
+     * The measure the page itself is laid out on. Found by style rather than
+     * by a `testID` because `Page` renders TWO `ReadableWidth`s — the content
+     * and `AppFooter`, which is always `grid` — so "is 1100px anywhere in the
+     * tree" is true at every width and proves nothing. The content one is the
+     * only node carrying both a measure and the page's own vertical rhythm.
+     */
+    function pageMeasure(tree: unknown): unknown {
+      const node = find(tree, (n) => styleOf(n)["paddingTop"] === px(sectionRhythm.normal) && styleOf(n)["maxWidth"] !== undefined);
+      return node === null ? null : styleOf(node)["maxWidth"];
+    }
+
+    /** The print/story row, which only exists in the two-column layout. */
+    function splitRow(tree: unknown): Node | null {
+      return find(tree, (n) => styleOf(n)["flexDirection"] === "row" && styleOf(n)["alignItems"] === "flex-start");
+    }
+
+    async function renderAt(width: number, height: number): Promise<ReturnType<typeof render>> {
+      setViewport(width, height);
+      const utils = render(
+        <ToastProvider>
+          <Item />
+        </ToastProvider>,
+      );
+      await act(flush);
+      return utils;
+    }
+
+    it("puts the photograph and the story side by side, in that order", async () => {
+      jest.mocked(getListing).mockResolvedValue(listing);
+
+      const { toJSON } = await renderAt(...DESKTOP);
+      const tree = toJSON();
+
+      expect(pageMeasure(tree)).toBe(px(measure.grid));
+
+      const row = splitRow(tree);
+      expect(row).not.toBeNull();
+      const columns = row?.children;
+      expect(Array.isArray(columns) ? columns : []).toHaveLength(2);
+
+      // Left is the print (the carousel's 4:3 box is the only `aspectRatio`
+      // on this page); right is the story. This is the whole issue: both are
+      // on screen, and the photograph is the thing you read the page from.
+      const [printColumn, storyColumn] = columns as [unknown, unknown];
+      expect(JSON.stringify(printColumn)).toContain("aspectRatio");
+      expect(JSON.stringify(storyColumn)).toContain("It pointed the way on a trip I never finished");
+
+      // The story column keeps its whole `Card` treatment.
+      const story = JSON.stringify(storyColumn);
+      expect(story).toContain("Brass compass");
+      expect(story).toContain("pencil-underline.svg"); // the `PencilRule`
+      expect(story).toContain("Somerville, MA · posted"); // the meta line
+      expect(story).toContain("Share");
+      expect(story).toContain("Report");
+    });
+
+    it("drops the carousel's 560px cap so the print fills its column", async () => {
+      jest.mocked(getListing).mockResolvedValue(listing);
+
+      const { toJSON } = await renderAt(...DESKTOP);
+      expect(JSON.stringify(toJSON())).not.toContain(`"maxWidth":"${px(560)}"`);
+    });
+
+    it("keeps the single-column prose layout on a phone", async () => {
+      jest.mocked(getListing).mockResolvedValue(listing);
+
+      const { toJSON } = await renderAt(...PHONE);
+      const tree = toJSON();
+
+      expect(pageMeasure(tree)).toBe(px(measure.prose));
+      expect(splitRow(tree)).toBeNull();
+      // ...and the print is still capped exactly as it always was.
+      expect(JSON.stringify(tree)).toContain(`"maxWidth":"${px(560)}"`);
+    });
+
+    /**
+     * `TWO_COLUMN_BREAKPOINT` (1024) and `WIDE_TITLE_BREAKPOINT` (820) are
+     * different numbers on purpose: splitting at 820 would leave each column
+     * around 378px, the phone column twice over. The cheapest way for that to
+     * rot is for someone to collapse them into one constant, so pin a width
+     * between them — big type, still one column.
+     */
+    it("uses the wide title but stays single-column between the two breakpoints", async () => {
+      jest.mocked(getListing).mockResolvedValue(listing);
+
+      const { toJSON } = await renderAt(900, 800);
+      const tree = toJSON();
+
+      expect(pageMeasure(tree)).toBe(px(measure.prose));
+      expect(splitRow(tree)).toBeNull();
+      expect(find(tree, (n) => styleOf(n)["fontSize"] === px(typography.type.displayXl.fontSize))).not.toBeNull();
+    });
+
+    it("still stamps a given listing, in the print column, when split", async () => {
+      jest.mocked(getListing).mockResolvedValue({ ...listing, status: "given" });
+
+      const { toJSON, UNSAFE_queryAllByProps } = await renderAt(...DESKTOP);
+
+      const printColumn = (splitRow(toJSON())?.children as unknown[])[0];
+      expect(JSON.stringify(printColumn)).toContain("Given");
+      expect(UNSAFE_queryAllByProps({ accessibilityLabel: "I'd love this" })).toHaveLength(0);
+    });
+
+    it("opens the RequestSheet from the story column", async () => {
+      jest.mocked(getListing).mockResolvedValue(listing);
+
+      const { toJSON, UNSAFE_getByProps } = await renderAt(...DESKTOP);
+
+      await act(async () => {
+        fireEvent.press(UNSAFE_getByProps({ accessibilityLabel: "I'd love this" }));
+        await flush();
+      });
+
+      expect(JSON.stringify(toJSON())).toContain("Tell them why it should be yours");
+    });
+
+    /**
+     * The three branches without a listing in them deliberately stay on the
+     * prose measure at every width: there is no second column to put anything
+     * in, and an empty state stretched across 1100px is a wider nothing, not
+     * a fuller page.
+     */
+    it("leaves the not-found branch on the prose measure at desktop width", async () => {
+      jest.mocked(getListing).mockRejectedValue(new ApiError("not_found", "Not found", 404));
+
+      const { toJSON } = await renderAt(...DESKTOP);
+
+      expect(JSON.stringify(toJSON())).toContain("That keepsake isn");
+      expect(pageMeasure(toJSON())).toBe(px(measure.prose));
+    });
+
+    it("leaves the error branch on the prose measure at desktop width", async () => {
+      jest.mocked(getListing).mockRejectedValue(new ApiError("internal", "Something broke", 500));
+
+      const { toJSON } = await renderAt(...DESKTOP);
+
+      expect(JSON.stringify(toJSON())).toContain("Something broke");
+      expect(pageMeasure(toJSON())).toBe(px(measure.prose));
+    });
   });
 });

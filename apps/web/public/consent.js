@@ -429,15 +429,29 @@
   // (`packages/tokens/src/colors.ts`), hard-coded rather than read from CSS
   // variables: `apps/site/public/site.css` flips `--surface` per theme while
   // the app keeps it constant, so a var() would render two different banners.
-  // The card is the constant cream index card (`surface #F1E6CC`) with
-  // constant ink in BOTH themes, which is the identity's own rule — a printed
-  // card does not change colour when the lights go down — and it means every
-  // contrast pair below is verified once and holds in light and dark:
-  //   ink #1B1815 on #F1E6CC          14.3:1
-  //   pencil #5A524A on #F1E6CC        6.2:1
-  //   stampText #8A2113 on #F1E6CC     7.3:1
-  //   onAccent #FBF9F4 on #C4341C      5.2:1  (the stamp button)
-  //   focus #7A2515 on #F1E6CC         8.1:1
+  // The bar is cut from the constant cream index card (`surface #F1E6CC`)
+  // with constant ink in BOTH themes, which is the identity's own rule — a
+  // printed card does not change colour when the lights go down — and it
+  // means every contrast pair below is verified once and holds in light and
+  // dark:
+  //   ink #1B1815 on #F1E6CC               14.3:1  title, body, disclosure
+  //   pencil #5A524A on #F1E6CC             6.2:1  category blurbs, footnote
+  //   stampText #8A2113 on #F1E6CC          7.3:1  eyebrow, GPC note, links
+  //   onAccent2 #F1E6CC on accent2 #1B1815  14.3:1  EVERY button's label
+  //   accent2 #1B1815 on #F1E6CC           14.3:1  ...and that button's fill
+  //                                                 against the bar behind it
+  //   focus #7A2515 on #F1E6CC              8.1:1  the focus ring
+  //
+  // Those numbers were RECOMPUTED for #223 with
+  // `packages/tokens/src/contrast.ts`'s `contrastRatio()`, because #223
+  // changed which pairs exist here. The line this block used to carry —
+  // `onAccent #FBF9F4 on #C4341C  5.2:1 (the stamp button)` — left with the
+  // button that wore it (see the button comment below). Stamp red `#C4341C`
+  // survives in this file only where it is decorative and carries no text:
+  // the GPC note's left rule, and the checkboxes' native `accent-color`.
+  // The bottom bar's gradient scrim is decorative too — no text sits on it,
+  // so it has no pair to verify.
+  //
   // `e2e/a11y.spec.ts`'s "consent banner" block re-checks them with axe on a
   // real page, in light and dark, closed and with the panel open. That block
   // was added by #173; before it, this comment named a scan that did not
@@ -446,31 +460,114 @@
   // nothing was checking they stayed right.
 
   const STYLE = [
-    '.ks-consent{position:fixed;left:0;right:0;bottom:0;z-index:9999;display:flex;justify-content:center;',
-    'padding:12px;pointer-events:none;font-family:"CourierPrime","Courier Prime",ui-monospace,monospace;}',
+    // ── Docked to the bottom edge, not floating (#223) ────────────────────
+    //
+    // This was a floating 560px box with a drop shadow, centred over the page
+    // with nothing behind it — and on the desktop feed it landed on top of
+    // the category chips (`docs/qa/baseline/ux-desktop/consent-banner.jpg`
+    // shows it covering the middle of the filter row). It read as an element
+    // that had failed to position rather than as a deliberate interruption.
+    //
+    // So: a full-bleed bar docked to the bottom edge. `.ks-consent` IS the
+    // bar now — the cream index card, a 2px ink rule along its top edge and
+    // nothing on the other three, because those three edges are the
+    // viewport's — and `.ks-consent__card` is demoted to an inner column
+    // doing one job, holding the copy to a readable measure so it does not
+    // run 1900px wide on a desktop. It keeps the name `__card` on purpose:
+    // renaming it would mean touching `apps/site/public/*.html` and the
+    // specs, and #223 is styling and layout only.
+    //
+    // NOT a modal scrim, and that is the deliberate part. A scrim that blocks
+    // the page until the visitor answers turns a banner into a consent wall,
+    // and a visitor who cannot read the site without answering is not freely
+    // giving consent — a WORSE legal posture than the unequal prominence this
+    // issue set out to fix. What it gets instead is `.ks-consent::before`: a
+    // short gradient sitting directly above the bar with
+    // `pointer-events:none`. It separates the bar from whatever is scrolling
+    // behind it and does nothing else — blocks nothing, catches no clicks,
+    // carries no text (hence no contrast pair for it in the block above).
+    //
+    // `pointer-events` on the bar itself is gone in both places. The old
+    // outer div was a transparent full-width flex container whose padding
+    // would otherwise have swallowed clicks in it, hence `none` there and
+    // `auto` on the card; the bar is opaque and IS the banner, so the default
+    // is right. `e2e/consent.spec.ts`'s "does not cover the primary action on
+    // a 390px viewport" is the guard on that — it trial-clicks the hero CTA
+    // with the banner up, so a bar that grew tall enough to sit over it
+    // fails rather than merely looking wrong.
+    //
+    // `max-height`/`overflow-y` stay on the inner column so the expanded
+    // panel still scrolls inside a small screen rather than pushing the bar
+    // off the top of it. 82vh dropped to 78vh only because the bar's own
+    // padding and rule now sit outside that box and still have to fit.
+    '.ks-consent{position:fixed;left:0;right:0;bottom:0;z-index:9999;box-sizing:border-box;',
+    'padding:14px 16px;background:#F1E6CC;color:#1B1815;border-top:2px solid #1B1815;',
+    'font-family:"CourierPrime","Courier Prime",ui-monospace,monospace;}',
     '.ks-consent[hidden]{display:none!important;}',
-    '.ks-consent__card{pointer-events:auto;box-sizing:border-box;width:100%;max-width:560px;background:#F1E6CC;',
-    'color:#1B1815;border:2px solid #1B1815;border-radius:2px;padding:16px;',
-    'box-shadow:3px 5px 0 rgba(27,24,21,.35);max-height:82vh;overflow-y:auto;}',
+    '.ks-consent::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:48px;',
+    'pointer-events:none;background:linear-gradient(to top,rgba(27,24,21,.18),rgba(27,24,21,0));}',
+    '.ks-consent__card{box-sizing:border-box;width:100%;max-width:560px;margin:0 auto;',
+    'max-height:78vh;overflow-y:auto;}',
     '.ks-consent__eyebrow{margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#8A2113;}',
     '.ks-consent__title{margin:0 0 6px;font-size:15px;font-weight:700;line-height:1.35;color:#1B1815;}',
     '.ks-consent__body{margin:0 0 10px;font-size:13px;line-height:1.55;color:#1B1815;}',
     '.ks-consent__note{margin:0 0 10px;font-size:12px;line-height:1.5;color:#8A2113;border-left:2px solid #C4341C;padding-left:8px;}',
     '.ks-consent__note[hidden]{display:none!important;}',
     '.ks-consent__actions{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px;}',
-    // Equal prominence, and it is not decorative: a reject that is smaller,
-    // paler, or one click further away than accept is the specific pattern
-    // regulators fine people for. Both buttons are the same element, the same
-    // font, the same padding, the same min-height, side by side, one click
-    // each. Reject is FIRST in DOM and reading order.
+    // ── One button style, and neither answer is the recommended one ───────
+    //
+    // Resolves #223's first half, and part of #224's "a third button style
+    // with unclear rank" as a side effect — see the last paragraph.
+    //
+    // Equal prominence is not decorative: a reject that is smaller, paler, or
+    // one click further away than accept is the specific pattern regulators
+    // fine people for. The geometry half of that was always right here — same
+    // element, same font, same padding, same min-height, side by side, one
+    // click each, Reject FIRST in DOM and reading order, and
+    // `e2e/consent.spec.ts`'s "reject is exactly as easy as accept" measures
+    // the two boxes so it stays right.
+    //
+    // The COLOUR half was not (#223). `Accept all` wore `--stamp` (filled
+    // `accent #C4341C`) and `Reject all` wore `--outline` (a near-white
+    // `print #FBF9F4` fill inside an ink border). Stamp red is what every
+    // primary action in this product wears, so the whole system was quietly
+    // teaching that accept is the button you are meant to press — and both
+    // the EDPB's guidance on valid consent and the CPRA's dark-pattern
+    // provisions (the CCPA regulations' "symmetry in choice") treat unequal
+    // prominence between accept and reject as a defect in the consent
+    // MECHANISM rather than a matter of taste. This repo already carries
+    // deliberate CCPA work, so it was worth a decision rather than an
+    // accident.
+    //
+    // Both now wear `accent2 #1B1815` filled with an `onAccent2 #F1E6CC`
+    // label: the pair `apps/web/src/ui/Button.tsx`'s `secondary` case adopted
+    // for #134, and the long comment there is the argument. A filled ink
+    // rectangle is unmistakably a control — 14.3:1 against the paper it sits
+    // on, where `--outline`'s `print` fill measured 1.18:1 against the same
+    // paper and read as an empty field with a line round it — while staying
+    // clearly subordinate to the one stamp-red primary elsewhere in the
+    // product. Applying it to BOTH does two things at once: it removes the
+    // unequal prominence, and it takes stamp red off a screen where neither
+    // answer is the one we are recommending.
+    //
+    // `Save choices`, in the expanded panel, deliberately gets the IDENTICAL
+    // treatment rather than a third one. It is not a rival to accept/reject:
+    // it is the only action in its own row, reached only by opening the
+    // panel, so matching it costs no hierarchy — and styling it more weakly
+    // would re-introduce the exact asymmetry above against the visitor who
+    // took the trouble to choose per category. That leaves `.ks-consent__btn`
+    // as the file's only button rule (`--outline` and `--stamp` are gone),
+    // which is the part of #224 this closes. `.ks-consent__more` stays a
+    // plain underlined line because it is a DISCLOSURE, not an answer — it
+    // records no decision and its `aria-expanded` says so.
     '.ks-consent__btn{flex:1 1 0;min-width:132px;min-height:44px;box-sizing:border-box;padding:10px 14px;',
     'font:inherit;font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;',
-    'border-radius:2px;cursor:pointer;}',
-    '.ks-consent__btn--outline{background:#FBF9F4;color:#1B1815;border:2px solid #1B1815;}',
-    '.ks-consent__btn--outline:hover{background:#F0D6C9;}',
-    '.ks-consent__btn--stamp{background:#C4341C;color:#FBF9F4;border:2px solid #C4341C;',
-    'box-shadow:2px 3px 0 rgba(27,24,21,.3);}',
-    '.ks-consent__btn--stamp:hover{box-shadow:3px 5px 0 rgba(27,24,21,.35);}',
+    'background:#1B1815;color:#F1E6CC;border:2px solid #1B1815;border-radius:2px;cursor:pointer;',
+    // The same pressed-stamp lift `Button.tsx`'s `secondary` carries, to the
+    // same two alpha values, so the banner and the app agree on what a
+    // filled-ink control looks like when you hover it.
+    'box-shadow:2px 3px 0 rgba(27,24,21,.22);}',
+    '.ks-consent__btn:hover{box-shadow:3px 5px 0 rgba(27,24,21,.28);}',
     '.ks-consent__more{display:block;min-height:44px;background:none;border:0;padding:0;cursor:pointer;',
     'font:inherit;font-size:12px;letter-spacing:.5px;color:#1B1815;text-decoration:underline;text-underline-offset:3px;}',
     '.ks-consent__panel{margin:8px 0 0;border-top:1px solid rgba(27,24,21,.32);padding-top:10px;}',
@@ -489,14 +586,20 @@
     // site.css at all) to duplicate.
     '[data-ks-consent]{background:none;border:0;margin:0;padding:0;font:inherit;color:inherit;',
     'cursor:pointer;text-decoration:underline;text-underline-offset:3px;}',
-    '@media (min-width:560px){.ks-consent{padding:16px;}}',
-    // The one animation, and it collapses to nothing under reduce-motion —
-    // `e2e/a11y.spec.ts` runs with `reducedMotion: "reduce"`, and axe reads
-    // computed colour at one instant, so a mid-fade opacity would invent
-    // contrast failures.
+    '@media (min-width:560px){.ks-consent{padding:18px 24px;}}',
+    // The one animation. #223 moved it from the inner column to the bar and
+    // changed the distance: a docked bar rises from the edge it is docked to,
+    // so this slides the whole bar up from below the viewport
+    // (`translateY(100%)`) instead of drifting the old floating box 12px. The
+    // gradient scrim is a pseudo-element of the bar, so it comes up with it
+    // rather than appearing first over an empty edge.
+    //
+    // It still collapses to nothing under reduce-motion — `e2e/a11y.spec.ts`
+    // runs with `reducedMotion: "reduce"`, and axe reads computed colour at
+    // one instant, so a mid-fade opacity would invent contrast failures.
     '@media (prefers-reduced-motion:no-preference){',
-    '.ks-consent__card{animation:ks-consent-in 240ms cubic-bezier(.22,1,.36,1) both;}',
-    '@keyframes ks-consent-in{from{transform:translateY(12px);opacity:0}to{transform:none;opacity:1}}}'
+    '.ks-consent{animation:ks-consent-in 240ms cubic-bezier(.22,1,.36,1) both;}',
+    '@keyframes ks-consent-in{from{transform:translateY(100%);opacity:0}to{transform:none;opacity:1}}}'
   ].join('');
 
   const COPY =
@@ -577,10 +680,21 @@
     );
 
     el.note = element('p', { class: 'ks-consent__note', id: 'ks-consent-gpc', hidden: true }, [GPC_NOTE]);
-    el.reject = element('button', { type: 'button', id: 'ks-consent-reject', class: 'ks-consent__btn ks-consent__btn--outline' }, ['Reject all']);
-    el.accept = element('button', { type: 'button', id: 'ks-consent-accept', class: 'ks-consent__btn ks-consent__btn--stamp' }, ['Accept all']);
+    // #223: both answers carry the SAME class and therefore the same fill,
+    // border, shadow and type — the only difference between them is the word
+    // on the label. They differed by class (`--stamp` / `--outline`) until
+    // then; see the `.ks-consent__btn` comment for why that was a defect in
+    // the consent mechanism and not a styling preference. Ids, order and
+    // handlers are untouched.
+    el.reject = element('button', { type: 'button', id: 'ks-consent-reject', class: 'ks-consent__btn' }, ['Reject all']);
+    el.accept = element('button', { type: 'button', id: 'ks-consent-accept', class: 'ks-consent__btn' }, ['Accept all']);
     el.more = element('button', { type: 'button', id: 'ks-consent-customise', class: 'ks-consent__more', 'aria-expanded': 'false', 'aria-controls': 'ks-consent-panel' }, ['Choose what to allow']);
-    el.save = element('button', { type: 'button', id: 'ks-consent-save', class: 'ks-consent__btn ks-consent__btn--outline', style: 'flex:0 0 auto' }, ['Save choices']);
+    // Same class as the two above, deliberately (#223/#224 — see the
+    // `.ks-consent__btn` comment). `flex:0 0 auto` is the one thing that
+    // differs and it is width, not weight: Save is alone in its row, so
+    // stretching it edge to edge would make the panel's confirm look like a
+    // bigger decision than the two answers above it.
+    el.save = element('button', { type: 'button', id: 'ks-consent-save', class: 'ks-consent__btn', style: 'flex:0 0 auto' }, ['Save choices']);
     el.analytics = analytics.input;
     el.advertising = advertising.input;
     el.sale = sale.input;

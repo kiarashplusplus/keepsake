@@ -10,7 +10,13 @@ test.describe("browse", () => {
 
     await expect(page.getByText("Give a keepsake a second life.")).toBeVisible();
     await expect(page.getByLabel("Search")).toBeVisible();
-    await expect(page.getByLabel("Give something").first()).toBeVisible();
+    // Width-agnostic on purpose: since #219 the phone-width feed drops the
+    // hero's own Give button (the header already carries one, and the deck
+    // plus a second button was most of why no keepsake fit on the first
+    // screenful), and the narrow header labels it "Give" rather than "Give
+    // something". What this test is actually about is that there is a way to
+    // give from the feed, not which of the two renders at this width.
+    await expect(page.getByRole("button", { name: /^Give( something)?$/ }).first()).toBeVisible();
   });
 
   test("an approved listing shows up as a print on the table", async ({ page, request }) => {
@@ -60,12 +66,29 @@ test.describe("browse", () => {
     await expect(page.getByLabel(filteredOut.title, { exact: true })).toBeHidden();
   });
 
-  test("a search with no answer gets the empty state, not a blank page", async ({ page }) => {
+  test("a search with no answer offers a way out of the search, not an invitation to post", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByLabel("Search")).toBeVisible();
 
     await page.getByLabel("Search").fill("qzxwvutsrq");
 
-    await expect(page.getByText("Nothing here yet. Be the first to give something.")).toBeVisible();
+    // Until #220 this asserted "Nothing here yet. Be the first to give
+    // something." — the empty-*marketplace* copy, shown to a visitor looking
+    // at a marketplace that is not empty. It described the wrong state and
+    // offered the one action that cannot help: posting a keepsake does not
+    // find the one you were looking for. So the assertion is now on the
+    // distinction rather than on the words: the state names what was searched
+    // for, and the way out is clearing the search.
+    await expect(page.getByText(/Nothing matches/)).toBeVisible();
+    await expect(page.getByLabel("Clear search")).toBeVisible();
+    // The eyebrow, not the absence of a "Give something" button: the header
+    // carries one of those at desktop widths, so asserting it is gone would
+    // be asserting something about the chrome.
+    await expect(page.getByText("No matches")).toBeVisible();
+
+    await page.getByLabel("Clear search").click();
+
+    await expect(page.getByLabel("Search")).toHaveValue("");
+    await expect(page.getByText(/Nothing matches/)).toBeHidden();
   });
 });
