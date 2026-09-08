@@ -29,6 +29,17 @@ export interface KeysetCursor {
   id: string;
 }
 
+/** Parse the unsigned decimal integers emitted by this module without
+ * `parseInt`'s permissive prefix parsing (for example, `"12junk"` -> 12).
+ * Cursors are untrusted query-string input; accepting a numeric prefix turns
+ * a corrupt cursor into a different, valid page boundary instead of falling
+ * back to the first page as the decoder contracts promise. */
+function decodeUnsignedInteger(value: string): number | null {
+  if (!/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
 export function encodeKeysetCursor(publishedAt: number, id: string): string {
   return encodeBase64Url(`${publishedAt}:${id}`);
 }
@@ -42,9 +53,9 @@ export function decodeKeysetCursor(cursor: string | undefined): KeysetCursor | n
   if (decoded === null) return null;
   const separatorIndex = decoded.indexOf(":");
   if (separatorIndex <= 0) return null;
-  const publishedAt = Number.parseInt(decoded.slice(0, separatorIndex), 10);
+  const publishedAt = decodeUnsignedInteger(decoded.slice(0, separatorIndex));
   const id = decoded.slice(separatorIndex + 1);
-  if (!Number.isFinite(publishedAt) || id.length === 0) return null;
+  if (publishedAt === null || id.length === 0) return null;
   return { publishedAt, id };
 }
 
@@ -58,6 +69,5 @@ export function decodeOffsetCursor(cursor: string | undefined): number {
   if (!cursor) return 0;
   const decoded = decodeBase64Url(cursor);
   if (decoded === null) return 0;
-  const offset = Number.parseInt(decoded, 10);
-  return Number.isFinite(offset) && offset >= 0 ? offset : 0;
+  return decodeUnsignedInteger(decoded) ?? 0;
 }
