@@ -260,9 +260,39 @@ test.describe("the consent gate", () => {
       });
 
     expect(await treatment(accept)).toBe(await treatment(reject));
+
+    // The ONE difference #244 allows, held to exactly that. `Accept all`'s
+    // pressed-stamp shadow is tinted stamp red where `Reject all`'s is ink —
+    // `.ks-consent__btn--hint` in `public/consent.js`, whose comment promises
+    // the same offsets, the same blur and the same spread, colour only. So
+    // `boxShadow` is compared here with its colour stripped out: the geometry
+    // must match, the colour is deliberately not asserted. A hinted button
+    // that also sat further forward (a bigger offset) or glowed (a blur)
+    // would be a second difference, and that is what fails here. Chromium's
+    // computed form is `rgba(r, g, b, a) 2px 3px 0px 0px`, colour first.
+    const shadowGeometry = (locator: ReturnType<typeof page.locator>) =>
+      locator.evaluate((node) =>
+        getComputedStyle(node as Element)
+          .boxShadow.replace(/rgba?\([^)]*\)\s*/g, "")
+          .trim(),
+      );
+    expect(await shadowGeometry(accept)).toBe(await shadowGeometry(reject));
+
     // The bluntest form of the same statement, and the one that fails first
-    // if someone re-introduces a per-button modifier class.
-    expect(await accept.getAttribute("class")).toBe(await reject.getAttribute("class"));
+    // if someone introduces a per-button modifier class. Until #244 the two
+    // class attributes were required to be identical; now the class lists
+    // are required to differ by the hint modifier and NOTHING else. Written
+    // as two exact lists rather than a set difference so it also fails the
+    // day the hint grows a second modifier, or a modifier of any kind lands
+    // on `Reject all` — either one is a per-button treatment this test was
+    // written to refuse (#223).
+    const classes = async (locator: ReturnType<typeof page.locator>) =>
+      ((await locator.getAttribute("class")) ?? "")
+        .split(/\s+/)
+        .filter(Boolean)
+        .sort();
+    expect(await classes(reject)).toEqual(["ks-consent__btn"]);
+    expect(await classes(accept)).toEqual(["ks-consent__btn", "ks-consent__btn--hint"]);
     await context.close();
   });
 
