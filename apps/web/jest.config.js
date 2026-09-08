@@ -2,13 +2,6 @@
 module.exports = {
   preset: "jest-expo/web",
   transformIgnorePatterns: [
-    // `react-native-worklets` added for M1: react-native-reanimated v4 pulls
-    // it in as a runtime dependency (the `Seal`/`Skeleton` components use
-    // `react-native-reanimated`, first exercised by a render test in M1's
-    // give-review test), and it ships ESM (`import ... from`) that Jest's
-    // default node_modules skip can't parse without being run through the
-    // transform like its sibling packages below.
-    //
     // `expo-constants`/`expo-modules-core` added for issue #23's
     // version-skew guard: `src/lib/buildInfo.ts` is the first thing in this
     // app to actually import `expo-constants` (it was previously wired into
@@ -17,7 +10,7 @@ module.exports = {
     // an ESM build and `expo-modules-core`'s `main` points straight at its
     // TypeScript source, so both need the same transform every other
     // untranspiled Expo package here gets.
-    "node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo(nent)?/.*|expo-constants|expo-modules-core|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules-.*|sentry-expo|native-base|react-native-svg|react-native-reanimated|react-native-worklets|react-native-gesture-handler|react-native-screens|react-native-safe-area-context|react-native-web)/)",
+    "node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo(nent)?/.*|expo-constants|expo-modules-core|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules-.*|sentry-expo|native-base|react-native-svg|react-native-gesture-handler|react-native-screens|react-native-safe-area-context|react-native-web)/)",
   ],
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/src/$1",
@@ -47,7 +40,6 @@ module.exports = {
     // ancestor — real route tests `render()` screens directly without one.
     "^react-native-safe-area-context$": "<rootDir>/test/mocks/safeAreaContext.tsx",
   },
-  setupFiles: ["<rootDir>/test/setup/matchMedia.ts"],
   setupFilesAfterEnv: [],
   // `e2e/` holds Playwright specs, whose `*.spec.ts` names match Jest's
   // default `testMatch` exactly. Without this they'd be collected here, fail
