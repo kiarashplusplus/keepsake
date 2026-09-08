@@ -2,6 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Capture from "@keepsake/observability/capture";
 import { decide, decideImage, decideText } from "../src/moderation/decide.js";
+import { parseTextVerdict } from "../src/moderation/text.js";
 import { moderateListing } from "../src/moderation/pipeline.js";
 import { MODERATED_PHOTO_VARIANTS } from "../src/moderation/image.js";
 import { todayISO } from "../src/moderation/budget.js";
@@ -45,6 +46,42 @@ describe("decideText", () => {
 
   it("an unmapped S-code (not in either list) is treated as pass", () => {
     expect(decideText({ verdict: "unsafe", codes: ["S99"] })).toBe("pass");
+  });
+
+  // Issue #280: a text verdict of "unsafe" with no parsable S-codes must not
+  // fail open. An empty `codes` array is a distinct thing from an *unmapped*
+  // code (the S99 case above) — here nothing could be extracted at all, so
+  // there is no code to check membership on. Falling through to "pass" was
+  // the bug: it made this indistinguishable from a genuinely safe verdict.
+  it("unsafe with no parsable codes -> error, not pass (#280 fail-open)", () => {
+    expect(decideText({ verdict: "unsafe", codes: [] })).toBe("error");
+  });
+});
+
+// Issue #280. Direct unit tests of the parsing rule, independent of the AI
+// call — `parseTextVerdict`'s own doc comment says it is exported for this.
+describe("parseTextVerdict", () => {
+  it('parses "safe"', () => {
+    expect(parseTextVerdict("safe")).toEqual({ verdict: "safe" });
+  });
+
+  it('parses "unsafe" followed by S-codes', () => {
+    expect(parseTextVerdict("unsafe\nS12")).toEqual({ verdict: "unsafe", codes: ["S12"] });
+  });
+
+  // The deliberate fallback #280 is about: a bare "unsafe" with no category
+  // line still parses as unsafe (not "error"), with an empty codes array —
+  // it is `decideText`'s job, not the parser's, to treat that as fail-closed.
+  it('parses a bare "unsafe" with no category line as unsafe with empty codes', () => {
+    expect(parseTextVerdict("unsafe")).toEqual({ verdict: "unsafe", codes: [] });
+  });
+
+  it("empty input is an error", () => {
+    expect(parseTextVerdict("")).toBe("error");
+  });
+
+  it("unrecognised text is an error", () => {
+    expect(parseTextVerdict("banana")).toBe("error");
   });
 });
 
@@ -107,6 +144,12 @@ describe("decide (combining text + images)", () => {
 
   it("review with no flag -> needs_review", () => {
     expect(decide({ verdict: "unsafe", codes: ["S12"] }, [imageVerdict({})])).toEqual({ status: "needs_review" });
+  });
+
+  // Issue #280: an unsafe verdict with no parsable codes must hold for a
+  // human, the same as any other AI ambiguity — not fall through to approved.
+  it("unsafe with no parsable codes -> pending, fail-closed (#280)", () => {
+    expect(decide({ verdict: "unsafe", codes: [] }, [imageVerdict({})])).toEqual({ status: "pending" });
   });
 });
 
@@ -229,6 +272,32 @@ describe("moderateListing: text outcomes", () => {
 
     const row = await waitForListingStatus(listing.id, (s) => s === "rejected");
     expect(row.moderation_reason).toBe("sexual_content_minors");
+  });
+
+  // Issue #280: a bare "unsafe" with no category line — the fallback
+  // `parseTextVerdict` deliberately preserves — must not fail open into an
+  // approved listing.
+  it("bare text 'unsafe' with no category line -> stays pending, not approved (#280)", async () => {
+    mockAi({ text: () => "unsafe" });
+    const token = freshOwnerToken();
+    const listing = await createListingWithOnePhoto(token);
+
+    await waitForAttempt1(listing.id);
+    const row = await env.DB.prepare("SELECT status FROM listings WHERE id = ?").bind(listing.id).first<{ status: string }>();
+    expect(row?.status).toBe("pending");
+  });
+
+  // Same bug, the structured-JSON shape: `{"safe": false}` with no
+  // `categories` field is the other input `text.ts`'s header says the model
+  // can return.
+  it("structured {safe:false} with no categories -> stays pending, not approved (#280)", async () => {
+    mockAi({ text: () => ({ response: { safe: false } }) });
+    const token = freshOwnerToken();
+    const listing = await createListingWithOnePhoto(token);
+
+    await waitForAttempt1(listing.id);
+    const row = await env.DB.prepare("SELECT status FROM listings WHERE id = ?").bind(listing.id).first<{ status: string }>();
+    expect(row?.status).toBe("pending");
   });
 });
 
