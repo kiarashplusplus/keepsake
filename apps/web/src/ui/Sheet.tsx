@@ -42,6 +42,17 @@ export function Sheet({
   const { width, height } = useWindowDimensions();
   const isBottomSheet = width < BOTTOM_SHEET_BREAKPOINT;
   const panelRef = React.useRef<View>(null);
+  // Callers routinely pass an inline `onClose` (a fresh function every
+  // render), and typing into any field inside the sheet re-renders it. A ref
+  // lets the effect below read the latest `onClose` without depending on its
+  // identity — depending on it directly reran the focus trap on every
+  // keystroke, which stole focus back to whatever was focused before the
+  // sheet opened and blurred the field the person was typing into: the
+  // keyboard flashing open and shut, and a date `<input>` losing focus
+  // mid-pick committing whatever date its native picker happened to be
+  // showing (e.g. today).
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
 
   React.useEffect(() => {
     if (!visible || typeof document === "undefined") return undefined;
@@ -54,7 +65,7 @@ export function Sheet({
 
     function onKeyDown(event: KeyboardEvent): void {
       if (event.key === "Escape") {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab" || !panelNode) return;
@@ -76,7 +87,7 @@ export function Sheet({
       document.removeEventListener("keydown", onKeyDown);
       previouslyFocused?.focus?.();
     };
-  }, [visible, onClose]);
+  }, [visible]);
 
   if (!visible) return null;
 
