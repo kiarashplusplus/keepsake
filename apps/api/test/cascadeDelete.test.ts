@@ -32,6 +32,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { OwnerListing } from "@keepsake/contracts/listing";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
+import { ulid } from "../src/lib/ids.js";
 import {
   authHeaders,
   freshClientIp,
@@ -43,10 +44,25 @@ import {
 } from "./helpers.js";
 
 /** Every table with a declared `REFERENCES listings(id) ON DELETE CASCADE`,
- * as of migration 0006 — discovered from the schema in the test below rather
- * than trusted from this list, which only exists to make the positive
- * control's seeding explicit. */
-const LISTING_CHILD_TABLES = ["photos", "requests", "reports", "moderation_events", "listing_aspects"] as const;
+ * as of the bulk-upload migration — discovered from the schema in the test
+ * below rather than trusted from this list, which only exists to make the
+ * positive control's seeding explicit.
+ *
+ * `upload_batch_items` joined in the estate bulk-upload migration and is the
+ * reason this list is worth keeping honest: its `listing_id` is what stops a
+ * submitted draft being submitted twice, so if it did *not* cascade, deleting
+ * a listing would return its draft to "never submitted" and the submission
+ * runner would publish it again. The enumeration below is what caught the
+ * first draft of that migration, which declared the reference with no
+ * `ON DELETE` clause at all. */
+const LISTING_CHILD_TABLES = [
+  "photos",
+  "requests",
+  "reports",
+  "moderation_events",
+  "listing_aspects",
+  "upload_batch_items",
+] as const;
 
 async function countFor(table: string, listingId: string): Promise<number> {
   // `table` is a literal from this file, never request data — there is no
@@ -158,6 +174,30 @@ describe("issue #90: the delete path's ON DELETE CASCADE is enforced, not assume
     });
     expect(reportRes.status).toBe(201);
 
+    // The bulk-upload draft this listing would have come from. Seeded with
+    // SQL rather than driven through `/api/bulk` on purpose: what is under
+    // test here is the cascade, and `test/bulkSubmit.test.ts` already drives
+    // the real submission path end to end. Going through it here would make
+    // this test fail for reasons that have nothing to do with deletion.
+    const batchId = ulid();
+    const itemId = ulid();
+    const seedNow = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO upload_batches
+         (id, owner_id, client_batch_key, name, country, postal_code, place_name, admin1, lat, lng,
+          state, last_activity_at, expires_at, created_at, updated_at)
+       SELECT ?, owner_id, ?, ?, 'US', '02144', 'Somerville', 'MA', 42.3958, -71.0967,
+              'closed', ?, ?, ?, ? FROM listings WHERE id = ?`,
+    )
+      .bind(batchId, `cascade-${batchId}`, "Cascade test batch", seedNow, seedNow + 60_000, seedNow, seedNow, listingId)
+      .run();
+    await env.DB.prepare(
+      `INSERT INTO upload_batch_items (id, batch_id, client_item_id, state, listing_id, created_at, updated_at)
+       VALUES (?, ?, ?, 'submitted', ?, ?, ?)`,
+    )
+      .bind(itemId, batchId, "item-1", listingId, seedNow, seedNow)
+      .run();
+
     // The positive half of the control: every child table has rows to lose.
     const before = await countsFor(listingId);
     for (const table of LISTING_CHILD_TABLES) {
@@ -188,6 +228,10 @@ describe("issue #90: the delete path's ON DELETE CASCADE is enforced, not assume
     expect(after.moderation_events, "a deleted listing left its moderation history behind").toBe(0);
     expect(after.photos, "a deleted listing left its photo rows behind").toBe(0);
     expect(after.listing_aspects, "a deleted listing left its aspects behind").toBe(0);
+    expect(
+      after.upload_batch_items,
+      "a deleted listing left its bulk-upload draft behind, so the submission runner could publish it again",
+    ).toBe(0);
 
     // `listings_fts` is kept in sync by a trigger (0003_fts.sql), not a
     // foreign key — a different mechanism on the same delete path, and one

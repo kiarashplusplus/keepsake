@@ -7,6 +7,7 @@
   "exports": {
     "./common": "./src/common.ts",
     "./listing": "./src/listing.ts",
+    "./bulk": "./src/bulk.ts",
     "./photo": "./src/photo.ts",
     "./request": "./src/request.ts",
     "./report": "./src/report.ts",

@@ -139,6 +139,19 @@ export default defineConfig({
             EMAIL_FROM: "Keepsake <hello@keepsake.ing>",
             SITE_URL: "http://localhost:8787",
             MOCK_AI: "1",
+            // Estate bulk upload. Pinned "1" here (unlike every deployed
+            // environment except [env.preview]) so the feature is exercisable
+            // in the suite; the other six are pinned at the same values as
+            // wrangler.toml's top-level [vars] for the same reason the budget
+            // vars above are pinned — a retune of the real ceilings must not
+            // silently change what the bulk tests assert against.
+            BULK_UPLOAD: "1",
+            BULK_GRANT_TTL_HOURS: "72",
+            BULK_MAX_ITEMS_PER_BATCH: "100",
+            BULK_MAX_PHOTOS_PER_BATCH: "300",
+            BULK_OWNER_DAILY_ITEMS: "150",
+            BULK_OWNER_DAILY_PHOTOS: "450",
+            BULK_DRAFT_RETENTION_DAYS: "7",
           },
           // `../web/dist` (wrangler.toml's real `[assets] directory`) does
           // not exist yet — apps/web hasn't been scaffolded as of this
