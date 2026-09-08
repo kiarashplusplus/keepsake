@@ -812,11 +812,22 @@ preview_urls = false
 # SPA route like `/` or `/about` and was silently bypassing the Worker the
 # same way those were on preview, just for a different reason (nobody wants
 # `/admin` in production ever indexed, on top of the token gate).
+#
+# Issue #278 adds `/bulk`, `/mine`, `/recover`, `/withdraw` and `/confirm`
+# (bare and `/*`, matching every route actually under each — see
+# `apps/web/app/{bulk,mine,recover,withdraw,confirm}`) for the same reason:
+# `src/index.ts`'s `X-Robots-Tag` middleware was extended to noindex these
+# routes on production too, and that extension is invisible unless the
+# Worker runs ahead of the static-assets system for them — exactly the trap
+# `/admin` fell into first. `test/robotsConfig.test.ts` is what actually
+# proves each of these reaches the Worker rather than being served by
+# ASSETS directly; `vitest.config.ts` derives its fixture from this list, so
+# there is nothing to keep in sync by hand.
 [env.production.assets]
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/i/*", "/item/*", "/og/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt", "/admin"]
+run_worker_first = ["/api/*", "/i/*", "/item/*", "/og/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt", "/admin", "/bulk", "/bulk/*", "/mine", "/mine/*", "/recover", "/recover/*", "/withdraw/*", "/confirm/*"]
 
 [env.production.ai]
 binding = "AI"
