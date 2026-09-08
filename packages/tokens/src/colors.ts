@@ -139,3 +139,61 @@ export const TEXT_ON_GROUND_TOKENS = [
  * itself and the light it's under. Everything else must be byte-identical;
  * see `test/contrast.test.ts`'s "never invert" check. */
 export const TABLE_TOKENS = ["bg", "table", "tableEdge", "surfaceSunken", "overlay", "shadow", "shadowStrong", "lampLight"] as const satisfies readonly (keyof ColorTokens)[];
+
+type TableToken = (typeof TABLE_TOKENS)[number];
+
+/** `surfaceSunken` -> `--ks-surface-sunken`. One rule, used by both the
+ * palette below and the stylesheet that feeds it. */
+const cssVarName = (token: TableToken): string => `--ks-${token.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+
+/**
+ * The web palette: identical markup in light and dark.
+ *
+ * Static rendering is the reason this exists. `expo export` renders every
+ * route to HTML at build time, where there is no `localStorage` and no OS
+ * colour scheme — so a palette chosen in JavaScript can only be the light
+ * one, and a dark-mode visitor's first client render would disagree with the
+ * server's markup on every colour it touched. React calls that a hydration
+ * mismatch and throws the server's DOM away.
+ *
+ * The way out is the shape of the palette above: of the ~40 tokens, exactly
+ * the eight in `TABLE_TOKENS` differ between light and dark. So on the web
+ * those eight become CSS custom properties and every other token stays the
+ * literal it already was. The markup is then *the same bytes* in both
+ * themes, and which palette a visitor sees is decided by the `data-theme`
+ * attribute `app/+html.tsx`'s pre-hydration script sets before the first
+ * paint — no JavaScript, no gate, no flash, nothing for hydration to
+ * disagree about.
+ *
+ * The fallback inside each `var()` is the light value, so a page that
+ * somehow loses the inline stylesheet renders the light table rather than
+ * transparent.
+ *
+ * Native keeps `colorsFor()`: there is no CSS there, and no server render
+ * either. Anything that needs a REAL colour on the web — the
+ * `<meta name="theme-color">` a browser paints its chrome with, a canvas, an
+ * image — must call `colorsFor()` too; `var(--ks-bg)` is meaningless outside
+ * a CSS property.
+ */
+export const colorsWeb: ColorTokens = Object.freeze(
+  Object.fromEntries(
+    (Object.keys(colorsLight) as (keyof ColorTokens)[]).map((key) => [
+      key,
+      (TABLE_TOKENS as readonly string[]).includes(key)
+        ? `var(${cssVarName(key as TableToken)}, ${colorsLight[key]})`
+        : colorsLight[key],
+    ]),
+  ) as ColorTokens,
+);
+
+/**
+ * The `:root` / `[data-theme="dark"]` declarations `colorsWeb` reads, for
+ * `app/+html.tsx`'s inline stylesheet. Generated from the two palettes above
+ * rather than written out a third time, so a token added to `TABLE_TOKENS`
+ * cannot be half-wired.
+ */
+export function themeCssVariables(): string {
+  const block = (selector: string, palette: ColorTokens): string =>
+    [`${selector} {`, ...TABLE_TOKENS.map((token) => `  ${cssVarName(token)}: ${palette[token]};`), "}"].join("\n");
+  return [block(":root", colorsLight), block('[data-theme="dark"]', colorsDark)].join("\n");
+}

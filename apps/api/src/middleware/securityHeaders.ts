@@ -76,7 +76,7 @@ const CONTENT_SECURITY_POLICY = [
   // guard below cover it.
   "connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org https://cloudflareinsights.com",
   "script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com " +
-    "'sha256-0+1/dyhem/DQyJcleu1QSKhUVK/gq5R519iI9mtWheM=' " +
+    "'sha256-Xrcu2vG2x+FPB1xtg6DFrNGNiO3x0AQ6vK5XstpOJM8=' " +
     "'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' " +
     "'sha256-d6qbtEYff/sB38YyzuzhASbVmmOidU/UFC9mNit47j4='",
   "style-src 'self' 'unsafe-inline'",

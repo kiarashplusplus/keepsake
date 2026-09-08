@@ -1,6 +1,6 @@
 import * as React from "react";
 import { View, type ViewStyle } from "react-native";
-import { useColors, useThemeMode } from "@/ui/theme";
+import { useColors } from "@/ui/theme";
 
 /**
  * Fixed full-bleed backdrop: the table itself. A seamless, isotropic
@@ -20,7 +20,6 @@ import { useColors, useThemeMode } from "@/ui/theme";
  * Web-only: native gets the no-op stub.
  */
 export function KraftTable(): React.ReactElement {
-  const { mode } = useThemeMode();
   const colors = useColors();
 
   const base: ViewStyle = {
@@ -44,9 +43,18 @@ export function KraftTable(): React.ReactElement {
     backgroundImage: "url(/kraft-grain.svg)",
     backgroundRepeat: "repeat",
     backgroundSize: "480px 480px",
-    backgroundBlendMode: mode === "light" ? "multiply" : "overlay",
-    // Linen needs only a trace of fibre: half the former light-mode grain.
-    opacity: mode === "light" ? 0.5 : 0.55,
+    // `var(--ks-grain-*)`, not `mode === "light" ? … : …`, for the same
+    // reason the colours are custom properties (see
+    // `@keepsake/tokens/colors`' `colorsWeb`): this component is rendered
+    // into the static HTML at export time, where the theme is not knowable,
+    // and a value that differs between that render and the visitor's first
+    // client render is a hydration mismatch on the element that covers the
+    // whole page. The two pairs of values live in `app/+html.tsx`'s
+    // THEME_CSS — including #256's "linen needs only a trace of fibre: half
+    // the former light-mode grain", which is what the light opacity there
+    // says.
+    backgroundBlendMode: "var(--ks-grain-blend, multiply)",
+    opacity: "var(--ks-grain-opacity, 0.5)",
   } as unknown as ViewStyle;
 
   return (

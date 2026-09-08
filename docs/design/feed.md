@@ -71,12 +71,40 @@ appear (only `status='approved'`); given/hidden/pending are all excluded from th
 `given` and 404s everything else, so hidden and pending are not readable there (matching "only
 `status='approved'` (or `given`, on the item page) is ever visible publicly" above). Distance is rounded to one decimal on `PublicListing.distance_mi`.
 
-`GET /item/:id` (`src/routes/item.ts`) reads the exported shell through `env.ASSETS`, injects
+`GET /item/:id` (`src/routes/item.ts`) reads the exported shell through `env.ASSETS` — since
+2026-09-08 the **item route's own** `dist/item/[id].html`, not `/`. That distinction did not exist
+while every exported page shipped an empty body; now that the static export carries real markup
+(`apps/web/src/ui/theme.tsx` explains what was emptying it), serving `/`'s HTML here would paint
+the feed for the moment before hydration replaced it with a keepsake. If the assets binding ever
+fails to match that path, its `single-page-application` not-found handling answers with
+`index.html` at 200 — the old behaviour, degraded but working.
+
+The same handler also inlines the **exact `PublicListing` JSON that `GET /api/listings/:id` would
+return**, in a `<script type="application/json" id="ks-listing" data-id="…">`, and
+`apps/web/src/features/item/inlineListing.ts` reads it instead of making that request: the route
+has already read the row and the photos for the tags below, so the fetch the screen used to make
+was asking the server for something it had just sent. It is the public projection (the same
+`serializePublicListing` the API route uses — no owner id, no postcode), `<` is escaped so a story
+cannot close the tag, and the payload is consumed once: the page is served `no-store` because a
+listing can be given away between visits, so a second visit in the same session asks the server
+again. A data block is never executed, so it needs no CSP hash — the same reasoning the shell's
+JSON-LD records. `apps/api/test/item.test.ts` asserts the payload equals the API's own `data`, and
+`apps/web/e2e/itemPayload.spec.ts` counts requests rather than timing the page.
+
+The rewriter injects
 `og:title`/`og:description`/`og:image` (+width/height)/`og:url`/`twitter:card`/`<title>`/canonical
-via `HTMLRewriter().on("head", { element })`, and serves the *unchanged* shell at 404 for any
+and the plain `<meta name="description">` via `HTMLRewriter().on("head", { element })`, and serves
+the *unchanged* shell at 404 for any
 non-public id — never confirming existence to a caller who can't see it, the same rule
-`src/routes/images.ts` already followed for photos. `GET /sitemap.xml` (`src/routes/sitemap.ts`)
-lists the four static pages plus every `approved` listing with `lastmod`; both routes only run at
+`src/routes/images.ts` already followed for photos. (The plain description was the one tag this
+rewriter left alone until 2026-09-08, so every listing page in the sitemap carried the shell's
+site-wide "Give a keepsake a second life." — the same sentence a search result would show for all
+of them. It now comes from the same `storyExcerpt` as `og:description`.) `GET /sitemap.xml`
+(`src/routes/sitemap.ts`) lists the four static pages plus every `approved` listing; only the
+listings carry `<lastmod>`, from `listings.updated_at`. The static four used to be stamped with
+the generation time, which told a crawler /about, /privacy and /terms had changed every ten
+minutes forever — a `lastmod` that is always "now" is not a date, and Google's guidance is that it
+disregards the field on a site whose dates it cannot trust, listings included. Both routes only run at
 all because **production's** `run_worker_first` list (and the vitest fixture's mirror in
 `vitest.config.ts`) names `/item/*`, `/sitemap.xml` and `/robots.txt` explicitly — otherwise the
 static-assets system's SPA fallback would answer first. Dev and preview set
@@ -91,6 +119,17 @@ non-production response carries `X-Robots-Tag: noindex, nofollow`. Preview used 
 `preview.keepsake.ing` a crawlable, brand-named clone of the product whose notification email is
 silently dropped. Production still serves `apps/web/public/robots.txt` — the Worker delegates to
 the `ASSETS` binding — so that file remains the one place the production rules are edited.
+
+`useFeed` (`apps/web/src/features/feed/useFeed.ts`) keeps page 1 of the last few queries in a
+module-level cache for 60 seconds, so feed → keepsake → back is the list the visitor was looking
+at rather than four skeletons and another round trip; `reloadToken` (the error banner's "Try
+again") bypasses it, because an explicit ask for fresh data must not be answered from a cache. It
+also passes an `AbortSignal` now — `getFeed` has always taken one and nothing passed it, so
+typing in the search box left a trail of page-1 requests that were ignored on arrival but still
+cost the visitor's connection, a Worker invocation and a D1 query each. And `loading` is no longer
+`enabled && …`: while `app/index.tsx` waits for the saved location, the feed is loading, not
+empty — reporting otherwise is what put "Nothing here yet. Be the first to give something." into
+the exported HTML of `/`.
 
 Tests: `apps/api/test/feed.test.ts` (30-listing keyset pagination to the end with no duplicates,
 category filter, given/hidden/pending exclusion, FTS "grandmother" → "grandmother's", 25 mi from

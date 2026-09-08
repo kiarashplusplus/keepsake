@@ -27,6 +27,7 @@ import { AspectList } from "@/features/item/AspectList";
 import { RequestSheet } from "@/features/request/RequestSheet";
 import { ReportSheet } from "@/features/report/ReportSheet";
 import { getListing } from "@/api/listings";
+import { readInlineListing } from "@/features/item/inlineListing";
 import { ApiError } from "@/api/client";
 import { shareListing } from "@/lib/share";
 import { relativeTime } from "@/lib/relativeTime";
@@ -90,17 +91,34 @@ export default function Item(): React.ReactElement {
 
   React.useEffect(() => {
     if (typeof id !== "string") return undefined;
-    let cancelled = false;
 
-    getListing(id)
+    const controller = new AbortController();
+
+    // The Worker that served this page already had the row — it needed it
+    // for the share card's tags — and wrote it into the HTML. When that is
+    // this keepsake, there is nothing to fetch: the round trip the app used
+    // to make here was asking the server for something it had already sent.
+    // Every other entry into this screen (a tap through from the feed, a
+    // second keepsake in the same session) finds no payload and falls
+    // through to the request, unchanged.
+    //
+    // Both sources land in the same `.then` on purpose. It keeps one code
+    // path — one place that decides what "loaded", "not found" and "failed"
+    // mean — and it keeps the state update out of the effect body, where it
+    // would be a synchronous render cascade (and where the server render, of
+    // course, has no DOM to read).
+    const inlined = readInlineListing(id);
+    const load = inlined !== null ? Promise.resolve(inlined) : getListing(id, controller.signal);
+
+    load
       .then((result) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         setListing(result);
         setNotFound(false);
         setError(null);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         if (err instanceof ApiError && err.code === "not_found") {
           setNotFound(true);
           return;
@@ -109,7 +127,10 @@ export default function Item(): React.ReactElement {
       });
 
     return () => {
-      cancelled = true;
+      // Leaving the screen mid-request (a back tap, or straight on to
+      // another keepsake) now cancels it rather than letting it finish into
+      // a component nobody is looking at.
+      controller.abort();
     };
   }, [id]);
 
