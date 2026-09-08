@@ -24,6 +24,7 @@ import {
   removeFakeEmail,
 } from "./helpers.js";
 import { sha256Hex } from "../src/lib/digest.js";
+import { claimRequestConfirmation } from "../src/routes/requestConfirm.js";
 
 const VICTIM_NOTE = "I'd love this, my grandmother had one just like it and I've never forgotten it.";
 
@@ -232,6 +233,39 @@ describe("issue #188: a request is held until its email address is proved", () =
     // have already given away is noise about a decision they have made.
     expect(sent).toHaveLength(mailsBefore);
     expect(sent.some((m) => m.to === "giver@keepsake.ing")).toBe(false);
+  });
+
+  it("does not open or count a request when the listing changes after the availability read", async () => {
+    const sent = installFakeEmail();
+    const { listingId } = await insertGiverWithListing();
+
+    await submitRequest(listingId, freshRequesterEmail());
+    const request = await env.DB.prepare("SELECT id FROM requests WHERE listing_id = ?")
+      .bind(listingId)
+      .first<{ id: string }>();
+    expect(request?.id).toBeTruthy();
+
+    // This is the state left by the other half of the race after the route's
+    // optimistic SELECT saw "approved" but before its confirmation write.
+    // Calling the write primitive directly proves the predicate on the
+    // artifact that closes the race; driving the whole handler would stop at
+    // its earlier check and could pass even if that predicate disappeared.
+    await env.DB.prepare("UPDATE listings SET status = 'given' WHERE id = ?").bind(listingId).run();
+    const claimed = await claimRequestConfirmation(env, request!.id, Date.now(), await sha256Hex("withdraw-token"));
+    expect(claimed).toBe(false);
+
+    const held = await env.DB.prepare("SELECT status, confirmed_at FROM requests WHERE id = ?")
+      .bind(request!.id)
+      .first<{ status: string; confirmed_at: number | null }>();
+    expect(held).toEqual({ status: "unconfirmed", confirmed_at: null });
+    const listing = await env.DB.prepare("SELECT request_count FROM listings WHERE id = ?")
+      .bind(listingId)
+      .first<{ request_count: number }>();
+    expect(listing?.request_count).toBe(0);
+
+    // Only the original confirmation-link email exists: the giver and the
+    // requester were not told that an unavailable keepsake was passed on.
+    expect(sent).toHaveLength(1);
   });
 
   it("kills the confirm link when the request is withdrawn, so the ask cannot be revived", async () => {
