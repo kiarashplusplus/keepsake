@@ -1,0 +1,10 @@
+{
+  "name": "@keepsake/ci-scripts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CI-side guards: assert-coverage.mjs (what the diff required actually ran) and verify-preview-commit.mjs.",
+  "scripts": {
+    "test": "node --test *.test.mjs"
+  }
+}

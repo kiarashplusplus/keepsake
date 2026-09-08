@@ -371,7 +371,11 @@ describe("the daily digest", () => {
   it("carries every cron in the registry, so a new job cannot be added unwatched", async () => {
     const observatory = await getObservatory();
     const names = observatory.report.crons.map((cron) => cron.name).sort();
-    expect(names).toEqual(["dailyDigest", "moderationRetry", "orphanSweep"]);
+    // Against the registry rather than a literal list: the point of this test
+    // is that a job cannot be added unwatched, and a hand-written expectation
+    // makes every new job fail here for the wrong reason — as a chore, not as
+    // a finding. `cron.test.ts` is what pins the registry to real jobs.
+    expect(names).toEqual([...CRON_JOB_NAMES].sort());
   });
 
   it("raises a budget alert only once the ceiling is nearly spent", async () => {

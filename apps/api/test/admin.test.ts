@@ -1,4 +1,5 @@
 import { env, SELF } from "cloudflare:test";
+import { CRON_JOB_NAMES, cronHeartbeatKey } from "../src/cron/registry.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Capture from "@keepsake/observability/capture";
 import type { FeedPage } from "@keepsake/contracts/feed";
@@ -484,11 +485,12 @@ describe("admin routes", () => {
     it("reports the postal_codes count and cron last-run timestamps once both crons are fresh", async () => {
       setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
       await seedStandardPostalCodes();
-      await env.KV.put("cron:last:orphanSweep", String(Date.now()));
-      await env.KV.put("cron:last:moderationRetry", String(Date.now()));
-      // `dailyDigest` joined the cron registry with the Observatory; `/health`
-      // derives `ok` from every job in it, so a green case has to seed all three.
-      await env.KV.put("cron:last:dailyDigest", String(Date.now()));
+      // Every job in the registry, not a hand-written list: `/health` derives
+      // `ok` from all of them, so each new cron turned this green case red
+      // until someone remembered to add a line. A loop cannot forget.
+      for (const name of CRON_JOB_NAMES) {
+        await env.KV.put(cronHeartbeatKey(name), String(Date.now()));
+      }
 
       const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
       expect(res.status).toBe(200);
@@ -508,10 +510,14 @@ describe("admin routes", () => {
     it("is not ok when a cron heartbeat has gone stale", async () => {
       setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
       await seedStandardPostalCodes();
-      await env.KV.put("cron:last:moderationRetry", String(Date.now()));
-      // orphanSweep is nightly and allowed 26 hours; three days is dead.
+      for (const name of CRON_JOB_NAMES) {
+        await env.KV.put(cronHeartbeatKey(name), String(Date.now()));
+      }
+      // …then exactly one goes stale, so the red verdict below can only have
+      // come from that. orphanSweep is nightly and allowed 26 hours; three
+      // days is dead.
       const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
-      await env.KV.put("cron:last:orphanSweep", String(threeDaysAgo));
+      await env.KV.put(cronHeartbeatKey("orphanSweep"), String(threeDaysAgo));
 
       const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
       const health = await readOk<AdminHealth>(res);

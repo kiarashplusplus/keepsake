@@ -234,7 +234,25 @@ jobs:
     name: test-web
     runs-on: ubuntu-latest
     needs: [lint, typecheck, changes]
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.site == 'true' || needs.changes.outputs.root == 'true'
+    # `api` is issue #147, and it is here rather than on `build-web` for a
+    # reason worth stating. `build-web` deliberately carries no `if` so that it
+    # and `e2e` inherit exactly one filter — this one — and `e2e` requires
+    # `build-web.result == 'success'`, which a skipped job never is. So until
+    # this line, **every pull request touching only `apps/api/**` skipped the
+    # end-to-end suite**: the one suite that runs the real Worker against local
+    # D1/R2/KV, on precisely the change shape it is best at, while
+    # `ci-complete` reported green because a skipped job is not a failed one.
+    #
+    # The mirror image of the bug the `e2e` job's own comment describes fixing
+    # (web-only changes skipping e2e). That one was fixed by adding `test-api`
+    # to `e2e`'s needs with a `!= 'failure'` allowance; nothing made an api-only
+    # change *build* the bundle e2e needs.
+    #
+    # The cost is running the web unit tests on an api-only change too. That is
+    # the cheap half of this job, and one filter that two downstream jobs
+    # inherit is what keeps the next person from having to notice this
+    # interaction at all.
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.web == 'true' || needs.changes.outputs.api == 'true' || needs.changes.outputs.packages == 'true' || needs.changes.outputs.tools == 'true' || needs.changes.outputs.site == 'true' || needs.changes.outputs.root == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

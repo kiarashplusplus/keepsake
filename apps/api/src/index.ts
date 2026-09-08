@@ -7,6 +7,7 @@ import { assertBindings, isProduction, semanticSearchEnabled, type Env } from ".
 import { dailyDigest } from "./cron/dailyDigest.js";
 import { moderationRetry } from "./cron/moderationRetry.js";
 import { orphanSweep } from "./cron/orphanSweep.js";
+import { searchIndexRetry } from "./cron/searchIndexRetry.js";
 import { type CronJobName, writeCronHeartbeat } from "./cron/registry.js";
 import { ukBlock } from "./middleware/ukBlock.js";
 import { securityHeaders } from "./middleware/securityHeaders.js";
@@ -425,6 +426,9 @@ async function scheduled(controller: ScheduledController, env: Env, ctx: Executi
   switch (controller.cron) {
     case "*/5 * * * *":
       await runCron("moderationRetry", moderationRetry, env, ctx);
+      break;
+    case "23 * * * *":
+      await runCron("searchIndexRetry", searchIndexRetry, env, ctx);
       break;
     case "17 3 * * *":
       await runCron("orphanSweep", orphanSweep, env, ctx);
