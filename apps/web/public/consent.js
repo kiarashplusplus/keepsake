@@ -434,9 +434,11 @@
   // printed card does not change colour when the lights go down — and it
   // means every contrast pair below is verified once and holds in light and
   // dark:
-  //   ink #1B1815 on #F1E6CC               14.3:1  title, body, disclosure
+  //   ink #1B1815 on #F1E6CC               14.3:1  title, body, disclosures
+  //                                                (both `Choose what to allow`
+  //                                                 and the footnote link)
   //   pencil #5A524A on #F1E6CC             6.2:1  category blurbs, footnote
-  //   stampText #8A2113 on #F1E6CC          7.3:1  eyebrow, GPC note, links
+  //   stampText #8A2113 on #F1E6CC          7.3:1  eyebrow, GPC note
   //   onAccent2 #F1E6CC on accent2 #1B1815  14.3:1  EVERY button's label
   //   accent2 #1B1815 on #F1E6CC           14.3:1  ...and that button's fill
   //                                                 against the bar behind it
@@ -448,7 +450,8 @@
   // `onAccent #FBF9F4 on #C4341C  5.2:1 (the stamp button)` — left with the
   // button that wore it (see the button comment below). Stamp red `#C4341C`
   // survives in this file only where it is decorative and carries no text:
-  // the GPC note's left rule, and the checkboxes' native `accent-color`.
+  // the GPC note's left rule, the checkboxes' native `accent-color`, and the
+  // tint on `Accept all`'s stamp shadow. No label is ever set in it.
   // The bottom bar's gradient scrim is decorative too — no text sits on it,
   // so it has no pair to verify.
   //
@@ -555,9 +558,12 @@
     // it is the only action in its own row, reached only by opening the
     // panel, so matching it costs no hierarchy — and styling it more weakly
     // would re-introduce the exact asymmetry above against the visitor who
-    // took the trouble to choose per category. That leaves `.ks-consent__btn`
-    // as the file's only button rule (`--outline` and `--stamp` are gone),
-    // which is the part of #224 this closes. `.ks-consent__more` stays a
+    // took the trouble to choose per category. That left `.ks-consent__btn` as
+    // the file's only button rule (`--outline` and `--stamp` are gone), which
+    // is the part of #224 #223 closed. It is no longer quite the only one:
+    // `--hint` below tints `Accept all`'s stamp shadow and changes nothing
+    // else, so everything above still holds for both buttons' fill, border,
+    // label, size and weight. `.ks-consent__more` stays a
     // plain underlined line because it is a DISCLOSURE, not an answer — it
     // records no decision and its `aria-expanded` says so.
     '.ks-consent__btn{flex:1 1 0;min-width:132px;min-height:44px;box-sizing:border-box;padding:10px 14px;',
@@ -568,6 +574,35 @@
     // filled-ink control looks like when you hover it.
     'box-shadow:2px 3px 0 rgba(27,24,21,.22);}',
     '.ks-consent__btn:hover{box-shadow:3px 5px 0 rgba(27,24,21,.28);}',
+    // The light hint toward `Accept all`: its pressed-stamp shadow is tinted
+    // stamp red instead of ink. Everything the `.ks-consent__btn` comment
+    // above argues still holds literally — same fill, same border, same label
+    // colour, same size, same weight, same type, same 44px target, same row,
+    // same shadow GEOMETRY. Only the shadow's colour differs, so the pair
+    // still reads as two equal answers and `Reject all` is not dimmed,
+    // shrunk, outlined or moved. Nothing about it changed at all.
+    //
+    // A red BORDER was tried first and rejected on sight: a hard 2px ring
+    // around a filled ink button reads as an alert or an error state, which is
+    // both louder than a hint should be and off-brand — nothing else in the
+    // product outlines a control to recommend it. The offset shadow is the
+    // identity's own affordance (a stamp pressed onto the card, sitting a
+    // little forward of the table), so tinting it says `this one is raised`
+    // in the vocabulary the rest of the page already speaks.
+    //
+    // Alpha `.32` against ink's `.22`: red on cream reads lighter than ink at
+    // equal alpha, so the extra alpha buys the same visual weight, not more.
+    // Both values are decorative — the shadow carries no text, and the
+    // button's boundary is its ink border and fill (14.3:1) with or without
+    // it — so there is no contrast pair here to verify, exactly as with the
+    // bar's gradient scrim.
+    //
+    // The `:hover` twin is required, not decoration: `.ks-consent__btn:hover`
+    // is specificity 0,2,0 and would otherwise reset the tint to ink on hover.
+    // It mirrors that rule's 3px/5px lift so the hinted button lifts by the
+    // same distance as the other one.
+    '.ks-consent__btn--hint{box-shadow:2px 3px 0 rgba(196,52,28,.32);}',
+    '.ks-consent__btn--hint:hover{box-shadow:3px 5px 0 rgba(196,52,28,.4);}',
     '.ks-consent__more{display:block;min-height:44px;background:none;border:0;padding:0;cursor:pointer;',
     'font:inherit;font-size:12px;letter-spacing:.5px;color:#1B1815;text-decoration:underline;text-underline-offset:3px;}',
     '.ks-consent__panel{margin:8px 0 0;border-top:1px solid rgba(27,24,21,.32);padding-top:10px;}',
@@ -577,7 +612,18 @@
     '.ks-consent__row label{font-size:13px;font-weight:700;line-height:1.4;color:#1B1815;cursor:pointer;}',
     '.ks-consent__row label span{display:block;font-weight:400;font-size:12px;line-height:1.5;color:#5A524A;}',
     '.ks-consent__foot{margin:10px 0 0;font-size:12px;line-height:1.5;color:#5A524A;}',
-    '.ks-consent__foot a{color:#8A2113;}',
+    // The footnote link is a DISCLOSURE, like `.ks-consent__more` above it and
+    // for the same reason: it explains the categories, it records no decision.
+    // It wore stamp red `#8A2113` until now, which made the one line on this
+    // screen that only DESCRIBES things the most saturated thing on it — louder
+    // than the two answers, which are ink — and stamp red is the product's
+    // "this is the action" colour everywhere else. So it takes the disclosure's
+    // own treatment: ink, underlined, same 3px offset. It still reads as a link
+    // (the underline, plus the ink/pencil step against the sentence around it),
+    // it just stops competing with the buttons. `ink #1B1815 on #F1E6CC` is
+    // 14.3:1 — the pair the contrast block above already verifies for the
+    // title, the body and `Choose what to allow`.
+    '.ks-consent__foot a{color:#1B1815;text-decoration:underline;text-underline-offset:3px;}',
     '.ks-consent :focus-visible{outline:2px solid #7A2515;outline-offset:3px;}',
     // The reopen control, wherever a surface puts one. Styled here rather than
     // in `apps/site/public/site.css` so a static page opts in with the bare
@@ -687,7 +733,9 @@
     // the consent mechanism and not a styling preference. Ids, order and
     // handlers are untouched.
     el.reject = element('button', { type: 'button', id: 'ks-consent-reject', class: 'ks-consent__btn' }, ['Reject all']);
-    el.accept = element('button', { type: 'button', id: 'ks-consent-accept', class: 'ks-consent__btn' }, ['Accept all']);
+    // `--hint` tints this button's stamp shadow and nothing else — see the
+    // rule for what it leaves alone. `Reject all` above is untouched by it.
+    el.accept = element('button', { type: 'button', id: 'ks-consent-accept', class: 'ks-consent__btn ks-consent__btn--hint' }, ['Accept all']);
     el.more = element('button', { type: 'button', id: 'ks-consent-customise', class: 'ks-consent__more', 'aria-expanded': 'false', 'aria-controls': 'ks-consent-panel' }, ['Choose what to allow']);
     // Same class as the two above, deliberately (#223/#224 — see the
     // `.ks-consent__btn` comment). `flex:0 0 auto` is the one thing that
@@ -739,6 +787,7 @@
       if (open) el.panel.removeAttribute('hidden');
       else el.panel.setAttribute('hidden', '');
       el.more.setAttribute('aria-expanded', open ? 'true' : 'false');
+      measure();
     });
     el.sale.addEventListener('change', function () {
       if (el.sale.checked) {
@@ -784,6 +833,58 @@
    * link promising choices should land on the choices, not on a two-button
    * bar they have already answered once.
    */
+  // ── Reserving the space the bar covers ───────────────────────────────────
+  //
+  // `.ks-consent` is `position:fixed;bottom:0` at up to `78vh`, so it is out
+  // of flow and sits ON TOP of whatever the page ends with. Nothing reserved
+  // room for it, which meant the tail of every page was unreachable while a
+  // decision was outstanding — including, on `/privacy`, the policy text the
+  // banner is pointing people at AND the `[data-ks-consent]` reopen button in
+  // that page's own footer.
+  //
+  // The two surfaces cannot consume that measurement the same way, so this
+  // publishes the number and lets each one apply it:
+  //
+  //   * `--ks-consent-inset` on <html>, which `apps/site/public/site.css`
+  //     turns into `body`'s bottom padding. The static pages are ordinary
+  //     document flow, so padding the body is all it takes.
+  //   * `window.__ksConsent.inset` plus a `ks-consent-inset` event on window,
+  //     which the app reads through `useConsentInset()`. It cannot use the
+  //     custom property: `app/+html.tsx` sets `html, body, #root{height:100%}`
+  //     and expo-router's `ScrollViewStyleReset` sets `body{overflow:hidden}`,
+  //     handing scrolling to React Native `ScrollView`s (see `src/ui/Page.tsx`
+  //     for the full reset), so padding `body` there moves nothing and risks
+  //     the fixed-height flex shell instead.
+  //
+  // Both are 0 whenever the bar is hidden, so a page that has already been
+  // answered reserves nothing.
+  let inset = 0;
+
+  function publishInset(next) {
+    if (next === inset) return;
+    inset = next;
+    api.inset = next;
+    document.documentElement.style.setProperty('--ks-consent-inset', next + 'px');
+    // A plain CustomEvent rather than `subscribe()`: that list is the consent
+    // DECISION channel, and a listener there re-runs provider logic. Height is
+    // not a decision.
+    window.dispatchEvent(new CustomEvent('ks-consent-inset', { detail: next }));
+  }
+
+  function measure() {
+    publishInset(root && !root.hasAttribute('hidden') ? Math.ceil(root.getBoundingClientRect().height) : 0);
+  }
+
+  // The bar's height is not fixed: opening the panel adds four rows, and a
+  // rotation or a resize reflows the copy. `ResizeObserver` catches the first,
+  // `resize` the second in browsers that lack it.
+  function watchSize() {
+    if (!root || watchSize.done) return;
+    watchSize.done = true;
+    if (typeof ResizeObserver === 'function') new ResizeObserver(measure).observe(root);
+    window.addEventListener('resize', measure);
+  }
+
   function open(expanded) {
     build();
     syncControls();
@@ -792,10 +893,15 @@
       el.more.setAttribute('aria-expanded', 'true');
     }
     root.removeAttribute('hidden');
+    watchSize();
+    measure();
   }
 
   function close() {
     if (root) root.setAttribute('hidden', '');
+    // Back to 0 the moment it is answered, so the page reclaims the space in
+    // the same frame the bar leaves.
+    publishInset(0);
   }
 
   function boot() {
@@ -805,7 +911,21 @@
     // a page footer must be styled from first paint, not from the first time
     // somebody clicks it.
     build();
-    if (!read()) open(false);
+    // `data-ks-consent-quiet` suppresses the AUTO-open on one page: the page
+    // that is itself the disclosure. `/privacy` used to open the bar over its
+    // own policy text, so the answer to "what does each one do" was covered by
+    // the thing asking the question — and arriving there from a search engine
+    // did it just as surely as following the banner's own link, which is why
+    // this is a property of the PAGE and not of how you got to it.
+    //
+    // It suppresses a prompt, never a gate. No decision is recorded here —
+    // reading a policy is not consent, and it is not refusal either — and
+    // because everything non-essential stays off until something is stored,
+    // nothing loads on a quiet page that would not have loaded anyway. The
+    // bar is still built (styles, `[data-ks-consent]` delegation), so the
+    // footer's own "Privacy choices" button opens it expanded on demand, and
+    // the next page with no attribute asks normally.
+    if (!read() && !document.querySelector('[data-ks-consent-quiet]')) open(false);
     // Delegated so any surface — a static <button data-ks-consent> in a
     // footer, or a React <Pressable> that renders long after this script ran —
     // reopens the same banner with no registration step.
@@ -822,7 +942,10 @@
     });
   }
 
-  window.__ksConsent = {
+  // Named so `publishInset` can write `api.inset` before this is assigned to
+  // `window.__ksConsent` below — `boot()` runs after, so the property is
+  // always present by the time anything can read it.
+  const api = {
     version: CONSENT_VERSION,
     storageKey: STORAGE_KEY,
     providers: PROVIDERS,
@@ -833,8 +956,13 @@
     gpc: gpc,
     subscribe: subscribe,
     open: open,
-    close: close
+    close: close,
+    // Pixels the bar currently covers at the bottom of the viewport; 0 when
+    // hidden. Mirrors `--ks-consent-inset`. See the reserving-space comment.
+    inset: 0
   };
+
+  window.__ksConsent = api;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', boot);

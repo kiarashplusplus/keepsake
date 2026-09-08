@@ -235,6 +235,13 @@ body {
   position: relative;
   overflow-x: hidden;
   min-height: 100vh;
+  /* Room for the consent bar, which is `position: fixed; bottom: 0` and so
+     covers the end of the page while a decision is outstanding — the footer
+     included, and the footer is where `[data-ks-consent]` lives. `consent.js`
+     publishes its measured height here and sets it back to 0px on close; the
+     fallback keeps this a no-op if that script never runs. See the
+     reserving-space comment in `apps/web/public/consent.js`. */
+  padding-bottom: var(--ks-consent-inset, 0px);
 }
 
 img,

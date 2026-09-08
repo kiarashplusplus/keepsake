@@ -3,6 +3,7 @@ import { Platform, ScrollView, View, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ReadableWidth } from "@/ui/ReadableWidth";
 import { AppFooter } from "@/ui/AppFooter";
+import { useConsentInset } from "@/ui/useConsentInset";
 
 export type PageProps = {
   /**
@@ -71,6 +72,11 @@ export function Page({
   testID,
 }: PageProps): React.ReactElement {
   const insets = useSafeAreaInsets();
+  // The consent bar is fixed to the bottom of the viewport and is not in this
+  // tree, so the scroller has to leave room for it or the end of the page —
+  // the footer, and with it "Privacy choices" — sits underneath it while a
+  // decision is outstanding. 0 once answered.
+  const consentInset = useConsentInset();
   const rhythmStyle: ViewStyle = { ...contentContainerStyle };
 
   const content =
@@ -85,7 +91,10 @@ export function Page({
   return (
     <ScrollView
       style={{ flex: 1 }}
-      contentContainerStyle={{ flexGrow: 1 }}
+      // On the container, not on the content above the footer, so the reserved
+      // space lands below the LAST thing in the document rather than between
+      // the page and its footer.
+      contentContainerStyle={{ flexGrow: 1, paddingBottom: consentInset }}
       showsVerticalScrollIndicator={Platform.OS === "web"}
       keyboardShouldPersistTaps="handled"
       testID={testID}
