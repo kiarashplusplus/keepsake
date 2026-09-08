@@ -409,3 +409,16 @@ where an empty list would be a lie and the honest answer is still the "not open 
 state). Verified the way the rule asks: the failure reproduced locally first
 (`playwright test e2e/bulk.spec.ts` — same timeout, same detached button), then passed on both
 projects with the fix.
+
+**The UX baseline was captured and then deliberately thrown away.** `pnpm --filter @keepsake/web
+e2e:ux` runs fine in an agent container — but only against the Chromium build the container has
+(141.0.7390.37, symlinked under the name the pinned `@playwright/test` asks for, per `AGENTS.md`'s
+own workaround). That is fine for the functional suite, which asserts on the DOM. It is not fine
+for *images*: all 77 frames came back changed, including screens this branch never touches, because
+the mono chip labels render fractionally wider on that build — `feed.jpg`'s category row reflows
+with nothing in the diff to explain it. Committing them would have written this container's font
+rendering into the repo's baseline and called it the product.
+
+So the frames stay stale for now, and `docs/qa/baseline/ux-mobile/bulk-new.jpg` still shows an
+admission-code field that no longer exists. The capture is a two-minute job in an environment with
+the pinned browser. Worth doing there, not here.
