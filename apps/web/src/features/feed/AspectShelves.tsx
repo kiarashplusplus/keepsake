@@ -12,8 +12,7 @@ import * as React from "react";
 import { ScrollView, View } from "react-native";
 import type { AspectShelf } from "@keepsake/contracts/shelves";
 import { space } from "@keepsake/tokens/spacing";
-import { Text } from "@/ui/Text";
-import { Eyebrow } from "@/ui/Eyebrow";
+import { TableHeading } from "@/ui/TableHeading";
 import { ListingCard } from "@/features/feed/ListingCard";
 
 const SHELF_ITEM_WIDTH = 200;
@@ -25,12 +24,13 @@ function pieceWord(count: number): string {
 function Shelf({ shelf }: { shelf: AspectShelf }): React.ReactElement {
   return (
     <View style={{ gap: space.md }} testID={`shelf-${shelf.name}-${shelf.value}`}>
-      <View style={{ flexDirection: "row", alignItems: "baseline", gap: space.sm, flexWrap: "wrap" }}>
-        <Eyebrow tick>{shelf.value}</Eyebrow>
-        <Text variant="caption" color="textTertiary">
-          {shelf.count} {pieceWord(shelf.count)} on the table
-        </Text>
-      </View>
+      {/* Issue #216: the shelf's name and its count used to be a bare
+          `Eyebrow` plus a caption laid straight on the table, which is the
+          one thing `packages/tokens/src/colors.ts` says nothing does — both
+          colours are constant, so on the dark table they measured 1.12:1 and
+          2.60:1. Same words, same order, now printed on a paper strip like
+          the rest of the shelves' contents. */}
+      <TableHeading note={`${shelf.count} ${pieceWord(shelf.count)} on the table`}>{shelf.value}</TableHeading>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: space.lg, paddingBottom: space.sm, paddingEnd: space.sm }}>
         {shelf.items.map((listing) => (
           <View key={listing.id} style={{ width: SHELF_ITEM_WIDTH }}>
