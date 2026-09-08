@@ -40,9 +40,11 @@ import { DEMO_PHOTOS, readDemoPhoto } from "./support/demoPhotos";
 import {
   DEMO_HIDDEN_LISTING,
   DEMO_LISTINGS,
+  DEMO_OWNER_TOKEN,
   DEMO_REQUESTS,
   ensureDemoCatalog,
 } from "./support/demoCatalog";
+import { ensureDemoBulkBatch } from "./support/demoBulkBatch";
 import { seedTheme, shot } from "./support/shots";
 import type { Browser, BrowserContext } from "@playwright/test";
 
@@ -346,6 +348,59 @@ test.describe("ux baseline", () => {
     await shot(page, testInfo, "mine-email");
   });
 
+  test("the estate bulk workspace", async ({ page, context, request }, testInfo) => {
+    // New with the bulk-upload pilot (PR #263) — `ensureDemoBulkBatch` mints
+    // its own admission grant for `DEMO_OWNER_TOKEN` (see that module's
+    // header on why there's no self-serve path onto `/bulk` to walk instead)
+    // and seeds one batch: two photos grouped into a filled-in, ready item,
+    // and a third left unassigned in the tray, so Photos shows both halves
+    // of "add and group" at once rather than an empty or an all-grouped tray.
+    const batch = await ensureDemoBulkBatch(request);
+    await seedOwnerToken(context, DEMO_OWNER_TOKEN);
+
+    await page.goto("/bulk");
+    await expect(page.getByText("Give several items")).toBeVisible();
+    await expect(page.getByText("UX baseline — estate batch", { exact: true })).toBeVisible();
+    await shot(page, testInfo, "bulk-batches");
+
+    // Started, not submitted: a filled admission code and postcode, one tap
+    // from creating a *second* batch — which this frame deliberately never
+    // does, so the fixture stays idempotent across runs.
+    await page.goto("/bulk/new");
+    await expect(page.getByText("Start clearing a house.")).toBeVisible();
+    await page.getByLabel("Batch name").fill("Dad's workshop — October");
+    await page.getByLabel("Postcode").fill("02144");
+    await expect(page.getByText("Somerville, MA")).toBeVisible();
+    await page.getByLabel("Admission code").fill(batch.grantId);
+    await shot(page, testInfo, "bulk-new");
+
+    await page.goto(`/bulk/${batch.clientBatchKey}/photos`);
+    await expect(page.getByText("Add and group photos.")).toBeVisible();
+    await expect(page.getByText("Pressed tin ceiling tile")).toBeVisible();
+    await shot(page, testInfo, "bulk-photos");
+
+    await page.goto(`/bulk/${batch.clientBatchKey}/review`);
+    // Unlike Photos' card heading, Review shows the title inside a `Title`
+    // `TextInput` — an input's value is not text content, so `getByText`
+    // never matches it here.
+    await expect(page.getByLabel("Title")).toHaveValue("Pressed tin ceiling tile");
+    await shot(page, testInfo, "bulk-review");
+
+    await page.goto(`/bulk/${batch.clientBatchKey}/submit`);
+    await expect(page.getByText("Publish what's ready.")).toBeVisible();
+    await expect(page.getByText(/1 ready/)).toBeVisible();
+    await shot(page, testInfo, "bulk-submit");
+
+    // My Keepsakes' private draft-batches section — a separate frame from
+    // the plain `mine` one above rather than folded into it: that frame's
+    // test runs earlier in this file, before this batch exists, and
+    // changing what it shows retroactively would be a second, unrelated
+    // frame changing for anyone diffing this one's baseline.
+    await page.goto("/mine");
+    await expect(page.getByText("Estate batches")).toBeVisible();
+    await shot(page, testInfo, "mine-bulk-drafts");
+  });
+
   test("the screens on the end of a link", async ({ page }, testInfo) => {
     await page.goto("/recover");
     await expect(page.getByText("Get back in.")).toBeVisible();
@@ -399,6 +454,7 @@ test.describe("ux baseline", () => {
       `the dark set is captured once, in ${DARK_PROJECT} — a second copy of the same palette is bytes, not evidence`,
     );
     const catalog = await ensureDemoCatalog(request);
+    const batch = await ensureDemoBulkBatch(request);
 
     const context = await openFreshContext(browser, CAPTURE_CONTEXT);
     await seedTheme(context, "dark");
@@ -424,6 +480,10 @@ test.describe("ux baseline", () => {
     await page.goto("/give");
     await expect(page.getByText("Show us the keepsake.")).toBeVisible();
     await shot(page, testInfo, "dark-give-photos");
+
+    await page.goto(`/bulk/${batch.clientBatchKey}/photos`);
+    await expect(page.getByText("Pressed tin ceiling tile")).toBeVisible();
+    await shot(page, testInfo, "dark-bulk-photos");
 
     await page.goto("/recover");
     await expect(page.getByText("Get back in.")).toBeVisible();
