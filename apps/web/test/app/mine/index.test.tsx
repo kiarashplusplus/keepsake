@@ -76,6 +76,7 @@ function listing(id: string, title: string, status: OwnerListing["status"]): Own
     title,
     story: "It sat on my grandmother's shelf for thirty years and should sit on someone else's now.",
     category: "home_kitchen",
+    category_chosen_at: null,
     place_name: "Somerville",
     admin1: "MA",
     country: "US",
