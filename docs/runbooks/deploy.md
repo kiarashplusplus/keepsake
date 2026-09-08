@@ -386,6 +386,105 @@ it as "has this token ever been used since X", not as a live counter. A failed p
 signal — `photoCache.ts` reports one through Workers Logs as
 `Cloudflare zone cache purge failed for photo <id>`, with Cloudflare's own `errors[]` in `extra`.
 
+## Web Analytics and the consent-gated tags (#228, #231, #233)
+
+Three separate things sit between "a Cloudflare Web Analytics site exists" and "the product records
+a page view", and each of them fails silently. All three were live at once on 2026-09-07, and the
+only thing that saw any of them was a real browser pointed at a real deployment.
+
+### The token, and which of the two 32-character values it is
+
+A Cloudflare RUM site carries **both** a `site_tag` and a `site_token`. They are both 32 hex
+characters, they are different values, and the one that goes in `data-cf-beacon` is the
+**`site_token`**. `site_tag` is what identifies the site to the API and to GraphQL. Reading the
+`snippet` field of `GET /accounts/{acct}/rum/site_info/{site}` settles it without guessing — it
+contains the exact tag Cloudflare would have injected.
+
+For `keepsake.ing`: site tag `d90ef13c…`, and the `site_token` is what
+`EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN` is set to.
+
+It is a **GitHub Environment variable, not a secret**, on both `preview` and `production` — it is
+inlined into the static export and served in the HTML, so it is public by construction. Both tiers
+currently use the same token; Web Analytics records the hostname with every event, so preview and
+production traffic stay separable in the dashboard. A separate site for `preview.keepsake.ing`
+would be cleaner and needs a token permission nobody has (see below).
+
+**An `EXPO_PUBLIC_*` value only reaches a tier that has been deployed since it was set.** Setting
+the variable does nothing to a running site. Production needs its own `workflow_dispatch`.
+
+### The dashboard mode, and why the API cannot tell you which one is set
+
+Web Analytics has four modes. The one this product needs is **"Enable with JS Snippet
+installation"**, because `public/consent.js` injects the beacon itself, only after the visitor
+grants the `analytics` category.
+
+"Enable" — automatic injection — is wrong here and was actively harmful: Cloudflare rewrites the
+HTML at the edge, before any of our JavaScript runs, so the beacon loaded regardless of consent and
+kept loading after "Reject all" (#231). The injected tag is recognisable by its shape,
+`{"version":…,"r":1,"spa":2}`, where `consent.js` emits only `{"token":…}`.
+
+**Do not try to read the mode back from the API.** "Enable with JS Snippet installation" and
+"Disable" are indistinguishable through `GET /rum/site_info` — both report `auto_install: false`
+and `ruleset.enabled: false`, because that ruleset governs *auto-injection*, not collection.
+Reading `ruleset.enabled` as an on/off switch will tell you the site is off when it is on. The only
+reliable check is whether events arrive; see the verification below.
+
+### `connect-src`, which is a different origin from `script-src`
+
+The beacon is **fetched** from `static.cloudflareinsights.com` and **reports** to
+`cloudflareinsights.com/cdn-cgi/rum`. Note the missing `static.`. `script-src` had permitted the
+first for as long as the banner has existed; `connect-src` did not permit the second, so once the
+token was configured the beacon loaded with HTTP 200 and was refused the instant it tried to send
+anything (#233).
+
+Both copies of the CSP must carry it — `apps/web/public/_headers` and
+`apps/api/src/middleware/securityHeaders.ts`. `apps/web/test/guards/analyticsCsp.test.ts` now holds
+both to whatever `public/consent.js` declares as that provider's `beacon`, so this cannot drift
+again. A provider with no `beacon` is skipped: Google Ads has none because it is configured nowhere
+and its reporting origins are deliberately absent from the CSP rather than widening it for a tag
+nothing loads. Whoever enables it adds `beacon` there, and the guard starts requiring the origins.
+
+The privacy policy is held to the same declaration by `test/guards/privacyPolicy.test.ts`: any
+provider with a `beacon` must have its **recipient** hostname named in `privacy.html`, not just the
+host the script is fetched from.
+
+### Verifying it, which needs a browser
+
+None of this is observable from `curl` or from the test suite. jsdom cannot tell a request the
+browser refused on CSP grounds from one that succeeded, and the auto-injected beacon does not
+appear in a `curl` of `/` because a first-time visitor is redirected client-side to `/welcome`.
+
+Load the site in a real browser, follow the redirect, and check three things:
+
+1. **Before answering the banner** — zero requests to `static.cloudflareinsights.com`. Any request
+   here means edge auto-injection is back on.
+2. **After accepting analytics** — `200` on `beacon.min.js` and `204 POST` on
+   `cloudflareinsights.com/cdn-cgi/rum`, with no CSP violation in the console.
+3. **That the data landed**, which a `204` alone does not prove. Query GraphQL:
+
+   ```graphql
+   query($acct:String!, $site:String!, $since:Time!) {
+     viewer { accounts(filter:{accountTag:$acct}) {
+       rumPageloadEventsAdaptiveGroups(filter:{siteTag:$site, datetime_geq:$since}) { count }
+     } }
+   }
+   ```
+
+   against `https://api.cloudflare.com/client/v4/graphql` with the `cf` or observatory token. A
+   rising `count` for `siteTag d90ef13c…` is the only end-to-end proof that the mode, the token,
+   the CSP and the consent gate are all correct at once.
+
+### The token permission nobody has
+
+Every Cloudflare token in `~/Documents/.env` (`cf`, `KEEPSAKE_OBSERVATORY_CF_TOKEN`,
+`KEEPSAKE_PR_PREVIEW_CF_TOKEN`, `KEEPSAKE_CACHE_PURGE_CF_TOKEN`) can **read** RUM config and
+**none** can write it: `POST /accounts/{acct}/rum/site_info` and `PUT .../site_info/{id}` both
+return `403 Authentication error`. Creating a site or changing the installation mode is therefore a
+dashboard action.
+
+Minting one with **Account → Web Analytics → Edit** would close that gap and let a separate preview
+site be created without a dashboard trip.
+
 ## What a deploy actually does
 
 1. `pnpm install --frozen-lockfile`
