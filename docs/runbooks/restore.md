@@ -68,8 +68,15 @@ insures against (more on both below).
 **RPO ≈ 0 for D1, within a 30-day window.** Time Travel is not a snapshot schedule — D1 keeps the
 write-ahead log and a bookmark identifies an exact commit, so you restore to *the state before the
 bad statement*, not to the last nightly dump. `d1 time-travel info --timestamp` resolved a
-one-hour-old RFC3339 timestamp to a bookmark on preview on the first try. Past 30 days there is
-nothing at all.
+one-hour-old RFC3339 timestamp to a bookmark on preview on the first try.
+
+**Past 30 days, RPO ≈ 24 hours, out to 90 days.** This sentence used to read "past 30 days there
+is nothing at all", which was true until `.github/workflows/backup-db.yml` started taking a nightly
+export into `keepsake-db-<env>-backup` (see
+[There is now a scheduled export](#d1-export-backup)). The granularity collapses hard at the
+30-day boundary — inside it you restore to the exact commit before the bad statement, outside it
+you restore to 02:00 UTC on some morning and lose everything after — but "some morning" and
+"nothing at all" are different situations. Past 90 days there is still nothing at all.
 
 **RPO for R2 depends on when `tools/backup-photos.mjs` last ran against the key in question** — see
 [R2 photo backup](#r2-photo-backup). Nothing is instant and nothing is guaranteed the way D1's
@@ -171,12 +178,75 @@ a guard.
 - Measured on preview: 11 KB, about 3 seconds. On production it stays small for a long time —
   this is text, and the photos (the actual bulk) live in R2.
 
-Keep the file somewhere that is not this Cloudflare account. There is deliberately **no scheduled
-export workflow**: an unattended weekly job writing into the same account's R2 would not survive
-the account-level failure it is supposedly for, and it would be one more thing that can rot
-unnoticed — which is the failure mode this whole audit is about. Run this by hand before anything
+Keep the file somewhere that is not this Cloudflare account. Run this by hand before anything
 risky (a migration that drops or rewrites a column, a bulk admin action), and note in
 `docs/runbooks/incident.md` that you did.
+
+<a id="d1-export-backup"></a>
+### There is now a scheduled export, and why this section used to argue against one
+
+This paragraph used to say there was **deliberately no scheduled export workflow**, on two
+grounds. Both were fair and only one of them survives.
+
+> an unattended weekly job writing into the same account's R2 would not survive the account-level
+> failure it is supposedly for
+
+True, and still true — `.github/workflows/backup-db.yml` does not fix the account-level problem
+and does not claim to. But that was an argument against the *destination*, applied as an argument
+against the *schedule*, and it proves too much: by the same reasoning `backup-photos.yml` should
+not exist either, and it does. An export earns its place on the three failure modes Time Travel
+cannot cover — a mistake older than 30 days, a D1-level problem, and restoring into a new
+database — none of which require the copy to be off-account. Meanwhile the by-hand-only policy had
+a cost the paragraph did not price: `docs/runbooks/launch-audit.md` §5 found that the recovery
+path existed **only as instructions**, to be discovered mid-incident, under pressure, by the one
+person who could run them. That is the specific risk it recommended a scheduled job to remove.
+
+> it would be one more thing that can rot unnoticed — which is the failure mode this whole audit
+> is about
+
+This one is a real objection and it is answered rather than dismissed, because rot in a backup job
+is the house speciality here (`backup-photos.yml`'s first green run touched no bucket at all).
+`tools/backup-db.mjs` is built so that green means something:
+
+- it probes the destination bucket **before** exporting, so a missing bucket cannot be hidden
+  behind a trivially-successful run;
+- it takes its `--table` list from *this file* via preflight's own
+  `documentedBackupTables` parser, so it cannot go stale independently of the `backup-tables`
+  check — the #164 failure cannot recur in a second copy of the list, because there is no second
+  copy;
+- it prints a per-table INSERT count, so "0 rows" and "the query returned nothing" stop looking
+  identical in a check mark;
+- it re-downloads the uploaded object and fails on a SHA-256 mismatch, so green means the bytes in
+  R2 are the bytes that left the runner — the check PR #215 ran by hand for photos, run nightly.
+
+Daily at 02:00 UTC rather than the audit's suggested weekly: the dump is kilobytes, so weekly buys
+nothing but up to seven days of lost rows in exactly the scenario an export is for.
+
+**Destination and retention.** `keepsake-db-production-backup` and `keepsake-db-preview-backup`,
+both created 2026-09-08 (location hint `eeur`, Standard), keys `d1/<database>/<timestamp>.sql`.
+Each carries an `expire-after-90d` lifecycle rule, so pruning is the bucket's job and never the
+script's — a backup job that deletes things is a backup job that can delete the wrong thing. 90
+days outlives Time Travel's 30 by a wide margin, which is the window that matters: a dump is only
+the recovery path once Time Travel has aged out.
+
+Each also carries a **30-day object lock** (`retain-30d`, `Age`/`maxAgeSeconds` 2592000), so a
+leaked credential with account-wide R2 write cannot erase the last month of dumps. Read
+[the lock's trade-off](#the-object-lock-and-what-it-costs) before assuming that is free.
+
+```sh
+# The one-time setup that was run, per tier:
+wrangler r2 bucket create keepsake-db-production-backup --location eeur
+wrangler r2 bucket lifecycle add keepsake-db-production-backup expire-after-90d --expire-days 90 -y
+# The lock has no wrangler subcommand for Age rules; it was set over the API:
+#   PUT /accounts/<acct>/r2/buckets/<bucket>/lock
+#   {"rules":[{"id":"retain-30d","enabled":true,"prefix":"",
+#              "condition":{"type":"Age","maxAgeSeconds":2592000}}]}
+```
+
+To restore from one of these, `wrangler r2 object get keepsake-db-production-backup/d1/<db>/<ts>.sql
+-f dump.sql` and then follow [Restoring into a new database](#restoring-into-a-new-database-then-cutting-over)
+from step 1 — the dumps are `--no-schema`, exactly like a by-hand export, so nothing about that
+procedure changes.
 
 ## Restoring into a new database, then cutting over
 
@@ -408,6 +478,43 @@ pnpm exec wrangler r2 bucket lifecycle add keepsake-photos-preview-backup \
 400 days is comfortably longer than D1's 30-day Time Travel window and `orphanSweep`'s 30-day
 terminal-photo grace period, so the backup outlives every other recovery mechanism in this
 document rather than expiring a photo those mechanisms would still consider live.
+
+<a id="the-object-lock-and-what-it-costs"></a>
+### The object lock, and what it costs
+
+Until 2026-09-08 the backup bucket's only protection was that nothing was written to delete from
+it. That is a convention, not a control, and the credential audit that day found six live API
+tokens holding account-wide `Workers R2 Storage Write` — any of which could have emptied it. So
+all four backup buckets (`keepsake-photos-{preview,production}-backup` and the two new
+`keepsake-db-*-backup`) now carry an R2 bucket lock:
+
+```
+PUT /accounts/<acct>/r2/buckets/<bucket>/lock
+{"rules":[{"id":"retain-30d","enabled":true,"prefix":"",
+           "condition":{"type":"Age","maxAgeSeconds":2592000}}]}
+```
+
+**It enforces, and this was verified rather than assumed.** A scratch object was written to
+`keepsake-photos-preview-backup`, `wrangler r2 object delete` was run against it, and the object
+was still readable afterwards. Note the shape of that proof, because it matters operationally:
+**wrangler printed `Delete complete.` and exited 0.** A blocked delete is a *silent* no-op at the
+CLI, the same failure shape the `CF_CACHE_PURGE_TOKEN` note warns about — do not read a successful
+`delete` as evidence an object is gone. Read the object back. (The probe object,
+`_locktest/proof-2026-09-08.txt`, is consequently stuck until 2026-10-08 and then falls to the
+lifecycle rule. It is five lines of text and harms nothing.)
+
+**What it costs.** A locked object cannot be deleted or overwritten by anyone — including you —
+until it is 30 days old. The published privacy policy says of a listing photo that "Delete your
+listing and it is deleted too" (asserted by `apps/web/test/guards/privacyPolicy.test.ts`), so an
+erasure request now has a floor of 30 days *in the backup bucket* before the copy there can be
+removed by hand. This does not make the policy newly false — the 400-day lifecycle already meant a
+backup copy outlived the primary by up to 400 days, and no code path has ever reached into the
+backup bucket to honour a deletion — but it does harden a gap that was previously only
+theoretical. 30 days was chosen over 90 for exactly this reason: it matches D1's Time Travel
+window and `orphanSweep`'s `TERMINAL_PHOTO_RETENTION_MS`, so it adds no new number to reason
+about, and it bounds the erasure-response floor at a month instead of a quarter. If a
+right-to-erasure request ever needs to reach the backup bucket sooner than that, the lock rule has
+to come off first; there is no per-object override.
 
 ### The ordering is enforced by the sweep
 
