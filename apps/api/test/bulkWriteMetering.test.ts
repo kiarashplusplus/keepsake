@@ -77,6 +77,19 @@ const WRITE_ROUTES: { method: string; path: string; url: (ids: { batchId: string
   { method: "DELETE", path: "/batches/:id/items/:clientItemId", url: ({ batchId }) => `/batches/${batchId}/items/item-1` },
   { method: "PUT", path: "/batches/:id/photos/:clientPhotoId", url: ({ batchId }) => `/batches/${batchId}/photos/photo-1`, multipart: true },
   { method: "DELETE", path: "/batches/:id/photos/:clientPhotoId", url: ({ batchId }) => `/batches/${batchId}/photos/photo-1` },
+  {
+    method: "POST",
+    path: "/batches/:id/photos/:clientPhotoId/suggest",
+    url: ({ batchId }) => `/batches/${batchId}/photos/photo-1/suggest`,
+  },
+  {
+    method: "POST",
+    path: "/batches/:id/submit",
+    url: ({ batchId }) => `/batches/${batchId}/submit`,
+    body: { op_key: "submit-metering", date_of_birth: "1990-01-01", items: [{ client_item_id: "item-1", revision: 1 }] },
+  },
+  { method: "POST", path: "/operations/:id/retry", url: () => "/operations/op-1/retry" },
+  { method: "DELETE", path: "/operations/:id", url: () => "/operations/op-1" },
 ];
 
 describe("every write on bulkRoutes is behind the router-level burst brake", () => {

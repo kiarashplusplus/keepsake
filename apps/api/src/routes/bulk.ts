@@ -42,7 +42,7 @@
  */
 import { Hono } from "hono";
 import type { Country, PostalLookup } from "@keepsake/contracts/geo";
-import { CreateBatchInput, UpdateBatchInput, UpsertBatchItemInput } from "@keepsake/contracts/bulk";
+import { CreateBatchInput, SubmitBatchInput, UpdateBatchInput, UpsertBatchItemInput } from "@keepsake/contracts/bulk";
 import type { Env } from "../env.js";
 import {
   bulkDraftRetentionDays,
@@ -72,6 +72,7 @@ import {
   buildSuggestionDebitStatements,
   settleDebit,
 } from "../bulk/grants.js";
+import { cancelOperation, getOperationSummary, listOperationsForBatch, retryOperation, runBulkOperation, startSubmission } from "../bulk/submit.js";
 import { suggestFromPhoto } from "../suggest/suggest.js";
 import {
   activityBump,
@@ -663,4 +664,92 @@ bulkRoutes.post("/batches/:id/photos/:clientPhotoId/suggest", ownerAuth(), requi
 
   const result = await suggestFromPhoto(c.env, photo);
   return ok(c, { suggestion: result.suggestion });
+});
+
+// ---------------------------------------------------------------------------
+// POST /batches/:id/submit
+// ---------------------------------------------------------------------------
+// No `requireGrant()` here, deliberately: `startSubmission` spends no
+// admission of its own — the items and photos it publishes already paid for
+// themselves, one at a time, at `PUT /batches/:id/items/:clientItemId` and
+// `PUT /batches/:id/photos/:clientPhotoId`. `DELETE /batches/:id` is the
+// existing precedent for a bulk write that needs no grant.
+bulkRoutes.post("/batches/:id/submit", ownerAuth(), validateBody(SubmitBatchInput), async (c) => {
+  const owner = c.get("owner");
+  const batchId = requireParam(c, "id");
+  const input = c.get("validatedBody") as SubmitBatchInput;
+
+  const result = await startSubmission(c.env, { ownerId: owner.id, batchId, input });
+  if (!result.ok) {
+    return fail(c, result.code, result.message, result.status);
+  }
+
+  // Eager first attempt so a small batch doesn't wait up to three minutes
+  // for `bulkRunner`'s `*/3` cron tick — `runBulkOperation` itself is what
+  // makes this safe to fire and forget: it's idempotent, lease-guarded, and
+  // the cron picks the operation right back up if this `waitUntil` never
+  // runs at all (Worker eviction, a thrown exception, anything). Not awaited
+  // — the response is the *accepted* operation, not the finished one.
+  c.executionCtx.waitUntil(runBulkOperation(c.env, result.operation.id));
+
+  return ok(c, result.operation, 202);
+});
+
+// ---------------------------------------------------------------------------
+// GET /batches/:id/operations
+// ---------------------------------------------------------------------------
+bulkRoutes.get("/batches/:id/operations", burst("RL_READ"), ownerAuth(), async (c) => {
+  const owner = c.get("owner");
+  const batchId = requireParam(c, "id");
+
+  const batch = await findBatchById(c.env, batchId, owner.id);
+  if (!batch) return fail(c, "not_found", "Batch not found.", 404);
+
+  const items = await listOperationsForBatch(c.env, { batchId, ownerId: owner.id });
+  return ok(c, { items });
+});
+
+// ---------------------------------------------------------------------------
+// GET /operations/:id
+// ---------------------------------------------------------------------------
+bulkRoutes.get("/operations/:id", burst("RL_READ"), ownerAuth(), async (c) => {
+  const owner = c.get("owner");
+  const operationId = requireParam(c, "id");
+
+  const operation = await getOperationSummary(c.env, { operationId, ownerId: owner.id });
+  if (!operation) return fail(c, "not_found", "Operation not found.", 404);
+  return ok(c, operation);
+});
+
+// ---------------------------------------------------------------------------
+// POST /operations/:id/retry
+// ---------------------------------------------------------------------------
+bulkRoutes.post("/operations/:id/retry", ownerAuth(), async (c) => {
+  const owner = c.get("owner");
+  const operationId = requireParam(c, "id");
+
+  const result = await retryOperation(c.env, { ownerId: owner.id, operationId });
+  if (!result) return fail(c, "not_found", "Operation not found.", 404);
+
+  // Only worth an eager attempt when there's actually something new queued
+  // — see `retryOperation`'s own header for why a no-op call (nothing was
+  // failing, or the operation wasn't `done` yet) must not disturb anything.
+  if (result.requeued > 0) {
+    c.executionCtx.waitUntil(runBulkOperation(c.env, operationId));
+  }
+
+  return ok(c, result.operation);
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /operations/:id — cancel unstarted work
+// ---------------------------------------------------------------------------
+bulkRoutes.delete("/operations/:id", ownerAuth(), async (c) => {
+  const owner = c.get("owner");
+  const operationId = requireParam(c, "id");
+
+  const result = await cancelOperation(c.env, { ownerId: owner.id, operationId });
+  if (!result) return fail(c, "not_found", "Operation not found.", 404);
+
+  return ok(c, { operation: result.operation, listing_ids: result.listingIds });
 });
