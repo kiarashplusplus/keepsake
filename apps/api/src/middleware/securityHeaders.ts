@@ -56,14 +56,25 @@ const CONTENT_SECURITY_POLICY = [
   // `apps/web/test/guards/reverseGeocodeCsp.test.ts` fails if this string
   // or `_headers` stops covering one.
   //
-  // Note for whoever turns analytics on: `script-src` already permits the
-  // Google Ads and Cloudflare Web Analytics *scripts*, but their beacons are
-  // `connect-src` and are NOT permitted here. Neither is configured in any
-  // environment today (no `ks-google-ads-id` / `ks-cf-beacon-token` meta is
-  // served), so nothing is broken right now — but enabling one without
-  // adding its endpoint here would load a tag that silently reports nothing,
-  // which is exactly the drift `launch-audit.md` §7 already caught once.
-  "connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org",
+  // `https://cloudflareinsights.com` is where the Web Analytics beacon
+  // reports, and it is a different origin from the
+  // `static.cloudflareinsights.com` that `script-src` fetches it from — note
+  // the missing `static.`. The note that used to sit here said neither
+  // analytics nor ads was configured anywhere "so nothing is broken right
+  // now", and warned that turning one on without adding its endpoint would
+  // load a tag that silently reports nothing. That is exactly what happened:
+  // `EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN` was set on both environments to
+  // unblock the deploy, and the beacon then loaded on preview and was refused
+  // by this directive — `Connecting to 'https://cloudflareinsights.com/cdn-cgi/rum'
+  // violates the following Content Security Policy directive`, in the console
+  // of a real browser and nowhere else.
+  //
+  // Google Ads is still not configured (`ks-google-ads-id` is served empty)
+  // and its reporting origins are still absent here deliberately, rather than
+  // widened for a tag nothing loads. Whoever enables it must add them and
+  // give that provider a `beacon` in `consent.js`, which is what makes the
+  // guard below cover it.
+  "connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org https://cloudflareinsights.com",
   "script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com " +
     "'sha256-VYy8ShHUfzzRt7GXnoWUg8bhL+AVi/uK7Oqzytw8Se4=' " +
     "'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' " +

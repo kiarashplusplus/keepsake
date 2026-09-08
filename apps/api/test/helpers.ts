@@ -531,6 +531,54 @@ export function installDenyingRateLimiter(name: RateLimitBindingName): () => voi
   };
 }
 
+/**
+ * Replaces a `[[ratelimits]]` binding with one that allows exactly `limit`
+ * calls per key and denies every call after that, recording each key it was
+ * handed.
+ *
+ * Issue #116. The admin brute-force test used to exhaust the *real* `RL_ADMIN`
+ * binding with 400 sequential requests, because the audit that found the bug
+ * measured it that way. Two things made that unreliable, and neither is about
+ * the code under test: Cloudflare documents these bindings as "permissive,
+ * eventually consistent, and intentionally designed to not be used as an
+ * accurate accounting system" (measured here at ~2.6x overshoot), and 400
+ * awaited round trips is real wall-clock work whose duration depends on how
+ * busy the machine is. Reproduced deliberately for #116: with 24 busy loops on
+ * a 4-core container the test hit its own 30s timeout, and it is the same test
+ * two sessions saw fail on unmodified `main`.
+ *
+ * A test that fails when the host is loaded cannot distinguish "the guard
+ * works" from "the machine was fast today", so the guard is asserted against a
+ * limiter this repo controls instead — the same trade `readRateLimit.test.ts`
+ * already makes with `installDenyingRateLimiter`, and for the same measured
+ * reason. What is gained is a stronger claim than the real binding could ever
+ * support: *every* request must reach the limiter, all under one key, with the
+ * refusal landing on exactly the call after the limit.
+ */
+export function installCountingRateLimiter(
+  name: RateLimitBindingName,
+  options: { limit: number },
+): { keys: string[]; restore: () => void } {
+  const bindings = env as unknown as Record<string, unknown>;
+  const original = bindings[name];
+  const keys: string[] = [];
+  const seen = new Map<string, number>();
+  bindings[name] = {
+    limit: async ({ key }: { key: string }) => {
+      keys.push(key);
+      const used = (seen.get(key) ?? 0) + 1;
+      seen.set(key, used);
+      return { success: used <= options.limit };
+    },
+  };
+  return {
+    keys,
+    restore: () => {
+      bindings[name] = original;
+    },
+  };
+}
+
 /** Replaces a `[[ratelimits]]` binding with one that allows every call and
  * records the `key` it was handed, so a test can assert on *what* `burst()`
  * keys the limiter by — not just that it fired. Issue #87: the key used to be

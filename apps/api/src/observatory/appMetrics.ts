@@ -21,8 +21,10 @@ import type {
   ObservatoryAppDay,
   ObservatoryFunnel,
   ObservatoryModerationLatency,
+  ObservatorySearchIndex,
 } from "@keepsake/contracts/observatory";
 import type { Env } from "../env.js";
+import { semanticSearchEnabled } from "../env.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -318,12 +320,47 @@ async function fetchModerationLatency(env: Env, now: number, windowDays: number)
   };
 }
 
+/**
+ * Issue #208. `listings.vector_indexed_at` was written by `search/reembed.ts`
+ * and read by nothing — the second half of #180's fix, left unbuilt because
+ * this file belonged to another session at the time. This is the reader.
+ *
+ * Scoped to `approved` listings on purpose: those are the ones a stranger can
+ * find, so those are the ones whose ranking a missing vector actually
+ * degrades. A `pending` listing with no vector yet is the pipeline working.
+ *
+ * `updated_at` rather than `created_at` for the age, because a re-embed
+ * failure after an edit is as much a fault as never having been indexed, and
+ * the edit is when the current text started being un-searchable.
+ *
+ * With `SEMANTIC_SEARCH` off there is no number worth rendering — see the
+ * union's own doc comment in @keepsake/contracts/observatory.
+ */
+export async function fetchSearchIndex(env: Env, now: number): Promise<ObservatorySearchIndex> {
+  if (!semanticSearchEnabled(env)) return { enabled: false };
+
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS approved,
+            SUM(CASE WHEN vector_indexed_at IS NULL THEN 1 ELSE 0 END) AS unindexed,
+            MIN(CASE WHEN vector_indexed_at IS NULL THEN updated_at END) AS oldest_unindexed
+       FROM listings WHERE status = 'approved'`,
+  ).first<{ approved: number | null; unindexed: number | null; oldest_unindexed: number | null }>();
+
+  return {
+    enabled: true,
+    approved: row?.approved ?? 0,
+    unindexed: row?.unindexed ?? 0,
+    oldest_unindexed_age_ms: row?.oldest_unindexed == null ? null : now - row.oldest_unindexed,
+  };
+}
+
 export async function buildAppMetrics(env: Env, windowDays: number, now: number = Date.now()): Promise<ObservatoryApp> {
-  const [byDay, funnel, moderation] = await Promise.all([
+  const [byDay, funnel, moderation, searchIndex] = await Promise.all([
     fetchDaySeries(env, now, windowDays),
     fetchFunnel(env, now, windowDays),
     fetchModerationLatency(env, now, windowDays),
+    fetchSearchIndex(env, now),
   ]);
 
-  return { window_days: windowDays, by_day: byDay, funnel, moderation };
+  return { window_days: windowDays, by_day: byDay, funnel, moderation, search_index: searchIndex };
 }

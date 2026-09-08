@@ -36,7 +36,8 @@
  *
  * Every field name says which it is (`created` vs `pending_now`).
  */
-import type { DailyReport, DailyReportAlert, DailyReportBudget } from "@keepsake/contracts/observatory";
+import type { DailyReport, DailyReportAlert, DailyReportBudget, ObservatorySearchIndex } from "@keepsake/contracts/observatory";
+import { fetchSearchIndex } from "../observatory/appMetrics.js";
 import { readCronHeartbeats } from "../cron/registry.js";
 import type { Env } from "../env.js";
 import { parseIntVar, reportAutohideThreshold } from "../env.js";
@@ -70,6 +71,14 @@ const BUDGET_ALERT_FRACTION = 0.8;
  */
 const PENDING_STUCK_MS = 6 * HOUR_MS;
 const NEEDS_REVIEW_STUCK_MS = 48 * HOUR_MS;
+/**
+ * Issue #208. `searchIndexRetry` runs hourly, so a listing that has been
+ * un-indexed for six hours has had five chances to be re-embedded and taken
+ * none of them. Below that, an un-indexed listing is the retry queue doing
+ * its job; above it, something is refusing the same listing every hour and
+ * nobody would otherwise hear about it.
+ */
+const SEARCH_INDEX_STUCK_MS = 6 * HOUR_MS;
 
 /** `YYYY-MM-DD` for a UTC instant. */
 function utcDate(ms: number): string {
@@ -268,6 +277,7 @@ function deriveAlerts(input: {
   budgets: DailyReport["budgets"];
   crons: DailyReport["crons"];
   needsReviewOldestMs: number | null;
+  searchIndex: ObservatorySearchIndex;
 }): DailyReportAlert[] {
   const alerts: DailyReportAlert[] = [];
 
@@ -342,6 +352,37 @@ function deriveAlerts(input: {
     });
   }
 
+  // Issue #208. The un-indexed count alone is not an alert: an embed that
+  // failed a minute ago is what the hourly retry is for, and paging on it
+  // would train the reader to ignore this digest. The *age* is the alert —
+  // the same "a count is a level, an age is a verdict" rule the pending and
+  // needs_review checks above follow.
+  //
+  // The embed-budget clause is #207's warning made concrete: when
+  // `EMBED_DAILY_BUDGET` is spent, every re-embed of the day has been denied
+  // and this backlog is that outage's symptom, not a second incident. Saying
+  // so in the same sentence is the difference between one thing to fix and
+  // two things to chase. `budget_exhausted` fires for the same day, so a
+  // reader who acts on that one has already acted on this one.
+  if (
+    input.searchIndex.enabled &&
+    input.searchIndex.oldest_unindexed_age_ms !== null &&
+    input.searchIndex.oldest_unindexed_age_ms > SEARCH_INDEX_STUCK_MS
+  ) {
+    const embedBudget = input.budgets.embed;
+    const embedSpent = embedBudget !== undefined && embedBudget.limit > 0 && embedBudget.used >= embedBudget.limit;
+    alerts.push({
+      severity: "warning",
+      code: "search_index_backlog",
+      detail:
+        `${input.searchIndex.unindexed} of ${input.searchIndex.approved} approved listing(s) have no search vector; ` +
+        `the oldest has waited ${humanAge(input.searchIndex.oldest_unindexed_age_ms)}. ` +
+        (embedSpent
+          ? "The embed budget is spent, which is the likely cause — this should clear itself after midnight UTC."
+          : "They are still findable by title and story through full-text search; only ranking is degraded."),
+    });
+  }
+
   if (input.state.near_threshold > 0) {
     alerts.push({
       severity: "warning",
@@ -365,7 +406,7 @@ export async function buildDailyReport(env: Env, now: number = Date.now()): Prom
   const dayStart = dayEnd - DAY_MS;
   const date = utcDate(dayStart);
 
-  const [flow, state, topEmailError, crons, modText, modImage, suggest, needsReviewOldest] = await Promise.all([
+  const [flow, state, topEmailError, crons, modText, modImage, suggest, embed, needsReviewOldest, searchIndex] = await Promise.all([
     fetchDayFlow(env, dayStart, dayEnd),
     fetchStateNow(env, now, reportAutohideThreshold(env)),
     fetchTopEmailError(env, dayStart, dayEnd),
@@ -375,12 +416,21 @@ export async function buildDailyReport(env: Env, now: number = Date.now()): Prom
     readBudget(env, "mod_text", "MOD_TEXT_DAILY_BUDGET", env.MOD_TEXT_DAILY_BUDGET, 1000, utcDate(now)),
     readBudget(env, "mod_image", "MOD_IMAGE_DAILY_BUDGET", env.MOD_IMAGE_DAILY_BUDGET, 3000, utcDate(now)),
     readBudget(env, "suggest", "SUGGEST_DAILY_BUDGET", env.SUGGEST_DAILY_BUDGET, 1000, utcDate(now)),
+    // #208: the `embed` counter `search/reembed.ts` bumps, on the same
+    // `budget:<kind>:<day>` key shape as the three above. Its default matches
+    // `DEFAULT_EMBED_DAILY_BUDGET` there.
+    readBudget(env, "embed", "EMBED_DAILY_BUDGET", env.EMBED_DAILY_BUDGET, 2000, utcDate(now)),
     env.DB.prepare("SELECT MIN(created_at) AS oldest FROM listings WHERE status = 'needs_review'").first<{
       oldest: number | null;
     }>(),
+    // Issue #208, and the same function `GET /api/admin/observatory` calls —
+    // the digest and the page must not be able to disagree about how many
+    // listings are missing a vector, which is the whole reason `report` is
+    // embedded in the Observatory payload in the first place.
+    fetchSearchIndex(env, now),
   ]);
 
-  const budgets = { mod_text: modText, mod_image: modImage, suggest };
+  const budgets = { mod_text: modText, mod_image: modImage, suggest, embed };
   const needsReviewOldestMs = needsReviewOldest?.oldest == null ? null : now - needsReviewOldest.oldest;
 
   return {
@@ -388,7 +438,7 @@ export async function buildDailyReport(env: Env, now: number = Date.now()): Prom
     generated_at: now,
     environment: env.ENVIRONMENT as string,
     commit: env.COMMIT_SHA as string,
-    needs_attention: deriveAlerts({ now, state, flow, budgets, crons, needsReviewOldestMs }),
+    needs_attention: deriveAlerts({ now, state, flow, budgets, crons, needsReviewOldestMs, searchIndex }),
     listings: {
       created: flow.listings_created,
       approved: flow.listings_approved,

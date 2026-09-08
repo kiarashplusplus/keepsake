@@ -127,11 +127,26 @@ recoverRoutes.post("/exchange", validateBody(RecoverExchangeInput), async (c) =>
   const newRawToken = `${OWNER_TOKEN_PREFIX}${randomTokenRaw()}`;
   const newTokenHash = await sha256Hex(newRawToken);
 
+  // Claim the recovery token atomically before rotating the owner token.
+  // The earlier read is necessarily stale-able: two requests could both
+  // observe `used_at IS NULL`, both rotate the owner token, and both return
+  // 200 — while only the token returned by the last writer actually worked.
+  // The conditional UPDATE makes D1 arbitrate that race; exactly one caller
+  // can change the row and every loser receives the same 401 as any other
+  // spent token.
+  const claim = await c.env.DB.prepare(
+    "UPDATE recovery_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL AND expires_at >= ?",
+  )
+    .bind(now, row.id, now)
+    .run();
+  if ((claim.meta.changes ?? 0) === 0) {
+    return fail(c, "unauthorized", "This recovery link is invalid or has expired.", 401);
+  }
+
   // The old token is dead the instant this lands — a device that loses the
   // recovery race gets 401 on its very next request, by design (compromise
   // containment, not a bug to smooth over: see docs/design/identity.md).
   await c.env.DB.prepare("UPDATE owners SET token_hash = ? WHERE id = ?").bind(newTokenHash, row.owner_id).run();
-  await c.env.DB.prepare("UPDATE recovery_tokens SET used_at = ? WHERE id = ?").bind(now, row.id).run();
 
   const result: RecoverResult = { ownerToken: newRawToken };
   return ok(c, result);

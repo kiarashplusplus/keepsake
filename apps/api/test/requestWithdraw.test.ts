@@ -28,7 +28,10 @@ function validRequestBody(): Record<string, unknown> {
  * token only exists after the second one — a request nobody confirmed has
  * nothing to withdraw, and is deleted by the nightly sweep instead.
  */
-async function createRequest(listingId: string, overrides: Record<string, unknown> = {}): Promise<{ res: Response; withdrawLink: string | undefined }> {
+async function createRequest(
+  listingId: string,
+  overrides: Record<string, unknown> = {},
+): Promise<{ res: Response; withdrawLink: string | undefined }> {
   const sent: CapturedEmail[] = installFakeEmail();
   const res = await SELF.fetch(`http://x/api/listings/${listingId}/requests`, {
     method: "POST",
@@ -72,11 +75,15 @@ describe("POST /api/requests/withdraw", () => {
     const ownerId = await insertOwner();
     const listingId = await insertApprovedListing({ ownerId });
 
-    const { res: createRes, withdrawLink } = await createRequest(listingId, { phone: "+16175550123" });
+    const { res: createRes, withdrawLink } = await createRequest(listingId, {
+      phone: "+16175550123",
+    });
     const { id: requestId } = await readOk<{ id: string }>(createRes);
     expect(withdrawLink).toBeTruthy();
 
-    const before = await env.DB.prepare("SELECT request_count FROM listings WHERE id = ?").bind(listingId).first<{ request_count: number }>();
+    const before = await env.DB.prepare("SELECT request_count FROM listings WHERE id = ?")
+      .bind(listingId)
+      .first<{ request_count: number }>();
     expect(before?.request_count).toBe(1);
 
     const res = await withdraw(tokenFromLink(withdrawLink as string));
@@ -86,7 +93,9 @@ describe("POST /api/requests/withdraw", () => {
     expect(body.listing_id).toBe(listingId);
     expect(body.withdrawn_at).toBeGreaterThan(0);
 
-    const row = await env.DB.prepare("SELECT status, note, email, phone, ip_digest, withdrawn_at FROM requests WHERE id = ?")
+    const row = await env.DB.prepare(
+      "SELECT status, note, email, phone, ip_digest, withdrawn_at, withdraw_token_hash FROM requests WHERE id = ?",
+    )
       .bind(requestId)
       .first<{
         status: string;
@@ -95,6 +104,7 @@ describe("POST /api/requests/withdraw", () => {
         phone: string | null;
         ip_digest: string | null;
         withdrawn_at: number | null;
+        withdraw_token_hash: string | null;
       }>();
     expect(row?.status).toBe("withdrawn");
     expect(row?.note).toBeNull();
@@ -107,8 +117,11 @@ describe("POST /api/requests/withdraw", () => {
     // The privacy page said it expired within 48 hours.
     expect(row?.ip_digest).toBeNull();
     expect(row?.withdrawn_at).not.toBeNull();
+    expect(row?.withdraw_token_hash).toBeNull();
 
-    const after = await env.DB.prepare("SELECT request_count FROM listings WHERE id = ?").bind(listingId).first<{ request_count: number }>();
+    const after = await env.DB.prepare("SELECT request_count FROM listings WHERE id = ?")
+      .bind(listingId)
+      .first<{ request_count: number }>();
     expect(after?.request_count).toBe(0);
   });
 
@@ -141,8 +154,32 @@ describe("POST /api/requests/withdraw", () => {
     await withdraw(token);
     await withdraw(token); // second call 401s and must not touch request_count again
 
-    const row = await env.DB.prepare("SELECT request_count FROM listings WHERE id = ?").bind(listingId).first<{ request_count: number }>();
+    const row = await env.DB.prepare("SELECT request_count FROM listings WHERE id = ?")
+      .bind(listingId)
+      .first<{ request_count: number }>();
     expect(row?.request_count).toBe(0);
+  });
+
+  it("atomically spends a withdraw token when simultaneous requests race", async () => {
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId });
+    const { withdrawLink } = await createRequest(listingId);
+    const token = tokenFromLink(withdrawLink as string);
+
+    // A listing normally has one count for this request. Give it a larger
+    // value so MAX(..., 0) cannot hide duplicate decrements by flooring the
+    // result, then present the same bearer token several times at once.
+    await env.DB.prepare("UPDATE listings SET request_count = 10 WHERE id = ?")
+      .bind(listingId)
+      .run();
+    const responses = await Promise.all(Array.from({ length: 8 }, () => withdraw(token)));
+
+    expect(responses.filter((response) => response.status === 200)).toHaveLength(1);
+    expect(responses.filter((response) => response.status === 401)).toHaveLength(7);
+    const row = await env.DB.prepare("SELECT request_count FROM listings WHERE id = ?")
+      .bind(listingId)
+      .first<{ request_count: number }>();
+    expect(row?.request_count).toBe(9);
   });
 
   it("still erases a chosen request's stored contact info — the giver may already have it by email, and this can't recall that, but our own database no longer holds it", async () => {
@@ -154,12 +191,16 @@ describe("POST /api/requests/withdraw", () => {
     // Simulate the giver having already chosen this request (contact info
     // revealed and mailed to them — docs/design/email.md's "contact reveal
     // rule") before the requester changes their mind.
-    await env.DB.prepare("UPDATE requests SET status = 'chosen', chosen_at = ? WHERE id = ?").bind(Date.now(), requestId).run();
+    await env.DB.prepare("UPDATE requests SET status = 'chosen', chosen_at = ? WHERE id = ?")
+      .bind(Date.now(), requestId)
+      .run();
 
     const res = await withdraw(tokenFromLink(withdrawLink as string));
     expect(res.status).toBe(200);
 
-    const row = await env.DB.prepare("SELECT status, email FROM requests WHERE id = ?").bind(requestId).first<{ status: string; email: string | null }>();
+    const row = await env.DB.prepare("SELECT status, email FROM requests WHERE id = ?")
+      .bind(requestId)
+      .first<{ status: string; email: string | null }>();
     expect(row?.status).toBe("withdrawn");
     expect(row?.email).toBeNull();
   });
