@@ -36,8 +36,15 @@
  *
  * Every field name says which it is (`created` vs `pending_now`).
  */
-import type { DailyReport, DailyReportAlert, DailyReportBudget, ObservatorySearchIndex } from "@keepsake/contracts/observatory";
+import type {
+  DailyReport,
+  DailyReportAlert,
+  DailyReportBudget,
+  DailyReportBulk,
+  ObservatorySearchIndex,
+} from "@keepsake/contracts/observatory";
 import { fetchSearchIndex } from "../observatory/appMetrics.js";
+import { buildBulkMetrics } from "../observatory/bulkMetrics.js";
 import { readCronHeartbeats } from "../cron/registry.js";
 import type { Env } from "../env.js";
 import { parseIntVar, reportAutohideThreshold } from "../env.js";
@@ -79,6 +86,17 @@ const NEEDS_REVIEW_STUCK_MS = 48 * HOUR_MS;
  * nobody would otherwise hear about it.
  */
 const SEARCH_INDEX_STUCK_MS = 6 * HOUR_MS;
+
+/**
+ * How long a `bulk_operations` row may sit `queued`/`running` before the
+ * digest calls it stuck. `runBulkOperation` checkpoints after every item and
+ * `cron/bulkRunner.ts` ticks every three minutes, so a submission that has
+ * not finished a single `ITEMS_PER_INVOCATION`-sized chunk in six hours is
+ * not slow, it is stranded — same reasoning, and the same threshold, as
+ * `PENDING_STUCK_MS` above: there is a giver on the other end of it who
+ * thinks their estate never went anywhere.
+ */
+const BULK_OPERATION_STUCK_MS = 6 * HOUR_MS;
 
 /** `YYYY-MM-DD` for a UTC instant. */
 function utcDate(ms: number): string {
@@ -278,6 +296,7 @@ function deriveAlerts(input: {
   crons: DailyReport["crons"];
   needsReviewOldestMs: number | null;
   searchIndex: ObservatorySearchIndex;
+  bulk: DailyReportBulk | null;
 }): DailyReportAlert[] {
   const alerts: DailyReportAlert[] = [];
 
@@ -391,6 +410,31 @@ function deriveAlerts(input: {
     });
   }
 
+  // Estate bulk upload (plan Stage 5). `null` means `BULK_UPLOAD` is off in
+  // this environment — nothing to alert on, same as `searchIndex.enabled`
+  // above.
+  if (input.bulk !== null) {
+    if (input.bulk.oldest_operation_age_ms !== null && input.bulk.oldest_operation_age_ms > BULK_OPERATION_STUCK_MS) {
+      alerts.push({
+        severity: "critical",
+        code: "bulk_operation_stuck",
+        detail: `A bulk submission has been queued or running for ${humanAge(input.bulk.oldest_operation_age_ms)}. A giver is watching an estate that will not finish.`,
+      });
+    }
+
+    // A rising count *among operations still in flight* is the signal —
+    // see `ObservatoryBulkOperations.active_stale_lease_recoveries`'s own
+    // doc comment for why this is scoped to active operations and what
+    // distinguishes a real recovery from ordinary multi-invocation chunking.
+    if (input.bulk.active_stale_lease_recoveries > 0) {
+      alerts.push({
+        severity: "warning",
+        code: "bulk_lease_recoveries",
+        detail: `${input.bulk.active_stale_lease_recoveries} bulk submission lease(s) had to be recovered from an unreleased hold among work still in flight — a rising number here means the runner is dying mid-run.`,
+      });
+    }
+  }
+
   return alerts;
 }
 
@@ -406,39 +450,55 @@ export async function buildDailyReport(env: Env, now: number = Date.now()): Prom
   const dayStart = dayEnd - DAY_MS;
   const date = utcDate(dayStart);
 
-  const [flow, state, topEmailError, crons, modText, modImage, suggest, embed, needsReviewOldest, searchIndex] = await Promise.all([
-    fetchDayFlow(env, dayStart, dayEnd),
-    fetchStateNow(env, now, reportAutohideThreshold(env)),
-    fetchTopEmailError(env, dayStart, dayEnd),
-    readCronHeartbeats(env.KV, now),
-    // Budget counters are keyed by *today's* date, not the reported day's:
-    // they are current state, and yesterday's key has already rolled off.
-    readBudget(env, "mod_text", "MOD_TEXT_DAILY_BUDGET", env.MOD_TEXT_DAILY_BUDGET, 1000, utcDate(now)),
-    readBudget(env, "mod_image", "MOD_IMAGE_DAILY_BUDGET", env.MOD_IMAGE_DAILY_BUDGET, 3000, utcDate(now)),
-    readBudget(env, "suggest", "SUGGEST_DAILY_BUDGET", env.SUGGEST_DAILY_BUDGET, 1000, utcDate(now)),
-    // #208: the `embed` counter `search/reembed.ts` bumps, on the same
-    // `budget:<kind>:<day>` key shape as the three above. Its default matches
-    // `DEFAULT_EMBED_DAILY_BUDGET` there.
-    readBudget(env, "embed", "EMBED_DAILY_BUDGET", env.EMBED_DAILY_BUDGET, 2000, utcDate(now)),
-    env.DB.prepare("SELECT MIN(created_at) AS oldest FROM listings WHERE status = 'needs_review'").first<{
-      oldest: number | null;
-    }>(),
-    // Issue #208, and the same function `GET /api/admin/observatory` calls —
-    // the digest and the page must not be able to disagree about how many
-    // listings are missing a vector, which is the whole reason `report` is
-    // embedded in the Observatory payload in the first place.
-    fetchSearchIndex(env, now),
-  ]);
+  const [flow, state, topEmailError, crons, modText, modImage, suggest, embed, needsReviewOldest, searchIndex, bulkMetrics] =
+    await Promise.all([
+      fetchDayFlow(env, dayStart, dayEnd),
+      fetchStateNow(env, now, reportAutohideThreshold(env)),
+      fetchTopEmailError(env, dayStart, dayEnd),
+      readCronHeartbeats(env.KV, now),
+      // Budget counters are keyed by *today's* date, not the reported day's:
+      // they are current state, and yesterday's key has already rolled off.
+      readBudget(env, "mod_text", "MOD_TEXT_DAILY_BUDGET", env.MOD_TEXT_DAILY_BUDGET, 1000, utcDate(now)),
+      readBudget(env, "mod_image", "MOD_IMAGE_DAILY_BUDGET", env.MOD_IMAGE_DAILY_BUDGET, 3000, utcDate(now)),
+      readBudget(env, "suggest", "SUGGEST_DAILY_BUDGET", env.SUGGEST_DAILY_BUDGET, 1000, utcDate(now)),
+      // #208: the `embed` counter `search/reembed.ts` bumps, on the same
+      // `budget:<kind>:<day>` key shape as the three above. Its default matches
+      // `DEFAULT_EMBED_DAILY_BUDGET` there.
+      readBudget(env, "embed", "EMBED_DAILY_BUDGET", env.EMBED_DAILY_BUDGET, 2000, utcDate(now)),
+      env.DB.prepare("SELECT MIN(created_at) AS oldest FROM listings WHERE status = 'needs_review'").first<{
+        oldest: number | null;
+      }>(),
+      // Issue #208, and the same function `GET /api/admin/observatory` calls —
+      // the digest and the page must not be able to disagree about how many
+      // listings are missing a vector, which is the whole reason `report` is
+      // embedded in the Observatory payload in the first place.
+      fetchSearchIndex(env, now),
+      // Plan Stage 5. `windowDays` here only shapes the funnel sub-object
+      // `buildBulkMetrics` computes, which the digest's own `bulk` block
+      // (below) never carries — see `DailyReportBulk`'s doc comment on why
+      // it stays a flat "state now" summary rather than the full nested
+      // shape. `1` is honest either way: it is never read.
+      buildBulkMetrics(env, 1, now),
+    ]);
 
   const budgets = { mod_text: modText, mod_image: modImage, suggest, embed };
   const needsReviewOldestMs = needsReviewOldest?.oldest == null ? null : now - needsReviewOldest.oldest;
+  const bulk: DailyReportBulk | null = bulkMetrics.enabled
+    ? {
+        active_batches: bulkMetrics.batches.active,
+        items_outstanding: bulkMetrics.drafts.items_outstanding,
+        oldest_operation_age_ms: bulkMetrics.operations.oldest_active_age_ms,
+        active_stale_lease_recoveries: bulkMetrics.operations.active_stale_lease_recoveries,
+        orphan_bytes: bulkMetrics.funnel.orphan_bytes,
+      }
+    : null;
 
   return {
     date,
     generated_at: now,
     environment: env.ENVIRONMENT as string,
     commit: env.COMMIT_SHA as string,
-    needs_attention: deriveAlerts({ now, state, flow, budgets, crons, needsReviewOldestMs, searchIndex }),
+    needs_attention: deriveAlerts({ now, state, flow, budgets, crons, needsReviewOldestMs, searchIndex, bulk }),
     listings: {
       created: flow.listings_created,
       approved: flow.listings_approved,
@@ -455,6 +515,7 @@ export async function buildDailyReport(env: Env, now: number = Date.now()): Prom
     },
     budgets,
     crons,
+    bulk,
   };
 }
 

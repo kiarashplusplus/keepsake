@@ -36,6 +36,7 @@
  */
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { captureException } from "@keepsake/observability/capture";
+import { redactString } from "@keepsake/observability/redact";
 import type { ErrorCode } from "@keepsake/contracts/common";
 import type { SubmitBatchInput, BulkOperationSummary, BulkOperationStatus } from "@keepsake/contracts/bulk";
 import { CreateListingInput } from "@keepsake/contracts/listing";
@@ -45,6 +46,28 @@ import { sha256Hex } from "../lib/digest.js";
 import { ulid } from "../lib/ids.js";
 import { aspectsContainContactInfo, ASPECT_CONTACT_INFO_MESSAGE, buildListingCreateStatements } from "../listings/create.js";
 import { moderateListing } from "../moderation/pipeline.js";
+
+/**
+ * The message half of a caught error, safe for a bare `console.error`/
+ * `console.warn` line.
+ *
+ * `captureException` (`@keepsake/observability/capture`) already redacts
+ * before it logs, but the two `console.error` calls below in this file (and
+ * the matching one in `cron/bulkRunner.ts`) are plain diagnostic lines *next
+ * to* a `captureException` call, not instead of it — `runCron` reads neither
+ * of them, only the heartbeat, so they exist purely for a human reading
+ * Workers Logs. An exception thrown from deep inside a D1 batch or a fetch
+ * can carry arbitrary interpolated detail (a bound value, a URL, a header),
+ * and this whole path exists because it is invoked against a draft item's
+ * assembled title/story/aspects — exactly the private, giver-authored text
+ * the plan's log-hygiene rule means to keep out of operational logs. Run
+ * every raw `.message` through the same `redactString` `capture.ts` uses
+ * before it reaches `console.*` here too, rather than trusting that no
+ * exception on this path will ever happen to embody one.
+ */
+export function redactedErrorMessage(err: unknown): string {
+  return redactString(err instanceof Error ? err.message : String(err));
+}
 
 // ---------------------------------------------------------------------------
 // startSubmission
@@ -478,14 +501,29 @@ export async function runBulkOperation(env: Env, operationId: string): Promise<v
   // resumed one, `lease_until` losing to anything not already expired is
   // what makes two overlapping callers exclusive, and `next_attempt_at <= ?`
   // is what makes a backed-off operation wait its turn.
+  //
+  // `stale_recoveries` (20260908072223_bulk_operation_lease_recovery.sql) is
+  // bumped in this same statement, guarded by a `CASE` over the row's own
+  // pre-update `lease_until` — an UPDATE's SET assignments read the row as it
+  // stood before this statement, so this is still asking "was there a lease
+  // here, and had it already expired" about the *previous* holder, not the
+  // one this claim is about to install. `lease_until IS NULL` (a fresh pickup,
+  // or one that ended via the ordinary release path in the code below) adds
+  // nothing; `lease_until` set and already in the past — reachable only when
+  // a prior invocation claimed this operation and never reached its own
+  // success path or its own `catch` to release it, i.e. the Worker was
+  // evicted or hard-timed-out mid-run — is the one case this counts. See the
+  // migration's own header for why `attempts` alone cannot tell this apart
+  // from the ordinary multi-invocation chunking every large batch does.
   const claim = await env.DB.prepare(
     `UPDATE bulk_operations
-        SET status = 'running', lease_until = ?, attempts = attempts + 1, updated_at = ?
+        SET status = 'running', lease_until = ?, attempts = attempts + 1, updated_at = ?,
+            stale_recoveries = stale_recoveries + CASE WHEN lease_until IS NOT NULL AND lease_until < ? THEN 1 ELSE 0 END
       WHERE id = ? AND status IN ('queued', 'running')
         AND (lease_until IS NULL OR lease_until < ?)
         AND next_attempt_at <= ?`,
   )
-    .bind(leaseUntil, now, operationId, now, now)
+    .bind(leaseUntil, now, now, operationId, now, now)
     .run();
 
   if ((claim.meta?.changes ?? 0) === 0) {
@@ -566,7 +604,7 @@ export async function runBulkOperation(env: Env, operationId: string): Promise<v
       .run();
     console.error("bulkRunner: operation failed", {
       operationId,
-      error: err instanceof Error ? err.message : String(err),
+      error: redactedErrorMessage(err),
     });
     captureException(err, { tags: { cron: "bulkRunner" }, extra: { operationId } });
   }

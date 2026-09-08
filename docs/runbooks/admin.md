@@ -319,9 +319,9 @@ curl -s -X POST "$SITE_URL/api/admin/backfill-aspects" \
 important thing about them is that they fail *separately*:
 
 - **`app`** — listings, requests, the give→get funnel, how long the moderation queue has been
-  waiting, and the search index. Comes from D1, needs no credential, and is always present. If
-  this is missing the request 500s, because a Worker that cannot read its own database has nothing
-  to say.
+  waiting, the search index, and (plan Stage 5) estate bulk upload's own batches/drafts/operations/
+  grants/funnel. Comes from D1, needs no credential, and is always present. If this is missing the
+  request 500s, because a Worker that cannot read its own database has nothing to say.
 - **`edge`** — request/error counts and CPU quantiles from Cloudflare's GraphQL Analytics API.
 - **`logs`** — the Worker's own `console.error`/`console.warn` lines, read back out of Workers Logs.
 
@@ -360,6 +360,110 @@ climbs past a day with a small count is a bug report about one listing, not a re
 Note `logs` clamps its own window to 3 days whatever you ask for, because that is Workers Logs
 retention on the Free plan, and it reports the window it actually used rather than labelling three
 days of data as thirty.
+
+### The bulk-upload panel (plan Stage 5)
+
+`app.bulk` is estate bulk upload's own "is anything stuck" panel — D1-derived like the rest of
+`app`, no credential needed, always present when the feature is reachable. Before this existed,
+the bulk API's only failure signal was a giver emailing to ask where their photos went; a pilot
+cannot run on that.
+
+**`{"enabled": false}` means `BULK_UPLOAD` is off in this environment** — every deployed tier but
+preview today (`apps/api/wrangler.toml`) — and there is deliberately nothing else in the payload.
+Same rule the search-index panel above follows: a zeroed block for a feature nobody can currently
+reach would read as "bulk is quiet today" rather than the true "bulk is not reachable here", so
+there is no number to render at all. `docs/product-decisions.md`'s row on the kill switch is the
+place to check before assuming this is a bug.
+
+With `enabled: true`, five sub-objects, read in the order an operator would actually check them:
+
+- **`batches`** — `by_state` (`draft` / `submitting` / `closed` / `cancelled`), `active`
+  (`draft + submitting`), and `abandoned_draft`: `draft` batches whose own `expires_at` has already
+  passed. Their photos are already being reclaimed by `cron/orphanSweep.ts` on its next nightly
+  pass, but the `upload_batches` row itself is never deleted — nobody sweeps it — so this is the
+  honest count of batches a giver started and never came back to.
+- **`drafts`** — `items_by_state` (`editing` / `ready` / `queued` / `submitted` / `failed`),
+  `items_outstanding` (everything except `submitted`), and `photos_reserved`/`photos_stored` —
+  `upload_batch_photos` rows where admission was charged but the bytes never finished landing in R2
+  (`photo_id IS NULL`) versus rows where the upload actually finished. **`items_by_state.ready`
+  reads `0` on every environment today, and that is correct, not a bug in the query**: nothing in
+  `src/bulk/submit.ts` or `routes/bulk.ts` ever writes `state = 'ready'` — readiness
+  (`BatchItemSummary.ready`) is computed live on every read by running the real `CreateListingInput`
+  over the assembled item, and it is never persisted with a timestamp. This is also why the plan's
+  "first ready item" funnel step is one of the three metrics this schema cannot answer yet (below).
+- **`operations`** — `by_status` (`queued` / `running` / `done` / `cancelled`), `active`
+  (`queued + running`), **`oldest_active_age_ms`** (the number worth a second look — a depth of 3
+  that has been 3 for six hours is the failure this panel exists to catch), and
+  `active_stale_lease_recoveries`. That last one is `SUM(bulk_operations.stale_recoveries)` scoped
+  to operations still `queued`/`running` — see the migration
+  (`20260908072223_bulk_operation_lease_recovery.sql`) for exactly what it counts: only a claim that
+  recovered a lease a *previous* invocation set and never released (the Worker was evicted or
+  hard-timed-out mid-run), never the ordinary multi-invocation chunking a large batch does on
+  purpose every ~3 minutes. Scoped to active operations so one that needed a recovery and then
+  finished cleanly doesn't keep this number above zero forever — **a rising count here, among work
+  still in flight, means the runner is dying mid-run.**
+- **`grants`** — `active` / `expired` / `revoked` counts, and `items_remaining` /
+  `photos_remaining` / `suggestions_remaining` summed across only the `active` grants: how much
+  admission is outstanding right now.
+- **`funnel`** — windowed the same way `app.funnel` is: `batches_started`, `items_submitted`,
+  `items_approved`, **`orphan_bytes`** (real bytes — `SUM(photos.bytes_full)` — for finished
+  uploads that never got attached to any item in a batch whose fate is already sealed, `closed` or
+  `cancelled`; a photo still sitting in a `draft` batch's tray is ordinary in-progress work, not an
+  orphan), and a median moderation-latency split, `moderation_latency_ordinary_median_ms` versus
+  `moderation_latency_bulk_median_ms` — the plan's "ordinary-versus-bulk processing latency"
+  metric, answered honestly because both paths already share the same `moderateListing` call and
+  the same `moderation_events` log.
+
+**What an operator should do when a number here is wrong:**
+
+- **`operations.oldest_active_age_ms` is large** (the daily digest alerts past 6 hours,
+  `bulk_operation_stuck`, critical) — a giver's estate is not finishing. Look at that operation's
+  row directly (`SELECT * FROM bulk_operations WHERE status IN ('queued','running') ORDER BY
+  created_at ASC LIMIT 1`) for its `attempts` and `next_attempt_at`; if `cron:last:bulkRunner` in
+  `GET /api/admin/health` is stale too, the cron itself has stopped and that is the real incident.
+- **`operations.active_stale_lease_recoveries` is above zero** (the digest's `bulk_lease_recoveries`
+  warning) — the runner is being evicted or timing out mid-invocation for at least one operation
+  still in flight. Check Workers Logs for `bulkRunner: operation failed` lines around the affected
+  operation id (the message field is redacted — see "Log hygiene" below — so cross-reference by id,
+  not by message content) and treat it as a platform-level symptom (CPU limits, a hung fetch inside
+  `moderateListing`), not a data problem.
+- **`drafts.photos_reserved` stays non-zero for a while** — a giver was charged admission for a
+  photo whose bytes never finished storing (an evicted `PUT /api/bulk/batches/:id/photos/:id`
+  mid-upload). A retry of the same `client_photo_id` resumes it without a second debit — that is the
+  whole point of the reservation row (`20260908063000_bulk_photo_reservation.sql`) — so this is
+  usually self-healing the next time the giver's client retries; a count that only grows is worth a
+  look at whether their client is retrying at all.
+- **`batches.abandoned_draft` is large** — expected at some background rate (every product has
+  people who start and don't finish); a sudden jump is worth checking against whatever changed in
+  the give/bulk client around that time.
+
+**What the plan's tracked funnel asks for that this schema genuinely cannot answer today** — named
+here rather than invented as a number:
+
+- **The "first ready item" funnel step.** Readiness is computed live, never persisted with a
+  timestamp — see `drafts.items_by_state.ready` above.
+- **Retry rate.** `bulk_operations.attempts` increments on every successful claim, including the
+  ordinary multi-invocation chunking a large batch does on purpose — it cannot tell that apart from
+  a genuine failure-driven retry, and there is no separate per-item retry counter or event log.
+  `drafts.items_by_state.failed` is the closest honest signal: a level (how many need a retry right
+  now), not a rate.
+- **Time to resume.** Nothing timestamps when a backed-off operation actually got picked back up,
+  as distinct from its own routine `next_attempt_at` scheduling.
+
+**Log hygiene.** The plan requires no raw stories, filenames, addresses or credentials in
+operational logs. `src/bulk/submit.ts` and `src/cron/bulkRunner.ts` were already close: every
+structured log field they write is an id (`operationId`, `itemId`, `ownerId`) or a count, and the
+one place a caught exception's own `.message` reached a bare `console.error` — right next to an
+already-redacted `captureException(err, ...)` call — did **not** run it through the same redaction,
+which matters because this path throws from deep inside a D1 batch or a fetch while operating on a
+draft item's assembled title/story/aspects, exactly the text this rule exists to keep out of
+Workers Logs. Fixed by routing both call sites through a shared `redactedErrorMessage()` (exported
+from `submit.ts`), which runs the caught message through the same `redactString` `capture.ts` uses.
+`apps/api/test/bulkLogHygiene.test.ts` proves the wiring — not just the redaction regex — by forcing
+each `console.error` line to fire with a message shaped like real leaked content (an email address,
+a token-shaped credential) and asserting neither reaches the log line un-redacted; reverting the fix
+locally reproduces both failures with the raw content printed verbatim next to the already-clean
+`captureException` line, which is what confirmed the two really were independent before the fix.
 
 ### Minting `CF_OBSERVATORY_TOKEN`
 
@@ -437,6 +541,16 @@ the page and the email render the same object, so they cannot disagree:
 ```bash
 curl -s "$SITE_URL/api/admin/observatory" -H "Authorization: Bearer $ADMIN_TOKEN" | jq .report
 ```
+
+**Bulk upload gets five lines in the email** (`Bulk batches active`, `Bulk items outstanding`,
+`Bulk oldest operation`, `Bulk lease recoveries (active)`, `Bulk orphan bytes` — see "The
+bulk-upload panel" above for what each one means) whenever `BULK_UPLOAD` is on in that environment,
+so a quiet day for bulk still reports the same as a quiet day for the give flow. With the flag off
+the five lines are omitted entirely, not printed as zeros — `report.bulk` is `null` in that case,
+mirroring `app.bulk`'s own `{enabled: false}`. Two alerts can fire into `needs_attention` from this
+data: `bulk_operation_stuck` (critical — an active operation has been queued or running past 6
+hours) and `bulk_lease_recoveries` (warning — at least one operation still in flight needed its
+lease recovered from an unreleased hold, the signal the runner is dying mid-run).
 
 ## Re-reading listings after a prompt change
 

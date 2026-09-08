@@ -25,6 +25,7 @@ import type {
 } from "@keepsake/contracts/observatory";
 import type { Env } from "../env.js";
 import { semanticSearchEnabled } from "../env.js";
+import { buildBulkMetrics } from "./bulkMetrics.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -39,17 +40,22 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * newest-first before the cap applies, so what survives truncation is the
  * recent behaviour rather than an arbitrary slice.
  */
-const LATENCY_SAMPLE_LIMIT = 2000;
+export const LATENCY_SAMPLE_LIMIT = 2000;
 
 /** `YYYY-MM-DD` for a UTC instant — same shape as `lib/day.ts`'s `todayISO`
  * and as Cloudflare's `date` dimension, so the two series join on the key
  * without either side converting. */
-function utcDate(ms: number): string {
+export function utcDate(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-/** Midnight UTC, `windowDays - 1` days before the day containing `now`. */
-function windowStartMs(now: number, windowDays: number): number {
+/** Midnight UTC, `windowDays - 1` days before the day containing `now`.
+ * Exported so `./bulkMetrics.ts` windows its own funnel on the exact same
+ * calendar boundary this file's own `by_day`/`funnel` use — two panels that
+ * disagree about where "the last 7 days" starts is the same bug the module
+ * header above warns a rolling window would cause between the D1 and edge
+ * series. */
+export function windowStartMs(now: number, windowDays: number): number {
   return Date.parse(`${utcDate(now - (windowDays - 1) * DAY_MS)}T00:00:00Z`);
 }
 
@@ -264,8 +270,13 @@ async function fetchFunnel(env: Env, now: number, windowDays: number): Promise<O
  * most flattering possible reading of "nothing happened". The even-length
  * case averages the two middle values rather than taking either, so the
  * result does not jump when a single sample arrives.
+ *
+ * Exported so `./bulkMetrics.ts` computes its ordinary-vs-bulk moderation
+ * latency split with the exact same rounding and empty-sample rule this
+ * file uses for the give-flow's own median, rather than a second copy that
+ * could quietly drift.
  */
-function medianOf(sorted: number[]): number | null {
+export function medianOf(sorted: number[]): number | null {
   if (sorted.length === 0) return null;
   const middle = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 1) return sorted[middle] ?? null;
@@ -355,12 +366,13 @@ export async function fetchSearchIndex(env: Env, now: number): Promise<Observato
 }
 
 export async function buildAppMetrics(env: Env, windowDays: number, now: number = Date.now()): Promise<ObservatoryApp> {
-  const [byDay, funnel, moderation, searchIndex] = await Promise.all([
+  const [byDay, funnel, moderation, searchIndex, bulk] = await Promise.all([
     fetchDaySeries(env, now, windowDays),
     fetchFunnel(env, now, windowDays),
     fetchModerationLatency(env, now, windowDays),
     fetchSearchIndex(env, now),
+    buildBulkMetrics(env, windowDays, now),
   ]);
 
-  return { window_days: windowDays, by_day: byDay, funnel, moderation, search_index: searchIndex };
+  return { window_days: windowDays, by_day: byDay, funnel, moderation, search_index: searchIndex, bulk };
 }

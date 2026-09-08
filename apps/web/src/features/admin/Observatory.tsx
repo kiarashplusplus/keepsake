@@ -23,6 +23,7 @@ import { space, sectionRhythm } from "@keepsake/tokens/spacing";
 import type {
   DailyReportAlert,
   ObservatoryApp as ObservatoryAppData,
+  ObservatoryBulk,
   ObservatoryEdge,
   ObservatoryFunnel,
   ObservatoryLogEvent,
@@ -71,6 +72,16 @@ export function formatDurationMs(ms: number): string {
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
+}
+
+/** `ObservatoryBulkFunnel.orphan_bytes` in the largest sensible unit — same
+ * "read cold" rule `formatDurationMs` follows, and the same formatting the
+ * daily digest's `byteWords` uses, so a number quoted from the email and the
+ * same number read off this page never disagree in shape. */
+export function formatBytes(bytes: number): string {
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
+  if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(1)} KB`;
+  return `${bytes} B`;
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +339,130 @@ function AppSeriesSection({ byDay }: { byDay: ObservatoryAppData["by_day"] }): R
         {byDay.map((day) => (
           <BarRow key={day.date} label={day.date} value={day.listings_created} max={max} />
         ))}
+      </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// `app.bulk` — estate bulk upload, plan Stage 5. Same D1-derived floor as
+// every other section above (no `ObservatorySource` wrapper — it cannot be
+// unconfigured), and the same "don't render a number for a feature nobody
+// turned on" rule `SearchIndexSection` already follows: `enabled: false`
+// means `BULK_UPLOAD` is off in this environment, which is every deployed
+// tier but preview today (`apps/api/wrangler.toml`).
+//
+// Five sub-blocks, in the order an operator would actually check them when
+// something feels stuck: is anything moving at all (batches), what's
+// backed up (drafts), is a submission actually stuck (operations — the age
+// is the one number in this whole section worth a second look), is admission
+// the reason (grants), and finally the windowed funnel a quiet day still
+// wants reported.
+// ---------------------------------------------------------------------------
+
+/** A small caps label above a group of `StatBadge`s — one down from
+ * `variant="eyebrow"`, so five sub-blocks inside one `BulkSection` read as
+ * subordinate to its own "Bulk upload" eyebrow rather than five more
+ * sections at the same level. */
+function SubHeading({ children }: { children: string }): React.ReactElement {
+  return (
+    <Text variant="label" color="textSecondary" style={{ fontSize: 10, letterSpacing: 0.04 }}>
+      {children}
+    </Text>
+  );
+}
+
+function BulkSection({ bulk }: { bulk: ObservatoryBulk }): React.ReactElement {
+  if (!bulk.enabled) {
+    return (
+      <View style={{ gap: space.sm }}>
+        <Text variant="eyebrow" accessibilityRole="header">
+          Bulk upload
+        </Text>
+        <Text variant="body">Estate bulk upload is switched off in this environment, so there is nothing to report.</Text>
+      </View>
+    );
+  }
+
+  const { batches, drafts, operations, grants, funnel } = bulk;
+
+  return (
+    <View style={{ gap: space.sm }}>
+      <Text variant="eyebrow" accessibilityRole="header">
+        Bulk upload
+      </Text>
+
+      <View style={{ gap: space.xs }}>
+        <SubHeading>Batches</SubHeading>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
+          <StatBadge label="Draft" value={batches.by_state.draft} />
+          <StatBadge label="Submitting" value={batches.by_state.submitting} />
+          <StatBadge label="Closed" value={batches.by_state.closed} />
+          <StatBadge label="Cancelled" value={batches.by_state.cancelled} />
+          <StatBadge label="Active now" value={batches.active} />
+          <StatBadge label="Abandoned drafts" value={batches.abandoned_draft} />
+        </View>
+      </View>
+
+      <View style={{ gap: space.xs }}>
+        <SubHeading>Drafts</SubHeading>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
+          <StatBadge label="Editing" value={drafts.items_by_state.editing} />
+          <StatBadge label="Ready" value={drafts.items_by_state.ready} />
+          <StatBadge label="Queued" value={drafts.items_by_state.queued} />
+          <StatBadge label="Failed" value={drafts.items_by_state.failed} />
+          <StatBadge label="Items outstanding" value={drafts.items_outstanding} />
+          <StatBadge label="Photos reserved" value={drafts.photos_reserved} />
+          <StatBadge label="Photos stored" value={drafts.photos_stored} />
+        </View>
+      </View>
+
+      <View style={{ gap: space.xs }}>
+        <SubHeading>Operations</SubHeading>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
+          <StatBadge label="Queued" value={operations.by_status.queued} />
+          <StatBadge label="Running" value={operations.by_status.running} />
+          <StatBadge label="Done" value={operations.by_status.done} />
+          <StatBadge label="Cancelled" value={operations.by_status.cancelled} />
+          <StatBadge label="Active now" value={operations.active} />
+          <StatBadge label="Lease recoveries (active)" value={operations.active_stale_lease_recoveries} />
+        </View>
+        <AgeRow label="Oldest active operation" ms={operations.oldest_active_age_ms} nullLabel="Nothing queued or running" />
+      </View>
+
+      <View style={{ gap: space.xs }}>
+        <SubHeading>Grants</SubHeading>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
+          <StatBadge label="Active" value={grants.active} />
+          <StatBadge label="Expired" value={grants.expired} />
+          <StatBadge label="Revoked" value={grants.revoked} />
+          <StatBadge label="Items remaining" value={grants.items_remaining} />
+          <StatBadge label="Photos remaining" value={grants.photos_remaining} />
+          <StatBadge label="Suggestions remaining" value={grants.suggestions_remaining} />
+        </View>
+      </View>
+
+      <View style={{ gap: space.xs }}>
+        <SubHeading>{`Funnel · last ${funnel.window_days} ${funnel.window_days === 1 ? "day" : "days"}`}</SubHeading>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
+          <StatBadge label="Batches started" value={funnel.batches_started} />
+          <StatBadge label="Items submitted" value={funnel.items_submitted} />
+          <StatBadge label="Items approved" value={funnel.items_approved} />
+        </View>
+        <View style={{ gap: space.xxs }}>
+          <View accessibilityRole="text" accessibilityLabel={`Orphan bytes: ${formatBytes(funnel.orphan_bytes)}`} style={{ flexDirection: "row", gap: space.sm }}>
+            <Text variant="caption" color="textSecondary" style={{ width: 168 }}>
+              Orphan bytes
+            </Text>
+            <Text variant="caption">{formatBytes(funnel.orphan_bytes)}</Text>
+          </View>
+          <AgeRow
+            label="Moderation latency, ordinary"
+            ms={funnel.moderation_latency_ordinary_median_ms}
+            nullLabel="No decisions yet"
+          />
+          <AgeRow label="Moderation latency, bulk" ms={funnel.moderation_latency_bulk_median_ms} nullLabel="No decisions yet" />
+        </View>
       </View>
     </View>
   );
@@ -635,6 +770,7 @@ export function Observatory({ token, onSessionExpired }: ObservatoryProps): Reac
           <SearchIndexSection searchIndex={snapshot.data.app.search_index} />
           <FunnelSection funnel={snapshot.data.app.funnel} />
           <AppSeriesSection byDay={snapshot.data.app.by_day} />
+          <BulkSection bulk={snapshot.data.app.bulk} />
           <SourceSection title="Edge traffic" source={snapshot.data.edge} renderOk={(edge) => <EdgeSection edge={edge} />} />
           <SourceSection
             title="Worker logs"

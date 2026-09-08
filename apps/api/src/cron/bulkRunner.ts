@@ -5,7 +5,7 @@
 // lease that simply outlived its own invocation.
 import { captureException } from "@keepsake/observability/capture";
 import type { Env } from "../env.js";
-import { runBulkOperation } from "../bulk/submit.js";
+import { redactedErrorMessage, runBulkOperation } from "../bulk/submit.js";
 
 /** Matches the `LIMIT` in the candidate query below, not
  * `ITEMS_PER_INVOCATION` (which bounds *items* within one operation) — this
@@ -68,7 +68,7 @@ export async function bulkRunner(env: Env): Promise<void> {
       console.error("bulkRunner: operation failed", {
         operationId: candidate.id,
         ownerId: candidate.owner_id,
-        error: err instanceof Error ? err.message : String(err),
+        error: redactedErrorMessage(err),
       });
       captureException(err, { tags: { cron: "bulkRunner" }, extra: { operationId: candidate.id } });
     }
