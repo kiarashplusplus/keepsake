@@ -29,7 +29,7 @@ import {
   type AdminTestErrorResult,
 } from "@keepsake/contracts/admin";
 import { LISTING_STATUSES, type Category, type ListingStatus, type OwnerListing } from "@keepsake/contracts/listing";
-import { AdminMintBulkGrantInput } from "@keepsake/contracts/bulk";
+import { AdminMintBulkGrantInput, MAX_BATCH_SUGGESTIONS } from "@keepsake/contracts/bulk";
 import { readCronHeartbeats } from "../cron/registry.js";
 import { ObservatoryQuery, type Observatory } from "@keepsake/contracts/observatory";
 import { buildAppMetrics } from "../observatory/appMetrics.js";
@@ -1174,6 +1174,7 @@ adminRoutes.post("/bulk/grants", validateBody(AdminMintBulkGrantInput), async (c
     ownerId: input.owner_id,
     items: input.items ?? bulkMaxItemsPerBatch(c.env),
     photos: input.photos ?? bulkMaxPhotosPerBatch(c.env),
+    suggestions: input.suggestions ?? MAX_BATCH_SUGGESTIONS,
   });
 
   return ok(c, serializeBulkGrant(grant), 201);

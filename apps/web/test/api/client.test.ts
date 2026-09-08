@@ -67,6 +67,18 @@ describe("apiFetch", () => {
     expect(init?.body).toBe(JSON.stringify({ a: 1 }));
   });
 
+  it("merges custom headers in, without letting them override Authorization", async () => {
+    const mock = mockFetchOnce({ ok: true, data: null });
+    const token = getOrCreateOwnerToken();
+
+    await apiFetch("/api/bulk/thing", { owner: true, headers: { "x-bulk-grant": "grant-1", Authorization: "Bearer nope" } });
+
+    const init = mock.mock.calls[0]?.[1];
+    const headers = init?.headers as Record<string, string>;
+    expect(headers["x-bulk-grant"]).toBe("grant-1");
+    expect(headers.Authorization).toBe(`Bearer ${token}`);
+  });
+
   it("passes a FormData body through untouched, without a Content-Type header", async () => {
     const mock = mockFetchOnce({ ok: true, data: null });
     const form = new FormData();
@@ -77,5 +89,22 @@ describe("apiFetch", () => {
     const init = mock.mock.calls[0]?.[1];
     expect(init?.body).toBe(form);
     expect((init?.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
+  });
+
+  it("drops a caller-supplied Content-Type on a FormData body, in any casing", async () => {
+    // The one header a caller must NOT win: only `fetch` can write the
+    // multipart value, because only it knows the boundary. Both spellings,
+    // because `headers` is a plain object and HTTP header names are not
+    // case-sensitive.
+    for (const name of ["Content-Type", "content-type"]) {
+      const mock = mockFetchOnce({ ok: true, data: null });
+      const form = new FormData();
+      form.append("a", "1");
+
+      await apiFetch("/api/upload", { method: "PUT", body: form, headers: { [name]: "multipart/form-data" } });
+
+      const headers = mock.mock.calls[0]?.[1]?.headers as Record<string, string>;
+      expect(Object.keys(headers).some((key) => key.toLowerCase() === "content-type")).toBe(false);
+    }
   });
 });

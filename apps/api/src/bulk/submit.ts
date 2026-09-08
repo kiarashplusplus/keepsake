@@ -104,7 +104,7 @@ interface OperationRow {
   finished_at: number | null;
 }
 
-function toSummary(op: OperationRow): BulkOperationSummary {
+export function toSummary(op: OperationRow): BulkOperationSummary {
   return {
     id: op.id,
     batch_id: op.batch_id,
@@ -138,8 +138,10 @@ function canonicalSelection(items: readonly { client_item_id: string; revision: 
  * Resolves a submission's named items against this batch, records a
  * `bulk_operations` row (idempotent on `op_key`), and marks the batch and its
  * items as submitting. Performs no publishing work itself — that is
- * `runBulkOperation`'s job, driven by `cron/bulkRunner.ts` (and, in the
- * future, an eager first attempt right after accept).
+ * `runBulkOperation`'s job, driven by `cron/bulkRunner.ts` and by the eager
+ * `c.executionCtx.waitUntil(runBulkOperation(...))` `POST /batches/:id/submit`
+ * kicks right after accept — the cron stays the durable path either way, so
+ * everything above and below stays correct if that `waitUntil` never runs.
  */
 export async function startSubmission(env: Env, args: StartSubmissionArgs): Promise<StartSubmissionResult> {
   const { ownerId, batchId, input } = args;
@@ -568,4 +570,183 @@ export async function runBulkOperation(env: Env, operationId: string): Promise<v
     });
     captureException(err, { tags: { cron: "bulkRunner" }, extra: { operationId } });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Progress reads, retry, cancel — the rest of `POST /batches/:id/submit`'s
+// surface, all owned by `routes/bulk.ts`.
+// ---------------------------------------------------------------------------
+
+/** Owner-scoped in the query itself, per this repo's convention
+ * (`routes/images.ts`): a different owner's operation id resolves to
+ * nothing, not to a 403 that would confirm the id exists. */
+export async function getOperationSummary(env: Env, args: { operationId: string; ownerId: string }): Promise<BulkOperationSummary | null> {
+  const op = await env.DB.prepare(`SELECT * FROM bulk_operations WHERE id = ? AND owner_id = ?`)
+    .bind(args.operationId, args.ownerId)
+    .first<OperationRow>();
+  return op ? toSummary(op) : null;
+}
+
+/** Every operation ever started for one batch, newest first. Scoped by both
+ * `batch_id` and `owner_id` — belt and suspenders with the caller's own
+ * `findBatchById` check, not a substitute for it. */
+export async function listOperationsForBatch(env: Env, args: { batchId: string; ownerId: string }): Promise<BulkOperationSummary[]> {
+  const { results } = await env.DB.prepare(`SELECT * FROM bulk_operations WHERE batch_id = ? AND owner_id = ? ORDER BY created_at DESC`)
+    .bind(args.batchId, args.ownerId)
+    .all<OperationRow>();
+  return results.map(toSummary);
+}
+
+export interface RetryOperationResult {
+  operation: BulkOperationSummary;
+  /** How many items this call actually re-queued — `0` means the call was a
+   * genuine no-op (nothing was failing, or the operation isn't `done` yet),
+   * which is what makes calling this twice in a row safe. */
+  requeued: number;
+}
+
+/**
+ * Re-queues exactly the items of this operation that are currently
+ * `upload_batch_items.state = 'failed'` — read fresh from that table, never
+ * from a copy kept here, since `state` is the one place a per-item outcome
+ * lives (this file's header). Only fires once the operation has reached
+ * `status = 'done'`: a `queued`/`running` operation already has a runner (or
+ * the cron) working through it, and rewriting `selection_json`/`cursor` out
+ * from under a held lease would race that runner's own checkpoint writes.
+ *
+ * Rewrites `selection_json` down to just the retried items rather than
+ * resetting `cursor` to `0` over the *original* selection. That is what
+ * keeps this idempotent and safe to call after a partial success: replaying
+ * the full original list would re-run `processItem` for items that already
+ * hold a listing too, and while the claim in `createClaimedListing` refuses
+ * to touch them again (`listing_id IS NULL` no longer matches), the
+ * operation's own `succeeded`/`failed` counters would still double-count the
+ * attempt. `total` and `succeeded` are left untouched — they keep meaning
+ * "everything this operation was ever asked to publish" and "how many of
+ * those are actually listings now" across any number of retries; only
+ * `failed` resets, to be rebuilt by whatever this retry's run finds.
+ */
+export async function retryOperation(env: Env, args: { ownerId: string; operationId: string }): Promise<RetryOperationResult | null> {
+  const { ownerId, operationId } = args;
+  const op = await env.DB.prepare(`SELECT * FROM bulk_operations WHERE id = ? AND owner_id = ?`)
+    .bind(operationId, ownerId)
+    .first<OperationRow>();
+  if (!op) return null;
+
+  if (op.status !== "done") {
+    return { operation: toSummary(op), requeued: 0 };
+  }
+
+  const selection: SelectionEntry[] = JSON.parse(op.selection_json);
+  const itemIds = selection.map((entry) => entry.item_id);
+  if (itemIds.length === 0) {
+    return { operation: toSummary(op), requeued: 0 };
+  }
+
+  const placeholders = itemIds.map(() => "?").join(",");
+  const { results: stateRows } = await env.DB.prepare(`SELECT id, state FROM upload_batch_items WHERE id IN (${placeholders})`)
+    .bind(...itemIds)
+    .all<{ id: string; state: string }>();
+  const failedIds = new Set(stateRows.filter((row) => row.state === "failed").map((row) => row.id));
+  const retrySelection = selection.filter((entry) => failedIds.has(entry.item_id));
+
+  if (retrySelection.length === 0) {
+    // Nothing is currently failing — either everything already succeeded,
+    // or an earlier retry's run hasn't produced a new failure (or has
+    // finished successfully) yet. Idempotent no-op either way.
+    return { operation: toSummary(op), requeued: 0 };
+  }
+
+  const now = Date.now();
+  const retryItemIds = retrySelection.map((entry) => entry.item_id);
+  const retryPlaceholders = retryItemIds.map(() => "?").join(",");
+
+  const results = await env.DB.batch([
+    // Guarded on `status = 'done'` again, here, not just in the read above —
+    // the read-then-write gap is exactly where two concurrent retry calls
+    // could otherwise both think they won.
+    env.DB.prepare(
+      `UPDATE bulk_operations
+          SET selection_json = ?, cursor = 0, failed = 0, status = 'queued',
+              lease_until = NULL, next_attempt_at = ?, finished_at = NULL, updated_at = ?
+        WHERE id = ? AND status = 'done'`,
+    ).bind(JSON.stringify(retrySelection), now, now, operationId),
+    // Returns each retried item from `failed` to `queued` — the same state
+    // a fresh submission puts a newly-accepted item in — so nothing is left
+    // displaying `failed` while a runner is already working it again.
+    env.DB.prepare(`UPDATE upload_batch_items SET state = 'queued', updated_at = ? WHERE id IN (${retryPlaceholders})`).bind(
+      now,
+      ...retryItemIds,
+    ),
+    env.DB.prepare(`UPDATE upload_batches SET state = 'submitting', updated_at = ? WHERE id = ?`).bind(now, op.batch_id),
+  ]);
+
+  if ((results[0]?.meta?.changes ?? 0) === 0) {
+    // Lost the race — another concurrent call already claimed the retry (or
+    // moved the operation on). Report the operation as it stands now rather
+    // than the queue this call attempted.
+    const current = await env.DB.prepare(`SELECT * FROM bulk_operations WHERE id = ?`).bind(operationId).first<OperationRow>();
+    return { operation: toSummary(current ?? op), requeued: 0 };
+  }
+
+  const updated = await env.DB.prepare(`SELECT * FROM bulk_operations WHERE id = ?`).bind(operationId).first<OperationRow>();
+  return { operation: toSummary(updated ?? op), requeued: retrySelection.length };
+}
+
+export interface CancelOperationResult {
+  operation: BulkOperationSummary;
+  /** Listings already created by this operation — never withdrawn by a
+   * cancel, the same promise `DELETE /batches/:id` makes for a whole batch. */
+  listingIds: string[];
+}
+
+/**
+ * Cancels whatever this operation has not started yet. The guarded update
+ * only fires `WHERE status IN ('queued', 'running')`, so a `done` operation
+ * (or one already `cancelled`) is untouched and reported as-is — calling
+ * this twice, or calling it after the operation finished on its own, is a
+ * no-op, not an error. Cancelling a `running` operation does not reach into
+ * whatever item its current lease is mid-way through — that item is a single
+ * `env.DB.batch()` away from committing either way — it only stops the next
+ * one: once `status = 'cancelled'`, neither `runBulkOperation`'s own claim
+ * nor `bulkRunner`'s candidate query (both `status IN ('queued','running')`)
+ * will pick this operation up again.
+ */
+export async function cancelOperation(env: Env, args: { ownerId: string; operationId: string }): Promise<CancelOperationResult | null> {
+  const { ownerId, operationId } = args;
+  const op = await env.DB.prepare(`SELECT * FROM bulk_operations WHERE id = ? AND owner_id = ?`)
+    .bind(operationId, ownerId)
+    .first<OperationRow>();
+  if (!op) return null;
+
+  const now = Date.now();
+  await env.DB.prepare(`UPDATE bulk_operations SET status = 'cancelled', lease_until = NULL, updated_at = ? WHERE id = ? AND status IN ('queued', 'running')`)
+    .bind(now, operationId)
+    .run();
+
+  const selection: SelectionEntry[] = JSON.parse(op.selection_json);
+  const itemIds = selection.map((entry) => entry.item_id);
+  let listingIds: string[] = [];
+
+  if (itemIds.length > 0) {
+    const placeholders = itemIds.map(() => "?").join(",");
+    // Read before the write below, same reasoning `DELETE /batches/:id`
+    // documents: the answer must reflect what existed at the moment of
+    // cancellation, not a state the write itself changes.
+    const { results } = await env.DB.prepare(`SELECT listing_id FROM upload_batch_items WHERE id IN (${placeholders}) AND listing_id IS NOT NULL`)
+      .bind(...itemIds)
+      .all<{ listing_id: string }>();
+    listingIds = results.map((row) => row.listing_id);
+
+    // Items this operation queued but never reached (state still 'queued',
+    // never became 'submitted' or 'failed') never got a listing and never
+    // will now — returned to 'editing' so the giver can pick them up again
+    // rather than see them stuck reading "queued" forever.
+    await env.DB.prepare(`UPDATE upload_batch_items SET state = 'editing', updated_at = ? WHERE id IN (${placeholders}) AND state = 'queued'`)
+      .bind(now, ...itemIds)
+      .run();
+  }
+
+  const updated = await env.DB.prepare(`SELECT * FROM bulk_operations WHERE id = ?`).bind(operationId).first<OperationRow>();
+  return { operation: toSummary(updated ?? op), listingIds };
 }

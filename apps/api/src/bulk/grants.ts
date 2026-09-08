@@ -31,19 +31,27 @@ export interface BulkGrantRow {
   batch_id: string | null;
   items_remaining: number;
   photos_remaining: number;
+  suggestions_remaining: number;
   issued_by: string;
   expires_at: number;
   revoked_at: number | null;
   created_at: number;
 }
 
+// `suggestions_remaining` belongs in this list: `loadUsableGrant` is the one
+// place a caller's `BulkGrantRow` comes from besides `mintGrant`'s own
+// return value, and `requireGrant()` hands that row straight to every route
+// that reads `c.get("grant")` — omitting the column here would have left
+// `grant.suggestions_remaining` silently `undefined` on every loaded grant
+// even though the migration and `mintGrant` both write it correctly.
 const GRANT_COLUMNS =
-  "id, owner_id, batch_id, items_remaining, photos_remaining, issued_by, expires_at, revoked_at, created_at";
+  "id, owner_id, batch_id, items_remaining, photos_remaining, suggestions_remaining, issued_by, expires_at, revoked_at, created_at";
 
 export interface MintGrantOptions {
   ownerId: string;
   items: number;
   photos: number;
+  suggestions: number;
   now?: number;
 }
 
@@ -57,10 +65,10 @@ export async function mintGrant(env: Env, options: MintGrantOptions): Promise<Bu
   const expiresAt = now + bulkGrantTtlHours(env) * 3_600_000;
 
   await env.DB.prepare(
-    `INSERT INTO bulk_grants (id, owner_id, batch_id, items_remaining, photos_remaining, issued_by, expires_at, created_at)
-     VALUES (?, ?, NULL, ?, ?, 'admin', ?, ?)`,
+    `INSERT INTO bulk_grants (id, owner_id, batch_id, items_remaining, photos_remaining, suggestions_remaining, issued_by, expires_at, created_at)
+     VALUES (?, ?, NULL, ?, ?, ?, 'admin', ?, ?)`,
   )
-    .bind(id, options.ownerId, options.items, options.photos, expiresAt, now)
+    .bind(id, options.ownerId, options.items, options.photos, options.suggestions, expiresAt, now)
     .run();
 
   return {
@@ -69,6 +77,7 @@ export async function mintGrant(env: Env, options: MintGrantOptions): Promise<Bu
     batch_id: null,
     items_remaining: options.items,
     photos_remaining: options.photos,
+    suggestions_remaining: options.suggestions,
     issued_by: "admin",
     expires_at: expiresAt,
     revoked_at: null,
@@ -190,6 +199,46 @@ export function buildPhotoDebitStatements(env: Env, options: PhotoDebitOptions):
   return { statements, grantResultIndex: 0, usageResultIndex: 1 };
 }
 
+export interface SuggestionDebitOptions {
+  grant: BulkGrantRow;
+  now?: number;
+}
+
+export interface SuggestionDebitStatements {
+  statements: D1PreparedStatement[];
+  /** Index into a `env.DB.batch(...)` result array for the guarded decrement.
+   * `meta.changes === 0` means the grant had no suggestions left (or was
+   * revoked/expired between `requireGrant()` and this write) — refuse before
+   * spending a vision call, don't charge. */
+  grantResultIndex: number;
+}
+
+/**
+ * The suggestion half of admission — one guarded statement, not the
+ * two-statement shape {@link buildItemDebitStatements} and
+ * {@link buildPhotoDebitStatements} use. Those two pair a grant-side debit
+ * with an owner/day ceiling in `bulk_owner_usage`, because items and photos
+ * both have a ceiling *above* the grant that survives a new batch or a
+ * renewed grant. Suggestions don't: the only ceiling is the grant's own
+ * `suggestions_remaining`, fixed per batch at mint time
+ * (`MAX_BATCH_SUGGESTIONS`, `packages/contracts/src/bulk.ts`) — there is no
+ * `bulk_owner_usage` column for it and none is added here. With only one
+ * statement, `settleDebit`'s compensation logic has nothing to reconcile (it
+ * exists for the case where two independently-guarded statements disagree),
+ * so a caller reads `meta.changes` off this single statement directly
+ * instead of calling it.
+ */
+export function buildSuggestionDebitStatements(env: Env, options: SuggestionDebitOptions): SuggestionDebitStatements {
+  const now = options.now ?? Date.now();
+  const statements: D1PreparedStatement[] = [
+    env.DB.prepare(
+      `UPDATE bulk_grants SET suggestions_remaining = suggestions_remaining - 1
+        WHERE id = ? AND suggestions_remaining > 0 AND revoked_at IS NULL AND expires_at > ?`,
+    ).bind(options.grant.id, now),
+  ];
+  return { statements, grantResultIndex: 0 };
+}
+
 export interface SettleDebitOptions {
   grantId: string;
   ownerId: string;
@@ -252,6 +301,7 @@ export function serializeBulkGrant(grant: BulkGrantRow): BulkGrantSummary {
     batch_id: grant.batch_id,
     items_remaining: grant.items_remaining,
     photos_remaining: grant.photos_remaining,
+    suggestions_remaining: grant.suggestions_remaining,
     expires_at: grant.expires_at,
   };
 }

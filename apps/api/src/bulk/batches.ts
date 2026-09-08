@@ -92,12 +92,26 @@ export interface BatchPhotoRow {
   id: string;
   batch_id: string;
   client_photo_id: string;
-  photo_id: string;
+  /**
+   * NULL until the reserved upload actually finishes storing — see the
+   * migration's comment on this column and `routes/bulk.ts`'s reserve →
+   * debit → store → finalize sequence. `findBatchPhotoByClientId` returns
+   * rows in either state (the PUT handler needs to see an unresolved
+   * reservation to resume it and skip a second debit); `loadPhotosForBatch`
+   * filters them out, so a batch's assembled photo list — and thus
+   * `photo_count` — never includes an upload that hasn't actually landed.
+   */
+  photo_id: string | null;
   item_id: string | null;
   position: number;
   created_at: number;
   updated_at: number;
 }
+
+/** `BatchPhotoRow` narrowed to rows `loadPhotosForBatch` actually returns —
+ * its query filters to `photo_id IS NOT NULL`, so every row reaching
+ * `buildPhotoSummary` really does have one. */
+export type ResolvedBatchPhotoRow = BatchPhotoRow & { photo_id: string };
 
 const BATCH_COLUMNS =
   "id, owner_id, client_batch_key, name, shared_story, country, postal_code, place_name, admin1, lat, lng, state, revision, last_activity_at, expires_at, created_at, updated_at, cancelled_at";
@@ -218,13 +232,27 @@ export async function findItemById(env: Env, itemId: string): Promise<BatchItemR
 // Photos
 // ---------------------------------------------------------------------------
 
-export async function loadPhotosForBatch(env: Env, batchId: string): Promise<BatchPhotoRow[]> {
-  const { results } = await env.DB.prepare(`SELECT ${PHOTO_COLUMNS} FROM upload_batch_photos WHERE batch_id = ? ORDER BY position, id`)
+/**
+ * Every *finished* upload in this batch, in display order. `photo_id IS NOT
+ * NULL` excludes reservations still in flight — a mapping row reserved
+ * before its debit and its bytes exist (see `routes/bulk.ts`) is a draft
+ * workspace fact nobody outside that one PUT handler should see yet; it must
+ * not inflate `photo_count` or appear in `BatchDetail.photos` with a
+ * `photo_id` the response schema requires to be a real id.
+ */
+export async function loadPhotosForBatch(env: Env, batchId: string): Promise<ResolvedBatchPhotoRow[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT ${PHOTO_COLUMNS} FROM upload_batch_photos WHERE batch_id = ? AND photo_id IS NOT NULL ORDER BY position, id`,
+  )
     .bind(batchId)
-    .all<BatchPhotoRow>();
+    .all<ResolvedBatchPhotoRow>();
   return results;
 }
 
+/** Looks up a batch's photo mapping by client key regardless of whether the
+ * upload it names has finished storing — unlike {@link loadPhotosForBatch},
+ * this is also how `routes/bulk.ts`'s PUT handler finds an unresolved
+ * reservation (`photo_id IS NULL`) to resume without a second debit. */
 export async function findBatchPhotoByClientId(env: Env, batchId: string, clientPhotoId: string): Promise<BatchPhotoRow | null> {
   const row = await env.DB.prepare(`SELECT ${PHOTO_COLUMNS} FROM upload_batch_photos WHERE batch_id = ? AND client_photo_id = ?`)
     .bind(batchId, clientPhotoId)
@@ -339,7 +367,7 @@ function parseAspects(aspectsJson: string | null): BatchItemSummary["aspects"] {
   return JSON.parse(aspectsJson) as BatchItemSummary["aspects"];
 }
 
-function buildItemSummary(batch: BatchRow, item: BatchItemRow, itemPhotos: BatchPhotoRow[]): BatchItemSummary {
+function buildItemSummary(batch: BatchRow, item: BatchItemRow, itemPhotos: ResolvedBatchPhotoRow[]): BatchItemSummary {
   const photoIds = itemPhotos.map((photo) => photo.photo_id);
   const { ready, blocked_reason } = checkItemReadiness(batch, item, photoIds);
   return {
@@ -362,7 +390,7 @@ function buildItemSummary(batch: BatchRow, item: BatchItemRow, itemPhotos: Batch
   };
 }
 
-function buildPhotoSummary(photo: BatchPhotoRow, itemClientIdById: Map<string, string>): BatchPhotoSummary {
+function buildPhotoSummary(photo: ResolvedBatchPhotoRow, itemClientIdById: Map<string, string>): BatchPhotoSummary {
   return {
     client_photo_id: photo.client_photo_id,
     photo_id: photo.photo_id,
@@ -422,7 +450,7 @@ export async function assembleBatchDetail(env: Env, batch: BatchRow): Promise<Ba
   const [itemRows, photoRows] = await Promise.all([loadItemsForBatch(env, batch.id), loadPhotosForBatch(env, batch.id)]);
 
   const itemClientIdById = new Map(itemRows.map((item) => [item.id, item.client_item_id]));
-  const photosByItem = new Map<string, BatchPhotoRow[]>();
+  const photosByItem = new Map<string, ResolvedBatchPhotoRow[]>();
   for (const photo of photoRows) {
     if (!photo.item_id) continue;
     const existing = photosByItem.get(photo.item_id);

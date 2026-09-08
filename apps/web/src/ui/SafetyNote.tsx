@@ -12,7 +12,7 @@ import { Text } from "@/ui/Text";
  *
  * Both safety paragraphs in `features/request/RequestSheet.tsx` were
  * `<Text variant="caption" color="textTertiary">` — 12px CourierPrime in
- * `textTertiary #6C6150`, the faintest text colour in the palette, sitting
+ * `textTertiary #635B53`, the faintest text colour in the palette, sitting
  * inside a sheet where everything around them is Fraunces at 16px. That is
  * the house style for distances, dates and counts; applied here it set the
  * single most consequential sentence in the product in the exact register
@@ -26,19 +26,27 @@ import { Text } from "@/ui/Text";
  *    beside, rather than `bodySm`. Stepping it down would just be a quieter
  *    version of the same "this is the small print" signal.
  *
- * 2. `color="inkSoft"` (#3A332B) — **10.0:1** against the sheet's own fill
+ * 2. `color="inkSoft"` (#49423C) — **9.2:1** against the sheet's own fill
  *    (`surface #FAF6EE`, which is what `ui/Sheet.tsx` paints and is constant
  *    in light and dark, so this one number holds in both themes). Computed
  *    with `packages/tokens/src/contrast.ts`'s `contrastRatio()`. For
- *    comparison: the `textTertiary` it replaces is 4.9:1 on the same fill —
- *    a hair over the AA floor and the palette's faintest option, which is
- *    what #224 objected to. `inkSoft` rather than full `ink` (14.3:1) keeps
- *    it legible as an aside beside the body copy without whispering.
+ *    comparison: the `textTertiary` it replaces is 6.2:1 on the same fill —
+ *    the palette's faintest text option, which is what #224 objected to.
+ *    `inkSoft` rather than full `ink` (14.4:1) keeps it legible as an aside
+ *    beside the body copy without whispering.
+ *
+ *    Those two ratios were 10.0 and 4.9 when this component was written; the
+ *    Linen & Rust refresh (#256) lightened `inkSoft` and darkened
+ *    `textTertiary`, so the gap narrowed from 2.0x to 1.5x while the
+ *    argument held. #224's objection was never that `textTertiary` scraped
+ *    the AA floor — it was the register: the faintest text token, at caption
+ *    size, in the mono face, for the most consequential sentence in the
+ *    product. All three of those are still what this component changes.
  *
  * 3. A stamp-red left rule, not `Surface.tsx`'s `Sunken`. Both idioms were on
  *    the table and this one is forced by the palette, not preference:
  *    `Sunken` fills with `tableEdge`, one of the handful of tokens that DO
- *    flip between light and dark (`#B89D74` day, `#1C140F` night — see
+ *    flip between light and dark (`#C9C0B3` day, `#1C140F` night — see
  *    `packages/tokens/src/colors.ts`'s file header). Ink never inverts here,
  *    so ink text on a night-coloured well measures about 1.1:1 and the note
  *    would vanish in dark mode — the precise failure the "objects on the
@@ -46,7 +54,7 @@ import { Text } from "@/ui/Text";
  *    borrows the idiom the consent banner already uses for the one paragraph
  *    it needs a visitor to actually read (`.ks-consent__note` in
  *    `public/consent.js`, a 2px stamp-red left border): it marks the block
- *    out without putting text on any new ground, so the 10.0:1 above is the
+ *    out without putting text on any new ground, so the 9.2:1 above is the
  *    only pair to verify. `accent #A9432E` is decorative here and carries no
  *    text, which is the only way this palette permits it to be used.
  *

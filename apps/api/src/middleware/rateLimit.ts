@@ -41,6 +41,7 @@ export type RateLimitBindingName =
   | "RL_READ"
   | "RL_WRITE"
   | "RL_UPLOAD"
+  | "RL_BULK_UPLOAD"
   | "RL_CREATE"
   | "RL_REQUEST"
   | "RL_REPORT"

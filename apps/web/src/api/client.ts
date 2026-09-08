@@ -31,8 +31,8 @@ export type ApiMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export type ApiFetchOptions = {
   method?: ApiMethod;
   /** A plain JSON-serializable body, or a `FormData` instance for uploads
-   * (passed through untouched — no `Content-Type` is set so the browser can
-   * add its own multipart boundary). */
+   * (passed through untouched — any `Content-Type` is *removed* so the
+   * browser can add its own multipart boundary). */
   body?: unknown;
   /** Attaches `Authorization: Bearer <ownerToken>`, minting one lazily if
    * none exists yet. Omit (or `false`) for anonymous routes. */
@@ -47,6 +47,20 @@ export type ApiFetchOptions = {
   turnstileToken?: string;
   /** Sent as `X-Idempotency-Key`. */
   idempotencyKey?: string;
+  /**
+   * Extra request headers, merged in before `Authorization`/`Content-Type`
+   * are set — so those two still win if a caller collides with them, and a
+   * caller can't be surprised into overriding auth by accident. On a
+   * `FormData` body a colliding `Content-Type` is dropped rather than
+   * overwritten, because there the correct value is the one only `fetch`
+   * can write (it carries the multipart boundary). Added for
+   * `src/api/bulk.ts`'s `x-bulk-grant` header (`BULK_GRANT_HEADER` in
+   * `@keepsake/contracts/bulk`): a bulk write needs a header no other
+   * domain module has ever needed, and the alternative — a bespoke fetch
+   * wrapper duplicating this file's envelope handling — is the exact drift
+   * this module exists to prevent.
+   */
+  headers?: Record<string, string>;
   signal?: AbortSignal;
 };
 
@@ -61,14 +75,24 @@ function isEnvelope(value: unknown): value is Envelope<unknown> {
 }
 
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
-  const { method = "GET", body, owner = false, adminToken, turnstileToken, idempotencyKey, signal } = options;
+  const { method = "GET", body, owner = false, adminToken, turnstileToken, idempotencyKey, headers: extraHeaders, signal } = options;
 
   const url = `${config.siteUrl}${path}`;
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...(extraHeaders ?? {}) };
   let requestBody: BodyInit | null = null;
 
   if (body !== undefined) {
     if (isFormData(body)) {
+      // Strip any caller-supplied Content-Type rather than merely declining
+      // to set one. `fetch` only generates the `multipart/form-data;
+      // boundary=...` value when the header is absent, so a caller who
+      // passed one through `headers` — even the correct-looking
+      // `multipart/form-data` — would send a body the server cannot split
+      // into parts. Header names are case-insensitive on the wire but this
+      // is a plain object, so match that way too.
+      for (const name of Object.keys(headers)) {
+        if (name.toLowerCase() === "content-type") delete headers[name];
+      }
       requestBody = body;
     } else {
       headers["Content-Type"] = "application/json";
