@@ -300,6 +300,9 @@ interface Provider {
   name: string;
   host: string;
   meta: string;
+  /** Where the tag reports, when that is a different origin from where it is
+   * fetched. Optional: a provider that has not needed one has "". */
+  beacon: string;
 }
 
 /** Pull the `PROVIDERS` array out of the shipped file, without importing it —
@@ -311,7 +314,13 @@ function providers(): Provider[] {
   const found: Provider[] = [];
   for (const entry of block[1].split(/\}\s*,?\s*\{/)) {
     const field = (name: string): string => new RegExp(`${name}:\\s*'([^']+)'`).exec(entry)?.[1] ?? "";
-    const provider = { category: field("category"), name: field("name"), host: field("host"), meta: field("meta") };
+    const provider = {
+      category: field("category"),
+      name: field("name"),
+      host: field("host"),
+      meta: field("meta"),
+      beacon: field("beacon"),
+    };
     if (provider.name) found.push(provider);
   }
   return found;
@@ -330,8 +339,26 @@ describe("privacy policy vs. the code", () => {
     expect(PRIVACY_TEXT).toContain(host);
   });
 
+  it.each(declared.filter((p) => p.beacon))(
+    "privacy.html names where $name sends what it collects, not just where it is loaded from",
+    ({ beacon }) => {
+      // The origin a tag *reports* to is the one that receives the data, so it
+      // is the one a reader of this policy actually needs. It is a different
+      // origin from the script host for Cloudflare Web Analytics, and naming
+      // only the script host would describe the fetch and hide the recipient.
+      //
+      // Matched as a whole hostname rather than with `toContain`, which was
+      // this assertion's first form and was vacuous: `cloudflareinsights.com`
+      // is a substring of `static.cloudflareinsights.com`, so deleting the
+      // recipient from the policy still passed.
+      const hostname = new URL(beacon).hostname;
+      const whole = new RegExp(`(?<![\\w.])${hostname.replace(/\./g, "\\.")}(?![\\w.])`);
+      expect(PRIVACY_TEXT).toMatch(whole);
+    },
+  );
+
   it("has no third-party URL in consent.js that the registry does not declare", () => {
-    const hosts = new Set(declared.map((p) => p.host));
+    const hosts = new Set(declared.flatMap((p) => (p.beacon ? [p.host, new URL(p.beacon).hostname] : [p.host])));
     const used = [...CONSENT_JS.matchAll(/https?:\/\/([a-zA-Z0-9.-]+)/g)].map((m) => m[1] ?? "");
     const undeclared = [...new Set(used)].filter((host) => !hosts.has(host));
     expect(undeclared).toEqual([]);
