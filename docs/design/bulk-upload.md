@@ -157,3 +157,53 @@ Stated so nobody reads silence as done:
   collection pages, printable lot labels, collaborators, pickup scheduling, prices, reservations.
 
 ## Status
+
+**2026-09-08 — API and schema landed on a branch. Not deployed, not driven from a browser.**
+
+What was actually run, and what it proves:
+
+| Check | Result |
+|---|---|
+| `pnpm --filter @keepsake/api test` | 70 files, 695 passing, 3 skipped (the pre-existing `REAL_AI` gate) |
+| `pnpm lint` | 0 errors, 61 warnings — all the zod const+type idiom |
+| `pnpm -r typecheck` | clean |
+| `node tools/preflight/preflight.mjs` | every check passes except `lfs-pointers`, which fails in an agent container because git-lfs is not installed |
+
+Five guards were deliberately broken and watched fail, then restored, per this
+repo's rule that a passing test is not evidence:
+
+1. Raising `BULK_MAX_ITEMS_PER_BATCH` past the contract's `MAX_BATCH_ITEMS` —
+   `expected 120 to be less than or equal to 100`.
+2. Removing the `retain_until` predicate from the orphan sweep — a retained
+   photo's row was gone, and a live batch's photo lost its retention.
+3. An unconditional grant debit, dropping `items_remaining > 0`.
+4. `owner_id` dropped from the batch fetch.
+5. `bulkUploadEnabled` forced true.
+
+Two defects were found this way rather than by reasoning, and both are worth
+keeping in mind because they are the same shape as the table in `AGENTS.md`:
+
+- **The cascade guard caught a foreign key with no delete behaviour.**
+  `test/cascadeDelete.test.ts` enumerates from the live schema, so it saw a
+  table nobody had told it about. Left as written, deleting a listing would
+  have returned its draft to "never submitted" and the runner would have
+  republished it.
+- **The claim writes a foreign key to a listing that does not exist yet.**
+  SQLite checks a non-deferrable foreign key immediately after the offending
+  statement, not at commit, so the claim failed before its paired insert ever
+  ran — on every bulk create. The fix is `PRAGMA defer_foreign_keys = ON` for
+  that one transaction. A sqlite check run beforehand had missed it entirely,
+  because the scratch table it used carried no foreign key on that column:
+  a check that could not have failed.
+
+And one near-miss worth recording. The end-to-end submission test asserted
+`approved` and got `pending`, because its seeded photos had R2 keys with no
+bytes behind them and `moderatePhotoVariant` fails closed on a missing object.
+Relaxing the assertion to `pending` would have gone green and left the suite
+permanently documenting a broken feature as working. The fixture was fixed
+instead.
+
+**What has NOT been done, and what that means:** nothing here has run against
+`workerd` end to end, nothing has been deployed, and `BULK_UPLOAD` is `"0"`
+everywhere except preview. No person has used this feature, because the part a
+person would use does not exist.
