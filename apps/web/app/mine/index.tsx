@@ -22,6 +22,8 @@ import { useColors } from "@/ui/theme";
 import { useToast } from "@/ui/Toast";
 import { getOwnerToken } from "@/lib/ownerToken";
 import { getMyListings } from "@/api/me";
+import { listBatches } from "@/api/bulk";
+import type { BatchSummary } from "@keepsake/contracts/bulk";
 import { ApiError } from "@/api/client";
 import { tiltDegForId } from "@/lib/masonry";
 import { LISTING_GROUP_LABELS, LISTING_GROUP_ORDER, groupListings } from "@/features/mine/groupListings";
@@ -108,11 +110,72 @@ function ListingRow({ listing }: { listing: OwnerListing }): React.ReactElement 
   );
 }
 
+/**
+ * The batches this owner is still preparing — draft ones only, a private
+ * filter over `GET /api/bulk/batches` (that route already returns every
+ * state; this is the one narrowing "Continue preparing" ever needs). A 404
+ * (feature off, or no admission ever granted on this device) degrades to
+ * simply not showing the section — Mine's whole point is the ordinary give
+ * flow, and a pilot feature being off is not something to alarm a visitor
+ * with here.
+ */
+function useDraftBulkBatches(hasOwnerToken: boolean): BatchSummary[] {
+  const [batches, setBatches] = React.useState<BatchSummary[]>([]);
+
+  React.useEffect(() => {
+    if (!hasOwnerToken) return;
+    let cancelled = false;
+    listBatches()
+      .then((result) => {
+        if (!cancelled) setBatches(result.filter((b) => b.state === "draft"));
+      })
+      .catch(() => {
+        // Silent — see this hook's own header.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasOwnerToken]);
+
+  return batches;
+}
+
+function DraftBatchesSection({ batches }: { batches: BatchSummary[] }): React.ReactElement | null {
+  if (batches.length === 0) return null;
+  return (
+    <View style={{ gap: space.md }}>
+      <TableHeading note={`${batches.length} in progress`}>Estate batches</TableHeading>
+      <View style={{ gap: space.sm }}>
+        {batches.map((batch) => (
+          <Link key={batch.id} href={{ pathname: "/bulk/[batchKey]/photos", params: { batchKey: batch.client_batch_key } }} asChild>
+            <Pressable accessibilityRole="button" accessibilityLabel={`Continue preparing ${batch.name}`}>
+              <Print interactive tiltDeg={0} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: space.md }}>
+                <View style={{ gap: space.xxs, flex: 1 }}>
+                  <Text variant="title" numberOfLines={1}>
+                    {batch.name}
+                  </Text>
+                  <Text variant="caption" color="textTertiary">
+                    {batch.item_count} item{batch.item_count === 1 ? "" : "s"} · {batch.ready_count} ready
+                  </Text>
+                </View>
+                <Text variant="label" color="accentText" style={{ fontSize: 10 }}>
+                  Continue
+                </Text>
+              </Print>
+            </Pressable>
+          </Link>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 export default function Mine(): React.ReactElement {
   useVerifiedToast();
   const [hasOwnerToken] = React.useState(() => getOwnerToken() !== null);
   const [listings, setListings] = React.useState<OwnerListing[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const draftBatches = useDraftBulkBatches(hasOwnerToken);
 
   React.useEffect(() => {
     if (!hasOwnerToken) return;
@@ -142,6 +205,9 @@ export default function Mine(): React.ReactElement {
             <View style={{ gap: space.lg, alignItems: "center" }}>
               <Link href="/give" dangerouslySingular asChild>
                 <Button label="Give something" />
+              </Link>
+              <Link href="/bulk" asChild>
+                <Button label="Give several items" variant="link" />
               </Link>
               <Link href="/recover" asChild>
                 <Button label="Lost your listings?" variant="link" />
@@ -173,18 +239,24 @@ export default function Mine(): React.ReactElement {
 
   if (listings.length === 0) {
     return (
-      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+      <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: sectionRhythm.tight }}>
         <EmptyState
           ornament={<Stamp state="idle" label="Mine" />}
           eyebrow="Mine"
           title="You haven't given anything yet."
           line="Once you give something, it'll show up here so you can follow along."
           action={
-            <Link href="/give" dangerouslySingular asChild>
-              <Button label="Give something" />
-            </Link>
+            <View style={{ gap: space.lg, alignItems: "center" }}>
+              <Link href="/give" dangerouslySingular asChild>
+                <Button label="Give something" />
+              </Link>
+              <Link href="/bulk" asChild>
+                <Button label="Give several items" variant="link" />
+              </Link>
+            </View>
           }
         />
+        <DraftBatchesSection batches={draftBatches} />
       </Page>
     );
   }
@@ -199,12 +271,18 @@ export default function Mine(): React.ReactElement {
             <Eyebrow tick>Your keepsakes</Eyebrow>
             <Text variant="displayLg">Mine</Text>
           </View>
-          <Link href="/mine/email" asChild>
-            <Button label="Email" variant="link" arrow={false} />
-          </Link>
+          <View style={{ flexDirection: "row", gap: space.md }}>
+            <Link href="/bulk" asChild>
+              <Button label="Give several items" variant="link" arrow={false} />
+            </Link>
+            <Link href="/mine/email" asChild>
+              <Button label="Email" variant="link" arrow={false} />
+            </Link>
+          </View>
         </View>
         <PencilRule />
       </Card>
+      <DraftBatchesSection batches={draftBatches} />
       <View style={{ gap: sectionRhythm.normal, marginTop: sectionRhythm.tight }}>
         {LISTING_GROUP_ORDER.map((key) => {
           const group = groups[key];
