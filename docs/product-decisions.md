@@ -139,13 +139,38 @@ edits nothing but the fields it shows, and the admin API has no set-category rou
 re-runs the model and applies whatever comes back. If the model is wrong twice, the listing stays
 wrong, and the giver — whose object it is — cannot fix it.
 
-**Re-evaluate now** (**#155**), because the premise has been tested and half-failed. The cheapest
-honest version is not the old picker: it is a correction affordance on a listing that already
-exists (the giver sees what the model decided and can change it), which keeps the give flow's five
-steps intact and is the one path currently missing at every layer. Whatever ships has to survive
-`resuggest` and the aspects backfill, both of which write `category` unconditionally today — a
-giver's explicit choice silently overwritten by a later model run would be a worse bug than the
-one being fixed.
+**Re-decided** 2026-09-08 (**#155**): the model still answers first, and **the giver has the last
+word**. `PUT /api/listings/:id/category` sets the category and stamps
+`listings.category_chosen_at`; the dashboard shows what was decided about the object and offers
+"Change category" beside it.
+
+Four things about the shape, because each was a fork:
+
+- **On the listing, not back in the flow.** The old picker asked a hurried giver to categorise
+  before they had seen what the model thought. This asks after, when there is something to
+  disagree with — and the give flow stays at five steps.
+- **Its own route, not a `PATCH` carrying one field.** `PATCH` bumps `version`, resets `status` to
+  `pending` and re-runs the pipeline, so correcting one word would take a live listing out of the
+  feed for a moderation cycle. That is the tax that stops people correcting anything. A category
+  is a closed enum this product defines, so there is no free text here for a moderator to read,
+  and `embeddingText()` does not include it, so nothing needs re-embedding either.
+- **The stamp is what makes it stick.** `resuggest` now leaves a giver-chosen category alone and
+  says so in its response (`category_kept: "chosen_by_giver"`), so an operator can tell that from
+  the model happening to agree. Without the column, a human's answer and a model's guess are the
+  same string in the same column and the next model run silently replaces one with the other.
+  (The aspects backfill turned out **not** to write `category` — checked rather than assumed, so
+  only `resuggest` needed the guard.)
+- **No admin set-category route.** The operator half can wait; the giver half is the one that
+  matters, because it is their object. An admin who thinks a category is wrong can still
+  `resuggest` a listing no giver has corrected.
+
+**Costs:** a giver can now put a keepsake in a category that suits them rather than the browser —
+a wrong category is a discoverability problem for their own listing, not a safety one, which is
+why this is not moderated. And `category_chosen_at` means `resuggest` can no longer fix a
+listing whose giver chose badly.
+
+**What would change the answer:** corrections arriving that are systematically worse than the
+model's guess, which would be visible as listings nobody finds. Nothing today measures that.
 
 ### 7. Photo bytes are backed up, into the same account
 

@@ -456,6 +456,14 @@ export type AdminResuggestResult = {
   /** Present only when `applied` is false — `suggestFromPhoto`'s own reason
    * (a missing thumb, a timeout, two unparseable replies). */
   reason?: string;
+  /**
+   * Present when the suggestion's *aspects* were applied but its category was
+   * not, because the giver had already corrected that category themselves
+   * (issue #155). Without this an operator would see `before.category ===
+   * after.category` and reasonably conclude the model had simply returned the
+   * same answer twice.
+   */
+  category_kept?: "chosen_by_giver";
   before: AdminResuggestSnapshot;
   after: AdminResuggestSnapshot;
 };

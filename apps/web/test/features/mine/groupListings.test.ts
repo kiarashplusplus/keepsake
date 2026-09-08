@@ -22,6 +22,7 @@ function makeListing(overrides: Partial<OwnerListing>): OwnerListing {
     created_at: 0,
     updated_at: 0,
     held: false,
+    category_chosen_at: null,
     ...overrides,
   };
 }

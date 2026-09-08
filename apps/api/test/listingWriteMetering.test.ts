@@ -50,6 +50,12 @@ const WRITE_ROUTES: { method: string; path: string; url: (id: string) => string;
   { method: "PATCH", path: "/:id", url: (id) => `http://x/api/listings/${id}`, body: { title: "Edited" } },
   { method: "DELETE", path: "/:id", url: (id) => `http://x/api/listings/${id}` },
   { method: "POST", path: "/:id/given", url: (id) => `http://x/api/listings/${id}/given` },
+  {
+    method: "PUT",
+    path: "/:id/category",
+    url: (id) => `http://x/api/listings/${id}/category`,
+    body: { category: "tools_diy" },
+  },
   { method: "POST", path: "/:id/withdraw", url: (id) => `http://x/api/listings/${id}/withdraw` },
   { method: "POST", path: "/:id/relist", url: (id) => `http://x/api/listings/${id}/relist` },
   { method: "POST", path: "/:id/reports", url: (id) => `http://x/api/listings/${id}/reports`, body: { reason: "not_a_keepsake" } },
