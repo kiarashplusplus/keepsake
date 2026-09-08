@@ -349,8 +349,9 @@ function AppSeriesSection({ byDay }: { byDay: ObservatoryAppData["by_day"] }): R
 // every other section above (no `ObservatorySource` wrapper — it cannot be
 // unconfigured), and the same "don't render a number for a feature nobody
 // turned on" rule `SearchIndexSection` already follows: `enabled: false`
-// means `BULK_UPLOAD` is off in this environment, which is every deployed
-// tier but preview today (`apps/api/wrangler.toml`).
+// means `BULK_UPLOAD` is off in this environment — local dev only as of
+// 2026-09-08, since it is `"1"` in both preview and production
+// (`apps/api/wrangler.toml`).
 //
 // Five sub-blocks, in the order an operator would actually check them when
 // something feels stuck: is anything moving at all (batches), what's

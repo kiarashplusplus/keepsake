@@ -2,8 +2,9 @@
 
 Status: `[TODO]` — API, schema and the web workspace's screens are written, but **nothing here has
 been driven from a real browser by a real person**. The admission code is gone (2026-09-08, status
-entry at the bottom), so `/bulk` is now self-serve wherever `BULK_UPLOAD` is `"1"` — preview only. Read "What is not built" before believing any
-part of this is usable. The status line at the bottom is the one that is kept current.
+entry at the bottom), so `/bulk` is now self-serve wherever `BULK_UPLOAD` is `"1"` — as of
+2026-09-08, that is both `[env.preview]` and `[env.production]`. Read "What is not built" before
+believing any part of this is usable. The status line at the bottom is the one that is kept current.
 
 Someone clearing a house has fifty objects and one evening at a time. The give flow is five steps
 per keepsake, and five steps fifty times is not a flow, it is a job. This is the machinery for
@@ -292,6 +293,17 @@ instead.
 person has used this feature — the web workspace below exists now, but only
 Jest has driven it. Production was approved ahead of a real-browser run
 rather than after one; watch it like a pilot still, not a finished feature.
+
+**Decision, written down (2026-09-08): the `/mine` entry point stays visible
+in production.** `apps/web/app/mine/index.tsx`'s three "Give several items"
+links carry no flag check, so with `BULK_UPLOAD = "1"` in production every
+giver on the live site sees the entry point, not just the person who
+approved the flag. That was Kiarash's call, not an oversight: he is
+currently the only tester on both tiers, so there is no other user this can
+surprise yet. Revisit before that stops being true — gating the link behind
+`bulkUploadEnabled`-equivalent client state, or waiting for the first real
+browser pass before leaving it linked, are the two options on the table if
+it needs to wait.
 
 **2026-09-08 — the web workspace landed on a separate branch. Screens exist; still nobody's
 driven them from a browser.**

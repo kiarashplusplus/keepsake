@@ -356,13 +356,12 @@ MOCK_AI = "0"
 # --- Estate bulk upload (packages/contracts/src/bulk.ts, migration
 # 20260908043946_bulk_upload.sql) ---
 #
-# `BULK_UPLOAD` is the kill switch, and it is "0" everywhere except
-# `[env.preview]`. Not caution for its own sake: nothing has yet prepared a
-# real batch through a real browser. Every draft, upload and submission this
-# feature can perform so far has only ever been exercised against
-# `wrangler dev`/vitest, which is a fine reason to build the plumbing and no
-# reason at all to let a giver reach it. Preview is where that first real
-# browser run has to happen before this can be considered for production.
+# `BULK_UPLOAD` is the kill switch. It is "0" here (local dev/vitest) and,
+# as of 2026-09-08, "1" in both `[env.preview]` and `[env.production]` — see
+# `[env.production.vars]`'s comment below for why it was approved for
+# production ahead of, not after, a real batch prepared through a real
+# browser, and `docs/design/bulk-upload.md`'s status section for what that
+# still leaves unproven.
 #
 # The counters below — `BULK_MAX_ITEMS_PER_BATCH`, `_PHOTOS_PER_BATCH`,
 # `BULK_OWNER_DAILY_ITEMS`, `_PHOTOS`, `_SUGGESTIONS` — are what actually
@@ -622,8 +621,9 @@ COMMIT_SHA = "dev"
 # `[vars]` comment above for why this is charged per-photo now and why it
 # differs from `[env.production]`.
 #
-# Raised again for the estate bulk-upload pilot, which runs on preview only
-# (`BULK_UPLOAD` below is "1" here and "0" everywhere else). A full batch is
+# Raised again for the estate bulk-upload pilot (`BULK_UPLOAD` below is "1"
+# here, same as `[env.production]` since 2026-09-08 — see that block's
+# comment). A full batch is
 # 100 listings / 300 photos (`MAX_BATCH_ITEMS`/`MAX_BATCH_PHOTOS`,
 # `packages/contracts/src/bulk.ts`) — 100 text calls, 600 vision calls
 # (`MODERATED_PHOTO_VARIANTS.length` per photo). One owner's whole day
@@ -686,9 +686,10 @@ CF_ZONE_ID = "dcc1fb09eeeba27a343fc1d98aff9094"
 CF_ACCOUNT_ID = "dc6a87ed4a4269ed74c8f508b275b703"
 CF_SCRIPT_NAME = "keepsake-preview"
 MOCK_AI = "0"
-# On here, and only here — see the top-level [vars] comment. Preview is
-# where the estate bulk upload pilot gets its first real-browser run before
-# it can be considered for production.
+# "1" here and, since 2026-09-08, in `[env.production]` too — see the
+# top-level [vars] comment and `[env.production.vars]`'s comment below.
+# Preview was meant to get the pilot's first real-browser run before
+# production; that run still hadn't happened when production was approved.
 BULK_UPLOAD = "1"
 BULK_MAX_ITEMS_PER_BATCH = "100"
 BULK_MAX_PHOTOS_PER_BATCH = "300"
