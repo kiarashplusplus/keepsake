@@ -62,6 +62,7 @@ const ownerListingBase = {
   created_at: 1,
   updated_at: 1,
   held: true,
+  category_chosen_at: null,
 };
 
 describe("AdminQueueItem", () => {

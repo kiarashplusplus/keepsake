@@ -111,7 +111,7 @@ meRoutes.get("/listings", ownerAuth(), async (c) => {
   const { results: rows } = await c.env.DB.prepare(
     `SELECT id, owner_id, title, story, category, country, postal_code, place_name, admin1, lat, lng,
             status, moderation_reason, version, report_count, request_count, chosen_request_id,
-            created_at, updated_at, published_at, given_at
+            created_at, updated_at, published_at, given_at, category_chosen_at
      FROM listings WHERE owner_id = ? ORDER BY created_at DESC`,
   )
     .bind(owner.id)

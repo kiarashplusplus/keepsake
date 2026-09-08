@@ -250,7 +250,7 @@ adminRoutes.get("/queue", validateQuery(AdminQueueQuery), async (c) => {
   const { results: rows } = await c.env.DB.prepare(
     `SELECT id, owner_id, title, story, category, country, postal_code, place_name, admin1, lat, lng,
             status, moderation_reason, version, report_count, request_count, chosen_request_id,
-            created_at, updated_at, published_at, given_at
+            created_at, updated_at, published_at, given_at, category_chosen_at
      FROM listings WHERE ${conditions.join(" AND ")} ORDER BY updated_at DESC, id DESC LIMIT ?`,
   )
     .bind(...params)
@@ -1102,8 +1102,20 @@ adminRoutes.post("/listings/:id/resuggest", async (c) => {
   }
 
   const now = Date.now();
+  // Issue #155. A giver who corrected their own listing's category outranks
+  // the model's second opinion about it — otherwise the one human path that
+  // exists is undone by any admin pressing this button, and nothing
+  // afterwards could tell that it had been. The aspects are rewritten either
+  // way: they are the model's own output with no human writer at any layer,
+  // and re-reading a photo is exactly what this route is for.
+  //
+  // Reported in the response rather than done quietly, so an operator whose
+  // resuggest left the category alone can see why instead of concluding the
+  // model returned the same answer.
+  const categoryIsGivers = row.category_chosen_at !== null && row.category_chosen_at !== undefined;
+  const nextCategory = categoryIsGivers ? (row.category as Category) : result.suggestion.category;
   await c.env.DB.prepare("UPDATE listings SET category = ?, updated_at = ?, aspects_backfilled_at = ? WHERE id = ?")
-    .bind(result.suggestion.category, now, now, id)
+    .bind(nextCategory, now, now, id)
     .run();
   // Stamping `aspects_backfilled_at` above keeps this listing out of the #37
   // backfill's candidate set, which would otherwise be a second, dumber pass
@@ -1122,8 +1134,9 @@ adminRoutes.post("/listings/:id/resuggest", async (c) => {
   const applied: AdminResuggestResult = {
     listing_id: id,
     applied: true,
+    ...(categoryIsGivers ? { category_kept: "chosen_by_giver" as const } : {}),
     before,
-    after: { category: result.suggestion.category, aspects: await fetchAspectRows(c.env, id) },
+    after: { category: nextCategory, aspects: await fetchAspectRows(c.env, id) },
   };
   return ok(c, applied);
 });
