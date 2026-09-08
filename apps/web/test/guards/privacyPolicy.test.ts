@@ -47,6 +47,7 @@ const SUGGESTION_CONTRACT = path.resolve(WEB_ROOT, "../../packages/contracts/src
 const AGE_GATE_DIR = path.resolve(WEB_ROOT, "src/features/ageGate");
 const LISTINGS_ROUTE = path.join(API_SRC, "routes/listings.ts");
 const ME_ROUTE = path.join(API_SRC, "routes/me.ts");
+const RECOVER_ROUTE = path.join(API_SRC, "routes/recover.ts");
 const ORPHAN_SWEEP = path.join(API_SRC, "cron/orphanSweep.ts");
 const REQUEST_WITHDRAW_ROUTE = path.join(API_SRC, "routes/requestWithdraw.ts");
 const BUDGET = path.join(API_SRC, "moderation/budget.ts");
@@ -645,5 +646,203 @@ describe("privacy policy vs. how long a hashed IP is kept (#169)", () => {
       expect(newest).toContain("ip_digest");
       expect(newest).not.toMatch(/ip_digest\s+TEXT\s+NOT NULL/);
     }
+  });
+});
+
+/**
+ * Emailed-link lifetimes. The page states two of them in one sentence — 24
+ * hours for a verify link, an hour for a recovery link — and both are
+ * retention promises in the same sense as the hashed IP above: they say how
+ * long a token that reaches someone's inbox stays usable.
+ *
+ * The recovery number is why this block exists. `RECOVER_TTL_MS` was raised
+ * from 30 minutes to an hour on 2026-09-07, and the change was careful about
+ * the copy it knew about: the recovery *email* had carried its own literal
+ * "30 minutes" one module away from the constant, so the template was made to
+ * take the TTL as a parameter and `apps/api/test/email.test.ts` holds the two
+ * together. The privacy page's copy of the same number was in neither place
+ * and nothing pointed at it, so it went on saying 30 minutes for a day. Same
+ * failure as #87/#88/#169 — a sentence going stale in a section nobody was
+ * editing — and the same fix: assert the page from one end and the constant
+ * from the other.
+ */
+describe("privacy policy vs. how long an emailed link lives", () => {
+  it("states both lifetimes in the sentence that makes the promise", () => {
+    expect(PRIVACY_TEXT).toContain("expires in 24 hours (or an hour for a recovery link)");
+  });
+
+  it("mints a recovery token for exactly the hour the page promises", () => {
+    // Comment-stripped: the constant's own doc comment narrates the 30-to-60
+    // change in words, so an assertion against the raw file would match the
+    // prose describing a number rather than the number.
+    const code = withoutComments(fs.readFileSync(RECOVER_ROUTE, "utf8"));
+    expect(code).toContain("export const RECOVER_TTL_MS = 60 * 60 * 1000;");
+    // And that the constant is what the mint actually uses — a TTL defined
+    // and then not applied is the declared-everywhere-called-from-nowhere
+    // shape AGENTS.md's table warns about.
+    expect(code).toContain("now + RECOVER_TTL_MS");
+  });
+
+  it("mints a verify-email token for exactly the 24 hours the page promises", () => {
+    const code = withoutComments(fs.readFileSync(ME_ROUTE, "utf8"));
+    expect(code).toContain("const VERIFY_EMAIL_TTL_MS = 24 * 60 * 60 * 1000;");
+    expect(code).toContain("now + VERIFY_EMAIL_TTL_MS");
+  });
+
+  it("clears the spent token record within the further week it promises", () => {
+    const code = withoutComments(fs.readFileSync(ORPHAN_SWEEP, "utf8"));
+    expect(code).toContain("const RECOVERY_TOKEN_GRACE_MS = 7 * 24 * 60 * 60 * 1000;");
+  });
+});
+
+/**
+ * The advertising group (#175). This is the inverse of the drift the top of
+ * this file was written for, and it is worth guarding for the same reason.
+ *
+ * `#88` and `#112` were the page claiming something the code did not do.
+ * Here the page claimed something the code *could not* do: "Advertising"
+ * described, in the present tense, a Google Ads tag loading on consent and
+ * Google receiving something — while `ks-google-ads-id` is hardcoded empty on
+ * every page, `config.ts`'s readers are deleted, and `consent.js` fails its
+ * own `/^(AW|G|GT)-/` test and returns before touching the network. No tag
+ * has ever loaded on either tier. A privacy policy that overstates what
+ * leaves the site is still a policy that does not describe the site, and with
+ * real visitors arriving it is the sentence they would act on.
+ *
+ * The page cannot simply drop the provider: the `PROVIDERS` guard above
+ * requires every declared provider's name and host to be named here, and the
+ * provider is deliberately kept declared-and-unfed so the pages and the
+ * registry cannot drift (see `apps/web/src/lib/config.ts`). So what is locked
+ * is the *tense*: the page may name Google Ads, and must say the tag does not
+ * load, for as long as the id is empty.
+ */
+describe("privacy policy vs. the advertising tag that does not load (#175)", () => {
+  /** The meta every page emits, and the value that is the loader's own kill
+   * switch. If a real `AW-`/`G-`/`GT-` id is ever put here, this block should
+   * fail loudly rather than let the page keep saying no tag loads. */
+  const EMPTY_ADS_META = '<meta name="ks-google-ads-id" content="" />';
+
+  it.each(STATIC_PAGES)("%s still emits the ads id empty", (page) => {
+    expect(fs.readFileSync(path.join(SITE_PUBLIC, page), "utf8")).toContain(EMPTY_ADS_META);
+  });
+
+  it("emits it empty from the app shell too", () => {
+    // `+html.tsx` is the other half: the static pages and the Expo app have
+    // to agree, or a visitor's answer means different things on /privacy and
+    // on /give.
+    expect(fs.readFileSync(path.join(WEB_ROOT, "app/+html.tsx"), "utf8")).toContain(EMPTY_ADS_META);
+  });
+
+  it("has no reader of the removed EXPO_PUBLIC_GOOGLE_ADS_* variables left anywhere", () => {
+    // The three variables and `adsEvents.ts` went together. A reader
+    // reappearing without the paragraph below being rewritten is exactly the
+    // sequence the policy is not allowed to lose to.
+    //
+    // What is searched for is the two shapes that would actually feed a tag —
+    // `process.env.EXPO_PUBLIC_GOOGLE_ADS_*` in the bundle, and a
+    // `%EXPO_PUBLIC_GOOGLE_ADS_*%` placeholder for `copy-site.mjs` to
+    // substitute — not the bare name, which several comments explaining the
+    // removal quite correctly still mention.
+    const offenders: string[] = [];
+    for (const root of [path.join(WEB_ROOT, "src"), path.join(WEB_ROOT, "app"), SITE_PUBLIC]) {
+      for (const file of filesUnder(root)) {
+        if (!/\.(ts|tsx|js|html)$/.test(file)) continue;
+        const source = fs.readFileSync(file, "utf8");
+        if (/process\.env\.EXPO_PUBLIC_GOOGLE_ADS/.test(source) || /%EXPO_PUBLIC_GOOGLE_ADS[A-Z_]*%/.test(source)) {
+          offenders.push(path.relative(WEB_ROOT, file));
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("says plainly that no advertising tag loads, rather than describing one that would", () => {
+    expect(PRIVACY_TEXT).toContain("Keepsake runs no adverts and loads no advertising tag at all");
+    expect(PRIVACY_TEXT).toContain("is empty in every version of this site that has ever been published");
+    // The promise that this section is rewritten *before* a tag ships, not
+    // after — the same commitment the "Search by meaning" paragraph made and
+    // then kept.
+    expect(PRIVACY_TEXT).toContain("this section changes first, before a single tag loads");
+  });
+
+  it("no longer tells a reader that Google receives something on consent", () => {
+    // The two sentences that were true of the plumbing and never true of the
+    // product.
+    expect(PRIVACY_TEXT).not.toContain("Google is the recipient");
+    expect(PRIVACY_TEXT).not.toContain("Google for the advertising tag, only after you consent");
+  });
+});
+
+/**
+ * What the published pages actually contain.
+ *
+ * `apps/site/public/*.html` are the only hand-written pages that ship, and
+ * their HTML comments are legal reasoning written for the next editor — which
+ * half of Texas's fair-notice doctrine each sentence of the indemnity is
+ * doing, that the entity question underneath it was decided without a lawyer,
+ * why no postal address is published and which reader that decision is about.
+ * Nothing in `pnpm export` minifies HTML, so until `copy-site.mjs` learned to
+ * strip them, every byte of that reasoning was in the served page.
+ *
+ * Two things have to hold, and neither is visible from reading either file on
+ * its own: the strip step still exists, and its pattern still matches the
+ * comments these pages actually contain. So the regex is pulled out of the
+ * script and run against the real pages here, rather than asserting that some
+ * line of code is present.
+ */
+describe("what ships in the static pages", () => {
+  const COPY_SITE = fs.readFileSync(path.join(WEB_ROOT, "scripts/copy-site.mjs"), "utf8");
+
+  /** `copy-site.mjs`'s own pattern, so this cannot pass against a regex the
+   * build no longer uses. */
+  function stripPattern(): RegExp {
+    const source = /const HTML_COMMENT_RE = \/(.+?)\/g;/.exec(COPY_SITE)?.[1];
+    if (!source) throw new Error("could not find HTML_COMMENT_RE in scripts/copy-site.mjs");
+    return new RegExp(source, "g");
+  }
+
+  it("finds the strip step (positive control)", () => {
+    // Without this the assertions below would pass on a build that stripped
+    // nothing, by testing a regex nobody runs.
+    expect(COPY_SITE).toContain("HTML_COMMENT_RE");
+    expect(COPY_SITE).toMatch(/original\.replace\(HTML_COMMENT_RE, ""\)/);
+    expect(stripPattern().test("<!-- x -->")).toBe(true);
+  });
+
+  it.each(STATIC_PAGES)("%s has every comment removed by that pattern", (page) => {
+    const source = fs.readFileSync(path.join(SITE_PUBLIC, page), "utf8");
+    // The source is supposed to have them — a page with none would make the
+    // next assertion vacuous.
+    expect(source).toContain("<!--");
+    expect(source.replace(stripPattern(), "")).not.toContain("<!--");
+  });
+
+  it("does not publish the reasoning behind the legal copy", () => {
+    // Named sentences rather than "no comments", because these are the ones
+    // that would be quoted back: the indemnity's own drafting notes, and the
+    // reason the operator's address is withheld.
+    const shipped = STATIC_PAGES.map((page) =>
+      fs.readFileSync(path.join(SITE_PUBLIC, page), "utf8").replace(stripPattern(), ""),
+    ).join("\n");
+    for (const phrase of [
+      "individual-vs-LLC",
+      "fair-notice doctrine",
+      "express-negligence",
+      "what the decision changes",
+      "not a lawyer's opinion",
+      "docs/legal-considerations.md",
+      "docs/legal-entity-and-insurance.md",
+    ]) {
+      expect(shipped).not.toContain(phrase);
+    }
+  });
+
+  it("keeps that reasoning in the source, where it is for", () => {
+    // The other direction, and the reason this is a build step rather than a
+    // deletion: stripping the comments out of the repo would lose the record
+    // AGENTS.md exists to protect.
+    const terms = fs.readFileSync(path.join(SITE_PUBLIC, "terms.html"), "utf8");
+    expect(terms).toContain("fair-notice doctrine");
+    expect(terms).toContain("docs/legal-entity-and-insurance.md");
   });
 });

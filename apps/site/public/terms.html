@@ -27,13 +27,11 @@
       .prohibited-items tr:last-child td {
         border-bottom: none;
       }
-      /* Conspicuousness for the indemnification clause below: Texas's fair-notice doctrine
-         (see docs/legal-considerations.md, #63) requires a clause like this stand out from
-         surrounding body text — capitalization, bold, a heading, or larger type — or it's
-         unenforceable absent the other party's actual knowledge. The border is decorative only
-         (not relied on for contrast); the clause's own text stays the page's normal `--ink` on
-         `--surface`, already verified against both themes by the Playwright axe check, and gets
-         its conspicuousness from the bold weight and the box instead. */
+      /* The boxed treatment for the indemnity below. Why it is boxed, and why that
+         is load-bearing rather than decorative, is in the comment beside the clause
+         itself — a CSS comment ships to the visitor, an HTML comment no longer does
+         (apps/web/scripts/copy-site.mjs strips those from the published page), so the
+         reasoning lives there and this stays a note about the rule. */
       .indemnity {
         border: 2px solid var(--accent-text);
         padding: 1em 1.25em;
@@ -313,7 +311,16 @@
              is unaffected either way — fair notice is entity-neutral — what the decision changes
              is who pays if the clause fails, and the answer to that is insurance rather than a
              liability shield. Reasoning, costs and the triggers that would reverse it:
-             docs/legal-entity-and-insurance.md. -->
+             docs/legal-entity-and-insurance.md.
+
+             The conspicuousness half in detail, since it moved here out of the `.indemnity`
+             CSS comment (a CSS comment still ships to the visitor; this one does not):
+             Texas's doctrine wants a clause like this to stand out from surrounding body
+             text — capitalization, bold, a heading, or larger type — or it is unenforceable
+             absent the other party's actual knowledge of it. The border is decorative only
+             and is not relied on for contrast; the clause's own text stays the page's normal
+             `--ink` on `--surface`, verified against both themes by the Playwright axe check,
+             and takes its conspicuousness from the bold weight and the box. -->
         <div class="indemnity">
           <p>
             <strong>

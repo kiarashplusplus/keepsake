@@ -87,6 +87,48 @@ console.log(
     : `[copy-site] substituted public ids into ${substituted} page(s)`,
 );
 
+// Strip HTML comments from the copied pages.
+//
+// These three files are the only hand-written HTML that ships, and their
+// comments are not markup notes — they are the reasoning behind legal copy,
+// written for whoever edits the page next. `terms.html` carries one beside
+// the indemnity clause explaining which half of Texas's fair-notice doctrine
+// each sentence is doing, that the individual-vs-LLC question underneath it
+// was decided without a lawyer, and what happens "if the clause fails";
+// `privacy.html` carries the whole #26 analysis for why no postal address is
+// published, including that the reason is a banned user reading the page.
+// Both are exactly the comments AGENTS.md wants kept — and neither is
+// something to hand a visitor, a crawler, or the other side of a dispute,
+// which is what shipping them does: nothing in `pnpm export` minifies HTML,
+// so every byte of them is in the served page and in view-source.
+//
+// So they stay in the source, where they are useful, and come out of the
+// artifact. This is a copy step, not an edit: `apps/site/serve.mjs`'s
+// standalone preview reads the source files and still shows them.
+//
+// Deliberately not a general HTML minifier. The only construct being removed
+// is `<!-- ... -->`, none of these pages puts one inside a <script> or
+// <style> (where it would be JS/CSS, not a comment), and none needs a
+// conditional comment. Anything cleverer would be a build-time rewrite of
+// legal copy, which is the last thing that should acquire a clever step.
+const HTML_COMMENT_RE = /\n?[ \t]*<!--[\s\S]*?-->/g;
+let stripped = 0;
+let strippedBytes = 0;
+for (const file of copiedPages) {
+  const original = readFileSync(file, "utf8");
+  const next = original.replace(HTML_COMMENT_RE, "");
+  if (next !== original) {
+    writeFileSync(file, next, "utf8");
+    stripped += 1;
+    strippedBytes += original.length - next.length;
+  }
+}
+console.log(
+  stripped === 0
+    ? "[copy-site] no HTML comments to strip"
+    : `[copy-site] stripped ${strippedBytes} bytes of HTML comments from ${stripped} page(s)`,
+);
+
 // A placeholder that survives into a DEPLOYED export is a shipped bug, not a
 // kill switch (#175). `%EXPO_PUBLIC_GOOGLE_ADS_ID%` shipped literally in
 // every production page for the life of that feature because the variable was

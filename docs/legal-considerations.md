@@ -213,6 +213,85 @@ stays an honest record of what was found and when:**
 
 ---
 
+**Status update (2026-09-08) — a pass over `privacy.html` and `terms.html` specifically, because
+first real users are close.** Appended rather than edited into the entries above, same as every
+other status block in this file.
+
+**Three things about the published pages were wrong or shipping more than they should, and are
+fixed.**
+
+- **The privacy page stated a recovery-link lifetime that had stopped being true.** It said "30
+  minutes for a recovery link"; `RECOVER_TTL_MS` (`apps/api/src/routes/recover.ts`) was raised from
+  30 to 60 minutes on 2026-09-07, Kiarash's call, so a slow first-send delivery can't hand someone a
+  dead link on the one path that exists because they already lost access. That change was careful
+  about the copy it knew about — the recovery *email* had carried its own literal "30 minutes", so
+  the template was made to take the TTL as a parameter and `apps/api/test/email.test.ts` holds the
+  two together — but the privacy page's copy of the same number was in neither place and nothing
+  pointed at it. Same failure as #87/#88/#169: a sentence going stale in a section nobody was
+  editing. The page now says an hour, and `apps/web/test/guards/privacyPolicy.test.ts` pins it to
+  the constant from both ends, along with the 24-hour verify link and the 7-day token grace.
+- **The privacy page described an advertising data flow that cannot occur.** "Advertising" said, in
+  the present tense, that consenting loads the Google Ads tag and that "Google is the recipient, and
+  it may set cookies on this site"; "Other services we rely on" named "Google for the advertising
+  tag, only after you consent." After #175 there is no ads id in any build, the `ks-google-ads-id`
+  meta is hardcoded empty on every page, `config.ts`'s readers are gone and `adsEvents.ts` is
+  deleted — so no tag has ever loaded on either tier and Google receives nothing. The only
+  mitigation on the page was a generic "consent is the ceiling, not the trigger" three paragraphs
+  later. This is the mirror image of the drift the guard file was written for — the policy
+  asserting something the code does not do — and it is the sentence a first visitor would actually
+  act on, so it is worth fixing even though it errs toward over-disclosure rather than under.
+  The section now says plainly that no advertising tag loads, why the switch is still on the page
+  anyway, and that this section is rewritten *before* a tag ever ships rather than after. **The
+  provider stays declared in `consent.js`'s registry on purpose** — that is what keeps the pages and
+  the registry in sync, per `apps/web/src/lib/config.ts` — so the guard still requires the page to
+  name Google Ads and `www.googletagmanager.com`; what is now locked is the tense, not the name.
+- **The pages were publishing their own legal reasoning.** Nothing in `pnpm export` minifies HTML,
+  and `copy-site.mjs` copied `apps/site/public/*.html` verbatim, so every HTML comment in them was
+  in the served bytes and in view-source: 8.6 KB of it, including the note beside the indemnity
+  clause explaining which half of Texas's fair-notice doctrine each sentence is carrying, that the
+  individual-vs-LLC question underneath it was decided without a lawyer, and what happens "if the
+  clause fails"; and the whole #26 analysis on `privacy.html` for why no postal address is
+  published, including that the reason is a banned user reading the page. Those comments are worth
+  keeping — they are exactly what AGENTS.md asks for — but not worth handing to a visitor, a
+  crawler, or the other side of a dispute. `copy-site.mjs` now strips HTML comments from the copied
+  pages; the source keeps them, and `apps/site/serve.mjs`'s standalone preview still shows them.
+  One CSS comment carried the same reasoning and a CSS comment still ships, so that one was reduced
+  to a note about the rule and its detail moved into the HTML comment beside the clause.
+
+**Checked and correct, so nothing changed:** every retention number on the privacy page against the
+crons and constants that enforce it (24h orphan photos, 30d terminal-listing photos, 90d
+moderation/email events, 48h IP-hash across all three mechanisms, 7d spent-token grace); the
+date-of-birth claims against both write sites in `routes/listings.ts`, the absence of any
+`date_of_birth` migration column, and `validateBody`'s zod `flatten()`, which returns messages
+rather than the submitted value; the postcode-centroid location claims; the minor-takedown
+commitments against `POST /admin/owners/:id/ban` and `POST /api/admin/requests/:id/remove`; and
+`terms.html` end to end, which needed no copy change.
+
+**Two gaps that are not staleness and are not tracked anywhere — neither this document, the eight
+questions in #34, nor #50.** Raising them here rather than drafting them, because both are the
+owner's call:
+
+1. **There are no content terms at all.** Users upload photographs and write stories; Keepsake
+   stores them, derives thumbnails, publishes them in a feed, renders them into OG and share cards,
+   lists them in a sitemap and schema.org structured data, and embeds their text for search.
+   `terms.html` contains no licence grant covering any of that, and no representation that the
+   uploader owns what they posted — "You have to own it" is about the *object*, not the photograph.
+   Nor is there a copyright complaint route: `REPORT_REASONS` is `illegal` / `not_a_keepsake` /
+   `spam` / `harassment` / `personal_info` / `other`, so a rights holder's only path is "other" or
+   the inbox, and there is no designated DMCA agent (§512(c) safe harbour needs one registered with
+   the Copyright Office — a filing, not a code change, in the same class as #142's two errands).
+   This is the largest untracked gap found in this pass.
+2. **There is no limitation of liability and no forum/venue clause.** `terms.html` has a warranty
+   disclaimer, a one-way indemnity and a Texas governing-law line, but nothing capping damages and
+   nothing on where a dispute is heard. That may well be a deliberate choice for a product like
+   this — but unlike every other legal call in this repo, no document records it as one, which is
+   the thing worth fixing either way.
+
+Neither gap blocks the corrections above, and neither is new: they have been true since the pages
+were written. They are worth deciding before the first user rather than after.
+
+---
+
 ## What I would do before launch (or before turning ads on)
 
 ### Legal requirements — do these regardless of size or budget

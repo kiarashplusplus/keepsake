@@ -59,7 +59,7 @@
     <main id="main">
       <div class="page-header wrap">
         <h1>Privacy</h1>
-        <p class="updated">Last updated 7 September 2026 — see <a href="#changes">what changed</a></p>
+        <p class="updated">Last updated 8 September 2026 — see <a href="#changes">what changed</a></p>
       </div>
 
       <div class="prose-content prose">
@@ -299,16 +299,27 @@
           Cloudflare is the recipient.
         </p>
         <p>
-          <strong>Advertising.</strong> Off unless you say yes. If you say yes, we load the
-          Google Ads tag from <code>www.googletagmanager.com</code> so we can tell
-          which advert brought you here. Google is the recipient, and it may set cookies on this
-          site. We never send it your photos, your story text, your email, or anything a
-          requester wrote to you.
+          <strong>Advertising.</strong> Off unless you say yes — and, as things stand,
+          off even if you say yes, because <strong>Keepsake runs no adverts and loads no
+          advertising tag at all</strong>. The group exists because the machinery for one was
+          built and then deliberately left unfed: the only tag it was ever wired for is the
+          Google Ads tag from <code>www.googletagmanager.com</code>, and the id that tag needs
+          is empty in every version of this site that has ever been published, so nothing is
+          fetched and Google receives nothing. That has been true for the whole life of the
+          feature, and in September 2026 it became a decision rather than an accident — the ad
+          code was removed and nothing is planned to replace it.
         </p>
         <p>
-          One more thing worth saying plainly: if we haven't switched a tool on for a particular
-          build, it doesn't load even when you've said yes. Consent is the ceiling, not the
-          trigger.
+          We are leaving the switch on this page rather than hiding it, because the honest
+          version of "we don't run ads" is one you can check and turn off in advance. If that
+          ever changes, this section changes first, before a single tag loads, and the entry in
+          "What changed" below will say so. Whatever happens, we would never send an advertiser
+          your photos, your story text, your email, or anything a requester wrote to you.
+        </p>
+        <p>
+          One more thing worth saying plainly, since it is what the paragraph above rests on: if
+          we haven't switched a tool on for a particular build, it doesn't load even when you've
+          said yes. Consent is the ceiling, not the trigger.
         </p>
 
         <h2>Changing your mind</h2>
@@ -391,7 +402,7 @@
           text live for as long as the listing exists, plus 30 days if it's rejected, withdrawn, or
           hidden. Request notes/emails/phone numbers live until the request is withdrawn (see
           above) or you ask us to remove them. A link we send to verify an email or recover your
-          dashboard expires in 24 hours (or 30 minutes for a recovery link) and the record of it is
+          dashboard expires in 24 hours (or an hour for a recovery link) and the record of it is
           cleared within a further week.
           Hashes of your IP address expire automatically after 48 hours (see "Rate limiting"
           above) — both the rate-limit counters and the copy stored alongside a request or a
@@ -437,15 +448,15 @@
         <h2>Other services we rely on</h2>
         <p>
           Beyond what's named above (Cloudflare for hosting, storage, AI screening, and the
-          autofill model; Google for the advertising tag, only after you consent), a few smaller
-          services touch limited data on our behalf: Cloudflare Turnstile checks that a submission
-          is coming from a real browser, not a bot, before it reaches our server; and Resend is a
-          backup email provider we can fall back to if Cloudflare's own email sending isn't
-          available. If something breaks, error
-          diagnostics stay inside Cloudflare — the same platform already hosting the app — rather
-          than going to a separate error-tracking company, with obvious personal data redacted
-          before anything is written. None of them receive your photos or story text beyond what's
-          needed to run the service itself.
+          autofill model — Google is named under "Your choice, before anything loads" as the
+          advertising tag this site does not load, and is not a service we rely on), a few
+          smaller services touch limited data on our behalf: Cloudflare Turnstile checks that a
+          submission is coming from a real browser, not a bot, before it reaches our server; and
+          Resend is a backup email provider we can fall back to if Cloudflare's own email sending
+          isn't available. If something breaks, error diagnostics stay inside Cloudflare — the
+          same platform already hosting the app — rather than going to a separate error-tracking
+          company, with obvious personal data redacted before anything is written. None of them
+          receive your photos or story text beyond what's needed to run the service itself.
         </p>
 
         <section id="changes">
@@ -454,6 +465,20 @@
             A date at the top of a policy tells you something moved but not what, so this is the
             record. It's kept by hand, newest first, and it starts the day we started keeping it —
             there's no entry here for anything before that date.
+          </p>
+          <p>
+            <strong>8 September 2026.</strong> Two corrections, both of them this page catching up
+            with the code rather than a change in what Keepsake does. "Advertising" described what
+            would happen if you consented to an advertising tag — that Google would be sent
+            something and might set a cookie — as though it were the live arrangement. It never
+            has been: the id that tag needs has been empty in every published version of this
+            site, and the code behind it was removed in September 2026. That section now says so
+            plainly, and says the switch stays on the page so the claim is one you can check. The
+            same sentence has gone from "Other services we rely on", where naming Google alongside
+            services that genuinely do handle your data was the same overstatement in a shorter
+            form. Separately, a recovery link's lifetime was raised from 30 minutes to an hour on
+            7 September so that a slow mail delivery can't hand you a dead link, and this page
+            still said 30 minutes; it now says an hour, and a test holds the two together.
           </p>
           <p>
             <strong>7 September 2026.</strong> The 48-hour expiry on hashes of your IP address is
