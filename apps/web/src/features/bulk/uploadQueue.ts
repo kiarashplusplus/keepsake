@@ -339,10 +339,17 @@ export class UploadQueue {
     this.limiter.updateConfig(patch);
   }
 
-  /** Enqueues a freshly picked file — the intake path, not a resume. */
+  /** Enqueues a freshly picked file — the intake path, not a resume.
+   * Deduped against `pending`: `track` already replaces a stale source and
+   * controller for an id enqueued twice, but `pump` drains the array
+   * synchronously, so two entries for the same id resolve to the same
+   * tracked object and launch two concurrent `processOne` runs sharing one
+   * `AbortController` (#292) — most reachable when a photo is re-enqueued
+   * (a manual retry) while the queue is paused after a 429 and `pending`
+   * is still accumulating. */
   enqueue(clientPhotoId: string, source: Blob): void {
     this.track(clientPhotoId, source);
-    this.pending.push(clientPhotoId);
+    if (!this.pending.includes(clientPhotoId)) this.pending.push(clientPhotoId);
     this.pump();
   }
 

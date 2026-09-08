@@ -397,6 +397,51 @@ describe("UploadQueue", () => {
     expect(complete).toMatchObject({ localPreviewUrl: null, hasLocalSource: false });
   });
 
+  it("enqueue dedupes against pending — a manual re-enqueue while paused after a 429 doesn't double-upload the photo (#292)", async () => {
+    const driver = createMemoryDriver();
+    let calls = 0;
+    let resolveSleep: (() => void) | undefined;
+    const controlledSleep = (): Promise<void> => new Promise((resolve) => (resolveSleep = resolve));
+
+    const uploadPhoto: UploadPhotoFn = async ({ clientPhotoId }) => {
+      calls += 1;
+      if (calls === 1) {
+        return { ok: false, error: classifyBulkError(new ApiError("rate_limited", "Slow down", 429, 30)) };
+      }
+      return { ok: true, data: photoSummary(clientPhotoId) };
+    };
+
+    const queue = new UploadQueue({
+      batchKey: "batch-1",
+      driver,
+      uploadPhoto,
+      prepareUpload: async () => preparedUpload(),
+      onPhotoUpdate: () => {},
+      sleep: controlledSleep,
+    });
+
+    queue.enqueue("photo-a", new Blob(["1"]));
+    // Let the 429 land: handleFailure's throttled branch unshifts "photo-a"
+    // back onto `pending` and calls `pauseFor`, which awaits `sleep` — the
+    // queue is now paused with "photo-a" already sitting in `pending`.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // A manual "Try again" (or any re-enqueue) for the same photo while
+    // still paused — exactly the interleaving #292 describes.
+    queue.enqueue("photo-a", new Blob(["2"]));
+
+    resolveSleep?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // One 429 call plus exactly one real upload once resumed — not two,
+    // which is what an undeduped `pending` (["photo-a", "photo-a"]) would
+    // have launched concurrently off the same tracked entry.
+    expect(calls).toBe(2);
+  });
+
   it("destroy() aborts in-flight work and stops the queue from continuing", async () => {
     const driver = createMemoryDriver();
     let uploadCalls = 0;
