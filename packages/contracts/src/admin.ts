@@ -467,3 +467,33 @@ export type AdminResuggestResult = {
   before: AdminResuggestSnapshot;
   after: AdminResuggestSnapshot;
 };
+
+// ---------------------------------------------------------------------------
+// Issue #225: POST /api/admin/testing/reassign-listing-ids — DIAGNOSTIC/
+// TEST-ONLY, not part of the product API. See the route's own comment in
+// `apps/api/src/routes/admin.ts` for why this exists at all: `packages/
+// tokens/src/tilt.ts` hashes a listing's id into its resting card angle, so
+// the UX baseline's fixed catalogue needs fixed ids even though every
+// listing is still minted through the real API with a fresh ULID.
+// ---------------------------------------------------------------------------
+export const AdminReassignListingIdsInput = z.object({
+  // Capped well above the six-plus-one the baseline catalogue actually
+  // needs — enough headroom for the fixture to grow without this schema
+  // being the thing that has to change, not so much that one call can walk
+  // the whole `listings` table.
+  pairs: z
+    .array(z.object({ from: UlidSchema, to: UlidSchema }))
+    .min(1)
+    .max(20),
+});
+export type AdminReassignListingIdsInput = z.infer<typeof AdminReassignListingIdsInput>;
+
+/** `tables` echoes back which child tables this call actually rewrote —
+ * discovered from the live schema each time (see `listingReferences()` in
+ * `apps/api/src/lib/listingsDb.ts`), so a caller can see for itself that a
+ * table a later migration adds was swept along rather than trusting this
+ * comment to have been updated. */
+export type AdminReassignListingIdsResult = {
+  reassigned: number;
+  tables: string[];
+};

@@ -193,6 +193,29 @@ export async function hideListingAsAdmin(request: APIRequestContext, listingId: 
   await readData(response);
 }
 
+/**
+ * `POST /api/admin/testing/reassign-listing-ids` — renames one or more
+ * just-created listings to fixed ids, carrying every foreign key with them
+ * in one D1 transaction. Exists for exactly one caller,
+ * `demoCatalog.ts`'s `ensureDemoCatalog()`: see the long comment there for
+ * why the UX baseline needs its listings' *ids* pinned even though the rows
+ * themselves are still minted through this same real API. `MOCK_AI=1` gates
+ * the route open server-side (`apps/api/src/routes/admin.ts`), which is
+ * always true under `wrangler dev` here (`playwright.config.ts`'s
+ * `--var MOCK_AI:1`) and never true in production — so this call is a 404
+ * against any server that isn't this suite's own.
+ */
+export async function reassignListingIds(
+  request: APIRequestContext,
+  pairs: Array<{ from: string; to: string }>,
+): Promise<void> {
+  const response = await request.post("/api/admin/testing/reassign-listing-ids", {
+    headers: adminHeaders(),
+    data: { pairs },
+  });
+  await readData(response);
+}
+
 /** A title no other listing (or run) can share, so a feed assertion is exact
  * even though the local feed accumulates rows from every spec. */
 export function uniqueTitle(prefix: string): string {

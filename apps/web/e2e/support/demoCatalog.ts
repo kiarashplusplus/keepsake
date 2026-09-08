@@ -22,9 +22,59 @@
  * which is why `pnpm e2e:ux` passes `--workers=1`. The alternative, a
  * Playwright `globalSetup`, would put the seeding somewhere a reader of this
  * spec would not think to look.
+ *
+ * Issue #225: "fixed titles, fixed stories" above used to stop short of
+ * "fixed ids", and that gap rewrote 16 of the baseline's 76 committed JPEG
+ * frames on every capture even when nothing about the product had changed.
+ * `packages/tokens/src/tilt.ts` hashes a listing's *id* into its resting
+ * card angle and vertical offset — deliberately: `Print.tsx` wants every
+ * card to look hand-tossed onto the table rather than grid-aligned, and a
+ * hash of something stable about the listing is what makes one listing's
+ * tilt repeatable across renders instead of re-rolled on every paint. But
+ * this file wipes and reseeds through the real API on every run (that's the
+ * whole point — see the header above), so the API mints a fresh ULID per
+ * listing per run, and a fresh id is a fresh angle. The six screens that
+ * render a list of prints — `feed-cards`, `feed-category`, `feed`, `mine`,
+ * `mine-detail-*`, `admin-hidden`, and the dark set of each — moved on every
+ * capture for a reason that had nothing to do with the design. (The item
+ * page never moved: `PhotoCarousel` is handed a literal `tiltDeg`, not the
+ * id-hashing path.)
+ *
+ * `DEMO_LISTING_IDS` below is the fix: after every listing in this file is
+ * created through the real API exactly as before, `ensureDemoCatalog()`
+ * renames each one to a fixed id via `reassignListingIds()`
+ * (`POST /api/admin/testing/reassign-listing-ids`) — carrying `photos`,
+ * `listing_aspects`, `requests`, `reports` and `moderation_events` along in
+ * one D1 transaction (see that route's own comment in
+ * `apps/api/src/routes/admin.ts` for the full mechanism, including why
+ * `listings_fts` needs no such handling). This is a real exception to
+ * `api.ts`'s "test data is created through the real API, never by writing
+ * rows into D1" rule, and it is worth being explicit about why it's the
+ * *only* exception in this suite rather than a precedent for others:
+ *
+ *  - Every other fixture in this suite calls `uniqueTitle()` /
+ *    `mintOwnerToken()` and gets a fresh row from the API on every call,
+ *    specifically so two specs running in parallel — or the same spec
+ *    re-run against a `reuseExistingServer` server — can never collide over
+ *    one shared row. Pinning an id there would recreate exactly the
+ *    collision the randomness exists to prevent.
+ *  - This fixture already *is* the named exception to that rule, before
+ *    this change: `ensureDemoCatalog()` looks its listings up by title and
+ *    reuses them across runs rather than minting new ones, precisely
+ *    because the baseline wants one shared, recognizable catalogue, not a
+ *    fresh one per call. A fixed id is the same deliberate choice applied
+ *    one column over — it doesn't create a new kind of sharing, it just
+ *    stops one part of an already-shared row (the id) from being the one
+ *    thing left to chance.
+ *  - The row itself is still exactly as real as it was: created through
+ *    `POST /api/photos` and `POST /api/listings` like any other listing,
+ *    with a genuine photo in R2, a genuine `owners` row, and a genuine
+ *    `MOCK_AI` moderation decision behind it. Only the primary key is
+ *    normalized afterward — nothing about *how* the row was produced
+ *    changes, which is the property `api.ts`'s rule actually protects.
  */
 import type { APIRequestContext } from "@playwright/test";
-import { createApprovedListing, hideListingAsAdmin, ownerHeaders, sendRequest } from "./api";
+import { createApprovedListing, hideListingAsAdmin, ownerHeaders, reassignListingIds, sendRequest } from "./api";
 import { DEMO_PHOTOS, type DemoPhoto } from "./demoPhotos";
 
 /** `OwnerTokenSchema` wants `ks_` + exactly 43 base64url characters; the
@@ -128,6 +178,28 @@ export const DEMO_HIDDEN_LISTING: DemoListing = {
   postalCode: "02144",
 };
 
+/**
+ * `DemoListing.key` -> the fixed id every row is renamed to after creation
+ * (see the header comment above for why). Deliberately far from anything a
+ * real ULID could be: `apps/api/src/lib/ids.ts` encodes the current Unix
+ * millisecond into the first ten characters and sixteen characters of real
+ * randomness into the rest, so a string of twenty zeros followed by a
+ * six-digit counter can never collide with one and reads, to anyone looking
+ * straight at a database row, as obviously placed there rather than minted.
+ * The counter is unrelated to creation order — it only has to be unique per
+ * key, and is assigned in `DEMO_LISTINGS`/`DEMO_HIDDEN_LISTING` order purely
+ * so the mapping below is easy to eyeball against those two definitions.
+ */
+export const DEMO_LISTING_IDS: Record<string, string> = {
+  kettle: "00000000000000000000000001",
+  brooch: "00000000000000000000000002",
+  letters: "00000000000000000000000003",
+  plane: "00000000000000000000000004",
+  records: "00000000000000000000000005",
+  quilt: "00000000000000000000000006",
+  hidden: "00000000000000000000000007",
+};
+
 /** The two strangers whose notes sit under `/mine/:id`. Fixed addresses:
  * the giver's screen shows them masked until Choose, and a random address
  * would change the width of the masked line from one capture to the next. */
@@ -193,7 +265,26 @@ export async function ensureDemoCatalog(request: APIRequestContext): Promise<Dem
   const ids: Record<string, string> = {};
 
   if (complete) {
-    for (const listing of all) ids[listing.key] = existing.get(listing.title) as string;
+    // Every row here was already renamed to its `DEMO_LISTING_IDS` entry the
+    // first time this ran — `existingCatalog()` looks rows up by title, so
+    // it hands back whatever id the row holds *now*, which by this point is
+    // always the fixed one. Nothing below re-touches D1: the idempotent path
+    // is exactly this branch doing nothing but reading. The check against
+    // `DEMO_LISTING_IDS` isn't load-bearing for the seed to work — it's a
+    // tripwire, so a person who edits the id map without wiping the local
+    // database gets a thrown error naming the mismatch instead of a
+    // baseline that silently drifts back to unstable ids.
+    for (const listing of all) {
+      const id = existing.get(listing.title) as string;
+      const expected = DEMO_LISTING_IDS[listing.key];
+      if (expected && id !== expected) {
+        throw new Error(
+          `demoCatalog: "${listing.title}" is ${id} in D1 but DEMO_LISTING_IDS["${listing.key}"] is ${expected}. ` +
+            "Wipe the e2e --persist-to state and reseed, or the two will never agree.",
+        );
+      }
+      ids[listing.key] = id;
+    }
   } else {
     for (const listing of all) {
       const created = await createApprovedListing(request, {
@@ -206,6 +297,20 @@ export async function ensureDemoCatalog(request: APIRequestContext): Promise<Dem
       });
       ids[listing.key] = created.id;
     }
+
+    // The rename happens once, for every listing at once, in a single call
+    // — one D1 transaction rather than seven, and one place where a partial
+    // failure (say, a bad pair) can't leave some listings renamed and
+    // others not. Everything from here on (`sendRequest`, `hideListingAsAdmin`)
+    // addresses listings by their now-final fixed id, so their own rows
+    // (`requests`, the admin `moderation_events` entry) are written against
+    // the id the baseline actually captures against — no second rename ever
+    // has to chase them down.
+    await reassignListingIds(
+      request,
+      all.map((listing) => ({ from: ids[listing.key] as string, to: DEMO_LISTING_IDS[listing.key] as string })),
+    );
+    for (const listing of all) ids[listing.key] = DEMO_LISTING_IDS[listing.key] as string;
 
     for (const key of Object.values(REQUESTED_KEYS_BY_PROJECT)) {
       for (const requester of DEMO_REQUESTS) {

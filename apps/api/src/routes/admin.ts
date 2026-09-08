@@ -14,6 +14,7 @@ import {
   AdminBanInput,
   AdminHideInput,
   AdminQueueQuery,
+  AdminReassignListingIdsInput,
   AdminRejectInput,
   AdminRemoveRequestInput,
   AdminTestEmailInput,
@@ -21,6 +22,7 @@ import {
   type AdminBackfillAspectsResult,
   type AdminHealth,
   type AdminQueueItem,
+  type AdminReassignListingIdsResult,
   type AdminRequestRemoveResult,
   type AdminRequestView,
   type AdminResuggestResult,
@@ -39,7 +41,7 @@ import { maskEmail, type RequestStatus } from "@keepsake/contracts/request";
 import type { ReportReason } from "@keepsake/contracts/report";
 import { captureException, captureMessage } from "@keepsake/observability/capture";
 import type { Env } from "../env.js";
-import { DEFAULT_SUGGEST_DAILY_BUDGET, emailProviderName, parseIntVar, reportAutohideThreshold } from "../env.js";
+import { DEFAULT_SUGGEST_DAILY_BUDGET, emailProviderName, isMockAi, parseIntVar, reportAutohideThreshold } from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
 import { requireParam } from "../lib/params.js";
@@ -54,6 +56,7 @@ import {
   fetchListingRow,
   fetchPhotoRows,
   fetchPhotoRowsForListings,
+  listingReferences,
   replaceListingAspects,
 } from "../lib/listingsDb.js";
 import { serializeOwnerListing, type ListingRow } from "../lib/serialize.js";
@@ -957,6 +960,92 @@ adminRoutes.post("/test-error", validateBody(AdminTestErrorInput), async (c) => 
     });
   }
   const result: AdminTestErrorResult = { captured: true, kind: input.kind };
+  return ok(c, result);
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/testing/reassign-listing-ids — DIAGNOSTIC/TEST-ONLY, not
+// part of the product API.
+// ---------------------------------------------------------------------------
+/**
+ * Issue #225: the UX baseline capture rewrote 16 of its 76 committed frames
+ * on every run with no code change, because `packages/tokens/src/tilt.ts`
+ * hashes a listing's id into its resting card angle and vertical offset, and
+ * `apps/web/e2e/support/demoCatalog.ts` wipes and reseeds its fixed
+ * catalogue through the real API every run — which mints a fresh ULID per
+ * listing per run, so every card the feed renders got a new angle.
+ *
+ * `demoCatalog.ts` still creates every listing through the real API, for
+ * every reason `apps/web/e2e/support/api.ts` gives (a genuine photo in R2, a
+ * real owner row, a real moderation decision). This route is what makes the
+ * *id* stable afterwards: it renames a just-created listing to a hard-coded,
+ * visibly-synthetic ULID, carrying every foreign key with it in one
+ * transaction so nothing is left pointing at an id that no longer exists.
+ *
+ * Two things make this safe to ship as a real route rather than a one-off
+ * script against `--persist-to`:
+ *
+ *  - `wrangler dev` holds the local D1 SQLite file open for the whole run,
+ *    so an out-of-band `wrangler d1 execute` against the same `--persist-to`
+ *    directory while the suite's server is live risks two processes
+ *    touching one SQLite file at once. Going through the Worker's own `DB`
+ *    binding — the same connection every other request already uses — has
+ *    no such hazard; it's one more statement on the connection D1 already
+ *    owns.
+ *  - `isMockAi(c.env)` gates it in addition to the `adminAuth()` this
+ *    router already requires on every route (`.use("*", ...)` above). Admin
+ *    auth alone would leave a real admin token able to stomp a live
+ *    listing's primary key; requiring `MOCK_AI=1` too means the route
+ *    answers `404` — genuinely absent, not just refused — everywhere except
+ *    the local/CI Playwright runs that set that var, the same belt Kiarash's
+ *    tokens can't undo on their own.
+ *
+ * The rename itself needs `PRAGMA defer_foreign_keys = ON`: none of the
+ * child tables declare `ON UPDATE CASCADE` (only `ON DELETE CASCADE`,
+ * checked by `test/cascadeDelete.test.ts`), and D1 enforces foreign keys
+ * immediately per statement, so `UPDATE listings SET id = ?` alone would
+ * orphan every child row mid-batch and fail the constraint check before the
+ * child rows are ever touched. Deferring deferral to the end of the
+ * transaction — which `env.DB.batch()` already is, atomically — lets the
+ * listing and every child row move together and only checks the constraint
+ * once everything agrees again. Verified directly against this repo's real
+ * D1 emulation (`test/adminReassignListingIds.test.ts`): the naive rename
+ * throws `FOREIGN KEY constraint failed`, the deferred one commits, and FK
+ * enforcement is confirmed back on for the next statement afterward — this
+ * doesn't leave the connection permanently unguarded.
+ *
+ * `listings_fts` needs nothing here at all. It's an external-content FTS5
+ * table keyed on `listings.rowid`, not `listings.id` — `id` is a `TEXT
+ * PRIMARY KEY` on an ordinary rowid table, so renaming it never touches the
+ * row's `rowid`, and `listings_fts_au`'s trigger only fires `AFTER UPDATE OF
+ * title, story`, which this route never sets. The row's search entry is
+ * unchanged because nothing about it needed to change.
+ *
+ * `listingReferences()` (`src/lib/listingsDb.ts`) discovers the child tables
+ * from the live schema rather than a list copied into this file, so a
+ * migration that adds a new `REFERENCES listings(id)` column is carried
+ * along automatically the next time this route runs.
+ */
+adminRoutes.post("/testing/reassign-listing-ids", validateBody(AdminReassignListingIdsInput), async (c) => {
+  if (!isMockAi(c.env)) {
+    return fail(c, "not_found", "Not found.", 404);
+  }
+  const input = c.get("validatedBody") as AdminReassignListingIdsInput;
+  const refs = await listingReferences(c.env);
+
+  const statements = [c.env.DB.prepare("PRAGMA defer_foreign_keys = ON")];
+  for (const { from, to } of input.pairs) {
+    statements.push(c.env.DB.prepare("UPDATE listings SET id = ? WHERE id = ?").bind(to, from));
+    for (const ref of refs) {
+      statements.push(c.env.DB.prepare(`UPDATE ${ref.table} SET ${ref.column} = ? WHERE ${ref.column} = ?`).bind(to, from));
+    }
+  }
+  await c.env.DB.batch(statements);
+
+  const result: AdminReassignListingIdsResult = {
+    reassigned: input.pairs.length,
+    tables: refs.map((ref) => ref.table),
+  };
   return ok(c, result);
 });
 

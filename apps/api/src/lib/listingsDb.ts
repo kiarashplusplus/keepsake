@@ -107,3 +107,45 @@ export async function replaceListingAspects(env: Env, listingId: string, aspects
       .run();
   }
 }
+
+export interface ListingReference {
+  table: string;
+  column: string;
+}
+
+/**
+ * Every table with a live foreign key pointing at `listings(id)`, discovered
+ * from the schema itself rather than hand-maintained — the same
+ * `sqlite_master` + `PRAGMA foreign_key_list` walk
+ * `test/cascadeDelete.test.ts` already uses to catch a child table added
+ * without `ON DELETE CASCADE`. That test's own comment is the reason this
+ * isn't a literal list here too: a list is a second place to remember to
+ * update, and the whole point of issue #90 was that the list and the schema
+ * had already drifted once.
+ *
+ * `apps/api/src/routes/admin.ts`'s `/testing/reassign-listing-ids` route is
+ * the only caller today — it needs to know every column that has to move
+ * alongside `listings.id` when the UX baseline's demo catalogue renumbers a
+ * listing after creating it through the real API (see that route's comment,
+ * and `apps/web/e2e/support/demoCatalog.ts`). `sqlite_%` and `_cf_%` are
+ * D1's own bookkeeping tables, never product schema, and are excluded the
+ * same way the cascade test excludes them.
+ */
+export async function listingReferences(env: Env): Promise<ListingReference[]> {
+  const { results: tables } = await env.DB.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'",
+  ).all<{ name: string }>();
+
+  const refs: ListingReference[] = [];
+  for (const { name } of tables) {
+    if (name === "listings") continue;
+    const { results: foreignKeys } = await env.DB.prepare(`PRAGMA foreign_key_list(${name})`).all<{
+      table: string;
+      from: string;
+    }>();
+    for (const fk of foreignKeys) {
+      if (fk.table === "listings") refs.push({ table: name, column: fk.from });
+    }
+  }
+  return refs;
+}
