@@ -22,6 +22,7 @@ import worker, { runCron } from "../src/index.js";
 import { dailyDigest } from "../src/cron/dailyDigest.js";
 import { moderationRetry } from "../src/cron/moderationRetry.js";
 import { orphanSweep } from "../src/cron/orphanSweep.js";
+import { searchIndexRetry } from "../src/cron/searchIndexRetry.js";
 import { CRON_JOBS, cronHeartbeatKey } from "../src/cron/registry.js";
 import { ulid } from "../src/lib/ids.js";
 import { insertOwner } from "./helpers.js";
@@ -140,6 +141,7 @@ describe("runCron", () => {
     const jobs: Record<string, (e: typeof env) => Promise<void>> = {
       moderationRetry,
       orphanSweep,
+      searchIndexRetry,
       dailyDigest,
     };
     expect(Object.keys(jobs).sort()).toEqual(CRON_JOBS.map((job) => job.name).sort());

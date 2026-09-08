@@ -97,7 +97,14 @@
       category: 'analytics',
       name: 'Cloudflare Web Analytics',
       host: 'static.cloudflareinsights.com',
-      meta: 'ks-cf-beacon-token'
+      meta: 'ks-cf-beacon-token',
+      // Where the tag *reports*, which is a different origin from where it is
+      // *fetched* — note the missing `static.`. `script-src` covers the fetch
+      // and `connect-src` covers this, and having one without the other loads
+      // a beacon that is then blocked from saying anything. Named here so
+      // `apps/web/test/guards/analyticsCsp.test.ts` can hold both CSP copies
+      // to it; see that file for how this was found in production.
+      beacon: 'https://cloudflareinsights.com'
     },
     {
       category: 'advertising',

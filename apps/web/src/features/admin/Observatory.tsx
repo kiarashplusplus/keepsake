@@ -28,6 +28,7 @@ import type {
   ObservatoryLogEvent,
   ObservatoryLogs,
   ObservatoryModerationLatency,
+  ObservatorySearchIndex,
   ObservatorySource,
   Observatory as ObservatoryData,
 } from "@keepsake/contracts/observatory";
@@ -233,6 +234,45 @@ function ModerationSection({ moderation }: { moderation: ObservatoryModerationLa
         <AgeRow label="Oldest needs review" ms={moderation.oldest_needs_review_age_ms} nullLabel="Nothing needs review" />
         <AgeRow label="Median time to decision" ms={moderation.median_time_to_decision_ms} nullLabel="No decisions yet" />
       </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// `app.search_index` — issue #208. `listings.vector_indexed_at` recorded that
+// a listing had no semantic-search vector and nothing displayed it, which is
+// #16's shape again ("computed correctly but never shown on the admin page").
+//
+// Rendered as an age as well as a count, for the reason the moderation
+// section above gives. And the disabled case renders as a sentence rather
+// than a zero: with `SEMANTIC_SEARCH` off every listing is un-indexed, and a
+// dashboard showing "40 un-indexed" for a feature nobody turned on is worse
+// than showing nothing.
+// ---------------------------------------------------------------------------
+
+function SearchIndexSection({ searchIndex }: { searchIndex: ObservatorySearchIndex }): React.ReactElement {
+  return (
+    <View style={{ gap: space.sm }}>
+      <Text variant="eyebrow" accessibilityRole="header">
+        Search index
+      </Text>
+      {searchIndex.enabled ? (
+        <>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
+            <StatBadge label="Approved" value={searchIndex.approved} />
+            <StatBadge label="No vector" value={searchIndex.unindexed} />
+          </View>
+          <View style={{ gap: space.xxs }}>
+            <AgeRow
+              label="Oldest without a vector"
+              ms={searchIndex.oldest_unindexed_age_ms}
+              nullLabel="Every approved listing is indexed"
+            />
+          </View>
+        </>
+      ) : (
+        <Text variant="body">Semantic search is switched off, so nothing is indexed and there is nothing to report.</Text>
+      )}
     </View>
   );
 }
@@ -592,6 +632,7 @@ export function Observatory({ token, onSessionExpired }: ObservatoryProps): Reac
         <View style={{ gap: sectionRhythm.tight }}>
           <NeedsAttentionSection alerts={snapshot.data.report.needs_attention} />
           <ModerationSection moderation={snapshot.data.app.moderation} />
+          <SearchIndexSection searchIndex={snapshot.data.app.search_index} />
           <FunnelSection funnel={snapshot.data.app.funnel} />
           <AppSeriesSection byDay={snapshot.data.app.by_day} />
           <SourceSection title="Edge traffic" source={snapshot.data.edge} renderOk={(edge) => <EdgeSection edge={edge} />} />

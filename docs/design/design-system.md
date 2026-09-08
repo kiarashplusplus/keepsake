@@ -205,6 +205,35 @@ that, not the token name `CourierPrime`, or resvg silently falls back to its def
 `apps/web/public/favicon.png` regenerated the same way from `apps/site/og/favicon.svg` (a tilted
 print with a red stamp dot).
 
+**Per-listing share card.** `apps/api/src/og/card.ts` draws the same vocabulary per listing — a
+taped square print on the left, the story on a kraft index card on the right — and the Worker
+rasterises it at `GET /og/item/:id/card.png` (`src/og/render.ts`). Chosen from three compositions
+by rendering all three and looking at them; `node tools/og/render-samples.mjs` still renders the
+shipped one across five fixtures and prints a byte table, and is the thing to run after any change
+to the card.
+
+Three facts about it that are not guessable from the code:
+
+- **It is a JPEG despite the `.png` path.** Measured with a real photograph: 377–536 KB as PNG,
+  81–98 KB as a q82 JPEG at the same 1200×630. The path is a suffix unfurlers are comfortable
+  with; the `Content-Type` is honest. WhatsApp is the constraint that makes this matter.
+- **The Worker uses different font files from the browser.** resvg 2.6.2 has no
+  `font-variation-settings` support, so a variable font renders at its `fvar` defaults — for
+  Fraunces that is `opsz 9`, the text cut, not the `opsz 144` display cut the tokens ask for. So
+  `apps/api/src/og/fonts/Fraunces-Display{,-Italic}-VF.ttf` are instanced ahead of time with
+  `wght` left variable (the one axis resvg does honour, via `font-weight`):
+
+  ```
+  python -m fontTools.varLib.instancer apps/web/public/fonts/Fraunces-VF.ttf \
+    opsz=144 SOFT=40 WONK=1 wght=100:900 -o apps/api/src/og/fonts/Fraunces-Display-VF.ttf
+  ```
+
+- **Regenerating those fonts means regenerating the advance table.** The card computes its own
+  line breaks in JS (resvg has no text-measuring API) from a per-character table in
+  `apps/api/src/og/text.ts` measured off those exact files; the display cut is up to 29% narrower
+  per character than the text cut, so a stale table mis-wraps every title. Re-run
+  `node tools/og/measure-advances.mjs` and paste the result.
+
 **Screenshots:** taken at light + dark, 390 + 1280, across home/item/give/give-review/mine/about.
 They are **not in the repo** — this line named `apps/web/screenshots/v4-*.png` and
 `apps/site/screenshots/v4-*.png`, neither of which has ever been tracked. Committed QA shots go

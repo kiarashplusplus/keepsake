@@ -15,7 +15,8 @@
     "./observatory": "./src/observatory.ts",
     "./feed": "./src/feed.ts",
     "./geo": "./src/geo.ts",
-    "./shelves": "./src/shelves.ts"
+    "./shelves": "./src/shelves.ts",
+    "./story": "./src/story.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

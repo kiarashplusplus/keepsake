@@ -1,7 +1,7 @@
 import { SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import { timingSafeEqualStrings } from "../src/middleware/adminAuth.js";
-import { freshClientIp, installDenyingRateLimiter, readErr, setTestEnvVar } from "./helpers.js";
+import { freshClientIp, installCountingRateLimiter, installDenyingRateLimiter, readErr, setTestEnvVar } from "./helpers.js";
 
 const ADMIN_TOKEN = "test-admin-token-0123456789abcdef";
 
@@ -144,55 +144,70 @@ describe("/api/admin/* brute-force protection", () => {
     setTestEnvVar("ADMIN_TOKEN", "");
   });
 
-  it("rate-limits more wrong tokens than RL_ADMIN's limit from a single IP", async () => {
-    // 400 sequential requests is itself real wall-clock work, and this file's
-    // own request loop competes with whatever else is running when the root
-    // `pnpm test` fans out packages/api/web concurrently — the default 5000ms
-    // `it()` timeout is tuned for a single fast assertion, not hundreds of
-    // awaited fetches under contention. An explicit, generous timeout here
-    // avoids trading one flake (missing 429) for another (spurious timeout).
+  it("meters every wrong token and refuses the guess past RL_ADMIN's limit", async () => {
+    // Issue #116. This used to fire 400 sequential requests at the *real*
+    // `RL_ADMIN` binding and assert that at least one came back 429, because
+    // that is how the audit measured the bug. It was flaky on unmodified
+    // `main` — two sessions hit it independently — and reproducing it took no
+    // luck at all: with 24 busy loops on a 4-core container the test times out
+    // at its own 30s budget, which is one of the two shapes that were seen.
+    // The other is a missing 429, which the same contention explains: 400
+    // awaited round trips can outlast the binding's own 60s window, and a
+    // window that rolls mid-run is never exceeded.
+    //
+    // Neither failure says anything about the code under test. Cloudflare
+    // documents these bindings as "permissive, eventually consistent, and
+    // intentionally designed to not be used as an accurate accounting system"
+    // — measured here at ~2.6x overshoot — so the old test was asserting on
+    // someone else's approximation, timed against a shared CPU.
+    //
+    // So the binding is swapped for one this repo controls, exactly as
+    // `readRateLimit.test.ts` already does and for the same measured reason.
+    // The claim gets stronger rather than weaker: it is no longer "at least
+    // one of 400 guesses was refused" but "every guess reached the limiter,
+    // under one key, and the refusal landed on the call after the limit".
+    //
+    // The audit's finding is what these assertions restate. With the original
+    // `adminRoutes.use("*", adminAuth(), burst("RL_ADMIN"))` ordering,
+    // `adminAuth` answers a bad token with `fail(...)` and never calls
+    // `next()`, so the limiter is unreachable for exactly the requests that
+    // need metering: `limiter.keys` would be empty and every status a 401.
     setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
-    // RL_ADMIN is `limit = 120, period = 60` in wrangler.toml. The binding is
-    // documented (rateLimit.ts's header, citing Cloudflare's own docs) as
-    // "permissive, eventually consistent, and intentionally designed to not
-    // be used as an accurate accounting system" — measured directly on
-    // `RL_UPLOAD` at 10/60s, it let 26 requests through before the first
-    // 429, a ~2.6x overshoot. 150 requests (only 1.25x the limit) had no
-    // margin over that, and flaked under concurrent load — see issue #65.
-    // 400 is ~3.3x the limit, past the worst overshoot this repo has ever
-    // measured on any of these bindings.
-    const REQUEST_COUNT = 400;
-    const ip = freshClientIp();
-    const statuses: number[] = [];
+    const LIMIT = 5;
+    const OVERSHOOT = 3;
+    const limiter = installCountingRateLimiter("RL_ADMIN", { limit: LIMIT });
+    try {
+      const ip = freshClientIp();
+      const statuses: number[] = [];
 
-    for (let attempt = 0; attempt < REQUEST_COUNT; attempt++) {
-      const res = await SELF.fetch("http://x/api/admin/stats", {
-        headers: { Authorization: `Bearer wrong-token-${attempt}`, "CF-Connecting-IP": ip },
-      });
-      // Drain the body: an unread response body keeps a stream open per
-      // iteration, and hundreds of them is enough to matter.
-      await res.text();
-      statuses.push(res.status);
+      for (let attempt = 0; attempt < LIMIT + OVERSHOOT; attempt++) {
+        const res = await SELF.fetch("http://x/api/admin/stats", {
+          headers: { Authorization: `Bearer wrong-token-${attempt}`, "CF-Connecting-IP": ip },
+        });
+        await res.text();
+        statuses.push(res.status);
+      }
+
+      const distribution = `statuses: ${JSON.stringify(statuses)}, limiter calls: ${limiter.keys.length}`;
+
+      // Every wrong guess was metered — the finding itself.
+      expect(limiter.keys, `expected one limiter call per request; ${distribution}`).toHaveLength(LIMIT + OVERSHOOT);
+      // One address, one bucket: guessing from a single IP cannot be spread
+      // across keys. (`dailyIpDigest` rotates the key daily, not per request —
+      // `ipDigest.test.ts` owns that claim.)
+      expect(new Set(limiter.keys).size, `expected a single bucket; ${distribution}`).toBe(1);
+
+      // Wrong tokens inside the allowance are refused by auth…
+      expect(statuses.slice(0, LIMIT), distribution).toEqual(Array<number>(LIMIT).fill(401));
+      // …and past it the limiter answers first, which is the ordering fix.
+      expect(statuses.slice(LIMIT), distribution).toEqual(Array<number>(OVERSHOOT).fill(429));
+      // And nothing leaked through: a guess is either metered or rejected,
+      // never served.
+      expect(statuses.every((status) => status === 401 || status === 429), distribution).toBe(true);
+    } finally {
+      limiter.restore();
     }
-
-    // Failure message includes the actual distribution rather than just
-    // "array did not contain 429" — the next failure (if the limiter is
-    // removed, or genuinely overshoots past 3.3x) should be diagnosable
-    // without re-instrumenting the test.
-    const counts = statuses.reduce<Record<number, number>>((acc, status) => {
-      acc[status] = (acc[status] ?? 0) + 1;
-      return acc;
-    }, {});
-    const distribution = `distribution over ${REQUEST_COUNT} requests: ${JSON.stringify(counts)}`;
-
-    expect(statuses, `expected at least one 429; ${distribution}`).toContain(429);
-    // And nothing leaked through: a guess is either metered or rejected,
-    // never served.
-    expect(
-      statuses.every((status) => status === 401 || status === 429),
-      `expected only 401/429; ${distribution}`,
-    ).toBe(true);
-  }, 30_000);
+  });
 
   it("runs the limiter before auth: a denied burst is a 429, not a 401", async () => {
     setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);

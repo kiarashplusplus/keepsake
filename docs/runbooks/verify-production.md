@@ -15,7 +15,8 @@ human has actually run it, because nothing in an agent session can.
 > reported as performed — see `AGENTS.md`, "A passing test is not evidence." Everything here needs
 > a human on an ordinary network.
 
-Prerequisites: `curl` and `jq`, plus a checkout of this repo for the commit check in §4.
+Prerequisites: `curl` and `jq`, plus a checkout of this repo for the commit check in §4, and a
+browser with a clean profile for §5 — that one cannot be done from a shell.
 
 ---
 
@@ -203,7 +204,32 @@ workflow run, and read [deploy.md](deploy.md#what-a-deploy-actually-does) — mi
 
 ---
 
-## 5. The first real listing (the rest of #47)
+## 5. Analytics loads only after consent, and only then
+
+Needs a real browser: `curl` cannot see this, and neither can the test suite. A first-time visitor
+is redirected client-side to `/welcome`, so follow the redirect rather than checking `/` alone.
+
+1. **Load the apex with a clean profile and do not answer the banner.** There must be **zero**
+   requests to `static.cloudflareinsights.com`. Any request here means Cloudflare's edge
+   auto-installation is enabled again, which loads analytics regardless of consent and makes the
+   banner's refusal inoperative — that is #231, and it was live on production once.
+2. **Click "Reject all", reload.** Still zero.
+3. **Click "Accept all".** Now expect `200` on `beacon.min.js` and `204 POST` on
+   `cloudflareinsights.com/cdn-cgi/rum`, with no Content Security Policy error in the console. A
+   CSP error here means `connect-src` lost the reporting origin (#233) — note it is
+   `cloudflareinsights.com`, *not* the `static.` host that `script-src` names.
+4. **Confirm the events actually landed**, which a `204` does not prove on its own. See
+   deploy.md's "Web Analytics and the consent-gated tags" for the GraphQL query; a rising count for
+   `siteTag d90ef13c…` is the end-to-end proof.
+
+Step 4 matters because every failure in this area is silent. A missing token, the wrong dashboard
+mode, and a blocked `connect-src` all present as "the banner works and nothing is recorded", and
+the dashboard mode in particular **cannot be read back from the API** — "Enable with JS Snippet
+installation" and "Disable" look identical there.
+
+---
+
+## 6. The first real listing (the rest of #47)
 
 The checks above prove the hostname, the Worker, D1, R2 and KV. They do not prove the product
 works end to end on the real domain — moderation, photo storage, and the email that tells a giver
@@ -219,7 +245,7 @@ watch it become visible.
   no email arrives is exactly the failure #6 describes; report it there rather than filing it as
   new.
 
-Record what you saw in #47, then close it. Do not close it on the strength of §1-§4 alone.
+Record what you saw in #47, then close it. Do not close it on the strength of §1-§5 alone.
 
 ---
 
@@ -233,6 +259,10 @@ Record what you saw in #47, then close it. Do not close it on the strength of §
 | Apex `robots.txt` says `Disallow: /` | Same as above: the Worker believes it is not production. |
 | Preview serves `Allow: /` or a live sitemap | `run_worker_first` or `ENVIRONMENT` regressed on `[env.preview]` — launch audit finding 2 / #84. |
 | `/health` commit ≠ dispatched commit | Deploy failed after migrations, or never ran. See deploy.md. |
+| Beacon loads before the banner is answered | Cloudflare edge auto-installation is on. Dashboard → Web Analytics → Manage site → "Enable with JS Snippet installation" (#231). |
+| `Content Security Policy` error naming `cdn-cgi/rum` | `connect-src` lost `https://cloudflareinsights.com` in one of the two CSP copies (#233). |
+| Banner works, `204`s go out, dashboard stays empty | The site is in **Disable** mode. It is indistinguishable from JS-snippet mode via the API — check the dashboard, not `rum/site_info`. |
+| No beacon at all, no CSP error, no meta tag in the HTML | `EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN` never reached this tier: it is inlined at build time, so the tier must be **deployed** after the variable is set (#228, #232). |
 
 Anything that changes the deployed configuration should be fixed by redeploying, not by editing
 Cloudflare state by hand — the dashboard and `wrangler.toml` disagreeing is how the next person

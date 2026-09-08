@@ -126,7 +126,35 @@ name = "EMAIL"
 # through to `default:`: a `console.warn` and no work, on an invocation the
 # platform records as successful.
 [triggers]
-crons = ["*/5 * * * *", "17 3 * * *", "7 0 * * *"]
+crons = ["*/5 * * * *", "23 * * * *", "17 3 * * *", "7 0 * * *"]
+
+# --- Share-card fonts (src/og/fonts.ts) ---
+#
+# Turns `import fraunces from "./fonts/Fraunces-Display-VF.ttf"` into an
+# ArrayBuffer in the bundle, which is how resvg gets font bytes inside a
+# Worker. These are Worker-only rendering assets: the browser's copies live in
+# `apps/web/public/fonts` and are served from `/fonts/*`, and the two sets are
+# deliberately NOT the same files — see the header of `src/og/fonts.ts` for
+# why the card needs `opsz`-instanced cuts that the browser must never
+# download.
+#
+# The glob is `**/*.ttf`, not `src/og/fonts/*.ttf`: wrangler resolves rule
+# globs relative to `base_dir`, which defaults to the directory of `main`
+# (`src/`), not to the directory holding this file. A config-relative-looking
+# glob resolves to nothing and fails with "No loader is configured for .ttf",
+# which reads like a missing rule rather than a mis-scoped one.
+#
+# `rules` is inheritable, so this one block covers preview and production too.
+# Verified the same way `[triggers]` above is, through wrangler's own public
+# API rather than by reading its source:
+#
+#   node -e 'const {unstable_readConfig}=require("wrangler");
+#     for (const env of [undefined,"preview","production"])
+#       console.log(env, unstable_readConfig({config:"wrangler.toml",env}).rules)'
+[[rules]]
+type = "Data"
+globs = ["**/*.ttf"]
+fallthrough = false
 
 [vars]
 # Local/dev defaults. Every one of these is repeated verbatim under
@@ -622,7 +650,7 @@ compatibility_flags = ["nodejs_compat"]
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/i/*", "/item/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt", "/admin"]
+run_worker_first = ["/api/*", "/i/*", "/item/*", "/og/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt", "/admin"]
 
 [env.production.ai]
 binding = "AI"

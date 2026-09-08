@@ -1718,13 +1718,13 @@ test("inlineScriptBodies skips <script src=…> and keeps inline bodies in order
 
 test("csp-script-hash: this repository's real hashes match the scripts they authorise", () => {
   // The whole point of #194, against the real tree. Kiarash verified
-  // sha256-Fv9zzPn… against a 1261-char script by hand; this asserts the
+  // sha256-0+1/dyhe… against a 1261-char script by hand; this asserts the
   // check computes the same thing, so an extractor grabbing the wrong bytes
   // cannot look like a policy that is genuinely in sync.
   const result = runChecks(["csp-script-hash"], REPO_ROOT)[0];
   assert.equal(result.status, "pass", result.details.join("\n"));
   const text = result.details.join("\n");
-  assert.match(text, /PREHYDRATION_SCRIPT: sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g= — apps\/web\/app\/\+html\.tsx \(1261 chars\)/);
+  assert.match(text, /PREHYDRATION_SCRIPT: sha256-0\+1\/dyhem\/DQyJcleu1QSKhUVK\/gq5R519iI9mtWheM= — apps\/web\/app\/\+html\.tsx \(1349 chars\)/);
   assert.match(text, /apps\/site inline script: sha256-d6qbtEYff\/sB38YyzuzhASbVmmOidU\/UFC9mNit47j4=/);
   // The one hash it cannot compute must say so rather than blending in.
   assert.match(text, /NOT against Expo's actual output/);

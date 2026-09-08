@@ -108,6 +108,8 @@ export function dailyDigest(report: DailyReport): EmailTemplate {
     ],
     ["AI budget (text)", `${report.budgets.mod_text.used}/${report.budgets.mod_text.limit}`],
     ["AI budget (image)", `${report.budgets.mod_image.used}/${report.budgets.mod_image.limit}`],
+    // #208: the budget whose exhaustion leaves listings with no search vector.
+    ["AI budget (embed)", `${report.budgets.embed.used}/${report.budgets.embed.limit}`],
   ];
 
   const bodyHtml = `

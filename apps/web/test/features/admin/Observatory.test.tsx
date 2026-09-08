@@ -30,6 +30,7 @@ const EMPTY_REPORT: DailyReport = {
     mod_text: { used: 0, limit: 1000 },
     mod_image: { used: 0, limit: 1000 },
     suggest: { used: 0, limit: 1000 },
+    embed: { used: 0, limit: 2000 },
   },
   crons: [],
 };
@@ -52,6 +53,7 @@ const EMPTY_APP: ObservatoryApp = {
     oldest_needs_review_age_ms: null,
     median_time_to_decision_ms: null,
   },
+  search_index: { enabled: true, approved: 0, unindexed: 0, oldest_unindexed_age_ms: null },
 };
 
 /** The floor fixture every test starts from and edits with a spread, same
@@ -185,6 +187,52 @@ describe("Observatory: moderation latency", () => {
     const text = JSON.stringify(toJSON());
     expect(text).toContain("<1m");
     expect(text).not.toContain("Nothing pending");
+  });
+});
+
+describe("Observatory: search index (#208)", () => {
+  it("renders the un-indexed count and the age of the oldest", async () => {
+    jest.mocked(getObservatory).mockResolvedValue(
+      observatory({
+        app: {
+          ...EMPTY_APP,
+          search_index: {
+            enabled: true,
+            approved: 40,
+            unindexed: 3,
+            oldest_unindexed_age_ms: 4 * 60 * 60 * 1000 + 12 * 60 * 1000,
+          },
+        },
+      }),
+    );
+    const { toJSON } = await renderObservatory();
+    const text = JSON.stringify(toJSON());
+    expect(text).toContain("Search index");
+    expect(text).toContain("No vector");
+    expect(text).toContain("4h 12m");
+  });
+
+  // Same rule the moderation block follows: "nothing is waiting" and "something
+  // has been waiting no time at all" must not render as the same string.
+  it("renders a fully-indexed catalogue as a sentence, not a zero", async () => {
+    jest.mocked(getObservatory).mockResolvedValue(
+      observatory({
+        app: { ...EMPTY_APP, search_index: { enabled: true, approved: 40, unindexed: 0, oldest_unindexed_age_ms: null } },
+      }),
+    );
+    const { toJSON } = await renderObservatory();
+    const text = JSON.stringify(toJSON());
+    expect(text).toContain("Every approved listing is indexed");
+  });
+
+  // With SEMANTIC_SEARCH off every listing reads as un-indexed, so a number
+  // here would be arithmetically true and completely misleading.
+  it("renders no numbers at all when semantic search is off", async () => {
+    jest.mocked(getObservatory).mockResolvedValue(observatory({ app: { ...EMPTY_APP, search_index: { enabled: false } } }));
+    const { toJSON } = await renderObservatory();
+    const text = JSON.stringify(toJSON());
+    expect(text).toContain("Semantic search is switched off");
+    expect(text).not.toContain("No vector");
   });
 });
 

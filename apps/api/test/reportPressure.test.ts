@@ -18,6 +18,7 @@
  * is what changed the verdict.
  */
 import { env, SELF } from "cloudflare:test";
+import { CRON_JOB_NAMES, cronHeartbeatKey } from "../src/cron/registry.js";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AdminHealth } from "@keepsake/contracts/admin";
 import { freshClientIp, insertApprovedListing, insertOwner, readOk, seedStandardPostalCodes, setTestEnvVar } from "./helpers.js";
@@ -52,11 +53,14 @@ async function listingStatus(id: string): Promise<string | undefined> {
 async function makeOtherwiseHealthy(): Promise<void> {
   setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
   await seedStandardPostalCodes();
-  await env.KV.put("cron:last:moderationRetry", String(Date.now()));
-  await env.KV.put("cron:last:orphanSweep", String(Date.now()));
-  // `dailyDigest` joined the cron registry with the Observatory; `/health`
-  // derives `ok` from every job in it, so a green case has to seed all three.
-  await env.KV.put("cron:last:dailyDigest", String(Date.now()));
+  // Seeded from the registry rather than from a hand-written list.
+  // `/health` derives `ok` from *every* job in `CRON_JOBS`, so each new cron
+  // used to turn this file red until someone added a fourth, then a fifth
+  // line — a chore AGENTS.md warns about and #208 collected. A loop over the
+  // registry cannot fall behind it.
+  for (const name of CRON_JOB_NAMES) {
+    await env.KV.put(cronHeartbeatKey(name), String(Date.now()));
+  }
 }
 
 describe("GET /api/admin/health — report pressure (#89)", () => {

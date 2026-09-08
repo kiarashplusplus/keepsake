@@ -121,7 +121,7 @@ export default function Item(): React.ReactElement {
 
   async function handleShare(): Promise<void> {
     if (listing === null) return;
-    const result = await shareListing({ id: listing.id, title: listing.title });
+    const result = await shareListing({ id: listing.id, title: listing.title, surface: "item" });
     if (result === "copied") toast.show("Link copied.");
     if (result === "failed") toast.show("Couldn't share — try copying the link from the address bar.");
   }
