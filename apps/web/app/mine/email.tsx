@@ -17,12 +17,14 @@ import { EmptyState } from "@/ui/EmptyState";
 import { Card } from "@/ui/Surface";
 import { Stamp } from "@/ui/Stamp";
 import { useToast } from "@/ui/Toast";
+import { useColors } from "@/ui/theme";
 import { deleteEmail, getMe, setEmail } from "@/api/me";
 import { ApiError } from "@/api/client";
 import { getOwnerToken } from "@/lib/ownerToken";
 
 export default function MineEmail(): React.ReactElement {
   const toast = useToast();
+  const colors = useColors();
   const [hasOwnerToken] = React.useState(() => getOwnerToken() !== null);
   const [me, setMe] = React.useState<OwnerMe | null>(null);
   const [emailInput, setEmailInput] = React.useState("");
@@ -151,9 +153,17 @@ export default function MineEmail(): React.ReactElement {
         </View>
 
         {hasEmail ? (
-          <Text variant="body" color={me?.email_verified === true ? "successText" : "foilText"}>
-            {me?.email_verified === true ? "Verified." : "Not verified yet — check your inbox, or resend below."}
-          </Text>
+          <View
+            style={{
+              borderStartWidth: 3,
+              borderStartColor: me?.email_verified === true ? colors.success : colors.foil,
+              paddingStart: space.md,
+            }}
+          >
+            <Text variant="bodyLg" color={me?.email_verified === true ? "successText" : "foilText"}>
+              {me?.email_verified === true ? "Verified." : "Not verified yet — check your inbox, or resend below."}
+            </Text>
+          </View>
         ) : null}
 
         <Input

@@ -59,7 +59,9 @@ describe("mine/email", () => {
       await flush();
     });
 
-    expect(JSON.stringify(toJSON())).toContain("Not verified yet");
+    const rendered = JSON.stringify(toJSON());
+    expect(rendered).toContain("Not verified yet");
+    expect(rendered).toContain('"borderLeftWidth":"3px"');
     expect(UNSAFE_queryAllByProps({ accessibilityLabel: "Resend" }).length).toBeGreaterThan(0);
   });
 
