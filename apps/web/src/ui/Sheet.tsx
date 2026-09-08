@@ -12,7 +12,7 @@ import { space } from "@keepsake/tokens/spacing";
 import { useColors } from "@/ui/theme";
 import { useMotion } from "@/ui/MotionProvider";
 import { Text } from "@/ui/Text";
-import { useVisualViewportHeight } from "@/ui/useVisualViewportHeight";
+import { useVisualViewport } from "@/ui/useVisualViewport";
 
 const BOTTOM_SHEET_BREAKPOINT = 720;
 const FOCUSABLE_SELECTOR =
@@ -45,12 +45,11 @@ export function Sheet({
   // layout viewport), which iOS Safari deliberately leaves unchanged when
   // the on-screen keyboard opens — react-native-web's own `Dimensions`
   // 'change' event doesn't fire there either (necolas/react-native-web#2430)
-  // — so it never reflects the keyboard. `visualViewport.height` is the one
-  // measurement that does. See `useVisualViewportHeight`'s own comment for
-  // why sizing off it is safe where `docs/platform-differences.md` §3 says
-  // *positioning* off `visualViewport` (via `offsetTop`/`scrollY` deltas)
-  // isn't.
-  const height = useVisualViewportHeight(windowHeight);
+  // — so it never reflects the keyboard. `visualViewport` is the one
+  // measurement that does, for both how tall the visible area is and where
+  // it currently sits — see `useVisualViewport`'s own comment for why this
+  // sheet needs both, not just the height.
+  const { height, offsetTop } = useVisualViewport(windowHeight);
   const isBottomSheet = width < BOTTOM_SHEET_BREAKPOINT;
   const panelRef = React.useRef<View>(null);
   // Callers routinely pass an inline `onClose` (a fresh function every
@@ -151,6 +150,18 @@ export function Sheet({
           // panel itself. Sizing this box to `height` is what actually
           // moves the flush-bottom edge up to the visible area.
           height,
+          // `translateY` by `offsetTop`: `position: fixed` (the `Modal`'s
+          // own box, one level up) pins this to the *layout* viewport's
+          // origin, which doesn't move when iOS pans the page to keep a
+          // focused input above the keyboard — only the *visual* viewport
+          // does. Without this, the box is the right height but sitting
+          // wherever the layout viewport's y=0 is, which drifts further
+          // from the visible window with every further pan (typing into a
+          // field that keeps pushing the caret down keeps re-triggering
+          // one) — built correctly for a screen that has since scrolled out
+          // from under it, which reads as the sheet sliding away rather
+          // than merely mis-sized.
+          transform: [{ translateY: offsetTop }],
           width: "100%",
           backgroundColor: colors.overlay,
           justifyContent: isBottomSheet ? "flex-end" : "center",
