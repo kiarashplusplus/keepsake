@@ -7,7 +7,18 @@ import { MODERATED_PHOTO_VARIANTS } from "../src/moderation/image.js";
 import { todayISO } from "../src/moderation/budget.js";
 import { moderationRetry } from "../src/cron/moderationRetry.js";
 import { MODELS } from "../src/models.js";
-import { authHeaders, freshOwnerToken, readOk, seedStandardPostalCodes, setTestEnvVar, uploadPhoto, waitFor, waitForListingStatus } from "./helpers.js";
+import { ulid } from "../src/lib/ids.js";
+import {
+  authHeaders,
+  freshOwnerToken,
+  insertOwner,
+  readOk,
+  seedStandardPostalCodes,
+  setTestEnvVar,
+  uploadPhoto,
+  waitFor,
+  waitForListingStatus,
+} from "./helpers.js";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
 import type { OwnerListing } from "@keepsake/contracts/listing";
 import type { ImageVerdict } from "@keepsake/contracts/admin";
@@ -566,6 +577,132 @@ describe("moderationRetry cron", () => {
     // Exactly the one decision event from the original create-triggered run —
     // the cron pass shouldn't have added a second.
     expect(events?.n).toBe(1);
+  });
+
+  // Issue: an estate's bulk submission produces dozens of pending listings
+  // with near-identical `updated_at`, so a plain FIFO `LIMIT 50` occupies
+  // most or all of a pass with one owner's rows — `docs/design/
+  // bulk-upload.md`'s "What is not paced". These insert `listings` rows
+  // directly (`insertOwner` + a hand-rolled pending row, no photos) rather
+  // than going through the create endpoint: what's under test is the cron's
+  // *selection*, not the moderation outcome, and a bare-story listing with no
+  // photos still runs the full pipeline (text only, since `photos.length` is
+  // 0) and reaches a real terminal status under `mockAi({})`.
+  describe("per-owner fairness cap", () => {
+    async function insertPendingListing(ownerId: string, updatedAt: number): Promise<string> {
+      const id = ulid();
+      await env.DB.prepare(
+        `INSERT INTO listings
+          (id, owner_id, title, story, category, country, postal_code, place_name, admin1, lat, lng,
+           status, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?, ?)`,
+      )
+        .bind(
+          id,
+          ownerId,
+          "A quiet teacup",
+          "This belonged to a dear friend of the family, and I'd love for it to find a new home.",
+          "home_kitchen",
+          "US",
+          "02144",
+          "Somerville",
+          "MA",
+          42.3958,
+          -71.0967,
+          updatedAt,
+          updatedAt,
+        )
+        .run();
+      return id;
+    }
+
+    async function pendingCount(ownerId: string): Promise<number> {
+      const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM listings WHERE owner_id = ? AND status = 'pending'")
+        .bind(ownerId)
+        .first<{ n: number }>();
+      return row?.n ?? 0;
+    }
+
+    it("one owner's 42-item estate does not crowd an ordinary giver's stuck listing out of the pass", async () => {
+      mockAi({}); // every one of these approves once it actually runs
+      const stale = Date.now() - 3 * 60 * 1000;
+
+      const bulkOwner = await insertOwner();
+      // Oldest-first, exactly like a real bulk submission: every item goes
+      // stale within the same cron tick, near-identical `updated_at`.
+      for (let i = 0; i < 42; i++) {
+        await insertPendingListing(bulkOwner, stale - (42 - i));
+      }
+
+      // Newer than every estate row, so a plain FIFO `ORDER BY updated_at
+      // ASC LIMIT 50` would reach it this pass regardless (42 < 50) — the
+      // real test is that it is *not* left to chance once the estate is
+      // bigger than a pass, which the next test covers. This one pins the
+      // ordinary case: the estate must not eat the whole batch even when it
+      // technically could fit.
+      const ordinaryOwner = await insertOwner();
+      const ordinaryListingId = await insertPendingListing(ordinaryOwner, stale);
+
+      await moderationRetry(env);
+
+      const ordinaryRow = await env.DB.prepare("SELECT status FROM listings WHERE id = ?")
+        .bind(ordinaryListingId)
+        .first<{ status: string }>();
+      expect(ordinaryRow?.status, "the ordinary giver's listing got its turn").not.toBe("pending");
+
+      // The estate lost at most MAX_PER_OWNER_PER_PASS (10) rows this pass —
+      // it did not get to monopolize the batch just because it fit.
+      expect(await pendingCount(bulkOwner)).toBe(32); // 42 - 10
+    });
+
+    it("an estate larger than one pass does not starve a second owner whose oldest row it would otherwise outrank", async () => {
+      mockAi({});
+      const stale = Date.now() - 3 * 60 * 1000;
+
+      // 60 items — bigger than BATCH_SIZE (50) — all older than the second
+      // owner's single row, so an uncapped FIFO pass would fill entirely
+      // from this one owner and never reach the other at all.
+      const bulkOwner = await insertOwner();
+      for (let i = 0; i < 60; i++) {
+        await insertPendingListing(bulkOwner, stale - (200 - i));
+      }
+      const otherOwner = await insertOwner();
+      const otherListingId = await insertPendingListing(otherOwner, stale - 1);
+
+      await moderationRetry(env);
+
+      const otherRow = await env.DB.prepare("SELECT status FROM listings WHERE id = ?")
+        .bind(otherListingId)
+        .first<{ status: string }>();
+      expect(otherRow?.status, "the second owner's older-than-most, but not oldest, row still got picked").not.toBe("pending");
+      expect(await pendingCount(bulkOwner)).toBe(50); // 60 - 10
+    });
+
+    it("a capped owner's backlog fully drains across subsequent passes rather than being permanently deprioritised", async () => {
+      mockAi({});
+      const owner = await insertOwner();
+      const stale = Date.now() - 3 * 60 * 1000;
+      for (let i = 0; i < 25; i++) {
+        await insertPendingListing(owner, stale - (25 - i));
+      }
+
+      await moderationRetry(env);
+      expect(await pendingCount(owner)).toBe(15); // 25 - 10
+
+      // Re-stage the remainder past the staleness window, exactly like a
+      // real 5-minute cron tick would see them next time.
+      await env.DB.prepare("UPDATE listings SET updated_at = ? WHERE owner_id = ? AND status = 'pending'")
+        .bind(stale, owner)
+        .run();
+      await moderationRetry(env);
+      expect(await pendingCount(owner)).toBe(5); // 15 - 10
+
+      await env.DB.prepare("UPDATE listings SET updated_at = ? WHERE owner_id = ? AND status = 'pending'")
+        .bind(stale, owner)
+        .run();
+      await moderationRetry(env);
+      expect(await pendingCount(owner), "fully drained — not stuck behind its own cap forever").toBe(0);
+    });
   });
 });
 
