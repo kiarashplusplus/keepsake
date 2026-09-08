@@ -67,11 +67,23 @@
 # green. The two origins are the reverse-geocode providers named in
 # apps/web/src/lib/geoReverse.ts's exported REVERSE_GEOCODE_ORIGINS;
 # apps/web/test/guards/reverseGeocodeCsp.test.ts fails if this line or
-# securityHeaders.ts stops covering one of them. The Google Ads and
-# Cloudflare Web Analytics *beacons* are connect-src too and are deliberately
-# NOT listed: neither provider is configured in any environment today, and
-# whoever enables one has to add its endpoint here or ship a tag that reports
-# nothing.
+# securityHeaders.ts stops covering one of them.
+#
+# https://cloudflareinsights.com is where the Web Analytics beacon reports,
+# and it is a different origin from the static.cloudflareinsights.com that
+# script-src fetches it from — note the missing `static.`. The note that
+# used to sit here said neither analytics nor ads was configured anywhere
+# "so nothing is broken right now", and warned that turning one on without
+# adding its endpoint would load a tag that silently reports nothing. That
+# is exactly what happened: EXPO_PUBLIC_CF_WEB_ANALYTICS_TOKEN was set on
+# both environments to unblock the deploy, and the beacon then loaded and
+# was refused by this directive until connect-src listed its origin here.
+#
+# Google Ads is still not configured (ks-google-ads-id is served empty) and
+# its reporting origins are still absent here deliberately, rather than
+# widened for a tag nothing loads. Whoever enables it must add them and give
+# that provider a `beacon` in consent.js, which is what makes the guard
+# below cover it.
 #
 # https://challenges.cloudflare.com is Turnstile's script (loaded via a
 # dynamically-inserted <script src>, src/ui/Turnstile.web.tsx) and its widget

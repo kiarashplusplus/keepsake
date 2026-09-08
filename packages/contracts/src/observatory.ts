@@ -415,9 +415,10 @@ export type ObservatoryBulkFunnel = {
 
 /**
  * A union rather than a struct with a flag, same reasoning as
- * `ObservatorySearchIndex`: with `BULK_UPLOAD` off (every environment but
- * preview today — `apps/api/wrangler.toml`), no route accepts a new batch,
- * so every number below would either be a true, meaningless zero or —
+ * `ObservatorySearchIndex`: with `BULK_UPLOAD` off (local dev only as of
+ * 2026-09-08 — it is `"1"` in both `[env.preview]` and `[env.production]`,
+ * `apps/api/wrangler.toml`), no route accepts a new batch, so every number
+ * below would either be a true, meaningless zero or —
  * worse, if historical rows from before the flag was flipped off still sit
  * in the tables — a number that looks live but describes a feature nobody
  * can currently reach. There is deliberately nothing to render either way.

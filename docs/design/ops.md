@@ -16,14 +16,19 @@ whenever what they depend on skipped. See `.github/workflows/ci.yml`.
 
 **`e2e` runs.** This paragraph used to end "`e2e` is wired up but `if: false` until Playwright
 specs exist (M4)" — that stopped being true when the suite landed, and the sentence outlived it.
-The job now runs `pnpm --filter @keepsake/web e2e` (84 specs, mobile and desktop) on every pull
-request that touches what it depends on. Two live caveats: it is gated by the same `changes`
-scoping as everything else, so an **api-only** pull request never runs it (#147, open — the exact
-mirror of the "the e2e job had never once executed" row in `AGENTS.md`'s table), and each merge to
-`main` gets its own CI run only because #103 changed the concurrency group — pushes now key on
-`github.run_id` with `cancel-in-progress: false`, so back-to-back merges queue instead of
-cancelling each other. Before that, `cancelled` is neither red nor green, nothing reads it, and
-three merged commits shipped to preview untested.
+The job now runs `pnpm --filter @keepsake/web e2e` (mobile and desktop projects) on every pull
+request that touches what it depends on. It is gated by the same `changes` scoping as everything
+else; an **api-only** pull request used to never run it — `build-web` and `e2e` inherit `test-web`'s
+filter, and that filter had no `api` case, so a change touching only `apps/api/**` skipped
+`test-web`, `build-web` and `e2e` in a chain while `ci-complete` still reported green (#147, the
+exact mirror of the "the e2e job had never once executed" row in `AGENTS.md`'s table). **Fixed
+2026-09-08 (#230, closed by it, on `main`):** `test-web`'s condition now includes
+`needs.changes.outputs.api == 'true'` (`.github/workflows/ci.yml`), so an api-only change builds
+the web bundle and runs e2e like everything else. And each merge to `main` gets its own CI run only
+because #103 changed the concurrency group — pushes now key on `github.run_id` with
+`cancel-in-progress: false`, so back-to-back merges queue instead of cancelling each other. Before
+that, `cancelled` is neither red nor green, nothing reads it, and three merged commits shipped to
+preview untested.
 
 ## Deploy
 

@@ -43,9 +43,10 @@ const WEB_SERVER_COMMAND = [
     "--var MOCK_AI:1",
     `--var SITE_URL:${BASE_URL}`,
     // Estate bulk upload's own kill switch (`apps/api/wrangler.toml`'s
-    // `BULK_UPLOAD`) is `"1"` only under `[env.preview]`; this command runs
-    // against the *default* (non-preview) `[vars]` block, where it's `"0"` —
-    // see that file's comment on why. Left off, `featureFlag(bulkUploadEnabled)`
+    // `BULK_UPLOAD`) is `"1"` under `[env.preview]` and `[env.production]`;
+    // this command runs against the *default* (non-preview, non-production)
+    // top-level `[vars]` block, where it's `"0"` — see that file's comment
+    // on why. Left off, `featureFlag(bulkUploadEnabled)`
     // (`src/index.ts`) 404s every `/api/bulk/*` route before any handler
     // runs, so `e2e/bulk.spec.ts` would exercise nothing at all. Verified:
     // with this line absent, both of that spec's tests fail — one waiting

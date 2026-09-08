@@ -127,11 +127,12 @@ issue open".
   is explicit that §1–§4 passing is not enough to close #47.
 - ~~The open remainders above (#86-#92, #106) whose fixes are merged but whose issues have not been
   closed out.~~ All closed.
-- **New, and not from this audit**: #116 (the `adminAuth` flake is back on unmodified `main`, so
-  #65's fix did not hold), #145 (DNSSEC off on the zone), #147 (an api-only pull request never runs
-  `e2e`), and, filed 2026-09-07 out of the docs sweep: #155 (no human can correct a listing's
-  category), #156 (the stranded per-PR preview token), #157 (production photos have never been
-  backed up), #158 (above), #159 (decide whether push alerting is worth it).
+- **New, and not from this audit**: ~~#116~~ (the `adminAuth` flake was back on unmodified `main`,
+  so #65's fix hadn't held — closed 2026-09-08 by #230), #145 (DNSSEC off on the zone), ~~#147~~
+  (an api-only pull request never ran `e2e` — closed the same day, same PR), and, filed 2026-09-07
+  out of the docs sweep: #155 (no human can correct a listing's category), #156 (the stranded
+  per-PR preview token), #157 (production photos have never been backed up), #158 (above), #159
+  (decide whether push alerting is worth it).
 
 ---
 

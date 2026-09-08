@@ -6,7 +6,8 @@ quota 1000/day, DNS configured 2026-09-06), and preview has sent real mail with
 **Read "Why a provider switch exists at all" below as history, not as an open risk** — the Risk #1
 it names was closed by that onboarding. What acceptance does *not* prove is delivery: there is no
 bounce webhook and no complaint feedback loop, so `ok = 1` means the provider took the message
-(#6, closed 2026-09-07).
+(#6, closed 2026-09-07, **reopened** the same day once it turned out the second-address test the
+closure assumed had never actually been run — see `docs/design/README.md`).
 
 Cloudflare Email Service `send_email` binding is the primary transport, sending from
 `hello@keepsake.ing`; Resend is a fallback behind the same `sendMail()` interface, selected by
