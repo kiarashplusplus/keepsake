@@ -131,4 +131,30 @@ describe("SuggestionFetcher", () => {
 
     expect(jest.mocked(suggestPhoto)).toHaveBeenCalledTimes(1);
   });
+
+  // Issue #290: a give flow with a `listingId` is editing (or resubmitting)
+  // an existing listing, whose cover photo the giver already chose. A fresh
+  // vision call there would only spend `SUGGEST` budget for a suggestion
+  // nothing needs — and, absent this guard, would still overwrite
+  // `category` even with `useEditHydration`'s `titleDirty: true` protecting
+  // `title` (the reducer's `set_suggestion` case has no dirty flag for
+  // category — see `giveDraft.ts`).
+  it("never fetches once the draft has a listingId (mid-edit or resubmitting)", async () => {
+    jest.mocked(suggestPhoto).mockResolvedValue(SUGGESTION);
+
+    render(
+      <GiveDraftProvider>
+        <SuggestionFetcher />
+        <Probe />
+      </GiveDraftProvider>,
+    );
+
+    await act(async () => {
+      capturedDispatch?.({ type: "set_listing_id", listingId: "01LISTINGEDIT" });
+      addCoverPhoto();
+      await flush();
+    });
+
+    expect(jest.mocked(suggestPhoto)).not.toHaveBeenCalled();
+  });
 });

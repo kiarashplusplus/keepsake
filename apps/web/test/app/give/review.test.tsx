@@ -200,6 +200,113 @@ describe("give/review", () => {
     expect(JSON.stringify(toJSON())).toContain("Keep contact details out of the story");
   });
 
+  // Issue #296: every earlier step validates its own field before letting
+  // the giver continue — this step didn't, so a giver who reaches
+  // `/give/review` directly (a typed/bookmarked URL, or browser
+  // back/forward across the flow) without ever passing through details or
+  // story used to see "Give it" enabled with a title and story the server
+  // was always going to reject, wasting a single-use Turnstile token.
+  it("GUARD: disables Give it when the draft has no title, even with photos and age gate satisfied", async () => {
+    window.sessionStorage.setItem(
+      GIVE_DRAFT_STORAGE_KEY,
+      serializeGiveDraft({
+        ...GIVE_DRAFT_INITIAL,
+        story: baseListing.story,
+        title: "", // never reached details.tsx
+        category: baseListing.category,
+        country: baseListing.country,
+        postalCode: "02144",
+        photos: [
+          {
+            clientId: "p1",
+            id: "01PHOTOAAAAAAAAAAAAAAAAAA",
+            objectUrl: null,
+            width: 800,
+            height: 600,
+            blurhash: "LKO2?U%2Tw=w]~RBVZRi};RPxuwH",
+            status: "done",
+            error: null,
+            errorCode: null,
+            canRetry: false,
+          },
+        ],
+      }),
+    );
+
+    const { getByLabelText } = renderReview();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.changeText(getByLabelText("Date of birth"), "1990-01-01");
+
+    await act(async () => {
+      fireEvent.press(getByLabelText("Give it"));
+      await Promise.resolve();
+    });
+
+    expect(jest.mocked(createListing)).not.toHaveBeenCalled();
+  });
+
+  it("GUARD: disables Give it when the draft's story is under the schema's minimum", async () => {
+    window.sessionStorage.setItem(
+      GIVE_DRAFT_STORAGE_KEY,
+      serializeGiveDraft({
+        ...GIVE_DRAFT_INITIAL,
+        title: baseListing.title,
+        story: "too short", // never reached story.tsx
+        category: baseListing.category,
+        country: baseListing.country,
+        postalCode: "02144",
+        photos: [
+          {
+            clientId: "p1",
+            id: "01PHOTOAAAAAAAAAAAAAAAAAA",
+            objectUrl: null,
+            width: 800,
+            height: 600,
+            blurhash: "LKO2?U%2Tw=w]~RBVZRi};RPxuwH",
+            status: "done",
+            error: null,
+            errorCode: null,
+            canRetry: false,
+          },
+        ],
+      }),
+    );
+
+    const { getByLabelText } = renderReview();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.changeText(getByLabelText("Date of birth"), "1990-01-01");
+
+    await act(async () => {
+      fireEvent.press(getByLabelText("Give it"));
+      await Promise.resolve();
+    });
+
+    expect(jest.mocked(createListing)).not.toHaveBeenCalled();
+  });
+
+  it("enables Give it once title, story, a photo and the age gate are all satisfied", async () => {
+    seedDraft();
+    jest.mocked(createListing).mockResolvedValue(baseListing);
+
+    const { getByLabelText } = renderReview();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.changeText(getByLabelText("Date of birth"), "1990-01-01");
+
+    await act(async () => {
+      fireEvent.press(getByLabelText("Give it"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(jest.mocked(createListing)).toHaveBeenCalledTimes(1);
+  });
+
   /**
    * Issue #218. The review print used to render the cover as a fixed 96x96
    * thumbnail pinned to the top-left of a full-width frame, with most of the
