@@ -50,15 +50,22 @@ async function insertItem(batchId: string, clientItemId: string): Promise<{ id: 
   return { id, revision: 1 };
 }
 
+/** A real object at both R2 keys — see `bulkSubmit.test.ts`'s copy of this
+ * helper for why presence (not content) is what `moderatePhotoVariant`
+ * needs. */
 async function insertPhoto(ownerId: string): Promise<string> {
   const id = ulid();
   const now = Date.now();
+  const fullKey = `photos/${id}/full.jpg`;
+  const thumbKey = `photos/${id}/thumb.jpg`;
+  await env.BUCKET.put(fullKey, new Uint8Array([0xff, 0xd8, 0xff, 0xd9]));
+  await env.BUCKET.put(thumbKey, new Uint8Array([0xff, 0xd8, 0xff, 0xd9]));
   await env.DB.prepare(
     `INSERT INTO photos
        (id, owner_id, listing_id, position, r2_key_full, r2_key_thumb, width, height, bytes_full, blurhash, content_type, moderation_status, created_at)
      VALUES (?, ?, NULL, NULL, ?, ?, 800, 600, 12345, 'LEHV6nl01waF5-KStrzX', 'image/jpeg', 'unchecked', ?)`,
   )
-    .bind(id, ownerId, `photos/${id}/full.jpg`, `photos/${id}/thumb.jpg`, now)
+    .bind(id, ownerId, fullKey, thumbKey, now)
     .run();
   return id;
 }
