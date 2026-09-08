@@ -219,3 +219,140 @@ export const OwnerListing = PublicListing.omit({ status: true }).extend({
   category_chosen_at: TimestampMs.nullable(),
 });
 export type OwnerListing = z.infer<typeof OwnerListing>;
+
+// ---------------------------------------------------------------------------
+// Staleness
+// ---------------------------------------------------------------------------
+/**
+ * Why a listing needs its giver, when nothing about its own `status` says so.
+ *
+ * `status` answers "what did moderation decide", which is the only question
+ * the dashboard used to ask of a listing. It cannot answer the two that
+ * actually strand people:
+ *
+ * - the giver has no reachable address, so `POST /api/requests/confirm`'s
+ *   owner-notify is skipped entirely (`apps/api/src/routes/requestConfirm.ts`
+ *   mails only a giver whose address is present *and* verified) and every ask
+ *   waits on the giver happening to reopen `/mine` on the one device that
+ *   holds their token;
+ * - somebody asked, was confirmed, and is still waiting — an `open` request
+ *   is a stranger who wrote a note and has heard nothing back.
+ *
+ * Both are conditions a live listing can sit in indefinitely while every
+ * status label on the screen reads "Live". Naming them as data, rather than
+ * deriving them ad hoc in one screen's JSX, is what lets the two dashboard
+ * views, their tests, and anything later (a digest, a nudge mail) agree on
+ * one definition.
+ */
+export const LISTING_STALE_REASONS = ["requests_unanswered", "email_missing", "email_unverified"] as const;
+export const ListingStaleReasonSchema = z.enum(LISTING_STALE_REASONS);
+export type ListingStaleReason = z.infer<typeof ListingStaleReasonSchema>;
+
+/**
+ * How long an `open` request may sit before the listing carrying it is
+ * called stale. 72 hours, deliberately the same span as a request's own
+ * confirmation window (`docs/design/identity.md`): the requester was given
+ * three days to prove their address, so the giver gets three days to answer
+ * before the dashboard starts saying someone is waiting.
+ *
+ * It is not zero because a fresh ask is not a neglected one — flagging every
+ * request the moment it lands would make the flag mean "you have requests",
+ * which `request_count` already says.
+ */
+export const UNANSWERED_REQUEST_STALE_MS = 72 * 60 * 60 * 1000;
+
+/**
+ * The statuses where any of this matters. A given, withdrawn, rejected or
+ * hidden listing takes no new asks and needs no reachable giver, so flagging
+ * one would be pure noise on a screen whose whole job is to show the few
+ * things that need a hand.
+ */
+export const STALE_ELIGIBLE_STATUSES: readonly ListingStatus[] = ["pending", "needs_review", "approved"];
+
+/** What the owner row says about being reachable, reduced to the only three
+ * cases that change the answer. `unverified` is its own case rather than a
+ * flavour of "has an email": an unverified address is mailed nothing at all
+ * except its own verification link, so it is exactly as unreachable as no
+ * address, and the giver's fix for it is different. */
+export const OWNER_EMAIL_STATES = ["missing", "unverified", "verified"] as const;
+export const OwnerEmailStateSchema = z.enum(OWNER_EMAIL_STATES);
+export type OwnerEmailState = z.infer<typeof OwnerEmailStateSchema>;
+
+export const ListingStaleness = z.object({
+  /** Empty when nothing is wrong. Ordered by the pure function below, most
+   * human cost first — a person waiting outranks an unset preference. */
+  reasons: z.array(ListingStaleReasonSchema),
+  /** When the oldest unanswered ask arrived, present only when
+   * `requests_unanswered` is among the reasons — so a client rendering "4
+   * days" can never draw it from a listing that is not actually waiting. */
+  waiting_since: TimestampMs.nullable(),
+});
+export type ListingStaleness = z.infer<typeof ListingStaleness>;
+
+/** `OwnerListing` plus the block above: what the two dashboard routes
+ * (`GET /api/me/listings`, `GET /api/me/listings/:id`) answer with.
+ *
+ * A separate schema rather than a field on `OwnerListing` itself, because
+ * staleness is a fact about a listing *and its owner's mailbox* at a moment
+ * in time, and the other seven routes that serialize an `OwnerListing`
+ * (create, edit, given/withdraw/relist, the admin queue) have neither the
+ * owner's email state nor the request rows in hand. Widening `OwnerListing`
+ * would have made every one of them answer a question it cannot see — the
+ * failure mode being an empty `reasons: []` that reads as "nothing wrong"
+ * when it means "nobody looked". Required here, so a dashboard route that
+ * forgot to compute it fails the client's parse instead. */
+export const OwnerDashboardListing = OwnerListing.extend({
+  staleness: ListingStaleness,
+});
+export type OwnerDashboardListing = z.infer<typeof OwnerDashboardListing>;
+
+export interface ListingStalenessInput {
+  status: ListingStatus;
+  /** Non-null the moment the giver picks someone: the ask has been answered,
+   * whatever happens next, so the listing stops waiting. */
+  chosen_request_id: string | null;
+  owner_email_state: OwnerEmailState;
+  /** `created_at` of the oldest *confirmed, still-open* request on this
+   * listing, or `null` when there is none. Confirmed-only is the same rule
+   * every other owner-facing read applies (`confirmed_at IS NOT NULL`, issue
+   * #188): an unconfirmed submission is not somebody waiting, it is an
+   * address nobody has proved they control. */
+  oldest_open_request_at: number | null;
+  now: number;
+}
+
+/**
+ * The one definition of "this listing needs you", shared by the API (which
+ * computes it) and the tests that pin it. Pure — every input is passed in,
+ * including `now` — so the 72-hour boundary is testable without waiting or
+ * mocking a clock.
+ */
+export function listingStaleness(input: ListingStalenessInput): ListingStaleness {
+  if (!STALE_ELIGIBLE_STATUSES.includes(input.status)) {
+    return { reasons: [], waiting_since: null };
+  }
+
+  const reasons: ListingStaleReason[] = [];
+  const waiting =
+    input.chosen_request_id === null &&
+    input.oldest_open_request_at !== null &&
+    input.now - input.oldest_open_request_at >= UNANSWERED_REQUEST_STALE_MS;
+
+  if (waiting) reasons.push("requests_unanswered");
+  if (input.owner_email_state === "missing") reasons.push("email_missing");
+  if (input.owner_email_state === "unverified") reasons.push("email_unverified");
+
+  return { reasons, waiting_since: waiting ? input.oldest_open_request_at : null };
+}
+
+/**
+ * One sentence per reason, in the product's voice, kept beside the enum so a
+ * new reason cannot ship without its copy. Second person, no exclamation, and
+ * each one says what happens rather than scolding — the giver did nothing
+ * wrong, the situation just needs them.
+ */
+export const LISTING_STALE_MESSAGES: Record<ListingStaleReason, string> = {
+  requests_unanswered: "Someone asked for this and is still waiting to hear back.",
+  email_missing: "No email on this device, so nobody can reach you about this.",
+  email_unverified: "Your email isn't verified yet, so we can't send you asks about this.",
+};

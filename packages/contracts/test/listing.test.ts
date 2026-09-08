@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { RESERVED_EMAIL_DOMAIN_MESSAGE } from "../src/common";
-import { CreateListingInput, MODERATION_REASONS } from "../src/listing";
+import {
+  CreateListingInput,
+  LISTING_STALE_MESSAGES,
+  LISTING_STALE_REASONS,
+  listingStaleness,
+  MODERATION_REASONS,
+  UNANSWERED_REQUEST_STALE_MS,
+  type ListingStalenessInput,
+} from "../src/listing";
 import { MAX_PHOTOS } from "../src/photo";
 
 const validPhotoIds = ["01ARZ3NDEKTSV4RRFFQ69G5FAV"];
@@ -106,6 +114,79 @@ describe("MODERATION_REASONS", () => {
     for (const value of Object.values(MODERATION_REASONS)) {
       expect(typeof value).toBe("string");
       expect(value.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("listingStaleness", () => {
+  const HOUR = 60 * 60 * 1000;
+  const NOW = 1_800_000_000_000;
+
+  function input(overrides: Partial<ListingStalenessInput> = {}): ListingStalenessInput {
+    return {
+      status: "approved",
+      chosen_request_id: null,
+      owner_email_state: "verified",
+      oldest_open_request_at: null,
+      now: NOW,
+      ...overrides,
+    };
+  }
+
+  it("says nothing about a reachable giver with no open asks", () => {
+    expect(listingStaleness(input())).toEqual({ reasons: [], waiting_since: null });
+  });
+
+  it("flags a listing whose owner has no email", () => {
+    expect(listingStaleness(input({ owner_email_state: "missing" })).reasons).toEqual(["email_missing"]);
+  });
+
+  it("flags an unverified address separately — it is mailed nothing either", () => {
+    expect(listingStaleness(input({ owner_email_state: "unverified" })).reasons).toEqual(["email_unverified"]);
+  });
+
+  it("leaves a fresh ask alone", () => {
+    const result = listingStaleness(input({ oldest_open_request_at: NOW - 71 * HOUR }));
+    expect(result).toEqual({ reasons: [], waiting_since: null });
+  });
+
+  it("flags an ask that has waited the full 72 hours, and says since when", () => {
+    const askedAt = NOW - UNANSWERED_REQUEST_STALE_MS;
+    const result = listingStaleness(input({ oldest_open_request_at: askedAt }));
+    expect(result.reasons).toEqual(["requests_unanswered"]);
+    expect(result.waiting_since).toBe(askedAt);
+  });
+
+  it("stops waiting once someone has been chosen", () => {
+    const result = listingStaleness(
+      input({ oldest_open_request_at: NOW - 30 * 24 * HOUR, chosen_request_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV" }),
+    );
+    expect(result).toEqual({ reasons: [], waiting_since: null });
+  });
+
+  it("puts the person waiting ahead of the mailbox", () => {
+    const result = listingStaleness(
+      input({ oldest_open_request_at: NOW - 10 * 24 * HOUR, owner_email_state: "missing" }),
+    );
+    expect(result.reasons).toEqual(["requests_unanswered", "email_missing"]);
+  });
+
+  it("says nothing about a listing that can no longer take an ask", () => {
+    for (const status of ["given", "withdrawn", "rejected", "hidden"] as const) {
+      const result = listingStaleness(
+        input({ status, owner_email_state: "missing", oldest_open_request_at: NOW - 10 * 24 * HOUR }),
+      );
+      expect(result, status).toEqual({ reasons: [], waiting_since: null });
+    }
+  });
+
+  it("does flag a listing still in moderation — asks are coming", () => {
+    expect(listingStaleness(input({ status: "pending", owner_email_state: "missing" })).reasons).toEqual(["email_missing"]);
+  });
+
+  it("has copy for every reason code", () => {
+    for (const reason of LISTING_STALE_REASONS) {
+      expect(LISTING_STALE_MESSAGES[reason].length).toBeGreaterThan(0);
     }
   });
 });
