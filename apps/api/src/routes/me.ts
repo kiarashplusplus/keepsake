@@ -1,6 +1,11 @@
 import { Hono } from "hono";
 import { SetEmailInput, type OwnerMe } from "@keepsake/contracts/owner";
-import type { ModerationReasonCode } from "@keepsake/contracts/listing";
+import {
+  listingStaleness,
+  type ListingStatus,
+  type ModerationReasonCode,
+  type OwnerEmailState,
+} from "@keepsake/contracts/listing";
 import {
   ADMIN_REMOVED_REQUEST_PLACEHOLDER,
   ChooseRequestInput,
@@ -16,7 +21,13 @@ import { turnstile } from "../middleware/turnstile.js";
 import { burst, dailyBudget, DEFAULT_EMAIL_IP_DAILY_BUDGET } from "../middleware/rateLimit.js";
 import { validateBody } from "../middleware/validate.js";
 import { serializeOwnerListing } from "../lib/serialize.js";
-import { fetchAspectRows, fetchAspectRowsForListings, fetchListingRow, fetchPhotoRows } from "../lib/listingsDb.js";
+import {
+  fetchAspectRows,
+  fetchAspectRowsForListings,
+  fetchListingRow,
+  fetchOldestOpenRequestAt,
+  fetchPhotoRows,
+} from "../lib/listingsDb.js";
 import type { ListingRow } from "../lib/serialize.js";
 import { requireParam } from "../lib/params.js";
 import { ulid } from "../lib/ids.js";
@@ -106,6 +117,21 @@ meRoutes.get("/", ownerAuth(), (c) => {
   return ok(c, ownerMe(c.get("owner")));
 });
 
+/**
+ * The owner row's two email columns, reduced to the one value
+ * `listingStaleness()` reasons about.
+ *
+ * `unverified` and `missing` stay distinct because the giver's fix differs
+ * (resend a link vs. add an address at all), even though both mean exactly
+ * the same thing to the mailer: `POST /api/requests/confirm` sends to a giver
+ * only when the address is present *and* verified, so an unverified one is
+ * every bit as unreachable as none.
+ */
+function ownerEmailState(owner: OwnerRow): OwnerEmailState {
+  if (owner.email === null) return "missing";
+  return owner.email_verified_at === null ? "unverified" : "verified";
+}
+
 meRoutes.get("/listings", ownerAuth(), async (c) => {
   const owner = c.get("owner");
   const { results: rows } = await c.env.DB.prepare(
@@ -121,10 +147,35 @@ meRoutes.get("/listings", ownerAuth(), async (c) => {
     c.env,
     rows.map((row) => row.id),
   );
+  // Both dashboard reads answer `OwnerDashboardListing` — `OwnerListing` plus
+  // a `staleness` block. It is computed here, and not inside
+  // `serializeOwnerListing`, because it is a fact about the listing *and* its
+  // owner's mailbox: the other seven routes that serialize an owner listing
+  // (create, edit, given/withdraw/relist, the admin queue) hold neither the
+  // email state nor the request rows, and widening the serializer would have
+  // had them all answer `reasons: []` — "nothing wrong" where the truth is
+  // "nobody looked". See the schema's own comment in
+  // `@keepsake/contracts/listing`.
+  const oldestOpenByListing = await fetchOldestOpenRequestAt(
+    c.env,
+    rows.map((row) => row.id),
+  );
+  const emailState = ownerEmailState(owner);
+  const now = Date.now();
+
   const items = [];
   for (const row of rows) {
     const photos = await fetchPhotoRows(c.env, row.id);
-    items.push(serializeOwnerListing(row, photos, aspectsByListing.get(row.id) ?? []));
+    items.push({
+      ...serializeOwnerListing(row, photos, aspectsByListing.get(row.id) ?? []),
+      staleness: listingStaleness({
+        status: row.status as ListingStatus,
+        chosen_request_id: row.chosen_request_id,
+        owner_email_state: emailState,
+        oldest_open_request_at: oldestOpenByListing.get(row.id) ?? null,
+        now,
+      }),
+    });
   }
   return ok(c, items);
 });
@@ -155,8 +206,24 @@ meRoutes.get("/listings/:id", ownerAuth(), async (c) => {
     .bind(id)
     .all<RequestRow>();
 
+  // Derived from the rows just read rather than a second query: the same
+  // "confirmed and still open" filter `fetchOldestOpenRequestAt` applies for
+  // the list view, over the set this route already has in hand. `requestRows`
+  // is confirmed-only by the query above, so `status === "open"` is the whole
+  // of the narrowing left to do here.
+  const oldestOpenRequestAt = requestRows
+    .filter((row) => row.status === "open")
+    .reduce<number | null>((oldest, row) => (oldest === null || row.created_at < oldest ? row.created_at : oldest), null);
+
   return ok(c, {
     ...ownerListing,
+    staleness: listingStaleness({
+      status: row.status as ListingStatus,
+      chosen_request_id: row.chosen_request_id,
+      owner_email_state: ownerEmailState(owner),
+      oldest_open_request_at: oldestOpenRequestAt,
+      now: Date.now(),
+    }),
     requests: requestRows.map(serializeOwnerViewRequest),
     moderation: {
       status: row.status,
