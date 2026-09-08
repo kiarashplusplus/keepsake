@@ -162,7 +162,11 @@ const LOCKED_PASSAGES: { name: string; phrases: string[] }[] = [
 /** `<h2>` text in source order, whitespace-collapsed the same way
  * `PRIVACY_TEXT` is. */
 function sections(): string[] {
-  return [...PRIVACY_HTML.matchAll(/<h2>([\s\S]*?)<\/h2>/g)].map((m) => (m[1] ?? "").replace(/\s+/g, " ").trim());
+  // `(?:\s+[^>]*)?` tolerates an `id="..."` (or other attribute) on the tag —
+  // #312 added `id="requester-shares"` so terms.html can link straight to
+  // the canonical withdraw explanation — without this the heading would
+  // simply not match and silently drop out of the list below.
+  return [...PRIVACY_HTML.matchAll(/<h2(?:\s+[^>]*)?>([\s\S]*?)<\/h2>/g)].map((m) => (m[1] ?? "").replace(/\s+/g, " ").trim());
 }
 
 /** Source with `//` and block comments removed, so an assertion about what
