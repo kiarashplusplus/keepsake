@@ -35,6 +35,42 @@ describe("bulk/index (batch list)", () => {
     expect(JSON.stringify(screen.toJSON())).toContain("Not open on this build yet");
   });
 
+  // The state a first-time estate giver is in: this device minted an owner
+  // token locally (any owner-authed call does), but the server has never
+  // seen it, so `GET /api/bulk/batches` 401s. Before the admission code was
+  // removed it was unreachable here — an operator had already minted a grant
+  // against an existing `owners` row — and it read as an error that took the
+  // whole screen, "Start a new batch" with it. That is the one thing this
+  // screen is for.
+  it("shows an empty list and the way in, not an error, for a device the server has never seen", async () => {
+    jest.mocked(getOwnerToken).mockReturnValue("ks_test");
+    jest.mocked(listBatches).mockRejectedValue(new ApiError("unauthorized", "Unknown owner token.", 401));
+
+    render(<BulkBatchList />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const rendered = JSON.stringify(screen.toJSON());
+    expect(rendered).toContain("Start a new batch");
+    expect(rendered).not.toContain("Couldn't load your batches");
+    expect(rendered).not.toContain("Unknown owner token");
+  });
+
+  it("keeps 'Start a new batch' reachable even when listing genuinely fails", async () => {
+    jest.mocked(getOwnerToken).mockReturnValue("ks_test");
+    jest.mocked(listBatches).mockRejectedValue(new ApiError("internal", "Something went wrong.", 500));
+
+    render(<BulkBatchList />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const rendered = JSON.stringify(screen.toJSON());
+    expect(rendered).toContain("Couldn't load your batches");
+    expect(rendered).toContain("Start a new batch");
+  });
+
   it("lists every batch with its item/photo counts, and a Continue link", async () => {
     jest.mocked(getOwnerToken).mockReturnValue("ks_test");
     jest.mocked(listBatches).mockResolvedValue([

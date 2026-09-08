@@ -390,3 +390,20 @@ mirror of a server constant: the API still says exactly when the ceiling lifts. 
 photo rather than pausing for hours"), and both were watched fail with the old rule restored —
 `expected false to be true` on the queue pausing, and the 33,000-second 429 classifying as
 `throttled`.
+
+**And a second one the CI e2e run caught, same shape as the API's own footgun.** `/bulk` listed
+batches with `GET /api/bulk/batches`, whose plain `ownerAuth()` 401s a device the server has never
+seen — and the screen turned any non-404 failure into a full-page "Couldn't load your batches",
+taking "Start a new batch" with it. That state was unreachable while the admission code existed
+(an operator had already minted a grant against an existing `owners` row), and it is now the
+ordinary first visit: a token minted locally, no row yet, nothing to list. `e2e/bulk.spec.ts` hit
+it the moment it stopped minting a grant — the button resolved, then detached mid-click as the
+401 landed, which is what a 90-second Playwright timeout looks like from the outside.
+
+A 401 is now read as what it is — an empty list — and a genuine failure renders *under* the card
+rather than instead of it, so the one thing this screen is for is never the thing an error hides.
+Three tests in `test/app/bulk/index.test.tsx` cover the 401, the 500 and the 404 (feature off,
+where an empty list would be a lie and the honest answer is still the "not open on this build"
+state). Verified the way the rule asks: the failure reproduced locally first
+(`playwright test e2e/bulk.spec.ts` — same timeout, same detached button), then passed on both
+projects with the fix.
