@@ -254,13 +254,26 @@ describe("GET /item/:id — structured data", () => {
     expect(html).toContain("&lt;/script&gt;");
   });
 
-  it("emits exactly one ld+json block", async () => {
+  it("injects exactly one Product block, however many others the shell carries", async () => {
     // Two `Product` blocks on one page is a validation error, and is what an
-    // absent-minded second `el.append` would produce.
+    // absent-minded second `el.append` would produce. That is the invariant.
+    //
+    // This test used to assert exactly one `ld+json` block on the page, which
+    // is FALSE in production and passed only because `test/fixtures/public`'s
+    // shell is a stub. The real exported shell carries its own
+    // WebSite/Organization block (`apps/web/app/+html.tsx`), so a live item
+    // page has two — verified against preview after deploy. A sitewide
+    // identity block plus a per-page Product is the intended shape; counting
+    // blocks was measuring the fixture, not the behaviour.
     const ownerId = await insertOwner();
     const listingId = await insertApprovedListing({ ownerId });
     const html = await (await SELF.fetch(`http://x/item/${listingId}`)).text();
-    expect(html.match(/application\/ld\+json/g)).toHaveLength(1);
+
+    const blocks = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)].map(
+      (match) => JSON.parse(match[1] as string) as unknown,
+    );
+    const products = blocks.flat().filter((node) => (node as { "@type"?: string })["@type"] === "Product");
+    expect(products).toHaveLength(1);
   });
 
   it("puts no structured data on a page that is not a listing", async () => {
