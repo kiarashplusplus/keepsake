@@ -79,6 +79,15 @@ function ageWords(ms: number | null): string {
   return `${Math.max(1, Math.floor(ms / 60_000))}m`;
 }
 
+/** `report.bulk.orphan_bytes` in the largest sensible unit — the same "read
+ * cold, no lookup" rule `ageWords` follows, and why this is never rendered
+ * as a bare byte count. */
+function byteWords(bytes: number): string {
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
+  if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
 export function dailyDigest(report: DailyReport): EmailTemplate {
   const reason = "you're getting this because you're the Keepsake admin. It sends every day, including quiet ones.";
 
@@ -110,6 +119,19 @@ export function dailyDigest(report: DailyReport): EmailTemplate {
     ["AI budget (image)", `${report.budgets.mod_image.used}/${report.budgets.mod_image.limit}`],
     // #208: the budget whose exhaustion leaves listings with no search vector.
     ["AI budget (embed)", `${report.budgets.embed.used}/${report.budgets.embed.limit}`],
+    // Plan Stage 5, estate bulk upload. `report.bulk` is `null` — not a row
+    // of zeros — when `BULK_UPLOAD` is off in this environment, so the
+    // whole block is omitted rather than printing a line that would read as
+    // "bulk is quiet today" for a feature nobody can currently reach.
+    ...(report.bulk
+      ? ([
+          ["Bulk batches active", String(report.bulk.active_batches)],
+          ["Bulk items outstanding", String(report.bulk.items_outstanding)],
+          ["Bulk oldest operation", ageWords(report.bulk.oldest_operation_age_ms)],
+          ["Bulk lease recoveries (active)", String(report.bulk.active_stale_lease_recoveries)],
+          ["Bulk orphan bytes", byteWords(report.bulk.orphan_bytes)],
+        ] as [string, string][])
+      : []),
   ];
 
   const bodyHtml = `

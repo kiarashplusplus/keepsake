@@ -1,8 +1,8 @@
 # Estate bulk upload
 
-Status: `[TODO]` — API and schema only, and **nothing here has been driven from a browser**. The
-web workspace does not exist. Read "What is not built" before believing any part of this is usable
-by a person. The status line at the bottom is the one that is kept current.
+Status: `[TODO]` — API, schema and the web workspace's screens are written, but **nothing here has
+been driven from a real browser by a real person**. Read "What is not built" before believing any
+part of this is usable. The status line at the bottom is the one that is kept current.
 
 Someone clearing a house has fifty objects and one evening at a time. The give flow is five steps
 per keepsake, and five steps fifty times is not a flow, it is a job. This is the machinery for
@@ -144,12 +144,66 @@ for a few passes. The fix is a per-owner cap per pass, and it is a change to the
 in the product depends on — it belongs in its own change with its own guard test, not hidden inside
 this feature.
 
+## The web workspace
+
+`apps/web/src/features/bulk/useBulkWorkspace.ts` is the one hook every screen under
+`app/bulk/[batchKey]/` shares (via `BulkWorkspaceContext.tsx`, mounted once in that route's
+`_layout.tsx` — the same "thin `useReducer` + effect pair" shape `batchStore.ts`'s own header
+asked for). It wires the four fixed modules — `batchStore.ts`'s reducer, `storage.ts`'s IndexedDB
+persistence, `uploadQueue.ts`'s upload pipeline, `src/api/bulk.ts`'s typed client — into the
+operations the screens call, and adds nothing to any of the four: every local mutation is one of
+the reducer's own existing actions.
+
+Two facts worth knowing before touching it:
+
+- **Every item save resends the item's whole `fields`.** `PUT /api/bulk/batches/:id/items/:id`
+  overwrites `title`/`story`/`category`/`aspects` with exactly what `fields` carries — unlike
+  `room_label`/`lot_label`, an omitted key is not "leave unchanged" (`apps/api/src/routes/bulk.ts`'s
+  handler). A save that only changes which photos belong to an item still sends that item's full,
+  current `fields`, or it would silently blank the story next to the photo change. Broken
+  deliberately once to check this: sending `{}` instead on a photo-only regroup produced `Object
+  {}` where the test expected `{title: "Blue mug", story: "A gift from Nan.", aspects: []}`.
+- **"Human chose this" markers exist only client-side.** Neither `DraftItemFields` nor
+  `BulkDraftItem` has anywhere to record "the giver typed their own title" or "the giver picked
+  this category on purpose" (issue #155's rule, reimplemented for a draft item shape that predates
+  it) — see `src/features/bulk/itemMarkers.ts` and the product-decisions row for why that is a
+  `localStorage` side table and not a change to either fixed module. A late-arriving suggestion
+  checks the marker before ever touching `title`/`category`; a manual "Suggest again" always
+  bypasses the automatic-attempt dedup (`force: true`) so a giver's retry is never silently a
+  no-op. Both were broken and watched fail: removing the dirty-title check let a stale suggestion
+  overwrite `"Nan's blue mug"` back to `"Blue mug"`; removing `force` left a manual retry's
+  `appliedSuggestionPhotoId` at `null` after an earlier automatic attempt had already failed for
+  the same cover.
+
+Screens: `app/bulk/index.tsx` (every batch this device knows, "Start a new batch"), `app/bulk/
+new.tsx` (name/country-postcode/shared-story/admission-code, plus a local-only pickup-deadline
+reminder — see below), `app/bulk/[batchKey]/photos.tsx` (add + explicit "group as one item" /
+"one item per photo" + per-photo cover/remove, no drag required for anything), `.../review.tsx`
+(one card per item — compact list on desktop, one expanded card with Prev/Next on a phone — plus
+"apply to selected" for room/lot labels and the shared-story context, with an exact before/after
+preview and a 2,000-character refusal before anything is written), `.../submit.tsx` (select ready
+items, one age check for the whole submission, separate saved/pending/live/failed counts). `app/
+mine/index.tsx` gained a "Give several items" entry and a private "Estate batches" section listing
+this device's draft batches.
+
+**The admission code and the pickup deadline are both local, not wire fields** — see
+`docs/product-decisions.md`'s two new rows. There is no `GET` for a giver's own grant, so a
+`?grant=` link or a pasted code is the only way one reaches the browser, and the workspace can only
+react to a write being refused ("no admission left"), never show a running total. The pickup
+deadline has no field in `CreateBatchInput` at all — it is a personal reminder in `localStorage`
+(`pickupDeadline.ts`), on purpose: this feature does not promise every item goes live together or
+before any date, and a client-invented wire field would have implied otherwise.
+
 ## What is not built
 
 Stated so nobody reads silence as done:
 
-- **All of `apps/web`.** There is no batch workspace, no grouping UI, no "apply to selected", no
-  cover picker, no My Keepsakes filter. The API is reachable and the product is not.
+- **Never driven from a real browser.** Every screen above has a Jest render/interaction test
+  against a mocked workspace or a mocked API — no Playwright pass, no screenshot, no person's phone.
+- **My Keepsakes' private batch filter** (a toggle over the ordinary listing groups) and **per-item
+  request counts** surfaced specifically from a batch context — a submitted item becomes an
+  ordinary listing and already shows up in Mine's existing groups with its existing request-count
+  UI, but nothing on the batch screens links forward to that beyond the plain fact that it happens.
 - Batch-level observability. No Observatory panel, no digest line, no operation-age metric — so a
   first pilot run has to be watched by hand.
 - Fairness in the moderation queue (above).
@@ -205,5 +259,37 @@ instead.
 
 **What has NOT been done, and what that means:** nothing here has run against
 `workerd` end to end, nothing has been deployed, and `BULK_UPLOAD` is `"0"`
-everywhere except preview. No person has used this feature, because the part a
-person would use does not exist.
+everywhere except preview. No person has used this feature — the web workspace
+below exists now, but only Jest has driven it.
+
+**2026-09-08 — the web workspace landed on a separate branch. Screens exist; still nobody's
+driven them from a browser.**
+
+| Check | Result |
+|---|---|
+| `pnpm --filter @keepsake/web test` | 83 files, 681 passing |
+| `pnpm lint` | 0 errors, 62 warnings — all the pre-existing zod const+type idiom, none new |
+| `pnpm -r typecheck` | clean |
+| `node tools/preflight/preflight.mjs` | every check passes except `lfs-pointers` (same agent-container limitation as above) |
+
+Seven guards were deliberately broken and watched fail, then restored — see "The web workspace"
+above for the two most load-bearing ones written out in full:
+
+1. `dispatchSync` reverted to a plain `dispatch()` (dropping the synchronous mirror into
+   `stateRef.current`) — four workspace tests failed, e.g. `expect(outcome?.ok).toBe(true)` /
+   `Received: false`, because every grouping helper that dispatches-then-immediately-saves read a
+   stale, pre-dispatch state.
+2. An item save sending `{}` instead of the item's current `fields` on a photo-only regroup —
+   `Object {}` where `{title: "Blue mug", story: "A gift from Nan.", aspects: []}` was expected.
+3. A late suggestion overwriting a giver-typed title unconditionally — `Received: "Blue mug"`
+   where `"Nan's blue mug"` was expected.
+4. `sourcePatchesForDetachment` skipped for `planGroupAsOneItem` — a photo moved into a new group
+   stayed listed on its old item too; `oldPatch?.photoClientIds` came back `undefined` where
+   `["photo-1"]` was expected.
+5. The 2,000-character shared-story guard in `previewSharedStoryApplication` disabled — a
+   nearly-full item's preview stopped being marked `skipped`.
+6. `MAX_PHOTOS` per item raised by one in `planGroupAsOneItem` — six photos grouped into one item
+   with no refusal, where the test expected one.
+7. The manual-suggestion-retry `force` flag removed — a giver's own "Suggest again" after an
+   automatic attempt had already failed for the same cover became a silent no-op;
+   `appliedSuggestionPhotoId` stayed `null` where the retry's own cover id was expected.

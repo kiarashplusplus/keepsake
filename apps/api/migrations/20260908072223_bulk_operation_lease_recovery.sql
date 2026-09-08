@@ -1,0 +1,38 @@
+-- Stage 5 (the Observatory's bulk panel, #150's estate follow-up): a counter
+-- that tells "the runner picked up a lease another invocation cleanly
+-- released a moment ago" apart from "the runner picked up a lease whose
+-- holder crashed or was evicted mid-run and never released it at all".
+--
+-- Why this cannot be answered from `attempts`, which already exists:
+-- `runBulkOperation`'s claim UPDATE (`apps/api/src/bulk/submit.ts`) does
+-- `attempts = attempts + 1` on *every* successful claim, and a large batch
+-- claims itself again on purpose every ~3 minutes until `ITEMS_PER_INVOCATION`
+-- has worked through the whole selection — that is the runner doing exactly
+-- what it is supposed to, not a failure. A column that only counts "claims"
+-- cannot tell that ordinary chunking apart from a claim that had to recover a
+-- lease nobody released, so it cannot answer the Observatory's own question:
+-- "is the runner dying mid-run".
+--
+-- `stale_recoveries` answers it by counting only the second kind. It is
+-- bumped in the same guarded claim UPDATE, using a `CASE` over the row's
+-- OWN pre-update `lease_until` — SQL evaluates every assignment in an
+-- `UPDATE ... SET` against the row as it was before this statement, so
+-- `lease_until` on the right-hand side here still means "what the lease was
+-- a moment ago", the same value the `WHERE` clause is judging:
+--
+--   SET stale_recoveries = stale_recoveries +
+--         CASE WHEN lease_until IS NOT NULL AND lease_until < ?now THEN 1 ELSE 0 END
+--
+-- A lease that was already NULL (a fresh pickup, or a clean release from the
+-- normal end-of-invocation path) adds nothing. A lease that was set and is
+-- now in the past — the only way that happens is a prior invocation claimed
+-- it, set `lease_until` 120s out, and never reached either its own success
+-- path or its own `catch` block to release it, i.e. the Worker was evicted
+-- or hard-timed-out mid-run — adds one. That is the recovery event the plan
+-- asks for, and nothing else can produce this specific shape from the
+-- existing columns.
+--
+-- `DEFAULT 0` so a row written before this migration reads as "never
+-- recovered", which is correct: it could not have been, this column did not
+-- exist yet to record it.
+ALTER TABLE bulk_operations ADD COLUMN stale_recoveries INTEGER NOT NULL DEFAULT 0;

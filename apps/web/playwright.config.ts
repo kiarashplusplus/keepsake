@@ -42,6 +42,17 @@ const WEB_SERVER_COMMAND = [
     `--env-file ${path.join(STATE_DIR, "e2e.env")}`,
     "--var MOCK_AI:1",
     `--var SITE_URL:${BASE_URL}`,
+    // Estate bulk upload's own kill switch (`apps/api/wrangler.toml`'s
+    // `BULK_UPLOAD`) is `"1"` only under `[env.preview]`; this command runs
+    // against the *default* (non-preview) `[vars]` block, where it's `"0"` —
+    // see that file's comment on why. Left off, `featureFlag(bulkUploadEnabled)`
+    // (`src/index.ts`) 404s every `/api/bulk/*` route before any handler
+    // runs, so `e2e/bulk.spec.ts` would exercise nothing at all. Verified:
+    // with this line absent, both of that spec's tests fail — one waiting
+    // 90s for a "Start a new batch" button that never appears (the batch
+    // list degrades to its "Not open on this build yet" empty state), the
+    // other timing out on the navigation a 404'd `createBatch` never makes.
+    "--var BULK_UPLOAD:1",
     "--log-level warn",
   ].join(" "),
 ].join(" && ");

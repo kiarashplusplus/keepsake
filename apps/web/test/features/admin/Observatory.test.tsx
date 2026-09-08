@@ -33,6 +33,7 @@ const EMPTY_REPORT: DailyReport = {
     embed: { used: 0, limit: 2000 },
   },
   crons: [],
+  bulk: null,
 };
 
 const EMPTY_APP: ObservatoryApp = {
@@ -54,6 +55,7 @@ const EMPTY_APP: ObservatoryApp = {
     median_time_to_decision_ms: null,
   },
   search_index: { enabled: true, approved: 0, unindexed: 0, oldest_unindexed_age_ms: null },
+  bulk: { enabled: false },
 };
 
 /** The floor fixture every test starts from and edits with a spread, same
@@ -262,6 +264,100 @@ describe("Observatory: funnel", () => {
     // the concrete case the contract's own doc comment on
     // `ObservatoryFunnel` warns a small denominator makes misleading.
     expect(text).not.toContain("50%");
+  });
+});
+
+describe("Observatory: bulk upload (plan Stage 5)", () => {
+  it("renders a calm sentence and no numbers when BULK_UPLOAD is off", async () => {
+    jest.mocked(getObservatory).mockResolvedValue(observatory({ app: { ...EMPTY_APP, bulk: { enabled: false } } }));
+    const { toJSON } = await renderObservatory();
+    const text = JSON.stringify(toJSON());
+    expect(text).toContain("switched off");
+    expect(text).not.toContain("Batches started");
+  });
+
+  it("renders batch/draft/operation/grant/funnel numbers when enabled", async () => {
+    jest.mocked(getObservatory).mockResolvedValue(
+      observatory({
+        app: {
+          ...EMPTY_APP,
+          bulk: {
+            enabled: true,
+            batches: { by_state: { draft: 2, submitting: 1, closed: 5, cancelled: 1 }, active: 3, abandoned_draft: 1 },
+            drafts: {
+              items_by_state: { editing: 4, ready: 0, queued: 2, submitted: 10, failed: 1 },
+              items_outstanding: 7,
+              photos_reserved: 1,
+              photos_stored: 20,
+            },
+            operations: {
+              by_status: { queued: 1, running: 0, done: 4, cancelled: 0 },
+              active: 1,
+              oldest_active_age_ms: 4 * 60 * 60 * 1000 + 12 * 60 * 1000,
+              active_stale_lease_recoveries: 2,
+            },
+            grants: { active: 3, expired: 1, revoked: 0, items_remaining: 40, photos_remaining: 120, suggestions_remaining: 10 },
+            funnel: {
+              window_days: 7,
+              batches_started: 5,
+              items_submitted: 30,
+              items_approved: 25,
+              orphan_bytes: 1_500_000,
+              moderation_latency_ordinary_median_ms: 60_000,
+              moderation_latency_bulk_median_ms: 90_000,
+            },
+          },
+        },
+      }),
+    );
+    const { toJSON } = await renderObservatory();
+    const text = JSON.stringify(toJSON());
+
+    expect(text).toContain("Bulk upload");
+    expect(text).toContain("Batches started");
+    // Operation age formatted the same way moderation ages already are.
+    expect(text).toContain("4h 12m");
+    // The lease-recovery count is genuinely rendered, not silently dropped.
+    expect(text).toContain("Lease recoveries");
+    // Orphan bytes rendered in a human unit, not a bare byte count.
+    expect(text).toContain("1.5 MB");
+    expect(text).not.toContain("switched off");
+  });
+
+  it("renders a null oldest_active_age_ms as a calm sentence, not a zero — nothing queued or running is not the same as an age of zero", async () => {
+    jest.mocked(getObservatory).mockResolvedValue(
+      observatory({
+        app: {
+          ...EMPTY_APP,
+          bulk: {
+            enabled: true,
+            batches: { by_state: { draft: 0, submitting: 0, closed: 0, cancelled: 0 }, active: 0, abandoned_draft: 0 },
+            drafts: { items_by_state: { editing: 0, ready: 0, queued: 0, submitted: 0, failed: 0 }, items_outstanding: 0, photos_reserved: 0, photos_stored: 0 },
+            operations: {
+              by_status: { queued: 0, running: 0, done: 0, cancelled: 0 },
+              active: 0,
+              oldest_active_age_ms: null,
+              active_stale_lease_recoveries: 0,
+            },
+            grants: { active: 0, expired: 0, revoked: 0, items_remaining: 0, photos_remaining: 0, suggestions_remaining: 0 },
+            funnel: {
+              window_days: 7,
+              batches_started: 0,
+              items_submitted: 0,
+              items_approved: 0,
+              orphan_bytes: 0,
+              moderation_latency_ordinary_median_ms: null,
+              moderation_latency_bulk_median_ms: null,
+            },
+          },
+        },
+      }),
+    );
+    const { toJSON } = await renderObservatory();
+    const text = JSON.stringify(toJSON());
+    expect(text).toContain("Nothing queued or running");
+    expect(text).not.toContain("0m");
+    expect(text).not.toContain("<1m");
   });
 });
 

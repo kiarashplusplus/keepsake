@@ -14,6 +14,7 @@
  * is `ObservatoryQuery` below, which *is* client-submitted.
  */
 import { z } from "zod";
+import type { BatchItemState, BatchState, BulkOperationStatus } from "./bulk";
 
 // ---------------------------------------------------------------------------
 // Source wrapper
@@ -227,12 +228,210 @@ export type ObservatorySearchIndex =
       oldest_unindexed_age_ms: number | null;
     };
 
+// ---------------------------------------------------------------------------
+// Estate bulk upload — plan Stage 5. Same D1-derived, no-credential,
+// always-present floor as the rest of `ObservatoryApp`: nothing here reaches
+// Cloudflare, so there is no `ObservatorySource` wrapper.
+//
+// A pilot cannot be run on a feature whose only failure signal is a giver
+// complaining, and until this existed nothing watched `upload_batches`,
+// `upload_batch_items`, `upload_batch_photos`, `bulk_grants` or
+// `bulk_operations` at all — four tables a submission depends on, zero of
+// them observed.
+// ---------------------------------------------------------------------------
+
+/**
+ * `upload_batches.state`, per `BATCH_STATES`
+ * (`@keepsake/contracts/bulk`) — `draft | submitting | closed | cancelled`.
+ * A `Record` rather than an array of `{state, count}` pairs so a caller can
+ * index it directly without a `.find()`, the same shape
+ * `AdminStats.listings_by_status` already uses for the give flow's own
+ * status breakdown.
+ */
+export type ObservatoryBulkBatches = {
+  by_state: Record<BatchState, number>;
+  /** `draft + submitting` — batches a giver could still be working, or that
+   * a submission is still working through. Everything else (`closed`,
+   * `cancelled`) is finished, in either direction. */
+  active: number;
+  /** `state = 'draft'` batches whose `expires_at` has already passed. Their
+   * photos are already being reclaimed by `cron/orphanSweep.ts` on its next
+   * nightly pass (the migration's own "reclamation for free" mechanism), but
+   * the `upload_batches` row itself is never deleted — nothing sweeps it —
+   * so this is the honest count of batches a giver started and then simply
+   * never came back to. The plan's "draft abandonment" metric, at the level
+   * this schema can actually answer it: a count of rows past their own
+   * expiry, not a rate against batches started (see `ObservatoryFunnel`'s
+   * own doc comment on why a ratio is deliberately not computed here either). */
+  abandoned_draft: number;
+};
+
+/**
+ * `upload_batch_items.state` — `editing | ready | queued | submitted |
+ * failed` (`BATCH_ITEM_STATES`) — plus the two-state shape of
+ * `upload_batch_photos` upload progress.
+ *
+ * `items_by_state.ready` is honest but structurally quiet: nothing in
+ * `apps/api/src/bulk/submit.ts` or `routes/bulk.ts` ever writes
+ * `state = 'ready'` — readiness (`BatchItemSummary.ready`) is computed live
+ * on every read by `checkItemReadiness`, running the real
+ * `CreateListingInput` over the assembled item, and is never persisted with
+ * a timestamp. So this bucket reads `0` on every environment today, which is
+ * correct, not a bug in this query — see this repo's report for the funnel
+ * step ("first ready item") that fact makes unanswerable from the schema.
+ */
+export type ObservatoryBulkDrafts = {
+  items_by_state: Record<BatchItemState, number>;
+  /** Every item not yet `submitted` — `editing + ready + queued + failed`.
+   * The work still outstanding across every batch, regardless of that
+   * batch's own state. */
+  items_outstanding: number;
+  /** `upload_batch_photos` rows with `photo_id IS NULL` — admission was
+   * charged and the row was written, but the bytes never finished landing in
+   * R2 (see `20260908063000_bulk_photo_reservation.sql`'s header). A retry
+   * resumes these; a reservation that sits here for a long time without one
+   * is a giver who was charged for a photo they don't have. */
+  photos_reserved: number;
+  /** `upload_batch_photos` rows with `photo_id IS NOT NULL` — finished
+   * uploads, whether or not they're attached to an item yet. */
+  photos_stored: number;
+};
+
+/**
+ * `bulk_operations.status` — `queued | running | done | cancelled`
+ * (`BULK_OPERATION_STATUSES`) — plus the age of the oldest still-active one
+ * and how many times an active operation's lease had to be recovered from a
+ * crash rather than a clean release.
+ *
+ * `oldest_active_age_ms` is this panel's twin of
+ * `ObservatoryModerationLatency.oldest_pending_age_ms`, for the same reason:
+ * a depth of 3 that has been 3 for six hours is the failure this exists to
+ * catch, and only an age says so. Measured from `created_at` — when the
+ * submission was accepted — not from when the operation was last claimed, so
+ * it answers "how long has this giver been waiting", not "how long has the
+ * current lease been held".
+ */
+export type ObservatoryBulkOperations = {
+  by_status: Record<BulkOperationStatus, number>;
+  /** `queued + running`. */
+  active: number;
+  /** `null` means nothing is queued or running right now — genuinely
+   * different from an age of zero, same rule every other `*_age_ms` field in
+   * this file follows. */
+  oldest_active_age_ms: number | null;
+  /** `SUM(bulk_operations.stale_recoveries)` over only the operations
+   * currently `queued`/`running` — see
+   * `20260908072223_bulk_operation_lease_recovery.sql`'s header for exactly
+   * what increments this column and why `attempts` alone cannot distinguish
+   * it from ordinary multi-invocation chunking. Scoped to active operations
+   * on purpose: an operation that needed one recovery and then finished
+   * cleanly should not keep this number above zero forever — a rising count
+   * *among work still in flight* is what means the runner is dying mid-run. */
+  active_stale_lease_recoveries: number;
+};
+
+/**
+ * `bulk_grants` — how much admission is outstanding right now, and how it
+ * broke down the last time a grant's clock ran out.
+ *
+ * `items_remaining`/`photos_remaining`/`suggestions_remaining` sum only the
+ * `active` grants (not revoked, not expired) — the same "state now" framing
+ * `ObservatoryModerationLatency` uses, not a historical total of everything
+ * ever minted.
+ */
+export type ObservatoryBulkGrants = {
+  active: number;
+  expired: number;
+  revoked: number;
+  items_remaining: number;
+  photos_remaining: number;
+  suggestions_remaining: number;
+};
+
+/**
+ * The plan's tracked funnel, windowed the same way `ObservatoryFunnel` is —
+ * see that type's own doc comment for why this reports absolute counts and
+ * never a computed ratio.
+ *
+ * This is a *cohort-adjacent* set of independent counts, not a strict
+ * cohort like `ObservatoryFunnel`: `items_submitted`/`items_approved` are
+ * scoped by when the *event* happened (`submitted_at` inside the window,
+ * the listing's first `approved` `moderation_events` row inside the window),
+ * not by when the owning batch was created — a batch started nine days ago
+ * and submitted yesterday still counts as a submission this week. Doing it
+ * as a cohort like the give-flow funnel would undercount every batch long
+ * enough to outlive the window, which is the normal shape for an estate
+ * prepared over several sittings.
+ *
+ * Three of the plan's named metrics are deliberately absent, and this repo's
+ * own report says why in full: **the first-ready-item step** (never
+ * persisted — see `ObservatoryBulkDrafts.items_by_state`'s doc comment),
+ * **retry rate** (`bulk_operations.attempts` conflates ordinary
+ * multi-invocation chunking with genuine failure-driven retries, and there
+ * is no per-item retry counter), and **time to resume** (nothing timestamps
+ * when a backed-off operation actually got picked back up, as distinct from
+ * its own routine `next_attempt_at` scheduling).
+ */
+export type ObservatoryBulkFunnel = {
+  window_days: number;
+  /** `upload_batches.created_at` inside the window. */
+  batches_started: number;
+  /** `upload_batch_items.submitted_at` inside the window — the item passed
+   * its claim and became a listing (not necessarily an *approved* one yet). */
+  items_submitted: number;
+  /** Of those, listings whose first `approved` `moderation_events` row also
+   * falls inside the window. Not a cohort of `items_submitted` above: an
+   * item submitted just before the window closes and approved just after it
+   * opens again next week is still counted the day it actually clears. */
+  items_approved: number;
+  /** `SUM(photos.bytes_full)` for finished-upload `upload_batch_photos` rows
+   * that never ended up attached to a submitted item, in a batch that is
+   * `closed` or `cancelled` — i.e. the batch's fate is sealed and these
+   * bytes will never become a listing. Real bytes (`photos.bytes_full`),
+   * not a photo count, because "orphan bytes" is what the plan asks for and
+   * R2 storage is what they actually cost. */
+  orphan_bytes: number;
+  /** Median wall-clock from listing creation to its first moderation
+   * decision, over the window, split by whether the listing came from a
+   * bulk item (`upload_batch_items.listing_id`) or the ordinary give flow —
+   * the plan's "ordinary-versus-bulk processing latency" metric, answered
+   * honestly because both halves already run through the same
+   * `moderateListing` call and the same `moderation_events` log
+   * (`src/bulk/submit.ts`'s own header on why there is no second
+   * moderation path). `null` means nothing in that group left the queue
+   * inside the window — see `ObservatoryModerationLatency.median_time_to_decision_ms`'s
+   * doc comment on why that is a different fact from `0`. */
+  moderation_latency_ordinary_median_ms: number | null;
+  moderation_latency_bulk_median_ms: number | null;
+};
+
+/**
+ * A union rather than a struct with a flag, same reasoning as
+ * `ObservatorySearchIndex`: with `BULK_UPLOAD` off (every environment but
+ * preview today — `apps/api/wrangler.toml`), no route accepts a new batch,
+ * so every number below would either be a true, meaningless zero or —
+ * worse, if historical rows from before the flag was flipped off still sit
+ * in the tables — a number that looks live but describes a feature nobody
+ * can currently reach. There is deliberately nothing to render either way.
+ */
+export type ObservatoryBulk =
+  | { enabled: false }
+  | {
+      enabled: true;
+      batches: ObservatoryBulkBatches;
+      drafts: ObservatoryBulkDrafts;
+      operations: ObservatoryBulkOperations;
+      grants: ObservatoryBulkGrants;
+      funnel: ObservatoryBulkFunnel;
+    };
+
 export type ObservatoryApp = {
   window_days: number;
   by_day: ObservatoryAppDay[];
   funnel: ObservatoryFunnel;
   moderation: ObservatoryModerationLatency;
   search_index: ObservatorySearchIndex;
+  bulk: ObservatoryBulk;
 };
 
 // ---------------------------------------------------------------------------
@@ -321,6 +520,31 @@ export type DailyReportCron = {
 };
 
 /**
+ * The digest's own short block of the same bulk-upload numbers
+ * `ObservatoryBulk` reports, so "a quiet day still reports" is true for
+ * estate bulk upload too and not just for the give flow. `null` — not a
+ * struct of zeros — mirrors `ObservatoryBulk`'s `{ enabled: false }`: with
+ * `BULK_UPLOAD` off, there is nothing to report, and a zeroed block would
+ * read as "bulk is quiet today" rather than the true "bulk is not reachable
+ * in this environment".
+ *
+ * Deliberately a flat handful of "state now" numbers rather than the whole
+ * nested `ObservatoryBulk` shape — the same trade this file already makes
+ * for the search-index panel, whose full breakdown never appears in
+ * `DailyReport` either, only its alert text and its budget line. The full
+ * breakdown is one `.report`-adjacent `GET /api/admin/observatory` call away
+ * for anyone who wants it.
+ */
+export type DailyReportBulk = {
+  active_batches: number;
+  items_outstanding: number;
+  /** Same fact as `ObservatoryBulkOperations.oldest_active_age_ms`. */
+  oldest_operation_age_ms: number | null;
+  active_stale_lease_recoveries: number;
+  orphan_bytes: number;
+};
+
+/**
  * The daily digest, covering one UTC day.
  *
  * Sent every day whether or not anything is wrong — the absence of the email
@@ -362,4 +586,5 @@ export type DailyReport = {
     embed: DailyReportBudget;
   };
   crons: DailyReportCron[];
+  bulk: DailyReportBulk | null;
 };
