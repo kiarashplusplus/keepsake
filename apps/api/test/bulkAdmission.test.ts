@@ -259,6 +259,43 @@ describe("estate bulk upload: admission", () => {
     expect(secondReal.status).toBe(429);
   });
 
+  it("re-links a previously stored photo without spending allowance again when the mapping row is missing", async () => {
+    await seedStandardPostalCodes();
+    const token = freshOwnerToken();
+    const ownerId = await seedOwner(token);
+    const grant = await mintGrant(ownerId, { items: 10, photos: 1 });
+    const batch = await createBatch(token, grant.id, "retry-relink");
+
+    const first = await bulk(`/batches/${batch.id}/photos/only`, {
+      method: "PUT",
+      headers: { ...authHeaders(token), "x-bulk-grant": grant.id },
+      body: photoForm(),
+    });
+    expect(first.status).toBe(201);
+    const firstPhoto = await readOk<{ photo_id: string }>(first);
+
+    await env.DB.prepare("DELETE FROM upload_batch_photos WHERE batch_id = ? AND client_photo_id = ?").bind(batch.id, "only").run();
+
+    const retry = await bulk(`/batches/${batch.id}/photos/only`, {
+      method: "PUT",
+      headers: { ...authHeaders(token), "x-bulk-grant": grant.id },
+      body: photoForm(),
+    });
+    expect(retry.status).toBe(201);
+    const retryPhoto = await readOk<{ photo_id: string }>(retry);
+    expect(retryPhoto.photo_id).toBe(firstPhoto.photo_id);
+
+    const grantRow = await env.DB.prepare("SELECT photos_remaining FROM bulk_grants WHERE id = ?").bind(grant.id).first<{ photos_remaining: number }>();
+    expect(grantRow?.photos_remaining).toBe(0);
+
+    const secondReal = await bulk(`/batches/${batch.id}/photos/second`, {
+      method: "PUT",
+      headers: { ...authHeaders(token), "x-bulk-grant": grant.id },
+      body: photoForm(),
+    });
+    expect(secondReal.status).toBe(429);
+  });
+
   it("the owner/day ceiling bites across two different batches", async () => {
     await seedStandardPostalCodes();
     setTestEnvVar("BULK_OWNER_DAILY_PHOTOS", "1");

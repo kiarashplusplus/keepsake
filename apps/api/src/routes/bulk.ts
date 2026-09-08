@@ -49,6 +49,7 @@ import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
 import { requireParam } from "../lib/params.js";
 import { todayISO } from "../lib/day.js";
+import { sha256Hex } from "../lib/digest.js";
 import { secondsUntilMidnightUTC } from "../moderation/budget.js";
 import { ownerAuth, type OwnerRow } from "../middleware/ownerAuth.js";
 import { requireGrant, type GrantVariables } from "../middleware/bulkGrant.js";
@@ -81,6 +82,11 @@ bulkRoutes.use("*", featureFlag(bulkUploadEnabled));
 bulkRoutes.on(["POST", "PATCH", "PUT", "DELETE"], "*", burst("RL_WRITE"));
 
 const MS_PER_DAY = 86_400_000;
+
+async function reservedPhotoId(batchId: string, clientPhotoId: string): Promise<string> {
+  const digest = (await sha256Hex(`${batchId}:${clientPhotoId}`)).toUpperCase();
+  return `0${digest.slice(0, 25)}`;
+}
 
 // ---------------------------------------------------------------------------
 // POST /batches
@@ -461,39 +467,34 @@ bulkRoutes.put("/batches/:id/photos/:clientPhotoId", burst("RL_UPLOAD"), ownerAu
 
   const now = Date.now();
   const day = todayISO();
+  const photoId = await reservedPhotoId(batchId, clientPhotoId);
+  const retainedPhoto = await c.env.DB.prepare("SELECT id FROM photos WHERE id = ? AND owner_id = ?")
+    .bind(photoId, owner.id)
+    .first<{ id: string }>();
 
   // Admission is checked, and spent, *before* a single byte reaches R2 —
   // fail closed on an exhausted grant or ceiling with nothing written
   // anywhere. `settleDebit` corrects the one case where only one of the two
   // guarded statements below actually fired (see its own doc comment).
-  const debit = buildPhotoDebitStatements(c.env, { grant, ownerId: owner.id, day, limit: bulkOwnerDailyPhotos(c.env), now });
-  const debitResults = await c.env.DB.batch(debit.statements);
-  const grantOk = (debitResults[debit.grantResultIndex]?.meta.changes ?? 0) > 0;
-  const usageOk = (debitResults[debit.usageResultIndex]?.meta.changes ?? 0) > 0;
-  const admitted = await settleDebit(c.env, { grantId: grant.id, ownerId: owner.id, day, kind: "photos", grantOk, usageOk });
-  if (!admitted) {
-    const message = grantOk
-      ? "Today's photo limit for this account has been reached."
-      : "Your admission grant has no photos left — ask the operator for a fresh one.";
-    return fail(c, "rate_limited", message, 429, grantOk ? { retryAfter: secondsUntilMidnightUTC() } : {});
+  if (!retainedPhoto) {
+    const debit = buildPhotoDebitStatements(c.env, { grant, ownerId: owner.id, day, limit: bulkOwnerDailyPhotos(c.env), now });
+    const debitResults = await c.env.DB.batch(debit.statements);
+    const grantOk = (debitResults[debit.grantResultIndex]?.meta.changes ?? 0) > 0;
+    const usageOk = (debitResults[debit.usageResultIndex]?.meta.changes ?? 0) > 0;
+    const admitted = await settleDebit(c.env, { grantId: grant.id, ownerId: owner.id, day, kind: "photos", grantOk, usageOk });
+    if (!admitted) {
+      const message = grantOk
+        ? "Today's photo limit for this account has been reached."
+        : "Your admission grant has no photos left — ask the operator for a fresh one.";
+      return fail(c, "rate_limited", message, 429, grantOk ? { retryAfter: secondsUntilMidnightUTC() } : {});
+    }
   }
 
-  // `upload_batch_photos.photo_id` is `NOT NULL REFERENCES photos(id)` —
-  // confirmed directly against the real migration (D1 enforces it: an
-  // insert naming a `photo_id` with no matching `photos` row throws
-  // `SQLITE_CONSTRAINT_FOREIGNKEY` immediately, not only at some later
-  // read). So unlike the item path above, the mapping row cannot be
-  // reserved before the photo it names exists — `storePhotoUpload` has to
-  // run first. `retain_until` is deliberately left unset on this call and
-  // only stamped once the mapping row is confirmed linked below: if this
-  // Worker is evicted in between, the photo this created is a bare orphan
-  // (`listing_id IS NULL`, `retain_until IS NULL`) that `cron/orphanSweep.ts`
-  // already knows how to reclaim in 24 hours, rather than bytes protected
-  // for a week with nothing ever pointing at them.
-  const photoId = ulid(now);
-  const stored = await storePhotoUpload(c.env, { ownerId: owner.id, form, photoId });
-  if (!stored.ok) {
-    return fail(c, stored.code, stored.message, stored.status, stored.issues ? { issues: stored.issues } : {});
+  if (!retainedPhoto) {
+    const stored = await storePhotoUpload(c.env, { ownerId: owner.id, form, photoId });
+    if (!stored.ok) {
+      return fail(c, stored.code, stored.message, stored.status, stored.issues ? { issues: stored.issues } : {});
+    }
   }
 
   const { updatedAt, lastActivityAt, expiresAt } = activityBump(c.env, now);

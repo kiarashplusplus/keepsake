@@ -74,10 +74,8 @@ export interface StorePhotoOptions {
    * differ in how they answer a body that will not parse at all. */
   form: FormData;
   /**
-   * Pre-chosen id. The bulk route reserves its `upload_batch_photos` row
-   * before the bytes are stored, so a retried upload after a lost response
-   * reuses the same id and the same deterministic R2 keys and overwrites,
-   * rather than storing a second copy and charging a second time.
+   * Pre-chosen id. The bulk route fixes this per `(batch_id, client_photo_id)`
+   * so retries target the same row and the same deterministic R2 keys.
    */
   photoId?: string;
   /**
@@ -169,14 +167,20 @@ export async function storePhotoUpload(env: Env, options: StorePhotoOptions): Pr
   await env.BUCKET.put(thumbKey, thumbBytes, { httpMetadata: { contentType: thumbType } });
 
   const now = Date.now();
-  // `INSERT OR REPLACE` rather than `INSERT`, and only reachable as a replace
-  // on the bulk path: a retried upload under the same reserved `photoId`
-  // rewrites the same row and the same two R2 keys. On the give flow `id` is
-  // a fresh ULID every time, so this can only ever insert.
   await env.DB.prepare(
-    `INSERT OR REPLACE INTO photos
+    `INSERT INTO photos
       (id, owner_id, listing_id, position, r2_key_full, r2_key_thumb, width, height, bytes_full, blurhash, content_type, moderation_status, created_at, retain_until)
-     VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?)`,
+     VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       r2_key_full = excluded.r2_key_full,
+       r2_key_thumb = excluded.r2_key_thumb,
+       width = excluded.width,
+       height = excluded.height,
+       bytes_full = excluded.bytes_full,
+       blurhash = excluded.blurhash,
+       content_type = excluded.content_type,
+       moderation_status = excluded.moderation_status,
+       retain_until = excluded.retain_until`,
   )
     .bind(
       id,
