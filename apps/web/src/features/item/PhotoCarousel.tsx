@@ -10,7 +10,28 @@ import { useColors } from "@/ui/theme";
 import { useMotion } from "@/ui/MotionProvider";
 import { Print } from "@/ui/Print";
 
-export function PhotoCarousel({ photos }: { photos: readonly PublicPhoto[] }): React.ReactElement {
+export type PhotoCarouselProps = {
+  photos: readonly PublicPhoto[];
+  /**
+   * Cap on the print's own width, in px. Defaults to 560 — the single-column
+   * item page's treatment, unchanged: under the 720px prose measure a print
+   * any wider than this stops reading as an object laid on the table and
+   * starts reading as a banner.
+   *
+   * Pass `null` to drop the cap and let the print fill whatever box it is
+   * given, which is what the two-column desktop item page does (#222): there
+   * the column itself is the constraint, and a second cap inside it is one
+   * more number to keep in sync for no benefit. At today's numbers the 560
+   * would in fact never bind — the left column tops out around 471px, since
+   * the `grid` measure is 1100 and the split gives the print five of eleven
+   * parts — so this is deliberately belt-and-braces: it keeps "the column
+   * decides" true by construction rather than by arithmetic that a later
+   * change to the measure or the split would quietly invalidate.
+   */
+  maxWidth?: number | null | undefined;
+};
+
+export function PhotoCarousel({ photos, maxWidth = 560 }: PhotoCarouselProps): React.ReactElement {
   const colors = useColors();
   const motion = useMotion();
   const [width, setWidth] = React.useState(0);
@@ -28,7 +49,7 @@ export function PhotoCarousel({ photos }: { photos: readonly PublicPhoto[] }): R
   const cover = photos[0];
 
   return (
-    <Print tiltDeg={-1.2} style={{ padding: 12, alignSelf: "center", width: "100%", maxWidth: 560, gap: space.sm }}>
+    <Print tiltDeg={-1.2} style={{ padding: 12, alignSelf: "center", width: "100%", maxWidth: maxWidth ?? undefined, gap: space.sm }}>
       <View
         onLayout={handleLayout}
         style={{ width: "100%", aspectRatio: 4 / 3, overflow: "hidden", backgroundColor: colors.tableEdge }}
