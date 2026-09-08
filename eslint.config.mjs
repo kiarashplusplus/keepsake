@@ -37,6 +37,13 @@ export default [
     files: ["apps/api/**/*.ts", "packages/**/*.ts", "tools/**/*.{mjs,ts}"],
   })),
   {
+    // Contract modules intentionally give each Zod value schema and its
+    // inferred TypeScript type the same public name. The two declarations
+    // occupy separate namespaces and are the package's established API.
+    files: ["packages/contracts/**/*.ts"],
+    rules: { "@typescript-eslint/no-redeclare": "off" },
+  },
+  {
     files: ["**/*.{ts,tsx,js,jsx,mjs,cjs}"],
     rules: {
       "no-restricted-imports": [

@@ -93,7 +93,7 @@ export interface CreateListingOptions {
    * case — `CreateListingInput.aspects` defaults to `[]` server-side either
    * way, but omitting it here is what a give flow with a suggestion the
    * giver never applied actually sends. */
-  aspects?: Array<{ name: string; value: string }>;
+  aspects?: { name: string; value: string }[];
   /** A real photograph from `e2e/fixtures/photos`, for the UX baseline. Left
    * unset everywhere else on purpose: the functional specs want `png.ts`'s
    * generated gradient, which asserts the same pipeline without reading a
