@@ -104,6 +104,11 @@ describe("terms.html vs. the content terms (2026-09-08)", () => {
       "a thumbnail for the feed",
       "a share card",
       "list the page in our sitemap",
+      // buildProductJsonLd (apps/api/src/routes/item.ts) emits schema.org
+      // Product markup carrying the full-resolution photo URL and a story
+      // excerpt for search engines — a further publication the visible
+      // grant has to name (#304).
+      "as structured data search engines can read directly",
       "turn your listing's public words into the numbers that make search work",
     ]) {
       expect(TERMS_SHIPPED).toContain(use);
