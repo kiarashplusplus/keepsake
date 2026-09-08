@@ -77,42 +77,65 @@ rather than maintain. What that costs is exact pixel fidelity, which nothing
 here is judged on: contrast is `a11y.spec.ts`'s axe run, and a one-pixel colour
 question belongs in the running app.
 
-## Known: the frames are not yet byte-stable between runs
+## Fixed: three causes that used to make the frames churn between runs
 
-Re-capturing with no code change rewrites 16 of the 76 frames. Two of the
-three causes are fixed; the third is understood and is not fixed here.
+How many frames a re-capture used to rewrite with no code change is
+deliberately not written down as a number here — it went stale twice (16 of
+76, then 77 total, while the directory quietly grew to 89). Compare two runs
+instead: `ls docs/qa/baseline/ux-mobile | wc -l` and the `ux-desktop` twin give
+the current counts, and `git status` after a re-capture shows exactly which
+files moved.
 
-**Fixed — the mount spring.** `src/ui/Print.tsx` drops each card onto the table
-with a Reanimated `withSpring`, and `page.screenshot()`'s `animations:
-"disabled"` only freezes CSS animations, so a capture could land anywhere in
-it. `support/shots.ts` now waits for two consecutive identical frames before
-capturing, and both capture projects run under `prefers-reduced-motion:
-reduce`, where `motionSafe()` starts `drop` at its settled value instead of
-animating to it. Note what `reduce` deliberately does *not* change:
-`tiltRangeDeg` is passed through untouched, so the prints are photographed at
-the same angles a visitor sees. What it drops are transients — the drop-in,
-`expo-image`'s cross-fade, and `Stamp.tsx`'s infinite wobble — every one of
-which resolves to the same resting pixels it was heading for. The baseline
-shows the design, not a reduced-motion variant of it.
+Fixed here means the three causes below no longer move a frame. It does not
+mean two captures are guaranteed byte-identical on every machine: Chromium's
+own text rasterisation differs by build, and a capture run on a Chromium other
+than the one this suite is pinned to can still move every frame on font
+metrics alone — that is an environment mismatch, not a bug in the fixture, and
+the fix is capturing from the pinned build, not chasing pixels here.
 
-**Not fixed — the ids.** The 16 that still move are every screen that renders
-a list of prints: `feed-cards`, `feed-category`, `mine`, `mine-detail-*`,
-`admin-hidden`, `dark-mine`. `ListingCard` sets each print's angle from
-`tiltDegForId(listing.id)` and its offset from `verticalOffsetForId(listing.id)`
-(`src/lib/masonry.ts`), both of which hash the id — and ids are ULIDs the API
-mints fresh on every run, because `support/demoCatalog.ts` wipes the database
-and re-seeds through the real API. So the catalogue fixes the titles, the
-stories, the categories and the postcodes, and then every card lands at a
-different angle anyway. The diff is a halo around every edge in the list: a
-sub-pixel shift, invisible to a reader, loud to `git`.
+**Fixed — the mount spring.** On web, `Print.web.tsx` drops each card onto the
+table with a CSS animation (`Stamp.web.tsx` and `Skeleton.web.tsx` are the same
+shape — added in #265, alongside `Print.web.tsx` which already existed), and
+`page.screenshot()`'s `animations: "disabled"` only freezes *some* of that, so
+a capture could land anywhere mid-drop. `support/shots.ts` now waits for two
+consecutive identical frames before capturing, and both capture projects run
+under `prefers-reduced-motion: reduce`, where `motionSafe()` starts `drop` at
+its settled value instead of animating to it. Note what `reduce` deliberately
+does *not* change: `tiltRangeDeg` is passed through untouched, so the prints
+are photographed at the same angles a visitor sees. What it drops are
+transients — the drop-in, `expo-image`'s cross-fade, and the wobble — every one
+of which resolves to the same resting pixels it was heading for. The baseline
+shows the design, not a reduced-motion variant of it. (The Reanimated
+`withSpring`/wobble this paragraph used to describe is `Print.tsx`'s and
+`Stamp.tsx`'s *native* implementation — this capture never runs against it;
+see #275.)
 
-That is also why `item` and the give-flow frames are stable and these are not —
-`PhotoCarousel` passes a literal `tiltDeg={-1.2}` rather than hashing anything.
+**Fixed — the ids.** Every screen that renders a list of prints —
+`feed-cards`, `feed-category`, `feed`, `mine`, `mine-detail-*`,
+`admin-hidden`, `dark-mine` — used to move on every re-capture even with the
+catalogue's titles, stories, categories and postcodes held fixed.
+`ListingCard` sets each print's angle from `tiltDegForId(listing.id)` and its
+offset from `verticalOffsetForId(listing.id)` (`src/lib/masonry.ts`), both of
+which hash the id, and the id used to be a ULID the API minted fresh on every
+run — `support/demoCatalog.ts` wipes the database and re-seeds through the
+real API every capture. `support/demoCatalog.ts`'s `PINNED_LISTING_IDS` now
+rewrites each minted id to a fixed one immediately after creating it
+(`support/demoDb.ts`'s `pinListingIds()`, a direct write into the same local
+D1 file `wrangler dev` is serving from), so the hash input — and therefore the
+tilt and offset — is the same on every run (#225). That is also why `item` and
+the give-flow frames were never affected: `PhotoCarousel` passes a literal
+`tiltDeg={-1.2}` rather than hashing anything.
 
-The fix is to pin the six catalogue ids, which means seeding them with known
-ULIDs rather than letting the API mint them, and it belongs in
-`support/demoCatalog.ts`. Nothing here compares images, so none of this costs a
-red build; what it costs is a noisier `git diff` than it should be on refresh.
+**Fixed — the four giver-request frames.** `mine-detail-requests`,
+`-choose`, `-chosen` and `mine-email` used to be permanently stale: #188 holds
+a request unconfirmed until the stranger clicks a link that exists only in an
+email, so this harness could never produce one for the giver's dashboard to
+show, and `e2e/ux.spec.ts` skipped that block outright. `support/demoDb.ts`'s
+`confirmDemoRequests()` now writes the same two effects
+`POST /api/requests/confirm` would have — `confirmed_at`/`status` on the
+request, the count on the listing — directly into D1 right after
+`support/demoCatalog.ts` sends the fixture's two asks, rather than adding any
+confirm-token shortcut the real app could reach too (#240).
 
 ## Always capture through `pnpm --filter @keepsake/web e2e:ux`
 

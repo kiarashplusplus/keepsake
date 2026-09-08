@@ -375,6 +375,78 @@ describe("PATCH /api/listings/:id", () => {
     await waitForListingStatus(listing.id, (status) => status === "approved");
   });
 
+  it("one of two overlapping PATCHes loses with 409, not a silently dropped update (issue #282)", async () => {
+    // Two genuinely concurrent requests — dispatched before either is
+    // awaited, the same overlap `reportAutohideConcurrency.test.ts` relies
+    // on — engineered with the same asymmetry the issue's own "concrete
+    // scenario" describes: A is a bare title edit, the shortest path through
+    // the handler (straight from `fetchListingRow` to the guarded
+    // `UPDATE`, no other awaits between them). B carries `country`/
+    // `postal_code` (an extra `lookupPostalCode` await) and `photo_ids` (an
+    // extra ownership `SELECT`) between its own read and its own write, so
+    // it reliably reaches its `UPDATE` after A's has already committed —
+    // while both still read the row at version 1, since they were
+    // dispatched together. That reproduces "B read `row.version = 1` a
+    // moment earlier" deterministically rather than hoping a bare
+    // `Promise.all` interleaves the right way.
+    //
+    // Deliberately `createListing`, not `createApprovedListing`: PATCH's own
+    // guard doesn't care whether the listing has converged to `approved`
+    // yet (only `given` is refused), and waiting on `waitForListingStatus`'s
+    // polling loop first was measured to change the runtime's scheduling
+    // enough to make the race below intermittent — sometimes both requests
+    // read before either wrote, sometimes not. Racing immediately after
+    // create, with nothing else awaited first, reproduced the interleaving
+    // on every run tried.
+    await seedStandardPostalCodes();
+    const token = freshOwnerToken();
+    const photoId = await givenOnePhoto(token);
+    const listing = await readOk<OwnerListing>(await createListing(token, [photoId]));
+    expect(listing.version).toBe(1);
+
+    const fast = SELF.fetch(`http://x/api/listings/${listing.id}`, {
+      method: "PATCH",
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({ title: "Winning PATCH's title" }),
+    });
+    const slow = SELF.fetch(`http://x/api/listings/${listing.id}`, {
+      method: "PATCH",
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Losing PATCH's title",
+        country: "US",
+        postal_code: "02144",
+        photo_ids: [photoId],
+        aspects: [{ name: "material", value: "porcelain" }],
+      }),
+    });
+
+    const [resFast, resSlow] = await Promise.all([fast, slow]);
+    // On `main`, B's `UPDATE ... WHERE version = ?` matches zero rows (A
+    // already bumped it to 2), the result is discarded, and the handler
+    // falls through to run B's photo re-attach and aspect replace
+    // unconditionally before returning 200 with a row it no longer owns.
+    // The fix returns 409 here instead, before either of those writes runs.
+    expect(resFast.status).toBe(200);
+    expect(resSlow.status).toBe(409);
+    const error = await readErr(resSlow);
+    expect(error.code).toBe("conflict");
+
+    // A's title and version 2 must survive untouched — no aspect row from
+    // B's request in particular, since that write sits after the guard in
+    // the handler and must never have run.
+    const row = await env.DB.prepare("SELECT title, version FROM listings WHERE id = ?")
+      .bind(listing.id)
+      .first<{ title: string; version: number }>();
+    expect(row?.title).toBe("Winning PATCH's title");
+    expect(row?.version).toBe(2);
+
+    const aspectCount = await env.DB.prepare("SELECT COUNT(*) AS n FROM listing_aspects WHERE listing_id = ?")
+      .bind(listing.id)
+      .first<{ n: number }>();
+    expect(aspectCount?.n).toBe(0);
+  });
+
   it("409s editing a given listing", async () => {
     await seedStandardPostalCodes();
     const token = freshOwnerToken();

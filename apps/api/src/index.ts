@@ -32,6 +32,22 @@ type Variables = {
   requestId: string;
 };
 
+/**
+ * Paths that are never worth a search engine's attention because their
+ * contents require a credential the crawler cannot have — see the
+ * `X-Robots-Tag` middleware below for why each one is here. Kept as one
+ * list read by both `isNoindexPath` and, indirectly, `test/robots.test.ts`,
+ * so a route added to one place cannot silently disagree with the other.
+ */
+const NOINDEX_PATH_PREFIXES = ["/admin", "/bulk", "/mine", "/recover", "/withdraw", "/confirm"];
+
+/** True for `prefix` itself and every path nested under it (`/admin`,
+ * `/admin/anything`), never for a merely similarly-named sibling
+ * (`/administer` does not match `/admin`). */
+function isNoindexPath(path: string): boolean {
+  return NOINDEX_PATH_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 // Every response carries the id it was handled under, so a report from a
@@ -58,17 +74,37 @@ app.use("*", async (c, next) => {
   // API are all indexable surfaces, and image search is exactly how a
   // stranger's keepsake photo would surface from a host nobody is watching.
   //
-  // Issue #84: also noindex `/admin` unconditionally, including in
-  // production. `apps/web/public/robots.txt` used to `Disallow: /admin`,
-  // which stops a well-behaved crawler from *fetching* it but does nothing
-  // about a page some other link already got indexed, and — worse — hands
+  // Issue #84, extended by #278: also noindex a fixed set of private-ish
+  // paths unconditionally, including in production — not just `/admin`.
+  // `apps/web/public/robots.txt` used to `Disallow: /admin` alone, which
+  // stops a well-behaved crawler from *fetching* a page but does nothing
+  // about one some other link already got indexed, and — worse — hands
   // anyone who reads a public, unauthenticated file a free pointer at the
-  // one endpoint worth attacking. The token gate (`adminAuth`) is the actual
-  // security boundary and is unchanged either way; this only keeps the page
-  // out of search results without advertising that it exists. Reaching this
-  // path at all on production requires `/admin` in `wrangler.toml`'s
-  // `run_worker_first` — see that file's comment.
-  if (!isProduction(c.env) || c.req.path === "/admin") {
+  // endpoints worth attacking (#84's reasoning, which is why this stays a
+  // header rather than growing `robots.txt` into an itemised list). The
+  // token/owner-token gate on each of these routes is the actual security
+  // boundary and is unchanged either way; this only keeps the page out of
+  // search results without advertising that it exists.
+  //
+  // `NOINDEX_PATH_PREFIXES` covers every route whose contents are reachable
+  // only with a credential the crawler doesn't have — `/admin` (token),
+  // `/bulk*` and `/mine*` (owner token, and `/bulk/<client_batch_key>` is
+  // meant to be known only to the device that minted it), `/recover*`,
+  // `/withdraw*` and `/confirm*` (a mailed, single-use token in the path
+  // itself, so indexing one is a worse leak than the others: search engines
+  // do crawl URLs they merely see linked, not only ones a sitemap lists).
+  // `/item/*` and the feed root stay indexable on purpose — they're the
+  // content this product wants found. A prefix match, not `===`, because
+  // `/admin` matching only itself was the same "list only protects what
+  // someone remembered" mistake #84 already found once for `robots.txt`:
+  // any future `/admin/...` or `/bulk/<key>/review` needs no new line here.
+  //
+  // Reaching any of these at all on production requires them in
+  // `wrangler.toml`'s `[env.production.assets] run_worker_first` — see that
+  // file's comment and `test/robotsConfig.test.ts`, which is what actually
+  // proves the Worker (and so this header) is reached rather than the
+  // static-assets system answering first.
+  if (!isProduction(c.env) || isNoindexPath(c.req.path)) {
     c.header("X-Robots-Tag", "noindex, nofollow");
   }
 });
@@ -357,11 +393,43 @@ app.all("/api/*", (c) => c.json({ ok: false as const, error: { code: "not_found"
 // served by the `ASSETS` binding. Only the HTML document is forced to
 // `no-store`; hashed `/_expo/static/*` assets keep whatever immutable
 // caching header the assets binding already set, untouched.
+//
+// Issue #272: `#262` turned on route splitting (`asyncRoutes`), so a route's
+// JS now arrives as its own content-hashed chunk under this prefix instead
+// of in the one entry bundle, and a deploy replaces those hashes. Every
+// `[env.*].assets` block sets `not_found_handling = "single-page-application"`,
+// which is right for an app route on a hard refresh (`/item/:id` has to come
+// back as the shell) but wrong here: a tab left open across a deploy that
+// navigates to a route it hasn't already loaded requests a chunk that no
+// longer exists, and the assets binding answers that miss the same way it
+// answers every miss — `200 text/html`, the SPA shell — instead of 404. The
+// browser gets HTML where a JS module was expected and the dynamic import
+// rejects with "Unexpected token '<'", which tells nobody what happened.
+const CHUNK_PATH_PREFIX = "/_expo/static/";
+
 app.all("*", async (c) => {
   const assetResponse = await c.env.ASSETS.fetch(c.req.raw);
   const contentType = assetResponse.headers.get("content-type") ?? "";
   if (!contentType.includes("text/html")) {
     return assetResponse;
+  }
+
+  // Nothing under `_expo/static/*` is ever legitimately HTML — it's
+  // route-split JS chunks, source maps and fonts, all content-hashed
+  // filenames from a single build. So a `text/html` response under this
+  // prefix is never the file the request actually asked for; it can only be
+  // the SPA-shell fallback the assets binding substitutes for a miss.
+  // Answering that truthfully (a real 404, uncached) is what lets the
+  // client's chunk-load recovery
+  // (`apps/web/src/features/chunkRecovery/useChunkRecoveryGuard.ts`) tell
+  // "this needs a reload" apart from an ordinary network failure, and turns
+  // the failure into a plain 404 in the network panel instead of a parse
+  // error.
+  if (c.req.path.startsWith(CHUNK_PATH_PREFIX)) {
+    return new Response("Not found", {
+      status: 404,
+      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+    });
   }
 
   const headers = new Headers(assetResponse.headers);
@@ -468,6 +536,15 @@ async function scheduled(controller: ScheduledController, env: Env, ctx: Executi
  * captured and rethrown rather than swallowed — is not observable from
  * anywhere else. */
 export { runCron };
+
+/** Exported for `test/writeSurfaceTurnstile.test.ts` (#246): `app.routes` is
+ * Hono's own registration table, built from every `app.route(...)` mount
+ * above with each sub-router's paths already merged onto its real prefix —
+ * the one place the *actual* non-GET `/api/*` write surface can be read back
+ * from, rather than re-derived by hand and risking a second list that drifts
+ * from this file the way the routes themselves once drifted from Turnstile
+ * coverage. */
+export { app };
 
 // No more `Sentry.withSentry(...)` wrapper (issue #14 — `@sentry/cloudflare`
 // removed entirely): this is the same `{ fetch, scheduled }` shape Cloudflare

@@ -54,7 +54,19 @@ export type QueueAction =
    * bulk handlers). */
   | { type: "remove_many"; status: AdminQueueStatus; ids: string[] }
   /** Puts an item back at a specific index — the undo half of `remove`. */
-  | { type: "reinsert"; status: AdminQueueStatus; item: AdminQueueItem; index: number };
+  | { type: "reinsert"; status: AdminQueueStatus; item: AdminQueueItem; index: number }
+  /** Marks one or more tabs as needing a real refetch — `loadedOnce` back to
+   * `false` without touching `items`/`cursor`, so whatever's on screen stays
+   * put (no flash to empty) until the tab-load effect replaces it. For an
+   * undo whose reversal doesn't land the item at a single well-known index
+   * (owner-wide actions can touch listings this client never fetched), this
+   * is the honest alternative to a guessed `reinsert`: come back stale, then
+   * self-correct, instead of confidently wrong. */
+  | { type: "invalidate"; statuses: AdminQueueStatus[] }
+  /** Back to every tab's `initialTabState()` — a fresh session (re-auth
+   * after a 401, or Forget) has no business trusting what a *previous* one
+   * loaded; see `app/admin.tsx`'s `handleSessionExpired`/`handleForget`. */
+  | { type: "reset" };
 
 function updateTab(
   state: QueueState,
@@ -105,6 +117,17 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
       items.splice(index, 0, action.item);
       return updateTab(state, action.status, { items });
     }
+
+    case "invalidate": {
+      let next = state;
+      for (const status of action.statuses) {
+        next = updateTab(next, status, { loadedOnce: false });
+      }
+      return next;
+    }
+
+    case "reset":
+      return initialQueueState();
 
     default:
       return state;

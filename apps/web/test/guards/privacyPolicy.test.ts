@@ -46,6 +46,15 @@ const API_SRC = path.resolve(WEB_ROOT, "../api/src");
 const SUGGESTION_CONTRACT = path.resolve(WEB_ROOT, "../../packages/contracts/src/photo.ts");
 const AGE_GATE_DIR = path.resolve(WEB_ROOT, "src/features/ageGate");
 const LISTINGS_ROUTE = path.join(API_SRC, "routes/listings.ts");
+/**
+ * Every write path that binds `date_of_birth`. #306: the guard below used to
+ * scan `LISTINGS_ROUTE` alone — the *request* creation path — while the
+ * *listing* creation path (`listings/create.ts`) feeds the same input into
+ * two more `INSERT INTO listings` statements from a different file, unscanned
+ * and unproven. A list, not a second constant, so a third write path
+ * introduced later fails loudly instead of joining the unguarded set.
+ */
+const DATE_OF_BIRTH_WRITE_PATHS = [LISTINGS_ROUTE, path.join(API_SRC, "listings/create.ts")];
 const ME_ROUTE = path.join(API_SRC, "routes/me.ts");
 const RECOVER_ROUTE = path.join(API_SRC, "routes/recover.ts");
 const ORPHAN_SWEEP = path.join(API_SRC, "cron/orphanSweep.ts");
@@ -162,7 +171,11 @@ const LOCKED_PASSAGES: { name: string; phrases: string[] }[] = [
 /** `<h2>` text in source order, whitespace-collapsed the same way
  * `PRIVACY_TEXT` is. */
 function sections(): string[] {
-  return [...PRIVACY_HTML.matchAll(/<h2>([\s\S]*?)<\/h2>/g)].map((m) => (m[1] ?? "").replace(/\s+/g, " ").trim());
+  // `(?:\s+[^>]*)?` tolerates an `id="..."` (or other attribute) on the tag —
+  // #312 added `id="requester-shares"` so terms.html can link straight to
+  // the canonical withdraw explanation — without this the heading would
+  // simply not match and silently drop out of the list below.
+  return [...PRIVACY_HTML.matchAll(/<h2(?:\s+[^>]*)?>([\s\S]*?)<\/h2>/g)].map((m) => (m[1] ?? "").replace(/\s+/g, " ").trim());
 }
 
 /** Source with `//` and block comments removed, so an assertion about what
@@ -327,12 +340,66 @@ function providers(): Provider[] {
   return found;
 }
 
+interface CategoryRow {
+  id: string;
+  name: string;
+  disabled: boolean;
+  description: string;
+}
+
+/**
+ * Every `categoryRow(...)` call in `consent.js`, in source order. Reads the
+ * FOURTH argument — the human-readable description a visitor actually reads
+ * before deciding — which `providers()` above never looks at: that parser
+ * only sees `PROVIDERS`' `name` / `host` / `beacon` fields. Issue #299 was
+ * the consequence: the banner told every visitor "Google Ads measurement, so
+ * we can tell which advert brought you here" — present tense, for a tag that
+ * has never loaded on any published build — and the one guard written for
+ * exactly this drift class (#175) was structurally blind to this file,
+ * because nothing here parsed this string.
+ */
+function categoryRows(): CategoryRow[] {
+  const found: CategoryRow[] = [];
+  const re = /categoryRow\(\s*'([^']*)',\s*'([^']*)',\s*(true|false),\s*'([^']*)'\s*\)/g;
+  for (const m of CONSENT_JS.matchAll(re)) {
+    found.push({ id: m[1] ?? "", name: m[2] ?? "", disabled: m[3] === "true", description: m[4] ?? "" });
+  }
+  return found;
+}
+
 describe("privacy policy vs. the code", () => {
   const declared = providers();
 
   it("finds the provider registry (positive control)", () => {
     expect(declared.length).toBeGreaterThan(0);
     expect(declared.map((p) => p.category).sort()).toEqual(["advertising", "analytics"]);
+  });
+
+  it("finds the category rows (positive control)", () => {
+    // Without this, the assertion below would pass vacuously against a
+    // banner that had lost its categoryRow(...) calls entirely.
+    expect(categoryRows().length).toBeGreaterThan(0);
+  });
+
+  it("no category description names a provider that has shipped with no loadable id (#299)", () => {
+    // A provider is DECLARED DEAD when its meta ships a literal, hardcoded
+    // `content=""` — the kill switch #175 put in place for Google Ads — as
+    // opposed to an unsubstituted `%EXPO_PUBLIC_*%` build-time placeholder,
+    // which may resolve to a real id once a deploy fills it in (Cloudflare
+    // Web Analytics ships that way, and its category description is allowed
+    // to describe it as live because it can become live). For a provider
+    // that is declared dead, the banner's own description of that category
+    // must not name it — naming a dead provider in a live-sounding
+    // description is exactly the #299 drift, and this is what makes that
+    // drift fail a test instead of only a launch-audit pass.
+    for (const provider of declared) {
+      const metaTag = new RegExp(`<meta name="${provider.meta}" content="([^"]*)"`).exec(PRIVACY_HTML);
+      const isDeclaredDead = metaTag?.[1] === "";
+      if (!isDeclaredDead) continue;
+      const row = categoryRows().find((r) => r.id === `ks-consent-${provider.category}`);
+      expect(row).toBeDefined();
+      expect(row?.description).not.toContain(provider.name);
+    }
   });
 
   it.each(declared)("privacy.html names $name and $host", ({ name, host }) => {
@@ -505,6 +572,22 @@ describe("privacy policy vs. the age gate (#64)", () => {
     expect(PRIVACY_TEXT).toContain("doesn't ask you to tick a box");
   });
 
+  it("no longer describes the date-of-birth field as one you type (#302)", () => {
+    // Since #133 the control is a real date picker (`ui/DateField`, a DOM
+    // `<input type="date">` on the web) — the system wheel on iOS, the
+    // system calendar on desktop — not a text box someone types
+    // `1990-12-12` into. "YYYY-MM-DD" is still the wire format
+    // `DateOfBirthSchema` validates, so that half is true of the *data*;
+    // "typed as ..." described the user's *action*, and that action is
+    // gone. Pinning the word rather than a whole sentence, because a
+    // picker also lets desktop users type into segmented fields, so
+    // describing the *new* widget would be just as overspecified as the
+    // old wording was.
+    expect(PRIVACY_TEXT).not.toMatch(/\btyped as\b/);
+    expect(PRIVACY_TEXT).not.toMatch(/\ba date you type\b/);
+    expect(PRIVACY_TEXT).toContain("your date of birth");
+  });
+
   it("says the date is discarded, and no migration adds a column that would make that false", () => {
     expect(PRIVACY_TEXT).toContain("No column in our database holds a date of birth");
     const offending = filesUnder(MIGRATIONS).filter(
@@ -513,11 +596,13 @@ describe("privacy policy vs. the age gate (#64)", () => {
     expect(offending).toEqual([]);
   });
 
-  it("writes only the timestamp, never the date itself, on create", () => {
+  it.each(DATE_OF_BIRTH_WRITE_PATHS)("writes only the timestamp, never the date itself, on create (%s)", (file) => {
     // `age_attested_at` is the whole of what the policy promises is kept. Any
-    // other use of the submitted date in this route — binding it into the
-    // INSERT, say — turns that paragraph into a false statement.
-    const code = withoutComments(fs.readFileSync(LISTINGS_ROUTE, "utf8"));
+    // other use of the submitted date in this file — binding it into the
+    // INSERT, say — turns that paragraph into a false statement. Both the
+    // request path (`routes/listings.ts`) and the listing path
+    // (`listings/create.ts`) make this claim, so both are held to it (#306).
+    const code = withoutComments(fs.readFileSync(file, "utf8"));
     const uses = code.split("\n").filter((line) => line.includes("date_of_birth"));
     expect(uses.length).toBeGreaterThan(0);
     for (const line of uses) {

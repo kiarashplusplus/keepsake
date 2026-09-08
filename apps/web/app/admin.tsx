@@ -142,6 +142,11 @@ export default function AdminPage(): React.ReactElement {
   const handleSessionExpired = React.useCallback(() => {
     clearAdminToken();
     setToken(null);
+    // Whatever this session had loaded belongs to the token that just
+    // stopped working — the next token in might be a different admin, or
+    // this one much later, and either way `loadedOnce` staying true would
+    // stop every tab from ever refetching (#291).
+    dispatch({ type: "reset" });
     toast.show("Session expired. Enter the token again.");
   }, [toast]);
 
@@ -264,6 +269,9 @@ export default function AdminPage(): React.ReactElement {
     setStats(null);
     setHealth(null);
     setHealthAsOf(null);
+    // Same reasoning as `handleSessionExpired` — re-entering a token later
+    // must refetch, not show whatever this queue happened to hold (#291).
+    dispatch({ type: "reset" });
   }
 
   async function runAction(
@@ -271,7 +279,12 @@ export default function AdminPage(): React.ReactElement {
     item: AdminQueueItem,
     action: () => Promise<unknown>,
     successMessage: string,
-    undo?: () => void,
+    /** Called with the index `remove` (below) just took the item from, once
+     * the primary action has already succeeded. The undo's own job is to
+     * reverse the *server* state and then tell the reducer the item is
+     * back — see `Toast.tsx`'s header comment on why this exists at all:
+     * without it the queue stays wrong until a full reload (#286). */
+    undo?: (index: number) => void,
   ): Promise<void> {
     if (token === null) return;
     const index = indexOfItem(queue, status, item.id);
@@ -279,7 +292,7 @@ export default function AdminPage(): React.ReactElement {
     setBusyId(item.id);
     try {
       await action();
-      toast.show(successMessage, undo !== undefined ? { label: "Undo", onPress: undo } : undefined);
+      toast.show(successMessage, undo !== undefined ? { label: "Undo", onPress: () => undo(index) } : undefined);
       scheduleStatsRefresh(token);
     } catch (err) {
       dispatch({ type: "reinsert", status, item, index });
@@ -300,15 +313,27 @@ export default function AdminPage(): React.ReactElement {
 
   function handleRestore(item: AdminQueueItem): void {
     if (token === null) return;
-    void runAction(activeTab, item, () => restoreListing(token, item.id), "Restored.", () => {
-      hideListing(token, item.id).catch(() => toast.show("Undo failed — hide it again by hand."));
+    // Restore only ever fires from the Hidden tab (`ACTIONS_BY_STATUS`), and
+    // its undo (`hideListing`) always lands the listing back on `hidden` —
+    // a single, well-known status, so the item can go straight back to the
+    // exact slot `remove` took it from.
+    void runAction(activeTab, item, () => restoreListing(token, item.id), "Restored.", (index) => {
+      hideListing(token, item.id)
+        .then(() => dispatch({ type: "reinsert", status: activeTab, item, index }))
+        .catch(() => toast.show("Undo failed — hide it again by hand."));
     });
   }
 
   function handleUnban(item: AdminQueueItem): void {
     if (token === null) return;
+    // Unlike Restore (one listing, one known resulting status), re-banning
+    // can hide every other listing this owner has too — no single index or
+    // tab covers that, so every tab is marked stale instead of guessing;
+    // see `queueReducer.ts`'s `invalidate` doc comment.
     void runAction(activeTab, item, () => unbanOwner(token, item.owner.id), "Owner unbanned.", () => {
-      banOwner(token, item.owner.id).catch(() => toast.show("Undo failed — ban them again by hand."));
+      banOwner(token, item.owner.id)
+        .then(() => dispatch({ type: "invalidate", statuses: [...ADMIN_QUEUE_STATUSES] }))
+        .catch(() => toast.show("Undo failed — ban them again by hand."));
     });
   }
 
@@ -414,6 +439,11 @@ export default function AdminPage(): React.ReactElement {
         toast.show("Hidden.", {
           label: "Undo",
           onPress: () => {
+            // Undo's only available reversal, `restoreListing`, always lands
+            // a hidden listing on `approved` — not one of the four queue
+            // tabs — so a successful undo here needs no reducer dispatch at
+            // all: the item already correctly stays out of every tab, both
+            // the one it started in and `hidden`.
             restoreListing(token, item.id).catch(() => toast.show("Undo failed — restore it by hand."));
           },
         });
@@ -427,7 +457,14 @@ export default function AdminPage(): React.ReactElement {
         toast.show("Owner banned.", {
           label: "Undo",
           onPress: () => {
-            unbanOwner(token, item.owner.id).catch(() => toast.show("Undo failed — unban them by hand."));
+            // `unbanOwner` reverses only the owner flag — listings the ban
+            // hid stay hidden — so this item (and any siblings the ban
+            // touched) are genuinely still `hidden` after a successful
+            // undo. Mark that tab stale rather than guess which items to
+            // put back.
+            unbanOwner(token, item.owner.id)
+              .then(() => dispatch({ type: "invalidate", statuses: ["hidden"] }))
+              .catch(() => toast.show("Undo failed — unban them by hand."));
           },
         });
         scheduleStatsRefresh(token);

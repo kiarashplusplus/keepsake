@@ -4,11 +4,19 @@
  * applying anything to the form itself here (see `giveDraft.ts`'s reducer
  * case for why the pre-fill has to happen there, not in an effect).
  *
- * Mounted in `app/give/_layout.tsx` alongside `EditHydrator`, which stays
- * mounted across all five steps: the request is fired the moment a photo
- * finishes uploading (step 1) and its result is still there by the time the
- * giver reaches details/story, without needing to re-fire it per step or
- * thread a prop through the `<Stack>`.
+ * Mounted in `app/give/_layout.tsx`, staying mounted across all five steps:
+ * the request is fired the moment a photo finishes uploading (step 1) and
+ * its result is still there by the time the giver reaches details/story,
+ * without needing to re-fire it per step or thread a prop through the
+ * `<Stack>`.
+ *
+ * Skips entirely once `draft.listingId` is set (#290) — a give flow with a
+ * `listingId` is either mid-`?edit=` (the cover photo already belongs to a
+ * published listing, whose title `useEditHydration` marks `titleDirty` for
+ * exactly this reason) or resubmitting after rejection, and neither wants a
+ * *fresh* vision call quietly relabelling the listing's category out from
+ * under the giver. It also stops the flow from spending `SUGGEST` budget on
+ * every edit-open for a suggestion nothing downstream will use.
  */
 import * as React from "react";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
@@ -17,7 +25,7 @@ import { suggestPhoto } from "@/api/photos";
 
 export function SuggestionFetcher(): null {
   const { draft, dispatch } = useGiveDraft();
-  const coverId = coverPhoto(draft)?.id ?? null;
+  const coverId = draft.listingId === null ? (coverPhoto(draft)?.id ?? null) : null;
   const hasSuggestion = coverId !== null && draft.suggestions[coverId] !== undefined;
   // Tracks ids already requested (in flight or done) so a re-render between
   // the request firing and its response landing doesn't fire a duplicate —

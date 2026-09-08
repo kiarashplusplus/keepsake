@@ -27,6 +27,12 @@ const IMAGE_DRUGS_FLAG_THRESHOLD = 0.7;
 export function decideText(verdict: TextVerdict | "error"): LocalVerdict {
   if (verdict === "error") return "error";
   if (verdict.verdict === "safe") return "pass";
+  // An `unsafe` verdict with no parsable S-codes is not the same thing as
+  // safe: the model said unsafe and the pipeline could not tell why. Falling
+  // through to "pass" here is exactly the fail-open bug #280 was filed for —
+  // treat it the same as a parse/AI error so `decide()` holds it `pending`
+  // for a human rather than publishing it.
+  if (verdict.codes.length === 0) return "error";
   if (verdict.codes.some((code) => TEXT_FLAG_CODES.has(code))) return "flag";
   if (verdict.codes.some((code) => TEXT_REVIEW_CODES.has(code))) return "review";
   return "pass";

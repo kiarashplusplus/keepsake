@@ -33,10 +33,11 @@ The product is the story. Anything that makes a listing feel like a classified a
   the live site: `uptime.yml` prints the commit each tier serves every 15 minutes, and reading that
   log is the only observation of production an agent container can make. At 2026-09-07 15:46 UTC it
   was five commits back.
-  Email is `live` there for all recipients (#43). #6, which carried "delivery to any address other
+  Email is `live` there for all recipients (#43). #6, which carries "delivery to any address other
   than Kiarash's has never been observed arriving", was **closed on 2026-09-07 with no closing
-  comment and no written result** — read `docs/design/README.md` before repeating either the old
-  claim or a proof nobody recorded.
+  comment and no written result — and reopened the same day** once it turned out the second-address
+  test the closure assumed had never actually run. **#6 is open again**, still `launch-blocker` —
+  read `docs/design/README.md` before repeating either the old claim or a proof nobody recorded.
   The preview Worker's `workers.dev` hostnames, unlike production's, are still enabled (#105).
 - **Ask the Observatory before guessing** (#150). `GET /api/admin/observatory` — or `/admin` →
   Observatory — answers "is anything stuck" in one call: the give→get funnel, how long the
@@ -130,7 +131,7 @@ environment secrets, which no session can read back (the GitHub secrets API retu
 
 **A passing test is not evidence. Verify the artifact.**
 
-This project has shipped eleven separate checks that could not fail:
+This project has shipped twelve separate checks that could not fail:
 
 | What looked fine | What was actually true |
 |---|---|
@@ -145,6 +146,7 @@ This project has shipped eleven separate checks that could not fail:
 | `PASS cron-triggers  3 cron(s) valid` | It read `wrangler.toml` and `index.ts`. `cron/registry.ts` — the file `/api/admin/health` and the daily digest actually read, and which two documents said this check tied to the other two — was never opened. Renaming a job and moving its schedule in the registry alone still reported three valid crons, naming the *old* schedules (#176). |
 | A documented, executed, verified D1 backup | The `--table` list was hard-coded and went stale when `0006_aspects.sql` landed, so no export contained any listing's aspects — and because `listings.aspects_backfilled_at` *is* in the export, every restored listing said "already done" and its aspects could never be re-derived. The restore closed its own recovery path. The runbook glob-loops the *migrations* to avoid exactly this, one paragraph away (#164). |
 | `[verify-public-env] 4 value(s) present in the bundle` | It built its expectation set by filtering `process.env`, so a variable `deploy.yml` forgot to pass was absent from the expectations too and could never be reported missing. It could only verify what had already been passed correctly — structurally blind to the shape of the bot-check incident two rows above. Three Google Ads ids shipped as `""` in every deployed bundle, and a legal document asserted the tag was live (#175). |
+| Five commits merged to `main` and deployed to preview, nothing job-level ever ran | Not a job going red — a workflow that failed to *start*. `058d4e6` deleted `ci.yml`'s `e2e` job but left `ci-complete`'s `needs` list still naming it, and a `needs` entry naming a job that does not exist is invalid before GitHub runs a single job: the run's conclusion was `failure`, but it carried **zero jobs**, so `ci-complete` — the one job meant to catch exactly this family of thing — never executed, because a run with no jobs runs no guard. `deploy.yml` has no `needs:` on CI at all, so all five shipped to preview anyway. The tell was easy to miss: GitHub labels a startup-failed run by the workflow *path* (`.github/workflows/ci.yml`) rather than its `name:` (`CI`), which only shows up if you already know to look for it. Fixed by a new preflight check, `workflow-validity`, that parses every `.github/workflows/*.yml` for the classes of invalidity GitHub rejects at start — a `needs` entry naming a nonexistent job foremost among them — so the broken file cannot merge in the first place (#270). |
 
 So: when you add a guard, **break the code and watch the guard fail**, then restore. Say in the
 issue comment which one you broke. This applies to observability too, and is why
@@ -223,9 +225,10 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
 - **The e2e suite runs entirely locally — use it, it is the best verification available.**
   `pnpm --filter @keepsake/web export` then `pnpm --filter @keepsake/web e2e` stands up real
   `workerd` with local D1/R2/KV via `wrangler dev` (see `apps/web/playwright.config.ts`), which is
-  closer to production than preview ever was and needs no credentials. Baseline was 84 passing;
-  #173 added six a11y specs, which is twelve more runs across the two projects.
-  Now that pull requests no longer deploy anywhere, this is *the* way to verify a branch.
+  closer to production than preview ever was and needs no credentials. The suite runs in two
+  projects, mobile and desktop, so the spec count is not worth restating here — it has already gone
+  stale more than once (#274) and `apps/web/e2e/*.spec.ts` is the count that can't drift. Now that
+  pull requests no longer deploy anywhere, this is *the* way to verify a branch.
   - If Playwright reports `Executable doesn't exist at .../chromium_headless_shell-<n>/...`, the
     container's browser build predates the pinned `@playwright/test`. Do not run
     `playwright install` blindly; point the expected path at the build that is present. Concretely,
@@ -234,7 +237,7 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
     marker files (`INSTALLATION_COMPLETE`, `DEPENDENCIES_VALIDATED`) is enough — note the
     directory *and binary* also get renamed between builds
     (`chrome-linux/headless_shell` → `chrome-headless-shell-linux64/chrome-headless-shell`), so
-    linking the folder alone still fails. All 84 specs pass on the older build (Chromium
+    linking the folder alone still fails. The full suite passes on the older build (Chromium
     141.0.7390.37); nothing about the suite needs the newer one. Re-confirmed 2026-09-07 with a
     `-1194` build linked under the expected `-1243` name.
   - **UX review is its own command, and deliberately not part of `pnpm e2e`.**
@@ -259,12 +262,14 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
     it cost one diagnosis cycle on 2026-09-07 doing exactly this, merging `main` in between the
     export and the run. Better still, if the merge is all that changed: push it and let the pull
     request's e2e job export and run against the merged tree for you.
-  - `test/adminAuth.test.ts`'s brute-force case can time out at 30 s when the root runner fans API
-    and web out concurrently on a loaded machine. Measured on both `main` and a feature branch with
-    no difference, so it is load, not a regression — the flake its own comment and #65 describe.
-    Re-run it alone before believing it. **#65 is closed and the flake is back**: #116 (open) says
-    it either regressed or was never fixed at the cause, so treat "#65 explains it" as the old
-    answer, not the current one.
+  - `test/adminAuth.test.ts`'s brute-force case used to time out at 30 s when the root runner fanned
+    API and web out concurrently on a loaded machine, because it fired 400 sequential requests at
+    the *real* `RL_ADMIN` binding and timed the result against wall clock — #65's fix didn't reach
+    that cause, and #116 caught it flaky again on unmodified `main`. **#116 and #147 are both closed,
+    fixed by #230** (on `main` as `68040fc`): the test now drives a fake, in-repo rate limiter it
+    controls directly, the same pattern `readRateLimit.test.ts` already used, so it no longer times
+    a real binding's approximation against a shared CPU. No known flake remains; if it times out
+    again, that is new, not a repeat of #65/#116.
 - **The admin tokens are in this file** (see "Admin tokens" below), so no session — local, phone
   or claude.ai — needs to source anything to call `/api/admin/*`. Every other credential still
   lives outside the repo: Cloudflare tokens are Worker secrets or GitHub environment secrets, and
@@ -306,7 +311,7 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
 pnpm lint                          # 0 errors; warnings are the zod const+type idiom
 pnpm -r typecheck
 pnpm test                          # preflight, packages, api, web
-pnpm --filter @keepsake/web e2e    # 84 specs, mobile and desktop
+pnpm --filter @keepsake/web e2e    # mobile and desktop projects
 node tools/preflight/preflight.mjs
 ```
 

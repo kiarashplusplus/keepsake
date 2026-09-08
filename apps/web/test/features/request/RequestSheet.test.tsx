@@ -130,8 +130,15 @@ describe("RequestSheet", () => {
   // most consequential copy in the product like something people are meant to
   // skip. `test/ui/SafetyNote.test.tsx` owns the typographic and contrast
   // assertions; these two own the two things only this file can see: that the
-  // sheet reaches for that component on BOTH phases, and that the wording it
-  // hands over is unchanged to the character.
+  // sheet reaches for that component on BOTH phases, and exactly what wording
+  // it hands over.
+  //
+  // Issue #308 changed that wording: the pre-submit note gained "or tell
+  // someone else the time and place" as an alternative to bringing a friend,
+  // and the post-submit note gained permission to back out — both already on
+  // `terms.html`'s "Meeting up safely" list, neither previously in the
+  // product. These constants moved with the copy; if they drift from
+  // `RequestSheet.tsx` again, that is the bug, not this test.
   //
   // Asserted through `UNSAFE_getAllByType`, which reads the composite
   // element's authored props before react-native-web's host translation, for
@@ -142,14 +149,16 @@ describe("RequestSheet", () => {
   // correctly set as small print.
   const FORM_COPY =
     "A note before you send this: if you two meet up, pick a public spot, bring a " +
-    "friend if you can, and keep talking here in Keepsake rather than trading numbers " +
-    "early. A porch handoff works too, if you'd both rather skip meeting in person.";
+    "friend if you can — or tell someone else the time and place — and keep talking " +
+    "here in Keepsake rather than trading numbers early. A porch handoff works too, " +
+    "if you'd both rather skip meeting in person.";
 
   const SENT_COPY =
     "If you're chosen: meet somewhere public and well-lit, bring a friend or tell " +
     "someone the plan, and keep working out the details here in Keepsake rather than " +
     "switching to text. Leaving it on a porch instead of meeting face to face is always " +
-    "fine too — just say so.";
+    "fine too — just say so. And if anything feels off, you can back out — that's worth " +
+    "more than any obligation you feel to a stranger you agreed to meet.";
 
   it("sets the form's safety guidance as a note, not as small print", () => {
     const instance = render(<RequestSheet visible onClose={jest.fn()} listingId="listing-1" />);

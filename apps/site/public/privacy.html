@@ -76,28 +76,21 @@
         <h2>Who runs this</h2>
         <p>
           Keepsake is run by one person, Kiarash Adl, operating as an individual — not through a
-          company or any other entity. As of September 2026 that's a decision rather than a
-          default: whether to put a company between him and this site was a question we actually
-          sat down and answered, and the answer was no. He's the controller for the purposes of
-          this policy: the one accountable for what's described here, and the one you'd contact,
-          complain to, or send a rights request to. Reach him at
-          <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a> — that inbox is read
-          personally, not by a support team.
+          company or any other entity. That's a decision, made deliberately in September 2026, not
+          a default. He's the controller for the purposes of this policy: the one accountable for
+          what's described here, and the one you'd contact, complain to, or send a rights request
+          to. Reach him at <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a> — that inbox
+          is read personally, not by a support team.
         </p>
         <p>
-          We don't publish a mailing address. That's a considered choice, not an omission: the UK
-          is the one jurisdiction whose law would otherwise require one (UK GDPR Art. 13), and
-          Keepsake doesn't serve the UK — see <a href="/terms">Terms</a>. Canadian and U.S. privacy
-          law, which do still apply, ask for an accountable person and a working way to reach them,
-          which the paragraph above already gives you; none of it requires a physical address on
-          top of that. If Keepsake ever expands somewhere that changes this, this section will
-          change with it.
-        </p>
-        <p>
-          The point of not publishing one is that Keepsake is a person at a home address, and this
-          is a site that arranges meetings between strangers and turns down listings — not that
-          he's hard to reach. If you need a postal address for a legal notice, or because some
-          form you're filling in demands one, ask at
+          We don't publish a mailing address — a considered choice, not an omission. The UK is the
+          one jurisdiction whose law would otherwise require one (UK GDPR Art. 13), and Keepsake
+          doesn't serve the UK — see <a href="/terms">Terms</a>. Canadian and U.S. privacy law,
+          which do still apply, ask only for an accountable person and a working way to reach
+          them, both already given above. The reason for withholding it is that Keepsake is a
+          person at a home address, running a site that arranges meetings between strangers and
+          turns down listings — not that he's hard to reach. If you need a postal address for a
+          legal notice, or because some form demands one, ask at
           <a href="mailto:hello@keepsake.ing">hello@keepsake.ing</a> and you'll be given one.
         </p>
         <!-- Reasoning for the paragraph above, and why it's safe to state plainly rather than
@@ -122,9 +115,9 @@
         <h2>No accounts, just a device key</h2>
         <p>
           When you post your first keepsake, your browser generates a private token and stores it
-          in your device's local storage. That token is your identity on Keepsake — there's no
-          username, password, or profile. If you clear your browser storage or switch devices
-          without saving an email, we have no way to prove a listing is yours again.
+          in your device's local storage — that token is your identity on Keepsake, and there's no
+          username, password, or profile behind it. What losing it costs you, and the one way back
+          if you saved an email, is in <a href="/terms">Terms</a>.
         </p>
 
         <h2>Your email</h2>
@@ -145,7 +138,7 @@
           contact details becomes visible to the other person — see the next section.
         </p>
 
-        <h2>What a requester shares</h2>
+        <h2 id="requester-shares">What a requester shares</h2>
         <p>
           If you ask for someone's keepsake, we store the note, email, and optional phone number
           you provide with that request. This contact information is only shown to the giver, and
@@ -153,15 +146,14 @@
           chosen" notification we send you, the same way the giver's is (see above).
         </p>
         <p>
-          Nothing is passed to the giver until you confirm the address. When a request is
-          submitted we send one email to the address given, asking whether it was really you, and
-          we hold the request without showing it to anyone until the link in that email is
-          followed. If it never is, the note, email, and phone number are deleted within a few
-          days and the giver never sees them. That is also what to do if you receive one of these
-          emails and didn't ask for anything: nothing. There is no account to secure and nothing
-          to click, and the details someone entered are erased on their own. We limit how many of
-          these confirmations any one address can be sent in a day, so this can't be used to fill
-          someone's inbox.
+          Nothing is passed to the giver until you confirm the address: when a request is
+          submitted we email the address given, asking whether it was really you, and hold the
+          request unseen until that link is followed. If it never is, we delete the note, email,
+          and phone number within a few days and the giver never sees them — which is also what
+          to do if you get one of these emails without asking for anything: nothing. There's no
+          account to secure and nothing to click; the details erase themselves. We also
+          rate-limit how many confirmations one address can be sent in a day, so this can't be
+          used to fill an inbox.
         </p>
         <p>
           Every request-confirmation email includes a link to withdraw that request. Following it
@@ -202,23 +194,24 @@
 
         <h2>Screening</h2>
         <p>
+          Keepsake makes three kinds of AI call, each for one purpose and separate from the
+          others: this one screens for safety, the next reads your first photo to save you
+          typing, and the third makes search work by meaning instead of exact words.
+        </p>
+        <p>
           Every listing's text and photos are checked automatically by AI models run by
           Cloudflare at the moment you post, to keep the marketplace safe. Some listings are also
-          reviewed by a human — just Kiarash, today — before they go live. Keeping the marketplace
-          safe is the only thing those models are used for; a different model reads your photo to
-          help you fill in the form, which is the next section.
+          reviewed by a human — just Kiarash, today — before they go live.
         </p>
 
         <h2>Autofill from your photo</h2>
         <p>
-          Separately from screening, and for a completely different reason, the first photo you
-          upload is also read by an AI vision model run by Cloudflare — to save you typing. It
-          proposes a title for your keepsake, picks a category, writes one line about visible wear
-          it can make out, suggests a handful of short tags (like "mug", "ceramic", "blue"),
-          copies out any words printed on the object itself &mdash; a brand, a model name, a
-          size &mdash; and returns a plain description of what it sees in the frame. This is a
-          convenience and nothing more: it's a separate call from the safety screening above,
-          and none of it decides whether your listing goes live.
+          The second of the three, and a separate call from the safety screening above: your
+          first photo is read by an AI vision model run by Cloudflare, to save you typing —
+          nothing it returns decides whether your listing goes live. It proposes a title, picks a
+          category, writes one line about visible wear, suggests a handful of short tags (like
+          "mug", "ceramic", "blue"), copies out any words printed on the object itself &mdash; a
+          brand, a model name, a size &mdash; and returns a plain description of what it sees.
         </p>
         <p>
           What happens to the result. The title is a starting point — it's filled into the form
@@ -227,31 +220,29 @@
           similar keepsakes together, so they're public in the same way your title and photo are.
           There's no category picker when you post, so the model's answer is the one that's
           saved — if it's wrong on your listing, write to us and we'll fix it. The line about
-          visible wear, the words read off the object, and the description of what it sees never
-          reach our records at all: they are the model's working, used only to produce the title
-          and tags above, and they live in your browser's draft until you post or clear it. (The
-          words read off the object can end up in a tag &mdash; a brand name becomes a "brand"
-          tag &mdash; and a tag <em>is</em> saved, as described above. The read-out itself is
-          not.) If you never finish the listing, none of it
-          is kept — the photo itself goes after 24 hours, as above.
+          visible wear and the description of what it sees never reach our records at all: they
+          are the model's working, used only to produce the title and tags above, and they live
+          in your browser's draft until you post or clear it. One exception: a word read off the
+          object can end up as a tag anyway — say, "KastKing" on the label becoming a
+          "brand: KastKing" tag — and that tag is saved like any other, even though the read-out
+          itself isn't. If you never finish the listing, none of it is kept — the photo itself
+          goes after 24 hours, as above.
         </p>
 
         <h2>Search by meaning</h2>
         <p>
-          There is a third kind of AI call in the code, for search. It turns the words already
-          public on your listing — its title, story and tags — into a list of numbers that
-          captures roughly what they mean, so someone searching for "grandmother's teapot" can
-          find a listing that says "my nan's old brown betty" without the words having to match.
-          The same is done to whatever a searcher types. Only your listing's own public words are
-          sent; nothing private, and no photo.
+          The third and last: it turns the words already public on your listing — its title,
+          story and tags — into a list of numbers that captures roughly what they mean, so
+          someone searching for "grandmother's teapot" can find a listing that says "my nan's old
+          brown betty" without the words having to match. The same is done to whatever a searcher
+          types. Only your listing's own public words are sent; nothing private, and no photo.
         </p>
         <p>
-          <strong>This is running.</strong> It was switched on in September 2026; an earlier
-          version of this page said it was built but disabled, and we said we would come back and
-          change this paragraph rather than quietly leave it. The list of numbers for each listing
-          is stored with Cloudflare, alongside the listing's id and nothing else — no name, no
-          email, no address. Delete your listing and it is deleted too. What a searcher types is
-          turned into numbers to compare against them and is not kept.
+          <strong>This is running.</strong> It was switched on in September 2026. The list of
+          numbers for each listing is stored with Cloudflare, alongside the listing's id and
+          nothing else — no name, no email, no address. Delete your listing and it is deleted
+          too. What a searcher types is turned into numbers to compare against them and is not
+          kept.
         </p>
         <p>
           If this ever produces odd results, ordinary word matching is still there underneath and
@@ -260,30 +251,28 @@
 
         <h2>Rate limiting</h2>
         <p>
-          To stop abuse, we keep a short-lived, hashed record of your IP address combined with
-          the date (for example, <code>sha256("2026-09-05:203.0.113.4")</code>) instead of your raw
-          IP address. We're being precise rather than absolute about what that buys you: the point
-          is minimization, not secrecy. IPv4 addresses are a small enough space (a few billion) that
-          someone who wanted to unmask one specific day's hash could brute-force it by hashing every
-          possible address — this isn't a strong cryptographic guarantee against a motivated
-          adversary. What it does do: we never handle or store your address in the clear at all,
-          and the hash is scoped to a single day, so two days' records can't be joined into a
-          history of your address the way a raw IP log could be. We keep each day's hash for 48
-          hours, then it expires automatically.
+          To stop abuse, we keep a short-lived, hashed record of your IP address combined with the
+          date (for example, <code>sha256("2026-09-05:203.0.113.4")</code>), never your raw IP
+          address. We're being precise rather than absolute about what that buys you — the point
+          is minimization, not secrecy: IPv4's address space is small enough (a few billion) that
+          someone who knew the day could brute-force a specific hash by trying every address, so
+          this isn't a strong cryptographic guarantee against a motivated adversary. What it
+          reliably does: we never handle or store your address in the clear, and a day-scoped hash
+          can't be joined across days into a history the way a raw IP log could. We keep each
+          day's hash for 48 hours, then it expires automatically.
         </p>
         <p>
-          Three things use that hash: a brake that slows down a burst of requests within a single
-          minute, a counter for how much you've done today, and a check that stops the same person
-          asking for one keepsake twice or reporting the same listing twice on the same day. All
-          three use the same date-scoped hash, so none of them can follow you from one day into
-          the next.
+          Three things use that same date-scoped hash: a brake that slows a burst of requests
+          within a minute, a counter for how much you've done today, and a check that stops the
+          same person asking for one keepsake twice or reporting the same listing twice on the
+          same day — so none of them can follow you from one day into the next.
         </p>
         <p>
-          The 48 hours covers every copy, not just the counters. The last of those checks means a
-          copy of the hash is written next to the request or the report itself, in our database —
-          so a nightly job clears it from there at 48 hours too, and withdrawing a request
-          (see below) clears it immediately along with your note, email and phone number. After
-          that the row keeps no trace of the address it came from.
+          The 48 hours covers every copy, not just the counters. The check above also writes a
+          copy of the hash beside the request or report itself, in our database — a nightly job
+          clears it there at 48 hours too, and withdrawing a request (see below) clears it
+          immediately along with your note, email and phone number, so the row keeps no trace of
+          the address it came from.
         </p>
 
         <h2>Your choice, before anything loads</h2>
@@ -312,21 +301,17 @@
           built and then deliberately left unfed: the only tag it was ever wired for is the
           Google Ads tag from <code>www.googletagmanager.com</code>, and the id that tag needs
           is empty in every version of this site that has ever been published, so nothing is
-          fetched and Google receives nothing. That has been true for the whole life of the
-          feature, and in September 2026 it became a decision rather than an accident — the ad
-          code was removed and nothing is planned to replace it.
+          fetched and Google receives nothing. In September 2026 that became a decision rather
+          than an accident — the ad code was removed and nothing is planned to replace it.
         </p>
         <p>
           We are leaving the switch on this page rather than hiding it, because the honest
           version of "we don't run ads" is one you can check and turn off in advance. If that
-          ever changes, this section changes first, before a single tag loads, and the entry in
-          "What changed" below will say so. Whatever happens, we would never send an advertiser
-          your photos, your story text, your email, or anything a requester wrote to you.
-        </p>
-        <p>
-          One more thing worth saying plainly, since it is what the paragraph above rests on: if
-          we haven't switched a tool on for a particular build, it doesn't load even when you've
-          said yes. Consent is the ceiling, not the trigger.
+          ever changes, this section changes first, before a single tag loads, and "What
+          changed" below will say so — and whatever happens, we would never send an advertiser
+          your photos, your story text, your email, or anything a requester wrote to you. One
+          more thing this rests on: if we haven't switched a tool on for a particular build, it
+          doesn't load even when you've said yes — consent is the ceiling, not the trigger.
         </p>
 
         <h2>Changing your mind</h2>
@@ -343,10 +328,10 @@
           If your browser sends a Global Privacy Control signal — Brave, Firefox, DuckDuckGo and
           several extensions can — our code checks for it and, when present, turns off advertising
           and treats it as a "do not sell or share" request automatically, without asking you about
-          it. We check for this signal on every visit, everywhere, not only in the handful of
-          U.S. states that legally require honoring it at our size — that part is a choice we're
-          making, not a legal obligation we're claiming, and we say so here so the promise stays
-          accurate if it ever changes.
+          it. We check for this signal on every visit, everywhere. Several U.S. states require
+          honoring it, but only from businesses larger than Keepsake — we don't read any of their
+          size thresholds as reaching us. Honoring it anyway is a choice we're making, not a legal
+          obligation we're claiming, and if that ever changes this section changes first.
         </p>
 
         <h2>We don't sell or share data</h2>
@@ -359,15 +344,22 @@
         </p>
 
         <h2>Categories of information we collect</h2>
-        <p>
-          Gathered in one place, since some places ask for it that way: a device-generated
-          identifier (your device key), an email address, an optional phone number (if
-          you request something), a note you write when requesting a keepsake, and the title,
-          story, photos, tags, category, and postcode-level location of a listing you post — the
-          title, category and tags may be the ones a model read off your photo, see "Autofill
-          from your photo" above. Separately, we keep a short-lived, hashed record of your IP
-          address for abuse prevention (see "Rate limiting" above).
-        </p>
+        <p>Gathered in one place, since some places ask for it that way:</p>
+        <ul>
+          <li>a device-generated identifier (your device key)</li>
+          <li>an email address</li>
+          <li>an optional phone number, if you request something</li>
+          <li>a note you write when requesting a keepsake</li>
+          <li>
+            the title, story, photos, tags, category, and postcode-level location of a listing
+            you post — the title, category and tags may be the ones a model read off your
+            photo, see "Autofill from your photo" above
+          </li>
+          <li>
+            a short-lived, hashed record of your IP address, kept for abuse prevention (see
+            "Rate limiting" above)
+          </li>
+        </ul>
         <p>
           Two more categories reach us and are then thrown away rather than kept, which we list
           here anyway because they are still collected. The first is your date of birth: the age
@@ -403,19 +395,31 @@
           manual requests we handle by hand, not an automated export button, but we'll get you an
           answer.
         </p>
-        <p>
-          What we keep and for how long: your device key, preferences, and last search location
-          live in your own browser's storage, not ours, until you clear them. Photos and listing
-          text live for as long as the listing exists, plus 30 days if it's rejected, withdrawn, or
-          hidden. Request notes/emails/phone numbers live until the request is withdrawn (see
-          above) or you ask us to remove them. A link we send to verify an email or recover your
-          dashboard expires in 24 hours (or an hour for a recovery link) and the record of it is
-          cleared within a further week.
-          Hashes of your IP address expire automatically after 48 hours (see "Rate limiting"
-          above) — both the rate-limit counters and the copy stored alongside a request or a
-          report — and moderation and email-delivery logs are kept for 90 days as an
-          abuse-prevention audit trail.
-        </p>
+        <p>What we keep and for how long:</p>
+        <ul>
+          <li>
+            Your device key, preferences, and last search location live in your own browser's
+            storage, not ours, until you clear them.
+          </li>
+          <li>
+            Photos and listing text live for as long as the listing exists, plus 30 days if
+            it's rejected, withdrawn, or hidden.
+          </li>
+          <li>
+            Request notes/emails/phone numbers live until the request is withdrawn (see above)
+            or you ask us to remove them.
+          </li>
+          <li>
+            A link we send to verify an email or recover your dashboard expires in 24 hours (or
+            an hour for a recovery link) and the record of it is cleared within a further week.
+          </li>
+          <li>
+            Hashes of your IP address expire automatically after 48 hours (see "Rate limiting"
+            above) — both the rate-limit counters and the copy stored alongside a request or a
+            report.
+          </li>
+          <li>Moderation and email-delivery logs are kept for 90 days as an abuse-prevention audit trail.</li>
+        </ul>
         <p>
           Your own email is the one thing on that list with no expiry date, and it's worth stating
           without hedging. If you add an email address, we keep it indefinitely, tied to your
@@ -431,8 +435,7 @@
         <p>
           You have to be 18 or older to post a keepsake or ask for one — see
           <a href="/terms">Terms</a> for why. The form doesn't ask you to tick a box that states
-          its own right answer. It asks a neutral question instead: your date of birth, typed as
-          <code>YYYY-MM-DD</code>.
+          its own right answer. It asks a neutral question instead: your date of birth.
         </p>
         <p>
           What happens to that date, exactly. It is sent to us along with the listing or the
@@ -445,7 +448,7 @@
           never saved into your browser's storage, so it's gone when you post or leave the page.
         </p>
         <p>
-          None of this verifies anyone's age — a date you type is a self-declaration, not an
+          None of this verifies anyone's age — the date you give us is a self-declaration, not an
           age-verification system. Asking it neutrally is what gives us a documented, honest basis
           for acting the moment we actually learn — through a report, a listing, or a request —
           that someone using Keepsake is a minor. Acting on that means removing the listing or
@@ -459,10 +462,11 @@
           advertising tag this site does not load, and is not a service we rely on), a few
           smaller services touch limited data on our behalf: Cloudflare Turnstile checks that a
           submission is coming from a real browser, not a bot, before it reaches our server; and
-          Resend is a backup email provider we can fall back to if Cloudflare's own email sending
-          isn't available. If something breaks, error diagnostics stay inside Cloudflare — the
-          same platform already hosting the app — rather than going to a separate error-tracking
-          company, with obvious personal data redacted before anything is written. None of them
+          Resend is an alternative email provider we're configured for and would switch to by hand
+          if Cloudflare's own email sending stopped working. If something breaks, error
+          diagnostics stay inside Cloudflare — the same platform already hosting the app — rather
+          than going to a separate error-tracking company, with obvious personal data redacted
+          before anything is written. None of them
           receive your photos or story text beyond what's needed to run the service itself.
         </p>
 
@@ -481,6 +485,25 @@
             device was lost, so were the listings. The give form now asks for the address and says
             what it is for, and this page's "Your email" section says the same. What we do with it
             has not changed, and you can still remove it at any time.
+          </p>
+          <p>
+            <strong>8 September 2026.</strong> A second pass the same day. The consent banner
+            (not this page) was still telling visitors "Google Ads measurement, so we can tell
+            which advert brought you here" — the same overstatement this page corrected below,
+            recurring in the one place a visitor reads before deciding, because the guard written
+            for that drift never parsed the banner's own copy; it does now. "Minimum age" still
+            described the date-of-birth field as one you type, in the format <code>YYYY-MM-DD</code>
+            — true when written, false since a real date picker replaced the text box; it now
+            just says "your date of birth". "Global Privacy Control" conceded a legal obligation
+            to honor the signal "at our size" that our own research concludes doesn't attach to
+            an operator this small under any U.S. state's threshold; reworded so the page claims
+            only the choice it's actually making. "Other services we rely on" called Resend a
+            provider "we can fall back to" — there's no automatic failover, only a config value
+            an operator would switch by hand; reworded to say that. Separately, this page was
+            condensed by roughly a fifth —
+            duplicated statements, scaffolding narrating its own reasoning, and one stale format
+            description cut, with two dense paragraphs turned into scannable lists — losing no
+            fact and no fact-pinned sentence.
           </p>
           <p>
             <strong>8 September 2026.</strong> Two corrections, both of them this page catching up

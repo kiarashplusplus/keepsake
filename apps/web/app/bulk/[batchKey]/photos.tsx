@@ -266,7 +266,6 @@ export default function BulkPhotos(): React.ReactElement {
 
   async function intake(files: File[]): Promise<void> {
     const duplicates = files.filter((f) => seenFilesRef.current.has(fileKey(f)));
-    for (const f of files) seenFilesRef.current.add(fileKey(f));
     if (duplicates.length > 0) {
       setDuplicateWarning(
         `${duplicates.length} of these look like a file you already added (${duplicates.map((f) => f.name).join(", ")}). Added anyway — remove any you didn't mean to duplicate.`,
@@ -280,6 +279,11 @@ export default function BulkPhotos(): React.ReactElement {
     } else {
       setPickError(null);
     }
+    // Only files actually added count as "seen" — a file dropped by the
+    // cap slice above was never added to the batch, so marking it seen
+    // would produce a false duplicate warning if the giver frees a slot and
+    // re-picks it later (#294).
+    for (const f of toAdd) seenFilesRef.current.add(fileKey(f));
     await workspace.addPhotos(toAdd);
   }
 
@@ -350,6 +354,15 @@ export default function BulkPhotos(): React.ReactElement {
                 onToggle={() => toggleSelected(photo.clientPhotoId)}
                 onRemove={() => void workspace.removePhoto(photo.clientPhotoId)}
                 onRetry={() => {
+                  // The queue keeps a retryable photo's source resident in
+                  // IndexedDB when it can (`needsReselection: false`)
+                  // specifically so a retry doesn't need a re-pick — only
+                  // fall back to the file picker when the source is
+                  // genuinely gone (#293).
+                  if (!photo.needsReselection) {
+                    workspace.retryPhoto(photo.clientPhotoId);
+                    return;
+                  }
                   void pickImages({ multiple: false }).then((files) => {
                     const file = files[0];
                     if (file !== undefined) workspace.retryPhoto(photo.clientPhotoId, file);

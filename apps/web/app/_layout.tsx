@@ -8,6 +8,7 @@ import { ToastProvider } from "@/ui/Toast";
 import { KraftTable } from "@/ui/KraftTable";
 import { AppHeader } from "@/ui/AppHeader";
 import { VersionSkewBanner } from "@/features/versionSkew/VersionSkewBanner";
+import { useChunkRecoveryGuard } from "@/features/chunkRecovery/useChunkRecoveryGuard";
 
 // expo-router's Stack renders each screen inside a React Navigation `Screen`
 // container whose own background comes from a *navigation* theme — entirely
@@ -28,6 +29,10 @@ const TRANSPARENT_ROUTER_THEME = { ...RouterDefaultTheme, colors: { ...RouterDef
  * re-pin it, because of the `flex: 1` shell below.
  */
 function Shell(): React.ReactElement {
+  // #272: recovers a stale tab's failed dynamic import (a route chunk a
+  // deploy already rotated out from under it) with a one-time guarded
+  // reload — a no-op on native and in any environment without `window`.
+  useChunkRecoveryGuard();
   return (
     <SafeAreaProvider>
       <View style={{ flex: 1, backgroundColor: "transparent" }}>

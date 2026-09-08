@@ -1,10 +1,8 @@
 // "Give several items" — start a batch. Collects everything
-// `CreateBatchInput` needs (name, country/postcode, optional shared story),
-// an optional private pickup-deadline reminder that the wire contract
-// deliberately doesn't carry (`src/features/bulk/pickupDeadline.ts`,
-// local-only, never a promise the product makes to anyone), and the giver's
-// email — required, like the give flow's own email step, since a batch with
-// no address behind it is dozens of listings nobody can be told about.
+// `CreateBatchInput` needs (name, country/postcode, optional shared story)
+// and the giver's email — required, like the give flow's own email step,
+// since a batch with no address behind it is dozens of listings nobody can
+// be told about.
 //
 // The email is saved **here**, inline, by `POST /api/me/email` — the same
 // call `app/mine/email.tsx` makes. It used to be a link to that screen at
@@ -41,7 +39,6 @@ import { Input } from "@/ui/Input";
 import { TextArea } from "@/ui/TextArea";
 import { Chip } from "@/ui/Chip";
 import { Button } from "@/ui/Button";
-import { DateField } from "@/ui/DateField";
 import { Turnstile, type TurnstileHandle, type TurnstileStatus } from "@/ui/Turnstile";
 import { Page } from "@/ui/Page";
 import { Card } from "@/ui/Surface";
@@ -53,7 +50,6 @@ import { getOwnerToken } from "@/lib/ownerToken";
 import { batchMetaFromSummary } from "@/features/bulk/batchStore";
 import { getDefaultBulkStorageDriver, saveBatchMeta } from "@/features/bulk/storage";
 import { describeBulkFailure, makeBulkClientId } from "@/features/bulk/useBulkWorkspace";
-import { setPickupDeadline } from "@/features/bulk/pickupDeadline";
 
 const NAME_MAX = 80;
 const LOOKUP_DEBOUNCE_MS = 400;
@@ -64,10 +60,6 @@ const LOOKUP_DEBOUNCE_MS = 400;
  * accepted. */
 type Resolved = { country: Country; code: string; result: PostalLookup | null };
 
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 export default function NewBulkBatch(): React.ReactElement {
   const router = useRouter();
   const [name, setName] = React.useState("");
@@ -75,7 +67,6 @@ export default function NewBulkBatch(): React.ReactElement {
   const [country, setCountry] = React.useState<Country>("US");
   const [postalCode, setPostalCode] = React.useState("");
   const [sharedStory, setSharedStory] = React.useState("");
-  const [deadline, setDeadline] = React.useState("");
   const [email, setEmailInput] = React.useState("");
   const [emailTouched, setEmailTouched] = React.useState(false);
   /** The address already attached to this device's owner, once `getMe`
@@ -209,7 +200,6 @@ export default function NewBulkBatch(): React.ReactElement {
 
     const meta = batchMetaFromSummary(clientBatchKey, result.data);
     await saveBatchMeta(getDefaultBulkStorageDriver(), meta);
-    if (deadline.trim() !== "") setPickupDeadline(clientBatchKey, deadline.trim());
 
     if (emailNeedsSaving) {
       try {
@@ -316,10 +306,6 @@ export default function NewBulkBatch(): React.ReactElement {
           <Text variant="caption" color="textTertiary">
             {'Public — you can offer to add this to individual items\' stories later ("Apply to selected"), but it is never shown on its own.'}
           </Text>
-        </View>
-
-        <View style={{ gap: space.xs }}>
-          <DateField label="Pickup deadline (optional)" value={deadline} onChangeText={setDeadline} min={todayIso()} helper="Private — a reminder for you only. Never shown to anyone, and never promises items go live by this date." />
         </View>
 
         {submitError !== null ? (

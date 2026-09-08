@@ -553,4 +553,21 @@ describe("useBulkWorkspace", () => {
     expect(outcome?.ok).toBe(false);
     expect(bulkApi.submitBatch).not.toHaveBeenCalled();
   });
+
+  it("returns a referentially stable object across a re-render that changes none of its real dependencies (#295)", async () => {
+    const key = freshBatchKey();
+    await seedLocalBatch(key);
+    const { result, rerender } = renderHook(() => useBulkWorkspace(key));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    const first = result.current;
+    rerender(undefined);
+
+    // Same identity — a consumer under BulkWorkspaceContext.Provider must
+    // not re-render off this alone. Before #295 this returned a fresh
+    // object literal (with two fresh inline closures) on every render.
+    expect(result.current).toBe(first);
+    expect(result.current.markerFor).toBe(first.markerFor);
+    expect(result.current.isSuggestionStale).toBe(first.isSuggestionStale);
+  });
 });

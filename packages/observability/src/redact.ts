@@ -48,8 +48,13 @@ const JSON_NONSTRING_SECRET_RE = new RegExp(
   "gi",
 );
 
-const KEY_VALUE_NAMES =
-  "access_token|refresh_token|id_token|token|api_key|key|secret|password|owner_token";
+// Built from SENSITIVE_KEY_RE.source (already a bare `(?:...)` group) rather
+// than a second hand-written list, so the object-key rule and the free-text
+// `key=value` / `key: value` rules below cannot drift apart again (#284):
+// `cookie:`, `session=`, `csrf=`, `jwt=` and `cf-turnstile-response=` used to
+// pass through free-text log lines in the clear because this list was missing
+// most of the names SENSITIVE_KEY_RE already covered.
+const KEY_VALUE_NAMES = SENSITIVE_KEY_RE.source;
 
 /**
  * The three PII/secret rules added by #170, built from the shared sources in
@@ -81,7 +86,13 @@ export function redactString(value: string): string {
     .replace(new RegExp(`([?&](?:${KEY_VALUE_NAMES})=)[^&\\s]+`, "gi"), "$1[REDACTED]")
     .replace(JSON_STRING_SECRET_RE, '$1"[REDACTED]"')
     .replace(JSON_NONSTRING_SECRET_RE, "$1[REDACTED]")
-    .replace(new RegExp(`((?:${KEY_VALUE_NAMES})\\s*[:=]\\s*)[^\\s,;&]+`, "gi"), "$1[REDACTED]")
+    // The negative lookahead skips a value that's already `Bearer <token>` /
+    // `Basic <token>` — the first rule above already redacted the token
+    // there, and without this "authorization" (now in KEY_VALUE_NAMES, #284)
+    // would re-match the literal word "Bearer" as if it were the secret,
+    // turning "Authorization: Bearer [REDACTED]" into "Authorization:
+    // [REDACTED] [REDACTED]".
+    .replace(new RegExp(`((?:${KEY_VALUE_NAMES})\\s*[:=]\\s*)(?!(?:Bearer|Basic)\\b)[^\\s,;&]+`, "gi"), "$1[REDACTED]")
     .replace(SECRET_PATH_SEGMENT_RE, "/$1/[REDACTED]")
     // Only the local part: the domain is not personal data and is the whole
     // difference between "one address bounced" and "this provider refuses

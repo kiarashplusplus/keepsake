@@ -11,6 +11,7 @@ import {
   getAdminStats,
   hideListing,
   rejectListing,
+  restoreListing,
 } from "@/api/admin";
 import AdminPage from "../../app/admin";
 
@@ -311,5 +312,52 @@ describe("/admin queue: keyboard and bulk actions", () => {
     expect(jest.mocked(rejectListing)).toHaveBeenCalledWith("e2e-admin", "a", {
       reason: "not_an_object",
     });
+  });
+
+  // #286: none of the four Undo callbacks told the reducer the item came
+  // back, so the queue kept showing it gone until a full reload. Restore's
+  // undo is the one case with a single, well-known resulting status
+  // (`hidden`), so it's fixed with a straight `reinsert` — this proves the
+  // whole round trip: optimistic remove, Undo, item visible again with no
+  // reload in between.
+  it("Undo after Restore puts the item back in the Hidden tab without a reload", async () => {
+    jest.mocked(getAdminQueue).mockImplementation(async (_token, options) => {
+      if (options.status === "hidden") {
+        return { items: [item("h", "Chipped mug")], next_cursor: null };
+      }
+      return { items: [], next_cursor: null };
+    });
+    jest.mocked(restoreListing).mockResolvedValue({} as never);
+
+    const { toJSON, UNSAFE_getAllByProps } = render(
+      <ToastProvider>
+        <AdminPage />
+      </ToastProvider>,
+    );
+    await act(async () => {
+      await flush();
+    });
+
+    await act(async () => {
+      fireEvent.press(lastWithLabel(UNSAFE_getAllByProps({ accessibilityLabel: "Hidden" }), "Hidden"));
+      await flush();
+    });
+    expect(JSON.stringify(toJSON())).toContain("Chipped mug");
+
+    await act(async () => {
+      fireEvent.press(lastWithLabel(UNSAFE_getAllByProps({ accessibilityLabel: "Restore" }), "Restore"));
+      await flush();
+    });
+    // Optimistic remove: gone from the Hidden tab the moment Restore fires.
+    expect(JSON.stringify(toJSON())).not.toContain("Chipped mug");
+
+    await act(async () => {
+      fireEvent.press(lastWithLabel(UNSAFE_getAllByProps({ accessibilityLabel: "Undo" }), "Undo"));
+      await flush();
+    });
+
+    expect(jest.mocked(hideListing)).toHaveBeenCalledWith("e2e-admin", "h");
+    // Reinsert dispatched on the undo's own success — back without a reload.
+    expect(JSON.stringify(toJSON())).toContain("Chipped mug");
   });
 });

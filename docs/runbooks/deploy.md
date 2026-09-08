@@ -45,11 +45,12 @@ landed on top of the one just verified, and got a commit belonging to neither.
 runs the whole product against real `workerd` with local D1/R2/KV — the same arrangement
 production runs, including the `[assets]` binding, `/item/:id`'s HTMLRewriter OG injection, the
 SPA fallback and the moderation pipeline (`apps/web/playwright.config.ts` explains why this is
-closer to production than `expo start` ever was). CI runs it on every pull request **that touches `apps/web`, `packages/`, `tools/`, `apps/site`
-or the root manifests** — `test-web` is gated on those filters and `build-web`/`e2e` hang off it,
-so an api-only pull request runs zero e2e specs and `ci-complete` still goes green (#147;
-`.github/workflows/ci.yml`, `tools/ci/assert-coverage.mjs`'s `api` row lists no `e2e`). For a
-one-off manual poke, `wrangler dev --local` from `apps/api/`.
+closer to production than `expo start` ever was). CI runs it on every pull request **that touches `apps/web`, `apps/api`, `packages/`, `tools/`,
+`apps/site` or the root manifests** — `test-web` is gated on those filters and `build-web`/`e2e`
+hang off it. An api-only pull request used to run zero e2e specs while `ci-complete` still went
+green, because `test-web`'s filter had no `api` case (#147); fixed 2026-09-08 by #230 adding
+`api` to that condition (`.github/workflows/ci.yml`). For a one-off manual poke, `wrangler dev
+--local` from `apps/api/`.
 
 **Checking preview still matters after a merge**, because "the newest commit on `main`" and "the
 commit I just merged" diverge as soon as someone merges again. Before trusting anything you

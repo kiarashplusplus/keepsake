@@ -69,8 +69,32 @@ function isFormData(value: unknown): value is FormData {
 
 type Envelope<T> = { ok: true; data: T } | { ok: false; error: { code: ErrorCode; message: string; retryAfter?: number } };
 
+/**
+ * Not just "has an `ok` key" (issue #297): that let a malformed
+ * `{ ok: true }` with no `data` — a proxy error page, a partially-written
+ * response, anything that happens to carry the one field this checked —
+ * through as a *successful* response whose payload is `undefined`. The two
+ * callers with no zod parse downstream (`getAdminStats`/`getAdminHealth` in
+ * `src/api/admin.ts`) had nothing left to catch that; every other caller
+ * only caught it by accident, one `.parse()` call away. Requiring `ok` to
+ * actually be a boolean, `data` to be present when it's `true`, and a
+ * well-formed `{ code, message }` when it's `false` makes a malformed
+ * envelope fail as the `internal` `ApiError` below throws for, instead of
+ * silently shipping `undefined` as if it were real data.
+ */
 function isEnvelope(value: unknown): value is Envelope<unknown> {
-  return typeof value === "object" && value !== null && "ok" in value;
+  if (typeof value !== "object" || value === null || !("ok" in value)) return false;
+  const ok = (value as { ok: unknown }).ok;
+  if (typeof ok !== "boolean") return false;
+  if (ok) return "data" in value;
+  if (!("error" in value)) return false;
+  const error = (value as { error: unknown }).error;
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    typeof (error as { code?: unknown }).code === "string" &&
+    typeof (error as { message?: unknown }).message === "string"
+  );
 }
 
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {

@@ -399,6 +399,15 @@ export default function GivePhotos(): React.ReactElement {
   // for an `?edit=` prefill (null object URLs too, but a real listing behind
   // them): "start over" there would read as "delete my listing's photos",
   // which is not what this button means.
+  //
+  // `listingId === null` alone used to be able to go stale — a giver could
+  // leave a live `?edit=` prefill without submitting and come back later to
+  // find it still set, hiding this banner over photos that were never
+  // theirs to "start over" on. `useEditHydration` now clears `listingId`
+  // (and the whole prefill) the moment the flow is entered again without
+  // `?edit=` (#281), so by the time this component renders there is nothing
+  // stale left to gate on: `listingId === null` here means "not mid-edit",
+  // full stop.
   const resumed = draft.listingId === null && draft.photos.some((photo) => photo.objectUrl === null);
 
   return (

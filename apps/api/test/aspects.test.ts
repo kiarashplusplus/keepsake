@@ -9,9 +9,10 @@
  */
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import type { PublicListing, OwnerListing } from "@keepsake/contracts/listing";
+import type { Aspect, PublicListing, OwnerListing } from "@keepsake/contracts/listing";
 import type { FeedPage } from "@keepsake/contracts/feed";
 import type { PublicPhoto } from "@keepsake/contracts/photo";
+import { replaceListingAspects } from "../src/lib/listingsDb.js";
 import { authHeaders, freshOwnerToken, insertApprovedListing, insertOwner, readOk, seedStandardPostalCodes, uploadPhoto } from "./helpers.js";
 
 const VALID_LISTING_BODY = {
@@ -192,6 +193,54 @@ describe("aspects persistence (issue #36)", () => {
 
       const page = await readOk<FeedPage<PublicListing>>(await fetchFeed("?q=grandfather"));
       expect(page.items.map((item) => item.id)).toContain(zeroAspectId);
+    });
+  });
+
+  // --- Issue #285: `replaceListingAspects` as one `env.DB.batch()` ---
+  describe("replaceListingAspects is atomic (issue #285)", () => {
+    it("a failing write among the inserts leaves the original aspects untouched, not half-deleted", async () => {
+      const ownerId = await insertOwner();
+      const listingId = await insertApprovedListing({ ownerId });
+
+      const original: Aspect[] = [
+        { name: "object", value: "teapot" },
+        { name: "material", value: "copper" },
+      ];
+      await replaceListingAspects(env, listingId, original);
+      const before = await env.DB.prepare("SELECT name, value FROM listing_aspects WHERE listing_id = ? ORDER BY position")
+        .bind(listingId)
+        .all<{ name: string; value: string }>();
+      expect(before.results).toEqual(original);
+
+      // `listing_aspects.value` is `NOT NULL` (0006_aspects.sql) — a `null`
+      // in the third of four aspects forces D1 to reject that INSERT, which
+      // is the failure this test stands in for: an isolate evicted midway
+      // through the un-batched loop this function used to be, per this
+      // module's own doc comment on why `create.ts` was rewritten the same
+      // way. Two good aspects flank the bad one on purpose, so a
+      // non-atomic implementation would have already committed the delete
+      // and the first insert or two before throwing.
+      const withABadAspect = [
+        { name: "era", value: "1970s" },
+        { name: "condition", value: "well loved" },
+        { name: "broken", value: null },
+        { name: "finish", value: "hammered" },
+      ] as unknown as Aspect[];
+
+      await expect(replaceListingAspects(env, listingId, withABadAspect)).rejects.toThrow();
+
+      // On `main`, the plain `DELETE` awaited on its own line commits
+      // unconditionally, then the loop's separate `.run()` calls insert
+      // "era" and "condition" before the null `value` throws on "broken" —
+      // leaving the row set as ["era", "condition"], neither the original
+      // two aspects nor the four requested ones. With the whole replace as
+      // one `env.DB.batch()`, the failing statement fails the batch and
+      // nothing in it commits: the row set this asserts is the original,
+      // unchanged.
+      const after = await env.DB.prepare("SELECT name, value FROM listing_aspects WHERE listing_id = ? ORDER BY position")
+        .bind(listingId)
+        .all<{ name: string; value: string }>();
+      expect(after.results).toEqual(original);
     });
   });
 });

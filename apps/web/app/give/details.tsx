@@ -7,8 +7,7 @@
 import * as React from "react";
 import { View } from "react-native";
 import { useRouter } from "expo-router";
-import { z } from "zod";
-import { TITLE_MAX, TITLE_MIN } from "@keepsake/contracts/listing";
+import { TITLE_MAX } from "@keepsake/contracts/listing";
 import { COUNTRIES, COUNTRY_LABELS, COUNTRY_POSTCODE_HINTS, normalizePostalCode, type Country, type PostalLookup } from "@keepsake/contracts/geo";
 import { space } from "@keepsake/tokens/spacing";
 import { Text } from "@/ui/Text";
@@ -20,11 +19,11 @@ import { Page } from "@/ui/Page";
 import { Card } from "@/ui/Surface";
 import { useGiveDraft } from "@/features/give/GiveDraftContext";
 import { coverPhoto } from "@/features/give/giveDraft";
+import { TitleFieldSchema } from "@/features/give/giveValidation";
 import { lookupPostalCode } from "@/api/geo";
 import { locateOnce } from "@/lib/geoLocate";
 import { MANUAL_ENTRY_MESSAGE, reverseGeocode } from "@/lib/geoReverse";
 
-const TitleFieldSchema = z.string().trim().min(TITLE_MIN).max(TITLE_MAX);
 const LOOKUP_DEBOUNCE_MS = 400;
 
 /** The last completed lookup, tagged with the exact (country, code) it

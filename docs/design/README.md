@@ -210,13 +210,13 @@ already describe in the fixed tense.
 
 *Workable by anyone (pre-audit):*
 - **#104** — `wrangler dev` dies mid-e2e with no diagnostic and `serve.mjs`'s restart hides it.
-- **#116** — the `adminAuth` brute-force test is flaky again on unmodified `main`. **Note the
-  supersession**: `AGENTS.md` and several docs still explain this flake by pointing at #65, which
-  is closed; #116's own title says #65 either regressed or was never fixed at the cause.
+- ~~#116~~ — closed 2026-09-08 by #230: the `adminAuth` brute-force test now drives a fake, in-repo
+  rate limiter instead of timing 400 sequential requests at the real `RL_ADMIN` binding, which is
+  what made it flaky under load. See `AGENTS.md`'s e2e bullet.
 - **#145** — DNSSEC is disabled on the `keepsake.ing` zone.
-- **#147** — an api-only pull request never runs `e2e`, because the job is scoped by
-  `dorny/paths-filter` like everything else. This is the mirror image of row four of `AGENTS.md`'s
-  "checks that could not fail" table.
+- ~~#147~~ — closed 2026-09-08 by #230: `test-web`'s `changes` condition now includes `api`, so an
+  api-only pull request builds the web bundle and runs `e2e` like everything else. See
+  `docs/design/ops.md`'s "CI shape".
 - **#155** — a listing's category comes from the model alone and no human can correct it, at any
   layer. A product decision (#35) whose premise has been tested and half-failed.
 - **#159** — decide whether a Tail Worker or Logpush is worth it. Nothing pushes an alert anywhere;

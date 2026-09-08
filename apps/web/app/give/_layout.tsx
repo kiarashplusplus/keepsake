@@ -2,7 +2,7 @@
 // `GiveDraftProvider` every step reads/writes via `useGiveDraft()`. See the
 // build plan's "Web app" section for the five steps.
 import * as React from "react";
-import { View } from "react-native";
+import { ActivityIndicator, View } from "react-native";
 import { Link, Stack, usePathname } from "expo-router";
 import { space } from "@keepsake/tokens/spacing";
 import { GiveDraftProvider } from "@/features/give/GiveDraftContext";
@@ -76,18 +76,41 @@ function StepShell({ children }: { children: React.ReactNode }): React.ReactElem
   );
 }
 
-function EditHydrator(): null {
-  useEditHydration();
-  return null;
+/**
+ * Stands in for the step stack while an `?edit=` prefill fetch is in
+ * flight (#289). Before this existed, `GivePhotos` mounted and was fully
+ * interactive the moment the flow opened — on a slow connection a giver
+ * could add a photo or start typing a title before the fetch landed and
+ * `useEditHydration`'s `hydrate` dispatch replaced the whole draft out from
+ * under them, wholesale and without warning. Gating the steps behind this
+ * instead of letting them render blank means there is nothing to type into
+ * until the draft they'd be typing into is the real one.
+ */
+function GiveStepsGate({ children }: { children: React.ReactNode }): React.ReactElement {
+  const { hydrating } = useEditHydration();
+
+  if (hydrating) {
+    return (
+      <Card style={{ alignItems: "center", paddingVertical: space.xxl, gap: space.md }}>
+        <ActivityIndicator accessibilityLabel="Loading your listing" />
+        <Text variant="body" color="textSecondary">
+          Loading your listing…
+        </Text>
+      </Card>
+    );
+  }
+
+  return <>{children}</>;
 }
 
 export default function GiveLayout(): React.ReactElement {
   return (
     <GiveDraftProvider>
-      <EditHydrator />
       <SuggestionFetcher />
       <StepShell>
-        <Stack screenOptions={{ headerShown: false }} />
+        <GiveStepsGate>
+          <Stack screenOptions={{ headerShown: false }} />
+        </GiveStepsGate>
       </StepShell>
     </GiveDraftProvider>
   );

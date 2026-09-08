@@ -106,4 +106,42 @@ describe("X-Robots-Tag", () => {
     const other = await SELF.fetch("http://x/some/other/route");
     expect(other.headers.get("x-robots-tag")).toBeNull();
   });
+
+  // Issue #278: `/admin` used to be the only unconditionally-noindexed path,
+  // an exact string compare that missed every other route reachable only
+  // with a credential — `/bulk` went live in production (`BULK_UPLOAD =
+  // "1"`) with nothing keeping its workspace out of search. Each private-ish
+  // route's *bare* path and one representative sub-path are checked, so a
+  // prefix match that only worked for one shape would still fail here.
+  it.each([
+    ["/admin"],
+    ["/bulk"],
+    ["/bulk/new"],
+    ["/bulk/abc123/review"],
+    ["/mine"],
+    ["/mine/some-id"],
+    ["/mine/email"],
+    ["/recover"],
+    ["/recover/some-token"],
+    ["/withdraw/some-token"],
+    ["/confirm/some-token"],
+  ])("marks %s noindex on production", async (path) => {
+    setTestEnvVar("ENVIRONMENT", "production");
+
+    const res = await SELF.fetch(`http://x${path}`);
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+  });
+
+  // The control side of the same change: the content this product wants
+  // found stays indexable on production, so the prefix list isn't so broad
+  // it swallows the feed or a listing along with the private routes.
+  it.each([["/"], ["/item/some-listing-id"], ["/welcome"], ["/about"]])(
+    "leaves %s indexable on production",
+    async (path) => {
+      setTestEnvVar("ENVIRONMENT", "production");
+
+      const res = await SELF.fetch(`http://x${path}`);
+      expect(res.headers.get("x-robots-tag")).toBeNull();
+    },
+  );
 });
