@@ -20,11 +20,14 @@ async function pickPhoto(page: Page, buffer: Buffer, name = "photo.png"): Promis
 
 /**
  * The text `label` on the screen the visitor is looking at — `onScreen` for
- * copy rather than a control. It matters more than usual here: "← Back" to
- * the feed leaves the give stack mounted (hidden) underneath, and the
- * header's "Give" then pushes a *second* one on top, so every string on the
- * photos step exists twice. The hidden copy still holds this session's blob
- * previews; the visible one is the draft that came back from storage.
+ * copy rather than a control. The give flow's nested stack keeps earlier
+ * steps mounted (hidden) under the current one, so a string can exist more
+ * than once; and until the Give links became `dangerouslySingular`, "← Back"
+ * to the feed left the whole give stack mounted underneath and "Give"
+ * pushed a second one on top of it — the hidden copy still holding this
+ * session's blob previews, the visible one the draft read back from storage.
+ * The "one give flow" test below is what now guarantees that cannot recur;
+ * this helper keeps the rest of the assertions honest either way.
  */
 function visibleText(page: Page, text: string | RegExp): Locator {
   return page
@@ -70,9 +73,7 @@ test("back from the story step returns to the photos step, with the tile intact"
   await expect(page.getByLabel("Back to the feed")).toBeVisible();
 });
 
-test("coming back to a left draft shows the real photo, says so, and can start over", async ({
-  page,
-}) => {
+test("leaving for the feed and coming back returns to the one give flow", async ({ page }) => {
   await page.goto("/give");
   await pickPhoto(page, makePng(640, 800));
   await expect(page.getByText("Cover", { exact: true })).toBeVisible({ timeout: 30_000 });
@@ -81,6 +82,35 @@ test("coming back to a left draft shows the real photo, says so, and can start o
   await expect(page).toHaveURL(/^https?:\/\/[^/]+\/(\?.*)?$/);
   // The header's own "Give" — the way a giver actually comes back.
   await onScreen(page, "Give").or(onScreen(page, "Give something")).first().click();
+  await expect(visibleText(page, "Show us the keepsake.")).toBeVisible();
+
+  // One give flow, not two. The root stack keeps the flow the giver backed
+  // out of mounted under the feed, and the header's "Give" used to push a
+  // second one on top of it: two shells, two photos screens, and a hidden
+  // upload nobody could see. `dangerouslySingular` on the Give links keeps
+  // it to one — counted unfiltered, hidden copies included, because a hidden
+  // duplicate is exactly the bug.
+  await expect(page.getByText("Show us the keepsake.")).toHaveCount(1);
+  await expect(page.getByLabel("Back to the feed")).toHaveCount(1);
+  // And it is the same flow: the tile still holds this session's preview,
+  // so nothing was read back from storage and nothing says it was.
+  await expect(visibleText(page, "Cover")).toBeVisible();
+  await expect(onScreen(page, "Continue")).toBeEnabled();
+  await expect(visibleText(page, "Picked up where you left off.")).toHaveCount(0);
+});
+
+test("a draft read back from storage shows the real photo, says so, and can start over", async ({
+  page,
+}) => {
+  await page.goto("/give");
+  await pickPhoto(page, makePng(640, 800));
+  await expect(page.getByText("Cover", { exact: true })).toBeVisible({ timeout: 30_000 });
+
+  // A full load: what a phone does to a tab it put in the background, and
+  // the one path where the blob previews are genuinely gone. This is the
+  // screenshot the issue came with — a blurhash smear with nothing to say
+  // whether it was the upload or a stuck one.
+  await page.goto("/give");
   await expect(visibleText(page, "Show us the keepsake.")).toBeVisible();
 
   // The draft came back, and it says so.
