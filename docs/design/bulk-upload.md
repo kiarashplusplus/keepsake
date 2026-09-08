@@ -373,3 +373,20 @@ otherwise. It could not be observed while the grant existed, because the grant's
 `UPDATE` sat in the same transaction and refused first — so removing the admission code is what
 exposed it, and the exhausted-allowance test is what caught it. Fixed by putting the ceiling on the
 insert branch too (`SELECT … WHERE ? > 0`).
+
+**Follow-up on the same day, from Copilot's review of #269: a 429 with `Retry-After` no longer
+means one thing.** `src/api/bulk.ts`'s `classifyBulkError` treated *any* `Retry-After` as
+`"throttled"`, which `uploadQueue.pauseFor` sleeps through — correct while the only such 429 was the
+router's per-minute burst brake. The per-owner daily ceilings answer 429 with
+`secondsUntilMidnightUTC()`, up to 86,400, so a giver hitting today's photo limit would have parked
+the whole queue until UTC midnight with no failed tile and nothing on screen to say why. That was
+reachable before this change too (the ceiling has always answered that way) but only *past* an
+exhausted grant, which normally refused first; removing the grant makes it the ordinary path.
+
+The split is now by size — `MAX_PAUSE_SECONDS` (300), comfortably above the burst window and far
+below any daily ceiling. It is a client-side policy about what a giver will sit through, not a
+mirror of a server constant: the API still says exactly when the ceiling lifts. Two tests pin it
+(`test/api/bulk.test.ts`'s boundary case, `test/features/bulk/uploadQueue.test.ts`'s "fails the
+photo rather than pausing for hours"), and both were watched fail with the old rule restored —
+`expected false to be true` on the queue pausing, and the 33,000-second 429 classifying as
+`throttled`.

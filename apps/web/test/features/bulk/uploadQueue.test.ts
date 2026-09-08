@@ -289,6 +289,50 @@ describe("UploadQueue", () => {
     expect(updates.at(-1)?.status).toBe("complete");
   });
 
+  // The daily ceilings answer 429 with `Retry-After: <seconds until UTC
+  // midnight>`, which is the same shape as the burst brake's and can be most
+  // of a day. Classified as a pause, it would park the whole queue silently
+  // until midnight — no failed tile, nothing to tell the giver. It has to
+  // fail the photo instead, which is what `MAX_PAUSE_SECONDS` decides.
+  it("a 429 whose Retry-After runs to UTC midnight fails the photo rather than pausing the queue for hours", async () => {
+    const driver = createMemoryDriver();
+    const updates: Partial<BulkDraftPhoto>[] = [];
+    let calls = 0;
+    let paused = false;
+
+    const uploadPhoto: UploadPhotoFn = async () => {
+      calls += 1;
+      return {
+        ok: false,
+        error: classifyBulkError(
+          new ApiError("rate_limited", "Today's photo limit for this account has been reached.", 429, 33_000),
+        ),
+      };
+    };
+
+    const queue = new UploadQueue({
+      batchKey: "batch-1",
+      driver,
+      uploadPhoto,
+      prepareUpload: async () => preparedUpload(),
+      onPhotoUpdate: (_id, patch) => updates.push(patch),
+      onPause: () => {
+        paused = true;
+      },
+      sleep: immediateSleep(),
+    });
+
+    queue.enqueue("photo-a", new Blob(["source"]));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(paused).toBe(false);
+    expect(calls).toBe(1);
+    expect(updates.at(-1)).toMatchObject({ status: "permanent_failure", errorCode: "limit_reached", canRetry: false });
+    expect(updates.at(-1)?.error).toContain("Today's photo limit");
+  });
+
   it("resume() re-queues a persisted queued/uploading photo whose source survived, and requests reselection for one that didn't", async () => {
     const driver = createMemoryDriver();
     await savePhotoSource(driver, "batch-1", "has-source", new Blob(["still here"]));

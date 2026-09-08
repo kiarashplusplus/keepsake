@@ -15,11 +15,11 @@
  *
  * A screen driving 100 items and 300 photos needs to tell three situations
  * apart, and a caught `ApiError` alone can't: was this edited elsewhere
- * (409, reload and retry), has this account hit a ceiling that only resets
- * at UTC midnight (429 with no `retryAfter`, or a batch that is already
- * full — waiting minutes doesn't fix either), or is this a resumable pause
- * (429 *with* `retryAfter` — the per-minute burst ceiling, wait and go
- * again)? Every mutating call
+ * (409, reload and retry), has this account hit a ceiling that only lifts at
+ * UTC midnight — or filled a batch, which no wait empties — or is this a
+ * resumable pause, the per-minute burst ceiling? The last two are both 429s
+ * carrying `Retry-After`, so it is the *size* of that wait that separates
+ * them; see `MAX_PAUSE_SECONDS`. Every mutating call
  * below returns a `BulkResult<T>` rather than throwing for any of those
  * three cases, via `classifyBulkError`. A response the API was never meant
  * to send — a validation bug, a 500, a client-side zod mismatch — still
@@ -61,14 +61,16 @@ export type BulkWriteError =
   /** 409 — `expected_revision` (or the item's own revision-on-update path)
    * didn't match. Reload the batch/item and let the giver reconcile. */
   | { kind: "conflict"; message: string }
-  /** 429 with no `Retry-After` — this account's daily ceiling for the kind
-   * of write attempted, or a batch that already holds all it can. Retrying
-   * in a minute won't help; the message says which ceiling and what to do
-   * (wait for UTC midnight, or start another batch). */
+  /** 429 that no realistic wait fixes: this account's daily ceiling for the
+   * kind of write attempted (its `Retry-After` counts down to UTC midnight,
+   * which can be most of a day), or a batch that already holds all it can
+   * (no `Retry-After` at all — waiting never empties a batch). The API's own
+   * message says which, and what to do about it. */
   | { kind: "limit_reached"; message: string }
-  /** 429 *with* `Retry-After` — a burst ceiling, not exhaustion. The caller
-   * (`uploadQueue.ts`) treats this as a pause: stop issuing new writes until
-   * `retryAfterSeconds` has passed, then resume the same request. */
+  /** 429 with a *short* `Retry-After` — the per-minute burst ceiling, not
+   * exhaustion. The caller (`uploadQueue.ts`) treats this as a pause: stop
+   * issuing new writes until `retryAfterSeconds` has passed, then resume the
+   * same request. See `MAX_PAUSE_SECONDS` for where the line is drawn. */
   | { kind: "throttled"; message: string; retryAfterSeconds: number }
   /** `fetch` itself failed — offline, DNS, CORS. Nothing reached the
    * server, so this is unambiguously retryable once connectivity returns. */
@@ -81,6 +83,27 @@ export type BulkWriteError =
 
 export type BulkResult<T> = { ok: true; data: T } | { ok: false; error: BulkWriteError };
 
+/**
+ * The longest `Retry-After` this module will call a *pause*.
+ *
+ * A 429 carrying `Retry-After` used to mean exactly one thing here — the
+ * router-level burst brake, whose window is a minute — so any `Retry-After`
+ * was safe to sleep through. It no longer does: a per-owner daily ceiling
+ * (`bulk_owner_usage`, `apps/api/src/bulk/usage.ts`) answers 429 with
+ * `secondsUntilMidnightUTC()`, up to 86,400. Classifying that as
+ * `"throttled"` hands it to `uploadQueue.pauseFor`, which would park the
+ * whole queue — no failed tile, no message, just a "paused" workspace — for
+ * the rest of the UTC day.
+ *
+ * Five minutes is comfortably above the burst window and far below any
+ * daily ceiling, so the two never collide. The number is a *client-side
+ * policy about what a giver will sit through*, not a mirror of any server
+ * constant: the API stays honest and keeps saying exactly when the ceiling
+ * lifts; this only decides whether waiting is something to do silently or
+ * something to tell them about.
+ */
+export const MAX_PAUSE_SECONDS = 300;
+
 /** Exported so `uploadQueue.ts` (and tests) can classify an `ApiError` the
  * same way without re-deriving this table. Rethrows anything that isn't an
  * `ApiError` — a zod `.parse()` failure on a request we built ourselves, for
@@ -90,7 +113,7 @@ export function classifyBulkError(error: unknown): BulkWriteError {
   if (!(error instanceof ApiError)) throw error;
   if (error.code === "conflict") return { kind: "conflict", message: error.message };
   if (error.code === "rate_limited") {
-    if (error.retryAfter !== undefined) {
+    if (error.retryAfter !== undefined && error.retryAfter <= MAX_PAUSE_SECONDS) {
       return { kind: "throttled", message: error.message, retryAfterSeconds: error.retryAfter };
     }
     return { kind: "limit_reached", message: error.message };

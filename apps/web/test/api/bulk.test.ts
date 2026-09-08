@@ -1,4 +1,5 @@
 import {
+  MAX_PAUSE_SECONDS,
   cancelBatch,
   classifyBulkError,
   createBatch,
@@ -49,6 +50,29 @@ describe("classifyBulkError", () => {
       message: "no items left today",
     });
     expect(classifyBulkError(new ApiError("unavailable", "offline", 0))).toEqual({ kind: "network", message: "offline" });
+  });
+
+  // Both the burst brake and the per-owner daily ceilings answer 429 with a
+  // `Retry-After`; only the length tells them apart. Getting this wrong is
+  // not cosmetic — `uploadQueue.pauseFor` sleeps for whatever `"throttled"`
+  // carries, so a daily ceiling read as a pause parks the queue until UTC
+  // midnight with nothing on screen to say why.
+  it("splits a 429 with Retry-After by how long the wait is, at MAX_PAUSE_SECONDS", () => {
+    expect(classifyBulkError(new ApiError("rate_limited", "burst", 429, MAX_PAUSE_SECONDS))).toEqual({
+      kind: "throttled",
+      message: "burst",
+      retryAfterSeconds: MAX_PAUSE_SECONDS,
+    });
+    expect(classifyBulkError(new ApiError("rate_limited", "until midnight", 429, MAX_PAUSE_SECONDS + 1))).toEqual({
+      kind: "limit_reached",
+      message: "until midnight",
+    });
+    // The real shape of a daily ceiling: `secondsUntilMidnightUTC()`, which
+    // tops out at 86,400.
+    expect(classifyBulkError(new ApiError("rate_limited", "Today's photo limit for this account has been reached.", 429, 86_400))).toEqual({
+      kind: "limit_reached",
+      message: "Today's photo limit for this account has been reached.",
+    });
   });
 
   it("falls back to 'unexpected', carrying the raw code and status, for everything else", () => {

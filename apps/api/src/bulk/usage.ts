@@ -63,7 +63,7 @@ export interface UsageDebitOptions {
  * It never showed, because the grant that sat below this ran its own
  * `> 0`-guarded `UPDATE` in the same transaction and refused first. Removing
  * the grant removed the thing that was covering for it: with a ceiling of 0,
- * a fresh owner's first photo was admitted, and `test/bulkCeilings.ts`'s
+ * a fresh owner's first photo was admitted, and `test/bulkCeilings.test.ts`'s
  * exhausted-allowance case is what caught it. Hence `SELECT ... WHERE ? > 0`
  * for the insert branch — a ceiling of zero admits nothing, on any day, for
  * any owner.
