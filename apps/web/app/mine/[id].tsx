@@ -28,6 +28,7 @@ import { RequestList } from "@/features/mine/RequestList";
 import { HandoffSheet } from "@/features/mine/HandoffSheet";
 import { track } from "@/lib/analytics";
 import { AnalyticsEvents } from "@/lib/analyticsEvents";
+import { RouteHead } from "@/ui/RouteHead";
 
 const STATUS_LABELS: Record<ListingStatus, { label: string; color: TextColor }> = {
   pending: { label: "Reviewing", color: "foilText" },
@@ -113,6 +114,7 @@ export default function MineDetail(): React.ReactElement {
   if (error !== null && listing === null) {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+        <RouteHead title="Keepsake details" />
         <EmptyState eyebrow="Mine" title="Couldn't load this listing" line={error} />
       </Page>
     );
@@ -121,6 +123,7 @@ export default function MineDetail(): React.ReactElement {
   if (listing === null) {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: space.md }}>
+        <RouteHead title="Keepsake details" />
         <Skeleton height={200} />
         <Skeleton height={80} />
       </Page>
@@ -133,6 +136,7 @@ export default function MineDetail(): React.ReactElement {
 
   return (
     <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
+      <RouteHead title={listing.title} />
       {/* Photos as small prints, each leaning its own deterministic way. */}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.lg, paddingTop: space.sm }}>
         {listing.photos.map((photo) => (

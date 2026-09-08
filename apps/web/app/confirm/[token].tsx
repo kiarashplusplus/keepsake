@@ -24,6 +24,7 @@ import { ApiError } from "@/api/client";
 import { confirmRequestWithToken } from "@/api/confirm";
 import { track } from "@/lib/analytics";
 import { AnalyticsEvents } from "@/lib/analyticsEvents";
+import { RouteHead } from "@/ui/RouteHead";
 
 type Phase = "working" | "done" | "gone" | "expired" | "error";
 
@@ -56,6 +57,7 @@ export default function ConfirmToken(): React.ReactElement {
   if (phase === "working") {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+        <RouteHead title="Confirm your request" />
         <EmptyState ornament={<Stamp state="breathing" label="Working" />} eyebrow="Confirming" title="One moment…" />
       </Page>
     );
@@ -64,6 +66,7 @@ export default function ConfirmToken(): React.ReactElement {
   if (phase === "expired") {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+        <RouteHead title="Confirm your request" />
         <EmptyState
           eyebrow="Confirm"
           title="This link has expired"
@@ -76,6 +79,7 @@ export default function ConfirmToken(): React.ReactElement {
   if (phase === "error") {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+        <RouteHead title="Confirm your request" />
         <EmptyState
           eyebrow="Confirm"
           title="That link didn't work"
@@ -88,6 +92,7 @@ export default function ConfirmToken(): React.ReactElement {
   if (phase === "gone") {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+        <RouteHead title="Confirm your request" />
         <EmptyState
           eyebrow="Confirm"
           title="This one's already spoken for"

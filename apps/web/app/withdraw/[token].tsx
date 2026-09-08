@@ -24,6 +24,7 @@ import { useToast } from "@/ui/Toast";
 import { withdrawWithToken } from "@/api/withdraw";
 import { track } from "@/lib/analytics";
 import { AnalyticsEvents } from "@/lib/analyticsEvents";
+import { RouteHead } from "@/ui/RouteHead";
 
 type Phase = "working" | "done" | "error";
 
@@ -55,6 +56,7 @@ export default function WithdrawToken(): React.ReactElement {
   if (phase === "working") {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+        <RouteHead title="Withdraw your request" />
         <EmptyState
           ornament={<Stamp state="breathing" label="Working" />}
           eyebrow="Withdrawing"
@@ -67,6 +69,7 @@ export default function WithdrawToken(): React.ReactElement {
   if (phase === "error") {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+        <RouteHead title="Withdraw your request" />
         <EmptyState
           eyebrow="Withdraw"
           title="That link didn't work"

@@ -30,6 +30,9 @@ import { ApiError } from "@/api/client";
 import { tiltDegForId } from "@/lib/masonry";
 import { LISTING_GROUP_LABELS, LISTING_GROUP_ORDER, groupListings } from "@/features/mine/groupListings";
 import { OWNER_EMAIL_PROBLEM_COPY, ownerEmailProblem, staleSummary } from "@/features/mine/staleness";
+import { RouteHead } from "@/ui/RouteHead";
+
+const MINE_HEAD = <RouteHead title="My keepsakes" description="Every listing you've given, and how each one is doing." />;
 
 /** The `/mine?verified=1|0&reason=` toast the email-verify link redirects
  * to. A dedicated hook (rather than inlining in the component body) so it's
@@ -210,6 +213,7 @@ export default function Mine(): React.ReactElement {
   if (!hasOwnerToken) {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+        {MINE_HEAD}
         <EmptyState
           ornament={<Stamp state="idle" label="Mine" />}
           eyebrow="Mine"
@@ -236,6 +240,7 @@ export default function Mine(): React.ReactElement {
   if (error !== null) {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+        {MINE_HEAD}
         <EmptyState eyebrow="Mine" title="Couldn't load your listings" line={error} />
       </Page>
     );
@@ -244,6 +249,7 @@ export default function Mine(): React.ReactElement {
   if (listings === null) {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: space.md }}>
+        {MINE_HEAD}
         <Skeleton height={88} />
         <Skeleton height={88} />
         <Skeleton height={88} />
@@ -254,6 +260,7 @@ export default function Mine(): React.ReactElement {
   if (listings.length === 0) {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: sectionRhythm.tight }}>
+        {MINE_HEAD}
         <EmptyState
           ornament={<Stamp state="idle" label="Mine" />}
           eyebrow="Mine"
@@ -283,6 +290,7 @@ export default function Mine(): React.ReactElement {
 
   return (
     <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+      {MINE_HEAD}
       <Card style={{ gap: sectionRhythm.tight, transform: [{ rotate: "0.2deg" }] }}>
         <View style={{ flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: space.md }}>
           <View style={{ gap: space.sm }}>

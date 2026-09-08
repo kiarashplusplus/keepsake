@@ -26,6 +26,7 @@ import { useBulkPhotoSource } from "@/features/bulk/photoSource";
 import { tiltDegForId } from "@/lib/masonry";
 import { pickImages } from "@/lib/images/pickImages";
 import { useFileDrop } from "@/lib/images/useFileDrop";
+import { useInViewOnce } from "@/lib/useInViewOnce";
 
 const TILE = 120;
 
@@ -33,7 +34,7 @@ function fileKey(file: File): string {
   return `${file.name}:${file.size}`;
 }
 
-function TrayTile({
+const TrayTile = React.memo(function TrayTile({
   photo,
   selected,
   onToggle,
@@ -47,10 +48,16 @@ function TrayTile({
   onRetry: () => void;
 }): React.ReactElement {
   const colors = useColors();
-  const source = useBulkPhotoSource(photo);
+  // Up to MAX_BATCH_PHOTOS (300) tiles can be in the tray at once — resolving
+  // (and, for a synced photo, authenticating) every tile's image source on
+  // mount would fire hundreds of requests before a single one is visible.
+  // `useBulkPhotoSource`'s `enabled` flag exists for exactly this; see its
+  // header.
+  const [inViewRef, inView] = useInViewOnce<View>();
+  const source = useBulkPhotoSource(photo, inView);
 
   return (
-    <View style={{ width: TILE, gap: space.xs }}>
+    <View ref={inViewRef} style={{ width: TILE, gap: space.xs }}>
       <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selected }} accessibilityLabel="Select this photo" onPress={onToggle}>
         <Print tiltDeg={tiltDegForId(photo.clientPhotoId, motion.tiltRangeDeg)} style={{ width: TILE, height: TILE, padding: 6 }}>
           <View style={{ width: "100%", height: "100%", overflow: "hidden", backgroundColor: colors.tableEdge }}>
@@ -123,9 +130,9 @@ function TrayTile({
       </View>
     </View>
   );
-}
+});
 
-function GroupThumb({
+const GroupThumb = React.memo(function GroupThumb({
   photo,
   isCover,
   onMakeCover,
@@ -137,11 +144,12 @@ function GroupThumb({
   onRemove: () => void;
 }): React.ReactElement {
   const colors = useColors();
-  const source = useBulkPhotoSource(photo ?? null);
+  const [inViewRef, inView] = useInViewOnce<View>();
+  const source = useBulkPhotoSource(photo ?? null, inView);
   if (photo === undefined) return <View />;
 
   return (
-    <View style={{ width: 72, gap: space.xxs }}>
+    <View ref={inViewRef} style={{ width: 72, gap: space.xxs }}>
       <View style={{ width: 72, height: 72, overflow: "hidden", borderRadius: 2, backgroundColor: colors.tableEdge, borderWidth: isCover ? 2 : 0, borderColor: colors.accent }}>
         <ExpoImage
           source={source}
@@ -163,9 +171,9 @@ function GroupThumb({
       </View>
     </View>
   );
-}
+});
 
-function ItemGroupRow({
+const ItemGroupRow = React.memo(function ItemGroupRow({
   item,
   selectedTrayIds,
   onCleared,
@@ -246,7 +254,7 @@ function ItemGroupRow({
       ) : null}
     </Card>
   );
-}
+});
 
 export default function BulkPhotos(): React.ReactElement {
   const colors = useColors();
@@ -308,10 +316,14 @@ export default function BulkPhotos(): React.ReactElement {
     });
   }
 
-  const selectedIds = Array.from(selected);
+  // Memoized so `ItemGroupRow` (React.memo'd) sees a stable reference across
+  // re-renders that don't touch `selected` — otherwise a fresh array every
+  // render would defeat the memoization for every row.
+  const selectedIds = React.useMemo(() => Array.from(selected), [selected]);
   const canGroupAsOne = selectedIds.length >= 1 && selectedIds.length <= MAX_PHOTOS && items.length < MAX_BATCH_ITEMS;
   const canGroupOnePerPhoto = selectedIds.length >= 1 && items.length + selectedIds.length <= MAX_BATCH_ITEMS;
   const [groupError, setGroupError] = React.useState<string | null>(null);
+  const handleCleared = React.useCallback(() => setSelected(new Set()), []);
 
   async function handleGroupAsOne(): Promise<void> {
     const result = await workspace.groupAsOneItem(selectedIds);
@@ -438,7 +450,7 @@ export default function BulkPhotos(): React.ReactElement {
             <TableHeading note={`${items.length} of ${MAX_BATCH_ITEMS}`}>Grouped so far</TableHeading>
             <View style={{ gap: space.md }}>
               {items.map((item) => (
-                <ItemGroupRow key={item.clientItemId} item={item} selectedTrayIds={selectedIds} onCleared={() => setSelected(new Set())} />
+                <ItemGroupRow key={item.clientItemId} item={item} selectedTrayIds={selectedIds} onCleared={handleCleared} />
               ))}
             </View>
           </View>

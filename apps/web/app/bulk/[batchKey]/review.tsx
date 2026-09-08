@@ -25,6 +25,7 @@ import { useBulkWorkspaceContext } from "@/features/bulk/BulkWorkspaceContext";
 import { listItems, listPhotosForItem, type BulkDraftItem } from "@/features/bulk/batchStore";
 import { useBulkPhotoSource } from "@/features/bulk/photoSource";
 import type { SuggestionPreview } from "@/features/bulk/useBulkWorkspace";
+import { useInViewOnce } from "@/lib/useInViewOnce";
 
 const NARROW_BREAKPOINT = 640;
 
@@ -53,12 +54,25 @@ function stateLabelFor(item: BulkDraftItem): string {
   return STATE_LABEL[item.state];
 }
 
-function ItemCard({ item, selected, onToggleSelected }: { item: BulkDraftItem; selected: boolean; onToggleSelected: () => void }): React.ReactElement {
+const ItemCard = React.memo(function ItemCard({
+  item,
+  selected,
+  onToggleSelected,
+}: {
+  item: BulkDraftItem;
+  selected: boolean;
+  onToggleSelected: (clientItemId: string) => void;
+}): React.ReactElement {
   const colors = useColors();
   const workspace = useBulkWorkspaceContext();
   const photos = listPhotosForItem(workspace.state, item.clientItemId);
   const cover = photos[0];
-  const coverSource = useBulkPhotoSource(cover ?? null);
+  // Up to MAX_BATCH_ITEMS (100) cards can be on this screen at once —
+  // deferring cover-photo resolution until a card is actually visible keeps
+  // review from firing 100 authenticated `/thumb` fetches on mount. See
+  // `useBulkPhotoSource`'s header.
+  const [inViewRef, inView] = useInViewOnce<View>();
+  const coverSource = useBulkPhotoSource(cover ?? null, inView);
   const [conditionDismissed, setConditionDismissed] = React.useState(false);
 
   const suggestion = cover !== undefined ? workspace.suggestionForPhoto(cover.clientPhotoId) : null;
@@ -78,7 +92,7 @@ function ItemCard({ item, selected, onToggleSelected }: { item: BulkDraftItem; s
     <Card style={{ gap: space.md }}>
       <View style={{ flexDirection: "row", gap: space.md }}>
         <Print style={{ width: 96, height: 96, padding: 4 }}>
-          <View style={{ width: "100%", height: "100%", overflow: "hidden", backgroundColor: colors.tableEdge }}>
+          <View ref={inViewRef} style={{ width: "100%", height: "100%", overflow: "hidden", backgroundColor: colors.tableEdge }}>
             <ExpoImage
               source={coverSource}
               placeholder={cover?.blurhash !== null && cover?.blurhash !== undefined && cover.blurhash !== "" ? { blurhash: cover.blurhash } : null}
@@ -97,7 +111,7 @@ function ItemCard({ item, selected, onToggleSelected }: { item: BulkDraftItem; s
               <Text variant="label" color={item.state === "failed" ? "dangerText" : item.ready === true ? "accent2Text" : "foilText"} style={{ fontSize: 10 }}>
                 {stateLabelFor(item)}
               </Text>
-              <Chip label={selected ? "Selected" : "Select"} selected={selected} onPress={onToggleSelected} />
+              <Chip label={selected ? "Selected" : "Select"} selected={selected} onPress={() => onToggleSelected(item.clientItemId)} />
             </View>
           </View>
           {item.blockedReason !== null && item.state !== "ready" ? (
@@ -156,7 +170,7 @@ function ItemCard({ item, selected, onToggleSelected }: { item: BulkDraftItem; s
       </View>
     </Card>
   );
-}
+});
 
 function ApplyToSelectedSheet({
   visible,
@@ -275,14 +289,18 @@ export default function BulkReview(): React.ReactElement {
   const [sheetOpen, setSheetOpen] = React.useState(false);
   const [expandedIndex, setExpandedIndex] = React.useState(0);
 
-  function toggle(clientItemId: string): void {
+  // useCallback (not just a plain function) so `ItemCard` (React.memo'd)
+  // receives a stable `onToggleSelected` reference across re-renders — it
+  // takes the id rather than closing over one row's, so the same instance
+  // works for every card.
+  const toggle = React.useCallback((clientItemId: string): void => {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(clientItemId)) next.delete(clientItemId);
       else next.add(clientItemId);
       return next;
     });
-  }
+  }, []);
 
   const readyCount = items.filter((i) => i.ready === true).length;
   const needDetailsCount = items.length - readyCount;
@@ -327,7 +345,7 @@ export default function BulkReview(): React.ReactElement {
 
         <View style={{ gap: space.md }}>
           {shownItems.map((item) => (
-            <ItemCard key={item.clientItemId} item={item} selected={selected.has(item.clientItemId)} onToggleSelected={() => toggle(item.clientItemId)} />
+            <ItemCard key={item.clientItemId} item={item} selected={selected.has(item.clientItemId)} onToggleSelected={toggle} />
           ))}
         </View>
       </View>

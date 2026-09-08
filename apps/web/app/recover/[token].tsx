@@ -14,6 +14,7 @@ import { setOwnerToken } from "@/lib/ownerToken";
 import { ApiError } from "@/api/client";
 import { track } from "@/lib/analytics";
 import { AnalyticsEvents } from "@/lib/analyticsEvents";
+import { RouteHead } from "@/ui/RouteHead";
 
 export default function RecoverToken(): React.ReactElement {
   const { token } = useLocalSearchParams<{ token: string }>();
@@ -42,6 +43,7 @@ export default function RecoverToken(): React.ReactElement {
   if (error !== null) {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+      <RouteHead title="Recovering your account" />
         <EmptyState
           eyebrow="Recovery"
           title="That link didn’t work"
@@ -58,6 +60,7 @@ export default function RecoverToken(): React.ReactElement {
 
   return (
     <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+      <RouteHead title="Recovering your account" />
       <EmptyState ornament={<Stamp state="breathing" label="Checking" />} eyebrow="Recovery" title="Getting you back in…" />
     </Page>
   );

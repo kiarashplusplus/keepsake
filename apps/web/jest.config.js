@@ -10,7 +10,15 @@ module.exports = {
     // an ESM build and `expo-modules-core`'s `main` points straight at its
     // TypeScript source, so both need the same transform every other
     // untranspiled Expo package here gets.
-    "node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo(nent)?/.*|expo-constants|expo-modules-core|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules-.*|sentry-expo|native-base|react-native-svg|react-native-gesture-handler|react-native-screens|react-native-safe-area-context|react-native-web)/)",
+    //
+    // `expo-router` added for the per-route metadata pass
+    // (`src/ui/RouteHead.tsx`): the package's main entry is already CJS
+    // (hence every other `expo-router` import — `Stack`, `Link`,
+    // `usePathname` — already worked here), but its `expo-router/head`
+    // subpath (`head.js`) is a bare ESM re-export
+    // (`export { Head as default } from './build/head/ExpoHead'`), which
+    // Jest can't parse unless this pattern lets it through the same way.
+    "node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo(nent)?/.*|expo-constants|expo-modules-core|expo-router|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules-.*|sentry-expo|native-base|react-native-svg|react-native-gesture-handler|react-native-screens|react-native-safe-area-context|react-native-web)/)",
   ],
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/src/$1",
@@ -44,6 +52,9 @@ module.exports = {
     // reads `useSafeAreaInsets()`, which throws without a `<SafeAreaProvider>`
     // ancestor — real route tests `render()` screens directly without one.
     "^react-native-safe-area-context$": "<rootDir>/test/mocks/safeAreaContext.tsx",
+    // See test/mocks/expoRouterHead.tsx's header comment: the real `Head`
+    // needs a navigation tree route tests don't render.
+    "^expo-router/head$": "<rootDir>/test/mocks/expoRouterHead.tsx",
   },
   setupFilesAfterEnv: [],
   // `e2e/` holds Playwright specs, whose `*.spec.ts` names match Jest's

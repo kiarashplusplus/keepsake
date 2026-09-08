@@ -2,9 +2,11 @@
  * Kiarash's moderation queue. Not linked from `AppHeader` anywhere — reached
  * only by typing `/admin` — and kept out of search via both a runtime
  * `<meta name="robots">` (this file, since expo-router's static export
- * pre-renders `admin.html` once and there is no per-route way to set head
- * tags at export time the way `apps/api`'s `/item/:id` route rewrites OG
- * tags server-side) and `public/robots.txt`'s `Disallow: /admin`.
+ * pre-renders `admin.html` once and there is no per-route way to set *OG*
+ * tags at export time the way `apps/api`'s `/item/:id` route rewrites them
+ * server-side, per listing) and `public/robots.txt`'s `Disallow: /admin`.
+ * The `<title>` below, unlike OG tags, IS static per route, so it goes
+ * through `expo-router/head` (`RouteHead`) like every other screen's.
  *
  * Token entry (`AdminTokenGate`) gates everything else; once verified the
  * token lives only in `sessionStorage` (`src/lib/adminToken.ts`) and every
@@ -25,6 +27,7 @@ import {
 } from "@keepsake/contracts/admin";
 import { MODERATION_REASONS } from "@keepsake/contracts/listing";
 import { Page } from "@/ui/Page";
+import { RouteHead } from "@/ui/RouteHead";
 import { Text } from "@/ui/Text";
 import { Chip } from "@/ui/Chip";
 import { Button } from "@/ui/Button";
@@ -562,6 +565,7 @@ export default function AdminPage(): React.ReactElement {
   if (token === null) {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.loose }}>
+        <RouteHead title="Admin" />
         <AdminTokenGate onVerified={handleVerified} />
       </Page>
     );
@@ -569,6 +573,7 @@ export default function AdminPage(): React.ReactElement {
 
   return (
     <Page variant="grid" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
+      <RouteHead title="Admin" />
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md }}>
         <Text variant="displayLg">Admin</Text>
         <Button label="Forget" variant="ghost" onPress={handleForget} />

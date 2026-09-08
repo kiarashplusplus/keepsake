@@ -21,6 +21,7 @@ import { useColors } from "@/ui/theme";
 import { deleteEmail, getMe, setEmail } from "@/api/me";
 import { ApiError } from "@/api/client";
 import { getOwnerToken } from "@/lib/ownerToken";
+import { RouteHead } from "@/ui/RouteHead";
 
 export default function MineEmail(): React.ReactElement {
   const toast = useToast();
@@ -129,6 +130,7 @@ export default function MineEmail(): React.ReactElement {
   if (!hasOwnerToken) {
     return (
       <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+        <RouteHead title="Your email" />
         <EmptyState
           ornament={<Stamp state="idle" label="Email" />}
           eyebrow="Email"
@@ -143,6 +145,7 @@ export default function MineEmail(): React.ReactElement {
 
   return (
     <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
+      <RouteHead title="Your email" />
       <Card style={{ gap: space.xl, transform: [{ rotate: "-0.2deg" }] }}>
         <View style={{ gap: space.sm }}>
           <Eyebrow tick>A way back</Eyebrow>
