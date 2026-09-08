@@ -236,9 +236,10 @@ test.describe("ux baseline", () => {
     await shot(page, testInfo, "give-3-details-filled");
     await onScreen(page, "Continue").click();
 
-    await expect(page.getByText("Want a way back?")).toBeVisible();
+    await expect(page.getByText("Where should we reach you?")).toBeVisible();
+    await page.getByLabel("Email").fill("giver@keepsake.ing");
     await shot(page, testInfo, "give-4-email");
-    await onScreen(page, "Skip").click();
+    await onScreen(page, "Continue").click();
 
     await expect(page.getByText("Take a last look.")).toBeVisible();
     await expect(page.getByAltText("Cover photo")).toBeVisible();

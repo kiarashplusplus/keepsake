@@ -51,7 +51,7 @@ test.describe("cold hard-load of every exported route", () => {
 
   test("/give/email renders", async ({ page }) => {
     await page.goto("/give/email");
-    await expect(page.getByText("Want a way back?")).toBeVisible();
+    await expect(page.getByText("Where should we reach you?")).toBeVisible();
   });
 
   test("/item/[id] renders the listing", async ({ page, request }) => {
