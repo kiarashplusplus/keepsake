@@ -3,10 +3,22 @@
   Built from packages/tokens/src/{colors,spacing,radii,typography,motion}.ts —
   do not invent new colors or sizes here; add a token upstream instead.
 
-  Almost every custom property below is CONSTANT between light and dark —
-  see packages/tokens/src/colors.ts's file header: a print, its ink, and the
-  stamp red do not invert when the room's lighting changes. Only the table
-  itself (--bg/--surface-sunken) and the shadow/grain respond to the theme.
+  UNLIKE THE APP, most of the ink family here is NOT constant between light
+  and dark — see docs/design/design-system.md's "v3" section and its
+  "Linen & Rust palette refinement" addendum: the app wraps every real piece
+  of content in a Card/Print so its ink never has to sit on the table, but
+  this site has no such wrapper and puts prose straight on the table ground,
+  so --ink/--ink-soft/--text2/--text3/--surface/--accent2/--accent2-text/
+  --on-accent2/--rule/--foil-text genuinely flip per theme (re-hexed to the
+  same kraft/walnut palette, not inverted arbitrarily). The table itself
+  (--bg/--surface-sunken) and the shadow/grain respond to the theme too, for
+  the obvious reason. Only the stamp red and print white
+  (--accent/--accent-text/--on-accent/--accent-soft/--foil/--on-foil/--print)
+  stay byte-identical in both modes — see packages/tokens/src/colors.ts's file
+  header for why that specific family never inverts even here. The one
+  exception is `.step-icon`, the single place this stylesheet asks stamp red
+  to sit bare on the table rather than on a print; its dark-mode fix lives
+  next to `.step-icon` below, not as a global override of --accent-text.
 */
 
 /* ---------- Fonts ---------- */
@@ -154,7 +166,10 @@
   table (the site has no literal "print" object framing every paragraph the
   way the app does — see packages/tokens/src/colors.ts's file header for why
   the app's `ink`/`pencil`/`print` are constant instead). The stamp red and
-  the print white (--accent/--on-accent/--foil/--print) still never invert.
+  the print white (--accent/--accent-text/--on-accent/--foil/--print) still
+  never invert as custom properties — see `.step-icon` below for the one
+  place that promise still needed a fix, handled as a selector override
+  rather than by touching --accent-text itself.
 */
 html[data-theme="dark"] {
   --bg: #2b2119;
@@ -183,6 +198,17 @@ html[data-theme="dark"] {
   --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='480' height='480'%3E%3Cfilter id='f' x='0' y='0' width='480' height='480' filterUnits='userSpaceOnUse' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0 0 0 0 1'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0.45' intercept='0.275'/%3E%3CfeFuncG type='linear' slope='0.45' intercept='0.275'/%3E%3CfeFuncB type='linear' slope='0.45' intercept='0.275'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='480' height='480' filter='url(%23f)'/%3E%3C/svg%3E");
   --lamp: rgba(255, 214, 140, 0.16);
   color-scheme: dark;
+}
+
+/* .step-icon is the one place stamp red sits bare on the table instead of on
+   a print — the constant --accent-text (#87301f) is 1.85:1 on dark --bg and
+   1.55:1 on dark --surface, invisible for a non-text 32px stroke (needs
+   3:1). #d97a5c, a lighter step along the same rust hue, is 5.16:1 on --bg
+   and 4.32:1 on --surface. Scoped to the selector rather than overriding
+   --accent-text itself, so every other reader of that token (none today,
+   but the promise stands) still gets the constant stamp red. */
+html[data-theme="dark"] .step-icon {
+  color: #d97a5c;
 }
 
 html[data-theme="light"] {
@@ -217,6 +243,15 @@ html[data-theme="light"] {
     --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='480' height='480'%3E%3Cfilter id='f' x='0' y='0' width='480' height='480' filterUnits='userSpaceOnUse' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0 0 0 0 1'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0.45' intercept='0.275'/%3E%3CfeFuncG type='linear' slope='0.45' intercept='0.275'/%3E%3CfeFuncB type='linear' slope='0.45' intercept='0.275'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='480' height='480' filter='url(%23f)'/%3E%3C/svg%3E");
     --lamp: rgba(255, 214, 140, 0.16);
     color-scheme: dark;
+  }
+
+  /* Mirrors the `.step-icon` override on `html[data-theme="dark"]` above —
+     see that rule's comment for the measured ratios. Duplicated rather than
+     shared because this whole block is the OS-preference copy of the
+     explicit-theme block, kept in lockstep by
+     apps/web/test/guards/sitePalette.test.ts. */
+  html:not([data-theme="light"]):not([data-theme="dark"]) .step-icon {
+    color: #d97a5c;
   }
 }
 
@@ -773,6 +808,10 @@ h2 {
 .step-icon {
   width: 32px;
   height: 32px;
+  /* Constant --accent-text (#87301f) is 6.29:1 on light --bg, well clear of
+     the 3:1 a non-text 32px stroke needs. Dark mode overrides this selector
+     directly rather than the token — see `html[data-theme="dark"]
+     .step-icon` above for the measured dark-mode value. */
   color: var(--accent-text);
   margin-top: var(--space-xs);
 }

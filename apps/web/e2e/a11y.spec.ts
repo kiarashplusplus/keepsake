@@ -337,4 +337,51 @@ test.describe("dark mode", () => {
 
     expect(await blockingViolations(page)).toEqual([]);
   });
+
+  // apps/site's static pages (issue #273): a separate stylesheet
+  // (apps/site/public/site.css) from everything above, and a separate
+  // pre-hydration script — one that only sets `data-theme` from a stored
+  // `keepsake.theme.v1` preference, never from `prefers-color-scheme`. A
+  // visitor with no stored preference (this fixture's default: no seeded
+  // localStorage) never gets that attribute at all and falls through to
+  // site.css's `@media (prefers-color-scheme: dark)` copy of the dark
+  // palette — the block that drifted from the app's tokens (#273) and the
+  // one `expectDark`'s `data-theme` check can't see, so these use a
+  // computed-style check instead. /privacy and /terms had no scan at all
+  // before this, light or dark; /about had a light-only one.
+  //
+  // What this does NOT catch: axe scores text contrast, not SVG stroke
+  // contrast, so `.step-icon`'s 1.85:1 (fixed alongside this test) would
+  // have passed a dark scan of /about even with the bug in place — the
+  // measured ratios in site.css's `.step-icon` comment are the real
+  // evidence for that one, not this suite.
+  async function expectStaticDark(page: Page): Promise<void> {
+    const bg = await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor);
+    // --bg dark, #2b2119.
+    expect(bg).toBe("rgb(43, 33, 25)");
+  }
+
+  test("the about page has no serious or critical accessibility violations in dark mode", async ({ page }) => {
+    await page.goto("/about");
+    await expect(page.locator("h1")).toBeVisible();
+    await expectStaticDark(page);
+
+    expect(await blockingViolations(page)).toEqual([]);
+  });
+
+  test("the privacy page has no serious or critical accessibility violations in dark mode", async ({ page }) => {
+    await page.goto("/privacy");
+    await expect(page.locator("h1")).toBeVisible();
+    await expectStaticDark(page);
+
+    expect(await blockingViolations(page)).toEqual([]);
+  });
+
+  test("the terms page has no serious or critical accessibility violations in dark mode", async ({ page }) => {
+    await page.goto("/terms");
+    await expect(page.locator("h1")).toBeVisible();
+    await expectStaticDark(page);
+
+    expect(await blockingViolations(page)).toEqual([]);
+  });
 });
