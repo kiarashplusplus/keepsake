@@ -469,6 +469,15 @@ async function scheduled(controller: ScheduledController, env: Env, ctx: Executi
  * anywhere else. */
 export { runCron };
 
+/** Exported for `test/writeSurfaceTurnstile.test.ts` (#246): `app.routes` is
+ * Hono's own registration table, built from every `app.route(...)` mount
+ * above with each sub-router's paths already merged onto its real prefix —
+ * the one place the *actual* non-GET `/api/*` write surface can be read back
+ * from, rather than re-derived by hand and risking a second list that drifts
+ * from this file the way the routes themselves once drifted from Turnstile
+ * coverage. */
+export { app };
+
 // No more `Sentry.withSentry(...)` wrapper (issue #14 — `@sentry/cloudflare`
 // removed entirely): this is the same `{ fetch, scheduled }` shape Cloudflare
 // expects from a Worker's default export, just not instrumented by an SDK

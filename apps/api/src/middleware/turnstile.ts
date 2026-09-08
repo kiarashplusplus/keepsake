@@ -27,7 +27,12 @@ interface SiteverifyResponse {
 }
 
 export function turnstile() {
-  return async (c: TurnstileCtx, next: Next) => {
+  // Named (not a bare arrow assigned nowhere) so `test/writeSurfaceTurnstile
+  // .test.ts` (#246) can recognise this middleware by `handler.name` when it
+  // walks the real app's registered route table — the guard has no other way
+  // to tell "this route is Turnstile-mounted" from "it just happens to 403
+  // sometimes" without either re-parsing source or naming the function.
+  return async function turnstileMiddleware(c: TurnstileCtx, next: Next) {
     const secret = c.env.TURNSTILE_SECRET;
     if (!secret) {
       if (!warnedMissingSecretOnce) {

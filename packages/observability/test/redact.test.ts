@@ -23,6 +23,46 @@ describe("redactString", () => {
   });
 });
 
+/**
+ * Issue #284. `KEY_VALUE_NAMES` (the free-text `key=value` / `key: value`
+ * rules) used to be a second, hand-written list that drifted from
+ * `SENSITIVE_KEY_RE` (the object-key rule): these exact strings — including
+ * the Keepsake-specific `cf-turnstile-response` and `owner_token` names the
+ * file header calls out — passed through `redactString` unchanged before the
+ * fix. Each one here was verified to leak against the pre-fix regex.
+ */
+describe("redactString: free-text credentials that used to leak (#284)", () => {
+  it("redacts cf-turnstile-response as free text", () => {
+    expect(redactString("cf-turnstile-response=03AGdBq27_realvalue999")).toBe(
+      "cf-turnstile-response=[REDACTED]",
+    );
+  });
+
+  it("redacts session as free text", () => {
+    expect(redactString("session=eyJhbGciOiJI.abc")).toBe("session=[REDACTED]");
+  });
+
+  it("redacts cookie as free text", () => {
+    expect(redactString("cookie: sid=deadbeef")).toBe("cookie: [REDACTED]");
+  });
+
+  it("redacts csrf as free text", () => {
+    expect(redactString("csrf=abc123")).toBe("csrf=[REDACTED]");
+  });
+
+  it("redacts jwt as free text", () => {
+    expect(redactString("jwt=x.y.z")).toBe("jwt=[REDACTED]");
+  });
+
+  it("redacts authorization as free text even without a Bearer/Basic prefix", () => {
+    expect(redactString("authorization: rawsecretvalue")).toBe("authorization: [REDACTED]");
+  });
+
+  it("still redacts idempotency_key as free text, not just incidentally", () => {
+    expect(redactString("idempotency_key=abc-123")).toBe("idempotency_key=[REDACTED]");
+  });
+});
+
 describe("redactDeep", () => {
   it("redacts a cf-turnstile-response key nested in an object", () => {
     const input = { form: { "cf-turnstile-response": "abc123", name: "Jane" } };
