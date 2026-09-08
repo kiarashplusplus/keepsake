@@ -175,7 +175,12 @@ app.onError((err, c) => {
   // `ERROR_CODES` — this is the catch-all for anything a route didn't
   // already turn into a proper `fail(...)` response via `src/lib/respond.ts`,
   // so "internal" (an unexpected failure) is the only honest code for it.
-  return c.json(apiErr("internal", err.message), status);
+  // Keep the exception itself in the log and capture above, but never copy
+  // its message into the public response: backend errors can contain SQL,
+  // binding names, provider details, or credentials. Routes with a message
+  // deliberately written for a giver return `fail(...)` before reaching
+  // this unexpected-error boundary.
+  return c.json(apiErr("internal", "Something went wrong. Please try again."), status);
 });
 
 app.get("/health", async (c) => {
