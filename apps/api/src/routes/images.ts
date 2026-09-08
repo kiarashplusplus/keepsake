@@ -31,14 +31,22 @@ interface PhotoRow {
   listing_status: string | null;
 }
 
-async function isOwnerToken(c: ImageCtx, ownerId: string): Promise<boolean> {
+async function isActiveOwnerToken(c: ImageCtx, ownerId: string): Promise<boolean> {
   const header = c.req.header("Authorization");
   if (!header?.startsWith("Bearer ")) return false;
   const token = header.slice("Bearer ".length);
   if (!OwnerTokenSchema.safeParse(token).success) return false;
 
   const tokenHash = await sha256Hex(token);
-  const owner = await c.env.DB.prepare("SELECT id FROM owners WHERE token_hash = ?").bind(tokenHash).first<{ id: string }>();
+  // Keep this route's lightweight token check aligned with `ownerAuth()`:
+  // banning a giver revokes their bearer token everywhere, including access
+  // to orphaned and unapproved photos. Without the predicate here, the same
+  // token rejected by every owner API could still retrieve private images.
+  const owner = await c.env.DB.prepare(
+    "SELECT id FROM owners WHERE token_hash = ? AND banned_at IS NULL",
+  )
+    .bind(tokenHash)
+    .first<{ id: string }>();
   return owner?.id === ownerId;
 }
 
@@ -60,7 +68,7 @@ imageRoutes.get("/:id/:variant", burst("RL_READ"), async (c) => {
   if (!photo) return fail(c, "not_found", "Not found.", 404);
 
   const isPublic = photo.listing_status === "approved" || photo.listing_status === "given";
-  if (!isPublic && !(await isOwnerToken(c, photo.owner_id))) {
+  if (!isPublic && !(await isActiveOwnerToken(c, photo.owner_id))) {
     return fail(c, "not_found", "Not found.", 404);
   }
 
