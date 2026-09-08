@@ -65,6 +65,10 @@ const VALID_LISTING_BODY = {
   country: "US",
   postal_code: "02144",
   date_of_birth: "1990-01-01",
+  // Required since the give flow stopped offering a "Skip" on its email
+  // step: `POST /api/listings` refuses a first listing with no way back to
+  // its giver (neither the body nor the owner row carrying an address).
+  email: "giver@keepsake.ing",
 };
 
 /**

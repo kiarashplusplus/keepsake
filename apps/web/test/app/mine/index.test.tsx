@@ -18,7 +18,7 @@ import * as React from "react";
 import { act, render } from "@testing-library/react-native";
 import { contrastRatio } from "@keepsake/tokens/contrast";
 import { colorsLight } from "@keepsake/tokens/colors";
-import type { OwnerListing } from "@keepsake/contracts/listing";
+import type { ListingStaleness, OwnerDashboardListing } from "@keepsake/contracts/listing";
 import { LISTING_GROUP_LABELS } from "@/features/mine/groupListings";
 import { getMyListings } from "@/api/me";
 import { getOwnerToken } from "@/lib/ownerToken";
@@ -70,8 +70,14 @@ function walk(node: Node | Node[] | string | null, ancestors: Node[] = []): { no
   return [{ node, ancestors }, ...(node.children ?? []).flatMap((child) => walk(child, chain))];
 }
 
-function listing(id: string, title: string, status: OwnerListing["status"]): OwnerListing {
+function listing(
+  id: string,
+  title: string,
+  status: OwnerDashboardListing["status"],
+  staleness: ListingStaleness = { reasons: [], waiting_since: null },
+): OwnerDashboardListing {
   return {
+    staleness,
     id,
     title,
     story: "It sat on my grandmother's shelf for thirty years and should sit on someone else's now.",
@@ -136,6 +142,65 @@ describe("Mine", () => {
     // No listing is withdrawn, so that group is absent entirely rather than
     // heading an empty stretch of table.
     expect(json).not.toContain(LISTING_GROUP_LABELS.withdrawn);
+  });
+
+  describe("what the dashboard says a listing needs", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+
+    it("says nothing when nothing needs the giver", async () => {
+      const { toJSON } = await renderMine("light");
+      const json = JSON.stringify(toJSON());
+
+      expect(json).not.toContain("Needs you");
+      expect(json).not.toContain("still waiting");
+      expect(json).toContain("Live");
+    });
+
+    it("replaces the status word with 'Needs you' on a listing somebody is waiting on", async () => {
+      jest
+        .mocked(getMyListings)
+        .mockResolvedValue([
+          listing("listing-1", "A hand-thrown mug", "approved", {
+            reasons: ["requests_unanswered"],
+            waiting_since: Date.now() - 5 * DAY,
+          }),
+        ]);
+
+      const json = JSON.stringify((await renderMine("light")).toJSON());
+
+      // The row says both what is wrong and for how long — "Live" alone is
+      // exactly what made this invisible.
+      expect(json).toContain("Needs you");
+      expect(json).toContain("waiting 5 days");
+    });
+
+    it("lifts an unreachable mailbox into one banner rather than repeating it per row", async () => {
+      const unreachable = { reasons: ["email_missing"] as const, waiting_since: null };
+      jest
+        .mocked(getMyListings)
+        .mockResolvedValue([
+          listing("listing-1", "A hand-thrown mug", "approved", { ...unreachable, reasons: [...unreachable.reasons] }),
+          listing("listing-2", "Brass compass", "approved", { ...unreachable, reasons: [...unreachable.reasons] }),
+        ]);
+
+      const json = JSON.stringify((await renderMine("light")).toJSON());
+
+      expect(json).toContain("Nobody can reach you");
+      expect(json).toContain("Add an email");
+      // One banner, two rows: the sentence itself appears once.
+      expect(json.split("no email on this device").length - 1).toBe(1);
+    });
+
+    it("offers the verify wording, not the add wording, for an unverified address", async () => {
+      jest
+        .mocked(getMyListings)
+        .mockResolvedValue([listing("listing-1", "A hand-thrown mug", "approved", { reasons: ["email_unverified"], waiting_since: null })]);
+
+      const json = JSON.stringify((await renderMine("light")).toJSON());
+
+      expect(json).toContain("Verify email");
+      expect(json).not.toContain("Add an email");
+    });
   });
 
   it.each(["light", "dark"] as const)("prints every group heading on paper, legibly, in %s mode", async (mode) => {

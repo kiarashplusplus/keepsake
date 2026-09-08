@@ -1,6 +1,8 @@
 // "Give several items" — start a batch. Collects everything
 // `CreateBatchInput` needs (name, country/postcode, optional shared story)
-// and an optional email.
+// and the giver's email — required, like the give flow's own email step,
+// since a batch with no address behind it is dozens of listings nobody can
+// be told about.
 //
 // The email is saved **here**, inline, by `POST /api/me/email` — the same
 // call `app/mine/email.tsx` makes. It used to be a link to that screen at
@@ -137,20 +139,26 @@ export default function NewBulkBatch(): React.ReactElement {
 
   const trimmedEmail = email.trim();
   const emailValidation = MailableEmailSchema.safeParse(trimmedEmail);
-  // Optional: an empty field is not an error, it is a giver choosing to
-  // stay device-only. Anything typed has to be a real address.
-  const emailValid = trimmedEmail === "" || emailValidation.success;
+  // Required, where it used to be optional. An estate batch is dozens of
+  // listings behind one device token: without an address, every ask on every
+  // one of them waits for the giver to reopen this browser, and clearing the
+  // browser takes the whole batch with it. `POST /api/bulk/batches/:id/submit`
+  // enforces the same thing at the moment a batch becomes live listings, so
+  // asking here is the polite half of a rule that holds either way.
+  const emailValid = emailValidation.success;
   const emailNeedsSaving = trimmedEmail !== "" && trimmedEmail !== savedEmail;
   const emailError =
     emailTouched && !emailValid
-      ? emailValidation.success === false && emailValidation.error.issues[0]?.message === RESERVED_EMAIL_DOMAIN_MESSAGE
-        ? RESERVED_EMAIL_DOMAIN_MESSAGE
-        : "That doesn't look like an email address."
+      ? trimmedEmail === ""
+        ? "We need an email to tell you when someone asks."
+        : emailValidation.success === false && emailValidation.error.issues[0]?.message === RESERVED_EMAIL_DOMAIN_MESSAGE
+          ? RESERVED_EMAIL_DOMAIN_MESSAGE
+          : "That doesn't look like an email address."
       : undefined;
 
   // `POST /api/me/email` is Turnstile-protected, so a pending challenge
-  // blocks the button only when there is actually an address to save —
-  // never for a giver who left the field empty.
+  // blocks the button only when there is actually an address to save — never
+  // for a giver whose address is already on their owner row.
   const turnstileReady = turnstileStatus.status === "ready" || turnstileStatus.status === "unconfigured";
   const turnstileToken = turnstileStatus.status === "ready" ? turnstileStatus.token : "";
 
@@ -163,7 +171,7 @@ export default function NewBulkBatch(): React.ReactElement {
       ? emailVerified
         ? "Verified — this batch is reachable from any browser."
         : "Saved. Check your inbox to verify it."
-      : "Optional. Without one, this batch lives only in this browser.";
+      : "How you hear that someone asked, and the only way back to this batch from another browser.";
 
   async function handleCreate(): Promise<void> {
     setNameTouched(true);
@@ -247,7 +255,7 @@ export default function NewBulkBatch(): React.ReactElement {
 
         <View style={{ gap: space.xs }}>
           <Input
-            label="Email (optional)"
+            label="Email"
             value={email}
             onChangeText={setEmailInput}
             onBlur={() => setEmailTouched(true)}

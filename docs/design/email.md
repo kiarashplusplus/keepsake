@@ -71,6 +71,16 @@ What this buys is a trail, not an alarm. Aggregate reports are gzipped XML, arri
 late, and nothing parses them yet, so a DMARC break is still effectively invisible in real time —
 which is exactly the failure mode the `EMAIL_PROVIDER` note in `wrangler.toml` warns about.
 
+### The one place a reply had nowhere to go
+
+`chosen` is the only template that sets `reply-to` (to the giver), and it does so only when the
+giver's address is **verified**. Until 2026-09-08 the other branch still told the requester
+"Reply to this email to reach them directly" — with no `reply-to` on the message, so the reply went
+to `hello@keepsake.ing` and, since the inbound catch-all above, straight into a personal inbox. The
+requester was writing to Keepsake believing they were writing to the giver, and the giver never
+heard about it. That branch now says the giver has their details and will be in touch, which is
+what is actually true; `apps/api/test/choose.test.ts` pins both halves.
+
 ### Operational note
 
 The account-wide Cloudflare token in `~/Documents/.env` can read and write DNS on this zone but
@@ -96,6 +106,7 @@ works out.
 | `POST /api/requests/confirm` | requester | "we passed your note along" confirmation + a signed, single-use link to `POST /api/requests/withdraw` — the requester's only no-account way back in; see `docs/design/identity.md`'s "Request withdrawal" section. Sent here rather than at submit time so the sentence is true when it is sent |
 | `POST /api/me/listings/:id/choose` | requester | handoff note, reply-to set to the giver's email — this is the one place both parties' emails become mutually visible |
 | `POST/POST verify` on `/api/me/email` | giver | verification link |
+| `POST /api/listings` | giver | verification link — **only when the address differs from the one already on the owner row** (2026-09-08). The give flow now always sends the address it prefilled, so the old unconditional write would re-unverify and re-mail every repeat giver on every give; an unchanged-but-unverified address is left alone here so the link already in their inbox keeps working. See identity.md's "Always asked for" |
 | `POST /api/recover` | the address given | recovery link, always sent as if the address matched (see identity.md) |
 | `POST /api/admin/test-email` | whatever address the admin gives | on-demand delivery proof — a real send through the real path, reported back honestly (sent/blocked and why); see `docs/runbooks/admin.md` |
 

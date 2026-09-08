@@ -61,10 +61,19 @@ const BATCH_SUMMARY = {
   expires_at: 999999,
 };
 
-/** Fills name + postcode and lets the debounced lookup settle. */
-async function fillRequiredFields(): Promise<void> {
+/**
+ * Fills name + postcode + email and lets the debounced lookup settle.
+ *
+ * The email is one of the required fields now (a batch with no address
+ * behind it is dozens of listings nobody can be told about — see
+ * `app/bulk/new.tsx`'s header), so it belongs here rather than in the three
+ * tests that care about it specifically. Pass `null` to leave the field
+ * exactly as the test found it, which is what the prefill case needs.
+ */
+async function fillRequiredFields(email: string | null = "giver@keepsake.ing"): Promise<void> {
   fireEvent.changeText(screen.getByLabelText("Batch name"), "Mum's house");
   fireEvent.changeText(screen.getByLabelText("Postcode"), "02144");
+  if (email !== null) fireEvent.changeText(screen.getByLabelText("Email"), email);
   await act(async () => {
     jest.advanceTimersByTime(500);
     await Promise.resolve();
@@ -89,7 +98,10 @@ describe("bulk/new", () => {
     jest.mocked(createBatch).mockReset();
     jest.mocked(lookupPostalCode).mockReset();
     jest.mocked(getMe).mockReset();
-    jest.mocked(setEmail).mockReset();
+    jest
+      .mocked(setEmail)
+      .mockReset()
+      .mockResolvedValue({ id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", email: "giver@keepsake.ing", email_verified: false, banned: false });
     latestOnStatus = null;
   });
 
@@ -148,8 +160,7 @@ describe("bulk/new", () => {
       jest.mocked(setEmail).mockResolvedValue({ id: "01OWNERAAAAAAAAAAAAAAAAAA", email: "person@keepsake.ing", email_verified: false, banned: false });
       render(<NewBulkBatch />);
 
-      fireEvent.changeText(screen.getByLabelText("Email (optional)"), "person@keepsake.ing");
-      await fillRequiredFields();
+      await fillRequiredFields("person@keepsake.ing");
       await pressStart();
 
       expect(setEmail).toHaveBeenCalledWith({ email: "person@keepsake.ing" }, { turnstileToken: "T1" });
@@ -157,24 +168,24 @@ describe("bulk/new", () => {
       expect(mockReplace).toHaveBeenCalledWith(expect.objectContaining({ pathname: "/bulk/[batchKey]/photos" }));
     });
 
-    it("creates the batch with no email call at all when the field is left empty", async () => {
+    it("starts no batch at all when the field is left empty — it is required now, not optional", async () => {
       jest.mocked(lookupPostalCode).mockResolvedValue({ country: "US", code: "02144", place_name: "Somerville", admin1: "MA", lat: 0, lng: 0 });
       jest.mocked(createBatch).mockResolvedValue({ ok: true, data: BATCH_SUMMARY });
       render(<NewBulkBatch />);
 
-      await fillRequiredFields();
+      await fillRequiredFields(null);
       await pressStart();
 
       expect(setEmail).not.toHaveBeenCalled();
-      expect(createBatch).toHaveBeenCalled();
+      expect(createBatch).not.toHaveBeenCalled();
+      expect(JSON.stringify(screen.toJSON())).toContain("We need an email");
     });
 
-    it("refuses a malformed address without calling either API — the field is optional, not unvalidated", async () => {
+    it("refuses a malformed address without calling either API", async () => {
       jest.mocked(lookupPostalCode).mockResolvedValue({ country: "US", code: "02144", place_name: "Somerville", admin1: "MA", lat: 0, lng: 0 });
       render(<NewBulkBatch />);
 
-      fireEvent.changeText(screen.getByLabelText("Email (optional)"), "not-an-address");
-      await fillRequiredFields();
+      await fillRequiredFields("not-an-address");
       await pressStart();
 
       expect(setEmail).not.toHaveBeenCalled();
@@ -188,8 +199,7 @@ describe("bulk/new", () => {
       jest.mocked(setEmail).mockRejectedValueOnce(new ApiError("bad_request", "That address can't receive mail.", 400));
       render(<NewBulkBatch />);
 
-      fireEvent.changeText(screen.getByLabelText("Email (optional)"), "person@keepsake.ing");
-      await fillRequiredFields();
+      await fillRequiredFields("person@keepsake.ing");
       await pressStart();
 
       expect(mockReplace).not.toHaveBeenCalled();
@@ -226,9 +236,9 @@ describe("bulk/new", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(screen.getByLabelText("Email (optional)").props.value).toBe("person@keepsake.ing");
+      expect(screen.getByLabelText("Email").props.value).toBe("person@keepsake.ing");
 
-      await fillRequiredFields();
+      await fillRequiredFields(null);
       await pressStart();
 
       expect(setEmail).not.toHaveBeenCalled();

@@ -167,6 +167,27 @@ listingRoutes.post(
       return fail(c, "bad_request", ASPECT_CONTACT_INFO_MESSAGE, 400);
     }
 
+    // Every listing has a way back to its giver. Before this, `email` was an
+    // optional field on a step the give flow let you skip, and skipping it
+    // produced a listing nobody could ever be told about: `POST
+    // /api/requests/confirm` mails the giver only when the owner row carries a
+    // *verified* address, so an ask on an emailless listing sat unread until
+    // the giver happened to reopen `/mine` on the one device holding their
+    // token — and if that device was lost, so was the listing, since
+    // `POST /api/recover` has nothing to mail either.
+    //
+    // The invariant is about the *owner row*, not the request body, which is
+    // why this is a route check rather than a required field on
+    // `CreateListingInput`. A giver who already gave once has an address on
+    // file; their second listing needs no address in its body, and failing it
+    // for one would be asking a question already answered. It also means a
+    // client from before this change is refused only in the case that is
+    // actually broken — a first listing with no address — rather than on
+    // every create.
+    if (input.email === undefined && owner.email === null) {
+      return fail(c, "bad_request", "An email is needed so we can tell you when someone asks for this.", 400);
+    }
+
     // Every photo_id must be this owner's own orphan upload — never someone
     // else's photo, and never one already attached to a listing.
     const placeholders = input.photo_ids.map(() => "?").join(",");
@@ -215,7 +236,24 @@ listingRoutes.post(
       return fail(c, "conflict", "One or more photos were claimed by another listing — try again.", 409);
     }
 
-    if (input.email) {
+    // Only when the address is genuinely new to this owner. It used to run on
+    // any `input.email` at all, which was harmless while the give flow asked
+    // once and let you skip; now that the flow always sends the address it
+    // prefilled from `GET /api/me`, an unconditional write would drop a giver
+    // back to unverified — and mail them another link — every time they gave a
+    // second thing. Same rule, and the same reason, as `POST /api/me/email`'s
+    // own no-op branch.
+    //
+    // Unchanged *and still unverified* is deliberately also a no-op here,
+    // where `POST /api/me/email` re-mints and re-sends. That route is a giver
+    // pressing "Resend" and expecting a new link; this one is a giver posting
+    // a second keepsake, and minting here would kill the link already sitting
+    // in their inbox — the redeem path refuses any token with a newer sibling
+    // (issue #167), and this site does not call
+    // `invalidateOutstandingVerifyTokens`. Leaving it alone keeps that link
+    // live, and `/mine/email`'s Resend is one tap away for the case where it
+    // is gone.
+    if (input.email !== undefined && input.email !== owner.email) {
       await c.env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = NULL WHERE id = ?")
         .bind(input.email, owner.id)
         .run();

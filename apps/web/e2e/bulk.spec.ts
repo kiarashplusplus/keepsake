@@ -69,6 +69,10 @@ test("a giver prepares an estate batch across photos, review and submit", async 
   await page.waitForURL(/\/bulk\/new$/);
   await page.getByLabel("Batch name").fill(batchName);
   await page.getByLabel("Postcode").fill("02144");
+  // Required, like the give flow's own email step: a batch is dozens of
+  // listings behind one device token, and `POST /batches/:id/submit` refuses
+  // one whose owner has no way to be told that somebody asked.
+  await page.getByLabel("Email").fill(`giver.${Math.random().toString(36).slice(2, 8)}@keepsake.ing`);
   await expect(page.getByText("Somerville, MA")).toBeVisible();
   await onScreen(page, "Start this batch").click();
 
@@ -234,6 +238,10 @@ test("My Keepsakes shows a private draft-batches section for an unsubmitted batc
   await page.goto("/bulk/new");
   await page.getByLabel("Batch name").fill(batchName);
   await page.getByLabel("Postcode").fill("02144");
+  // Required, like the give flow's own email step: a batch is dozens of
+  // listings behind one device token, and `POST /batches/:id/submit` refuses
+  // one whose owner has no way to be told that somebody asked.
+  await page.getByLabel("Email").fill(`giver.${Math.random().toString(36).slice(2, 8)}@keepsake.ing`);
   await expect(page.getByText("Somerville, MA")).toBeVisible();
   await onScreen(page, "Start this batch").click();
   await page.waitForURL(/\/bulk\/[^/]+\/photos$/);

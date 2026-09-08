@@ -134,6 +134,12 @@ export type GiveDraftAction =
   | { type: "set_country"; country: Country }
   | { type: "set_postal_code"; postalCode: string }
   | { type: "set_email"; email: string }
+  /** The address `GET /api/me` says this device's owner already has, applied
+   * by the email step on mount. Distinct from `set_email` because it must
+   * never overwrite what the giver has typed (or what a `sessionStorage`
+   * rehydrate restored) — a prefill that raced a fast typist and won would
+   * be the same class of bug as `set_suggestion` clobbering a dirty title. */
+  | { type: "prefill_email"; email: string }
   | { type: "set_listing_id"; listingId: string | null }
   | { type: "set_suggestion"; photoId: string; suggestion: PhotoSuggestion }
   | { type: "hydrate"; draft: GiveDraft }
@@ -173,6 +179,8 @@ export function giveDraftReducer(state: GiveDraft, action: GiveDraftAction): Giv
       return { ...state, postalCode: action.postalCode };
     case "set_email":
       return { ...state, email: action.email };
+    case "prefill_email":
+      return state.email.trim() === "" ? { ...state, email: action.email } : state;
     case "set_listing_id":
       return { ...state, listingId: action.listingId };
     case "set_suggestion": {

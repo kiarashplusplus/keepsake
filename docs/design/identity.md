@@ -4,9 +4,15 @@ Status: `[DONE]` — M1 mints the token, M3's recovery and email-verification pa
 implemented and tested (see "M3 status" below), and both were exercised end to end on preview on
 2026-09-06 (link delivered, clicked, verified, token consumed once).
 
-No accounts. A giver's identity is a device-bound secret token; an optional verified email exists
-only for notifications and dashboard recovery — losing the device without one means losing the
-listings, and the email step in `give` says so explicitly.
+No accounts. A giver's identity is a device-bound secret token; a verified email exists only for
+notifications and dashboard recovery — losing the device without one means losing the listings, and
+the email step in `give` says so explicitly.
+
+**The email is no longer optional** (2026-09-08). It was, and skipping it produced a listing nobody
+could ever be told about: `POST /api/requests/confirm` mails a giver only when the owner row holds
+a *verified* address, so every ask on an emailless listing waited on the giver happening to reopen
+`/mine` on the one device holding their token, and `POST /api/recover` had nothing to mail if that
+device went away. See "Always asked for" and "Staleness" below.
 
 ## Owner token
 
@@ -16,6 +22,71 @@ listings, and the email step in `give` says so explicitly.
   (`expo-secure-store` stub — web-only for now, kept compiling for the later native flip).
 - Sent as `Authorization: Bearer ks_<token>`; the Worker hashes it and upserts against
   `owners.token_hash` on first write. Nothing server-side ever sees or stores the raw token.
+
+## Always asked for
+
+Three places enforce one invariant — *nothing goes into the feed without a way back to the person
+giving it* — and they are deliberately not the same check:
+
+- `app/give/email.tsx` (step 4 of 5) has no "Skip". It states what the address is for, and
+  prefills whatever `GET /api/me` says this device's owner already has, so a returning giver
+  confirms rather than retypes.
+- `app/bulk/new.tsx` requires it before a batch is started, and
+  `POST /api/bulk/batches/:id/submit` refuses a batch whose owner has no address — the moment a
+  batch becomes live listings.
+- `POST /api/listings` refuses a create where **neither the body nor the owner row** carries an
+  address. Deliberately a route check rather than a required field on `CreateListingInput`: the
+  invariant is about the owner row, so a giver who already gave once needs no address in the body,
+  and a client from before this change is refused only in the case that is actually broken.
+
+Asking is not verifying, and the product does not pretend otherwise: an address typed at step 4 is
+unverified until its link is clicked, which is exactly what the `email_unverified` staleness reason
+below is for.
+
+One consequence worth stating, because it is easy to reintroduce: the create route now writes
+`owners.email` (and mints a `verify_email` token) **only when the address differs from the one on
+the row**. It used to do it for any `input.email` at all, which was harmless while the flow asked
+once and let you skip — and would now drop every repeat giver back to unverified, and mail them
+another link, on every single give. An unchanged-but-unverified address is left alone here too,
+where `POST /api/me/email` re-sends: minting there would kill the link already in the giver's
+inbox, since the redeem path refuses any token with a newer sibling (#167) and this site does not
+call `invalidateOutstandingVerifyTokens`. `/mine/email`'s Resend is the button for that.
+
+`DELETE /api/me/email` still exists and still works. Removing an address is a data right, not a
+loophole to close — what it produces is a listing the dashboard flags as unreachable, which is the
+next section.
+
+## Staleness
+
+A listing's `status` answers "what did moderation decide". It cannot answer the two questions that
+actually strand people, so `GET /api/me/listings` and `GET /api/me/listings/:id` answer them
+separately, as a `staleness` block on `OwnerDashboardListing`:
+
+| Reason | When | What the giver is shown |
+|---|---|---|
+| `requests_unanswered` | a confirmed, still-`open` request older than `UNANSWERED_REQUEST_STALE_MS` (72 h), on a listing with no chosen request | "Someone has been waiting 5 days to hear back." |
+| `email_missing` | the owner row has no address | one banner across the dashboard, with "Add an email" |
+| `email_unverified` | it has one, unverified — mailed nothing but its own verification link | the same banner, with "Verify email" |
+
+Three things about the shape, each of which was a choice:
+
+- **The rule is one pure function**, `listingStaleness()` in `@keepsake/contracts/listing`, so the
+  API that computes it and the tests that pin it cannot drift. `now` is a parameter, which is what
+  makes the 72-hour boundary testable without waiting.
+- **72 hours, not zero.** A fresh ask is not a neglected one, and flagging every request on
+  arrival would make the flag mean "you have requests" — which `request_count` already says. The
+  span deliberately matches the requester's own confirmation window: they were given three days to
+  prove their address, so the giver gets three days to answer.
+- **`OwnerDashboardListing` is its own schema**, not a widened `OwnerListing`. Staleness is a fact
+  about a listing *and its owner's mailbox*, and the seven other routes that serialize an owner
+  listing (create, edit, given/withdraw/relist, the admin queue) hold neither the email state nor
+  the request rows. Widening the base schema would have had all of them answer `reasons: []` —
+  "nothing wrong" where the truth is "nobody looked", which is the failure mode `AGENTS.md`'s
+  eleven-row table is about. The field is required, so a dashboard route that stopped computing it
+  fails the web client's parse instead of rendering a clean dashboard.
+
+Only `pending`, `needs_review` and `approved` listings are eligible: a given, withdrawn, rejected
+or hidden listing takes no new asks and needs no reachable giver.
 
 ## Recovery
 

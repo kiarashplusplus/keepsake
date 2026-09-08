@@ -1,12 +1,14 @@
 // Dashboard: every listing this device's owner token has ever created,
-// grouped into Reviewing / Live / Needs attention / Given / Withdrawn.
+// grouped into Reviewing / Live / Needs attention / Given / Withdrawn, with
+// anything the giver is unknowingly holding up flagged on the row it belongs
+// to (`features/mine/staleness.ts`).
 import * as React from "react";
 import { Pressable, View } from "react-native";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import { Image as ExpoImage } from "expo-image";
 import { motion } from "@keepsake/tokens/motion";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
-import { MODERATION_REASONS, type ListingStatus, type OwnerListing } from "@keepsake/contracts/listing";
+import { MODERATION_REASONS, type ListingStatus, type OwnerDashboardListing } from "@keepsake/contracts/listing";
 import { Page } from "@/ui/Page";
 import { EmptyState } from "@/ui/EmptyState";
 import { Eyebrow } from "@/ui/Eyebrow";
@@ -27,6 +29,7 @@ import type { BatchSummary } from "@keepsake/contracts/bulk";
 import { ApiError } from "@/api/client";
 import { tiltDegForId } from "@/lib/masonry";
 import { LISTING_GROUP_LABELS, LISTING_GROUP_ORDER, groupListings } from "@/features/mine/groupListings";
+import { OWNER_EMAIL_PROBLEM_COPY, ownerEmailProblem, staleSummary } from "@/features/mine/staleness";
 
 /** The `/mine?verified=1|0&reason=` toast the email-verify link redirects
  * to. A dedicated hook (rather than inlining in the component body) so it's
@@ -64,12 +67,15 @@ const STATUS_LABELS: Record<ListingStatus, { label: string; color: TextColor }> 
   hidden: { label: "Hidden", color: "dangerText" },
 };
 
-function ListingRow({ listing }: { listing: OwnerListing }): React.ReactElement {
+function ListingRow({ listing }: { listing: OwnerDashboardListing }): React.ReactElement {
   const colors = useColors();
   const cover = listing.photos[0];
   const canShowFull = listing.status === "approved" || listing.status === "given";
   const status = STATUS_LABELS[listing.status];
   const tiltDeg = tiltDegForId(listing.id, motion.tiltRangeDeg / 2);
+  // The row has one line to spare, so it carries the first reason only —
+  // they arrive in priority order, and the detail page lists them all.
+  const needsYou = staleSummary(listing.staleness);
 
   return (
     <Link href={{ pathname: "/mine/[id]", params: { id: listing.id } }} asChild>
@@ -100,9 +106,17 @@ function ListingRow({ listing }: { listing: OwnerListing }): React.ReactElement 
                 {MODERATION_REASONS[listing.moderation_reason]}
               </Text>
             ) : null}
+            {needsYou !== null ? (
+              <Text variant="caption" color="dangerText" numberOfLines={1}>
+                {needsYou}
+              </Text>
+            ) : null}
           </View>
-          <Text variant="label" color={status.color} style={{ fontSize: 10 }}>
-            {status.label}
+          {/* The status word is what moderation decided; "Needs you" is what
+              is true regardless of it — a live listing with a stranger
+              waiting on it is not, in any useful sense, fine. */}
+          <Text variant="label" color={needsYou !== null ? "dangerText" : status.color} style={{ fontSize: 10 }}>
+            {needsYou !== null ? "Needs you" : status.label}
           </Text>
         </Print>
       </Pressable>
@@ -173,7 +187,7 @@ function DraftBatchesSection({ batches }: { batches: BatchSummary[] }): React.Re
 export default function Mine(): React.ReactElement {
   useVerifiedToast();
   const [hasOwnerToken] = React.useState(() => getOwnerToken() !== null);
-  const [listings, setListings] = React.useState<OwnerListing[] | null>(null);
+  const [listings, setListings] = React.useState<OwnerDashboardListing[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const draftBatches = useDraftBulkBatches(hasOwnerToken);
 
@@ -262,6 +276,10 @@ export default function Mine(): React.ReactElement {
   }
 
   const groups = groupListings(listings);
+  // One banner for the whole account rather than the same sentence repeated
+  // down every row: an unreachable mailbox is one problem with one fix, and
+  // the rows still carry their own line for the listing-specific half.
+  const emailProblem = ownerEmailProblem(listings);
 
   return (
     <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
@@ -282,6 +300,19 @@ export default function Mine(): React.ReactElement {
         </View>
         <PencilRule />
       </Card>
+      {emailProblem !== null ? (
+        <Card style={{ gap: space.md, transform: [{ rotate: "-0.4deg" }] }}>
+          <Eyebrow color="dangerText">{OWNER_EMAIL_PROBLEM_COPY[emailProblem].title}</Eyebrow>
+          <Text variant="body" color="inkSoft">
+            {OWNER_EMAIL_PROBLEM_COPY[emailProblem].line}
+          </Text>
+          <View style={{ flexDirection: "row" }}>
+            <Link href="/mine/email" asChild>
+              <Button label={OWNER_EMAIL_PROBLEM_COPY[emailProblem].action} />
+            </Link>
+          </View>
+        </Card>
+      ) : null}
       <DraftBatchesSection batches={draftBatches} />
       <View style={{ gap: sectionRhythm.normal, marginTop: sectionRhythm.tight }}>
         {LISTING_GROUP_ORDER.map((key) => {

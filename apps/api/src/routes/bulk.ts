@@ -803,6 +803,17 @@ bulkRoutes.post("/batches/:id/submit", ownerAuth(), validateBody(SubmitBatchInpu
   const batchId = requireParam(c, "id");
   const input = c.get("validatedBody") as SubmitBatchInput;
 
+  // The same invariant `POST /api/listings` enforces, at the one place a
+  // batch turns into live listings: nothing goes into the feed without a way
+  // back to the person giving it. Checked here rather than at
+  // `POST /batches` because a batch is a workspace — you can spend an evening
+  // in one — and the address is only load-bearing once strangers can ask.
+  // `app/bulk/new.tsx` asks for it as the batch is started, so reaching this
+  // means the address was removed in between.
+  if (owner.email === null) {
+    return fail(c, "bad_request", "An email is needed so we can tell you when someone asks. Add one under Mine → Email, then submit.", 400);
+  }
+
   const result = await startSubmission(c.env, { ownerId: owner.id, batchId, input });
   if (!result.ok) {
     return fail(c, result.code, result.message, result.status);

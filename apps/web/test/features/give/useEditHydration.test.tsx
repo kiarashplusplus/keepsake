@@ -53,6 +53,7 @@ function ownerListingDetail(overrides: Partial<OwnerListingDetail> = {}): OwnerL
     updated_at: 0,
     held: true,
     category_chosen_at: null,
+    staleness: { reasons: [], waiting_since: null },
     requests: [],
     moderation: { status: "pending", held: true },
     ...overrides,

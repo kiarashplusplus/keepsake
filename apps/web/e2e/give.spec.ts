@@ -62,9 +62,15 @@ test("a giver walks the five steps and the keepsake goes live", async ({ page, r
   await expect(page.getByText("Somerville, MA")).toBeVisible();
   await onScreen(page, "Continue").click();
 
-  // --- 4. Email (skipped) --------------------------------------------------
-  await expect(page.getByText("Want a way back?")).toBeVisible();
-  await onScreen(page, "Skip").click();
+  // --- 4. Email ------------------------------------------------------------
+  // No longer skippable: a listing with no address behind it is one nobody
+  // can ever be told about (see `app/give/email.tsx`), and `POST
+  // /api/listings` refuses one.
+  await expect(page.getByText("Where should we reach you?")).toBeVisible();
+  await onScreen(page, "Continue").click();
+  await expect(page.getByText("We need an email to tell you when someone asks.")).toBeVisible();
+  await page.getByLabel("Email").fill("giver@keepsake.ing");
+  await onScreen(page, "Continue").click();
 
   // --- 5. Review and submit ------------------------------------------------
   await expect(page.getByText("Take a last look.")).toBeVisible();

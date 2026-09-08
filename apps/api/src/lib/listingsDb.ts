@@ -115,3 +115,36 @@ export async function replaceListingAspects(env: Env, listingId: string, aspects
   }
   await env.DB.batch(statements);
 }
+
+/**
+ * The oldest still-unanswered ask on each of `listingIds`, as
+ * `listing_id -> created_at`. Listings with none are simply absent.
+ *
+ * `confirmed_at IS NOT NULL` for the reason every other owner-facing read
+ * applies it (issue #188): an unconfirmed row is a submission nobody has
+ * proved they made, and it must not make a giver's dashboard say a person is
+ * waiting. `status = 'open'` narrows it the rest of the way — `chosen` and
+ * `not_chosen` were answered, `withdrawn` and `removed` are gone.
+ *
+ * One grouped query for the whole page rather than one per listing, the same
+ * shape (and the same `IN (…)` binding) as `fetchAspectRowsForListings`
+ * above.
+ */
+export async function fetchOldestOpenRequestAt(env: Env, listingIds: string[]): Promise<Map<string, number>> {
+  const byListing = new Map<string, number>();
+  if (listingIds.length === 0) return byListing;
+
+  const placeholders = listingIds.map(() => "?").join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT listing_id, MIN(created_at) AS oldest_at FROM requests
+     WHERE listing_id IN (${placeholders}) AND confirmed_at IS NOT NULL AND status = 'open'
+     GROUP BY listing_id`,
+  )
+    .bind(...listingIds)
+    .all<{ listing_id: string; oldest_at: number }>();
+
+  for (const row of results) {
+    byListing.set(row.listing_id, row.oldest_at);
+  }
+  return byListing;
+}

@@ -82,6 +82,11 @@ export interface CreateListingOptions {
   /** Reuse an existing device identity, e.g. so the giver's browser context
    * can be handed the same token and find the listing under `/mine`. */
   ownerToken?: string;
+  /** The giver's address. Defaults rather than being omitted: `POST
+   * /api/listings` refuses a first listing from an owner with no way back to
+   * them, so "no email" is not a shape the real product can produce any
+   * more — a spec that wants an unreachable giver removes the address
+   * afterwards (`DELETE /api/me/email`) instead. */
   email?: string;
   /** Issue #36/#39: the aspects a real photo-suggestion call would have
    * produced. Omit entirely (not `[]`) to exercise the issue #40 zero-aspect
@@ -150,7 +155,7 @@ export async function createApprovedListing(
       postal_code: options.postalCode ?? "02144",
       photo_ids: [photo.id],
       date_of_birth: "1990-01-01",
-      ...(options.email !== undefined ? { email: options.email } : {}),
+      email: options.email ?? "giver@keepsake.ing",
       ...(options.aspects !== undefined ? { aspects: options.aspects } : {}),
     },
   });

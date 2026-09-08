@@ -54,6 +54,43 @@ describe("POST /api/me/listings/:id/choose", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]?.to).toBe("chosen-me@keepsake.ing");
     expect(sent[0]?.replyTo).toBe("giver@keepsake.ing");
+    expect(sent[0]?.text).toContain("reply to this email");
+  });
+
+  it("never tells a chosen requester to 'reply to this email' when there is no reply-to on it", async () => {
+    // `replyTo` is set only for a giver whose address is verified. The copy
+    // used to say "Reply to this email to reach them directly" in the other
+    // branch too — where the reply goes to `hello@keepsake.ing`, whose
+    // catch-all forwards to a personal inbox (docs/design/email.md), so the
+    // requester would be writing to Keepsake believing they were writing to
+    // the giver, and the giver would never hear about it.
+    const sent = installFakeEmail();
+    const token = freshOwnerToken();
+    const tokenHash = await sha256HexForTest(token);
+    const ownerId = crypto.randomUUID();
+    const now = Date.now();
+    await env.DB.prepare("INSERT INTO owners (id, token_hash, email, email_verified_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(ownerId, tokenHash, "unverified-giver@keepsake.ing", null, now, now)
+      .run();
+
+    const listingId = await insertApprovedListing({ ownerId, title: "A brass compass" });
+    const requestId = await insertRequest(listingId, "chosen-me@keepsake.ing");
+
+    const res = await SELF.fetch(`http://x/api/me/listings/${listingId}/choose`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: requestId, handoff_note: "Any afternoon this week works." }),
+    });
+    expect(res.status).toBe(200);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.replyTo).toBeUndefined();
+    const body = `${sent[0]?.text ?? ""} ${sent[0]?.html ?? ""}`.toLowerCase();
+    expect(body).not.toContain("reply to this email");
+    expect(body).toContain("will be in touch");
+    // And the giver's own address is still not disclosed — that is what
+    // verification gates, and this branch is the unverified one.
+    expect(body).not.toContain("unverified-giver@keepsake.ing");
   });
 
   // Issue #6: choosing used to fire the "chosen" email and report success
