@@ -7,6 +7,7 @@ import { useWindowDimensions, View } from "react-native";
 import { Image as ExpoImage } from "expo-image";
 import { CATEGORIES, CATEGORY_LABELS, STORY_MAX, TITLE_MAX } from "@keepsake/contracts/listing";
 import type { Category } from "@keepsake/contracts/listing";
+import { normalizeCondition } from "@keepsake/contracts/photo";
 import { space } from "@keepsake/tokens/spacing";
 import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
@@ -62,7 +63,11 @@ function ItemCard({ item, selected, onToggleSelected }: { item: BulkDraftItem; s
 
   const suggestion = cover !== undefined ? workspace.suggestionForPhoto(cover.clientPhotoId) : null;
   const stale = workspace.isSuggestionStale(item.clientItemId);
-  const showCondition = !conditionDismissed && !stale && suggestion !== null && suggestion.condition !== "";
+  // Same rule as the give flow's story step: a model that answers "No
+  // visible damage" has observed nothing, and a note that says so is worse
+  // than no note. `normalizeCondition` is the one place that decides.
+  const condition = normalizeCondition(suggestion?.condition ?? "");
+  const showCondition = !conditionDismissed && !stale && condition !== "";
   const loading = workspace.suggestionLoading[item.clientItemId] === true;
 
   const title = item.fields.title ?? "";
@@ -111,10 +116,14 @@ function ItemCard({ item, selected, onToggleSelected }: { item: BulkDraftItem; s
         placeholder="A hand-thrown mug"
       />
 
-      {showCondition && suggestion !== null ? (
+      {showCondition ? (
         <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.xs, paddingStart: space.md, borderStartWidth: 2, borderStartColor: colors.accent }}>
+          {/* Colon rather than "The photo shows …", for the reason
+              app/give/story.tsx spells out: the clause carries the model's
+              own casing and only reads correctly when it starts a phrase of
+              its own. */}
           <Text variant="body" color="inkSoft" style={{ flex: 1 }}>
-            The photo shows {suggestion.condition}. Worth a line in the story?
+            From this photo: {condition}. Worth a line in the story?
           </Text>
           <Button label="Dismiss" variant="ghost" onPress={() => setConditionDismissed(true)} />
         </View>

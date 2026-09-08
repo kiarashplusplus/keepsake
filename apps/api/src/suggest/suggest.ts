@@ -51,7 +51,13 @@ const MOCK_SUGGESTION: PhotoSuggestion = {
   markings: "HANDMADE · R.T. 1998",
   title: "Blue ceramic mug",
   category: "home_kitchen",
-  condition: "small chip near the handle",
+  // Carries its article ("a small chip…") because the story step now reads
+  // the clause after a colon — "From your photo: a small chip near the
+  // handle. Worth a line?" — and this string is what every MOCK_AI run, e2e
+  // spec and UX baseline frame actually shows a human. It matches the
+  // example the prompt gives the real model, so the fixture and the
+  // instruction cannot drift apart.
+  condition: "a small chip near the handle",
   aspects: [
     { name: "object", value: "mug" },
     { name: "material", value: "ceramic" },
