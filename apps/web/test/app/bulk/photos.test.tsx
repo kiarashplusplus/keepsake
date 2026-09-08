@@ -115,4 +115,23 @@ describe("bulk photos screen", () => {
     // header comment for the same workaround.
     expect(JSON.stringify(toJSON())).toContain("already added");
   });
+
+  it("always prompts for a file when retrying a failed tray photo", async () => {
+    const state = fixtureBatchState({
+      photos: {
+        "photo-a": { ...trayPhoto("photo-a"), status: "retryable_failure", canRetry: true, needsReselection: false, hasLocalSource: true },
+      },
+    });
+    jest.mocked(pickImages).mockResolvedValue([new File(["a"], "retry.jpg", { type: "image/jpeg" })]);
+    mockWorkspace = makeWorkspaceFixture({ state });
+    render(<BulkPhotos />);
+
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText("Try again"));
+      await Promise.resolve();
+    });
+
+    expect(pickImages).toHaveBeenCalledWith({ multiple: false });
+    expect(mockWorkspace.retryPhoto).toHaveBeenCalledWith("photo-a", expect.any(File));
+  });
 });

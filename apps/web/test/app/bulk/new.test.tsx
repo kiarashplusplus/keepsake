@@ -2,13 +2,14 @@ import * as React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react-native";
 import { createBatch } from "@/api/bulk";
 import { lookupPostalCode } from "@/api/geo";
-import { getStoredGrantId } from "@/lib/bulkGrant";
+import { getStoredGrantId, setStoredGrantId } from "@/lib/bulkGrant";
 import NewBulkBatch from "../../../app/bulk/new";
 
 const mockReplace = jest.fn();
+let mockParams: { grant?: string } = {};
 
 jest.mock("expo-router", () => ({
-  useLocalSearchParams: () => ({}),
+  useLocalSearchParams: () => mockParams,
   useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
 }));
 
@@ -19,6 +20,7 @@ describe("bulk/new", () => {
   beforeEach(() => {
     window.localStorage.clear();
     jest.useFakeTimers();
+    mockParams = {};
     mockReplace.mockReset();
     jest.mocked(createBatch).mockReset();
     jest.mocked(lookupPostalCode).mockReset();
@@ -117,5 +119,18 @@ describe("bulk/new", () => {
 
     expect(mockReplace).not.toHaveBeenCalled();
     expect(JSON.stringify(screen.toJSON())).toContain("isn't usable");
+  });
+
+  it("keeps the grant input in sync when a grant link changes while mounted", () => {
+    setStoredGrantId("stored-grant");
+    mockParams = { grant: "grant-a" };
+    const { rerender } = render(<NewBulkBatch />);
+    expect(screen.getByLabelText("Admission code").props.value).toBe("grant-a");
+
+    mockParams = { grant: "grant-b" };
+    rerender(<NewBulkBatch />);
+
+    expect(screen.getByLabelText("Admission code").props.value).toBe("grant-b");
+    expect(getStoredGrantId()).toBe("grant-b");
   });
 });

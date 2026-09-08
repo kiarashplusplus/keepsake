@@ -61,6 +61,7 @@ export default function NewBulkBatch(): React.ReactElement {
   // and returning to this screen doesn't lose it.
   React.useEffect(() => {
     if (params.grant === undefined || params.grant.trim() === "") return;
+    setGrantId(params.grant);
     setStoredGrantId(params.grant);
   }, [params.grant]);
 
