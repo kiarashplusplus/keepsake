@@ -129,12 +129,42 @@ export interface CheckAndBumpOptions {
    * addresses), but it guarantees a caller who hasn't already been part of
    * today's burst still gets through until the floor itself runs out, so
    * "everyone is starved" requires exhausting *both* pools, not one.
+   *
+   * **Checked against estate bulk upload traffic.** Still holds with bulk
+   * traffic mixed in, and for a structural reason rather than a measured
+   * one: neither of bulk's two moderation call sites ever carries a
+   * `clientIP` — `bulk/submit.ts`'s create-time call passes none, and
+   * `cron/moderationRetry.ts`'s retries never have one to pass — so bulk
+   * consumption can *never* reach the floor at all, at creation or on retry.
+   * It is confined to the general pool for its entire life. Meanwhile an
+   * ordinary giver's create/edit call always does carry a `clientIP`
+   * (`routes/listings.ts`), so a genuinely fresh single-item caller's first
+   * attempt keeps floor access even while the general pool is saturated with
+   * bulk-originated calls — which is exactly the protection this option
+   * exists to give.
+   *
+   * The gap that remains: once a listing (bulk- or ordinary-owned) is stuck
+   * enough to need a *retry*, neither can draw on the floor — both compete
+   * in the general pool on equal terms, per `freshCallerCeiling`'s own doc
+   * comment below. That's symmetric, not a bulk-vs-ordinary problem: nothing
+   * here gives a bulk retry priority over an ordinary one. Giving retries
+   * floor access at all would mean threading a caller identity through
+   * `cron/moderationRetry.ts` into `moderation/pipeline.ts`'s `clientIP`
+   * parameter — and pipeline.ts's own doc comments (top of file, and by the
+   * two call sites of this option) already assert "the cron has no request
+   * to read one from, so those retries are never eligible for the reserved
+   * floor". Changing that behavior from this file alone, without updating
+   * the file that documents it, would leave pipeline.ts's comments actively
+   * wrong — the kind of drift `AGENTS.md`'s "one rule that matters" exists
+   * to catch, not create. Left as a reported finding rather than fixed here;
+   * a real fix touches pipeline.ts and belongs in its own change.
    */
   reservedFloor?: number;
   /** An IP counts as "fresh" (eligible for the reserved floor) while its own
    * count for `kind` today is below this. Ignored when `reservedFloor` is
    * unset or `clientIP` is omitted (e.g. the cron retry path, which never
-   * knows the original caller's address). */
+   * knows the original caller's address — see `reservedFloor`'s doc comment
+   * above for why that's a symmetric limit, not a bulk-vs-ordinary one). */
   freshCallerCeiling?: number;
 }
 
