@@ -56,7 +56,7 @@ export function PhotoCarousel({ photos, maxWidth = 560 }: PhotoCarouselProps): R
       >
         {width > 0 ? (
           <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} onScroll={handleScroll} scrollEventThrottle={16}>
-            {photos.map((photo) => (
+            {photos.map((photo, photoIndex) => (
               <View key={photo.id} style={{ width, height: "100%" }}>
                 <ExpoImage
                   source={photo.url_full}
@@ -64,6 +64,13 @@ export function PhotoCarousel({ photos, maxWidth = 560 }: PhotoCarouselProps): R
                   style={{ width: "100%", height: "100%" }}
                   contentFit="cover"
                   transition={motion.imageFadeMs}
+                  // The cover is the largest thing on the page and the one
+                  // the visitor came to look at; every other slide is
+                  // off-screen behind a horizontal scroll most visits never
+                  // touch. Saying so ranks the cover ahead of them in the
+                  // browser's own queue instead of leaving five full-size
+                  // photographs to compete as equals.
+                  priority={photoIndex === 0 ? "high" : "low"}
                   accessibilityLabel=""
                 />
               </View>
@@ -75,6 +82,7 @@ export function PhotoCarousel({ photos, maxWidth = 560 }: PhotoCarouselProps): R
             placeholder={{ blurhash: cover.blurhash }}
             style={{ width: "100%", height: "100%" }}
             contentFit="cover"
+            priority="high"
             accessibilityLabel=""
           />
         ) : null}

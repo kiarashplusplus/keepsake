@@ -2,6 +2,7 @@ import * as React from "react";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import type { PublicListing } from "@keepsake/contracts/listing";
 import type { AspectShelf } from "@keepsake/contracts/shelves";
+import { clearFeedCache } from "@/features/feed/useFeed";
 import { getFeed } from "@/api/feed";
 import { getShelves } from "@/api/shelves";
 import { LOCATION_PREF_STORAGE_KEY } from "@/lib/geo";
@@ -89,6 +90,11 @@ function setViewportWidth(width: number): void {
 describe("Feed", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    // `useFeed` caches page 1 of a query in module state for a minute, so a
+    // list fetched by the case above is still there for the case below —
+    // which would then render listings its own mock never returned, and pass
+    // for the wrong reason (or, as it did first, fail confusingly).
+    clearFeedCache();
     for (const key of Object.keys(mockUrlParams)) delete mockUrlParams[key];
     setViewportWidth(DESKTOP_WIDTH);
     jest.mocked(getFeed).mockReset();

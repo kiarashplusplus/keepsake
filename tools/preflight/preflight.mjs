@@ -193,23 +193,26 @@ export function fontVersionToken(files) {
   return hash.digest("hex").slice(0, 8);
 }
 
-/** Every `/fonts/<file>.ttf[?v=<token>]` reference in a source text. */
+/** Every `/fonts/<file>.<ttf|woff2>[?v=<token>]` reference in a source text,
+ * with where it appears — the order matters (see `checkFonts`). */
 function fontRefs(text) {
   const refs = [];
-  for (const match of text.matchAll(/\/fonts\/([A-Za-z0-9._-]+\.ttf)(\?v=([^"'`)\s]*))?/g)) {
-    refs.push({ file: match[1], version: match[3] });
+  for (const match of text.matchAll(/\/fonts\/([A-Za-z0-9._-]+\.(?:ttf|woff2))(\?v=([^"'`)\s]*))?/g)) {
+    refs.push({ file: match[1], version: match[3], at: match.index ?? 0 });
   }
   return refs;
 }
+
+const fontStem = (file) => file.replace(/\.(ttf|woff2)$/, "");
 
 function checkFonts(ctx) {
   const html = ctx.readText(HTML_PATH);
   if (html === null) return { status: "skip", details: [`${HTML_PATH} not present`] };
   if (!ctx.exists(FONTS_DIR)) return { status: "skip", details: [`${FONTS_DIR} not present`] };
 
-  const ttfPaths = ctx.walk(FONTS_DIR).filter((f) => f.endsWith(".ttf"));
-  const onDisk = new Set(ttfPaths.map((f) => path.posix.basename(f)));
-  const expected = fontVersionToken(ttfPaths.map((f) => [path.posix.basename(f), ctx.readBytes(f)]));
+  const fontPaths = ctx.walk(FONTS_DIR).filter((f) => f.endsWith(".ttf") || f.endsWith(".woff2"));
+  const onDisk = new Set(fontPaths.map((f) => path.posix.basename(f)));
+  const expected = fontVersionToken(fontPaths.map((f) => [path.posix.basename(f), ctx.readBytes(f)]));
 
   // `+html.tsx` interpolates the constant into a template literal, so the
   // reference reads `?v=${FONT_VERSION}` in source — resolve it to the
@@ -247,6 +250,23 @@ function checkFonts(ctx) {
     details.push(`fail: ${HTML_PATH}'s FONT_VERSION is ${declared}, but ${FONTS_DIR}/*.ttf hash to ${expected}`);
   }
 
+  // Every `.ttf` reference must be preceded, in the same file, by the
+  // `.woff2` of the same face. The TTF is the fallback and the byte-source
+  // the OG card's fonts are compared against (apps/web/test/guards/
+  // ogCardFonts.test.ts); WOFF2 is what a browser should actually fetch, and
+  // `src:` is an ordered list — a browser takes the first format it supports,
+  // so listing the TTF first silently ships the big file to everyone.
+  for (const [source, text] of sources) {
+    const refs = fontRefs(text);
+    for (const ref of refs) {
+      if (!ref.file.endsWith(".ttf")) continue;
+      const woff2 = refs.find((other) => other.file === `${fontStem(ref.file)}.woff2` && other.at < ref.at);
+      if (woff2 === undefined) {
+        details.push(`fail: ${source} offers /fonts/${ref.file} with no /fonts/${fontStem(ref.file)}.woff2 ahead of it`);
+      }
+    }
+  }
+
   const unreferenced = [...onDisk].filter((f) => !referenced.has(f)).sort();
   for (const file of unreferenced) {
     details.push(`warn: ${FONTS_DIR}/${file} is not referenced by any @font-face in ${HTML_PATH}`);
@@ -257,7 +277,10 @@ function checkFonts(ctx) {
   if (details.length > 0) return { status: "warn", details };
   return {
     status: "pass",
-    details: [`${referenced.size} font(s) referenced, all present, all at ?v=${expected}`],
+    details: [
+      `${referenced.size} font file(s) referenced, all present, all at ?v=${expected}`,
+      `${[...referenced].filter((f) => f.endsWith(".woff2")).length} woff2 ahead of ${[...referenced].filter((f) => f.endsWith(".ttf")).length} ttf fallback(s)`,
+    ],
   };
 }
 

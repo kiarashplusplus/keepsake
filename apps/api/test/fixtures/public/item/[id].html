@@ -1,0 +1,24 @@
+<!doctype html>
+<!--
+  Test-only stand-in for `apps/web/dist/item/[id].html` — the HTML Expo
+  Router exports for the item route, which `src/routes/item.ts` serves (and
+  rewrites) for every `/item/:id`. It is a separate file from index.html for
+  the reason the route serves it: since the app's static export stopped
+  shipping an empty body, `/`'s markup is the FEED, and serving that here
+  would paint the feed before hydration replaced it with a keepsake.
+
+  The marker text below is what `test/item.test.ts` asserts on to tell the
+  two apart; the head carries the same site-wide defaults index.html does,
+  because half of the rewriter's job is removing them.
+-->
+<html>
+  <head>
+    <title>keepsake item fixture</title>
+    <meta name="description" content="Give a keepsake a second life." />
+    <meta property="og:title" content="Keepsake" />
+    <meta property="og:description" content="Give a keepsake a second life." />
+    <meta property="og:image" content="https://keepsake.ing/og-default.png" />
+    <!--KEEPSAKE_OG-->
+  </head>
+  <body>item stub</body>
+</html>

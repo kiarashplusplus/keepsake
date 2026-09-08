@@ -53,25 +53,10 @@ asserting the rewriter *removes* the shell's description could not have failed a
 
 ## Deliberately not done, and what each would cost
 
-**Prerendering the public pages.** `dist/index.html` is a 22 KB shell whose `<body>` is
-`<div id="root"><div …><!--$--><!--/$--></div></div>` — a Suspense placeholder and nothing else, on
-every route, despite `web.output: "static"`. Everything a visitor reads arrives only after the
-bundle downloads and executes. This is not "Google cannot index the site" — Google renders
-JavaScript, and `/item/:id` already gets a real title, description, canonical, OG tags and a
-`Product` JSON-LD from the Worker without running any JS — but it is slower for everyone, and every
-non-rendering crawler and unfurler sees an empty document body. Fixing it properly means
-server-rendering React Native Web through the Worker (a Worker hop on `/`, which
-`wrangler.toml`'s own comment argues against) or generating real markup at export time for the
-landing page and the feed. It is a milestone, not a patch, and it should be decided against real
-numbers rather than against this paragraph.
+**Prerendering the public pages** — *done in the second pass below.* It was never Expo: it was one
+`return null` in the app's own root provider.
 
-**WOFF2, and whether both preloads are earning their place.** `Fraunces-VF.ttf` (360 KB) and
-`CourierPrime-Regular.ttf` (71 KB) are both `<link rel="preload">`ed — ~432 KB before HTTP
-compression, on the critical path of the first paint. WOFF2 typically halves a TTF and is
-universally supported now. Not done here because it needs `fontTools`/`brotli` in the container,
-new binary files in the tree, `apps/api/src/og/fonts.ts` still wants TTFs (resvg reads those), and
-the licence files travel with the fonts. Worth measuring before doing: the cheap half is asking
-whether the italic and the second family need to be preloaded at all.
+**WOFF2** — *done in the second pass below.* What was not done, and why, is glyph subsetting.
 
 **A CSP reporting endpoint.** The policy has no `report-uri`/`report-to`, so a violation in a real
 browser is visible only in that visitor's console — which is precisely how the
@@ -100,3 +85,113 @@ live site, which this audit could not make.
 - `style-src 'unsafe-inline'` stays: react-native-web writes layout as inline `style` attributes.
 - The empty `ks-google-ads-id` meta is the kill switch (#175), not drift, and the absent Google
   reporting origins in `connect-src` follow from it.
+
+---
+
+# Second pass, 2026-09-08: the empty body, and what it was really costing
+
+The first pass filed "the initial body is essentially empty" as a milestone-sized problem and left
+it. It was one line, and everything below follows from finding it.
+
+## `expo export` was not the problem
+
+`app/+html.tsx` carried the diagnosis as a fact about the tooling — "despite `web.output:
+"static"`, `expo export`'s per-route HTML ships an EMPTY body (a Suspense placeholder, no
+prerendered markup — confirmed by reading `dist/index.html` after export, not assumed)". The
+reading was right and the conclusion was wrong. `src/ui/theme.tsx`'s `ThemeProvider` returned
+`null` until an async `localStorage` read resolved:
+
+```tsx
+if (!hydrated) return null;
+```
+
+Effects do not run in a static render, so `hydrated` was false for the whole of it, and every
+exported page was an empty `<div id="root">` — not because Expo could not render the app, but
+because the app rendered nothing when asked.
+
+**The gate existed for a real reason**: without it a dark-mode visitor's first render would use the
+light palette and flash. The way out is that the palette barely flips. Of ~40 colour tokens exactly
+eight — `TABLE_TOKENS`, the table and the light on it — differ between light and dark. Those eight
+are now CSS custom properties (`colorsWeb` in `@keepsake/tokens/colors`, declared by
+`+html.tsx`'s `THEME_CSS`), every other token stays the literal it was, and the pre-hydration
+script's `data-theme` picks the palette before the first paint. Server markup and client markup are
+then byte-identical in both themes: nothing to gate, nothing to mismatch, no flash.
+
+The same argument applied twice more, to the two other things whose *markup* depended on the theme
+or on an animation frame:
+
+- `KraftTable.web.tsx` switched `background-blend-mode` and `opacity` on `mode`. Both are now
+  `var(--ks-grain-*)`.
+- `Print` — the object the entire identity is made of — animated its entrance from a Reanimated
+  shared value that starts at 0 and *is* the opacity. Static render, no effect, so every print in
+  the HTML was `opacity: 0`: present and invisible. The web now has `Print.web.tsx`, whose entrance
+  is a CSS animation that runs at the first paint with no JavaScript and that
+  `prefers-reduced-motion` turns off in the stylesheet.
+
+Measured on the export, `dist/index.html`'s `<body>`: **~130 bytes → 26,268 bytes**, and what is in
+it is the header, the hero, the search field, the category chips, the location control and the
+footer. `/welcome` ships the whole explainer; `/give` ships step one. `e2e/staticRender.spec.ts`
+asserts this with `javaScriptEnabled: false`, which is the only honest way to state it — with
+scripting on, a page that took two seconds and a page that was in the HTML look the same to a
+passing test.
+
+## Three things the empty body had been hiding
+
+**`/item/:id` was serving the feed's HTML.** The Worker read `/` for its shell because, when every
+page's body was empty, any of them would do. They are not empty now, so it reads
+`dist/item/[id].html` instead — otherwise every shared keepsake link would paint the feed for the
+moment before hydration.
+
+**The feed said "Nothing here yet" in the exported HTML.** `useFeed` reported `loading: false` while
+`enabled` was false — the window in which `app/index.tsx` reads the saved location out of storage —
+so a feed that had not been asked for yet rendered the empty state: *"Nothing here yet. Be the
+first to give something."* That sentence was baked into `/`'s HTML. Waiting for the location is
+loading; it now says so, and the first paint is the skeleton prints.
+
+**The Worker was making the client re-ask for a row it had just read.** `/item/:id` reads the
+listing and its photos to build the share card's tags, then handed the browser a page whose first
+act was to fetch the same listing. It now inlines the exact `PublicListing` JSON that
+`GET /api/listings/:id` answers with, in a `<script type="application/json">` (a data block —
+never executed, so no CSP hash, the same reasoning as the shell's JSON-LD), and the screen reads
+it. `e2e/itemPayload.spec.ts` counts the requests rather than timing the page.
+
+## Fonts
+
+WOFF2, with the TTF kept as a second `src` entry — the fallback, and the byte-source
+`ogCardFonts.test.ts` compares the OG card's Courier against. Uncompressed, the two preloaded faces
+go **431,628 → 221,708 bytes**. The honest caveat, measured locally: a TTF served with Brotli is
+already 199,171 bytes for Fraunces, so if the edge was compressing them the real saving is small —
+WOFF2's actual virtue is that it does not depend on that question. Order is enforced: preflight's
+`fonts` check fails a `.ttf` reference that is not preceded by its `.woff2`, because `src:` is an
+ordered list and getting it backwards ships the big file to everyone while looking correct in a
+diff.
+
+**Not subsetted.** Fraunces covers 624 codepoints, all Latin, 190 of them Latin-1 and Latin
+Extended-A — which is what spells Zoë, José and Łukasz. The stories here are written by strangers
+about their own things; dropping accented Latin to save ~30% of the glyphs would mangle real
+people's words in the one place this product is about.
+
+## Still open, in the order I would take them
+
+1. **Real server-side rendering of `/item/:id`'s content.** The payload is inlined but the markup
+   still comes from hydration. The Worker has the row; rendering the title, story and cover into
+   the HTML is the next real step, and the one that would make a shared link readable with no
+   JavaScript at all.
+2. **Route-level code splitting** (`asyncRoutes`). Browsing still downloads the give flow and the
+   admin screens. Measured on this export: the entry bundle is **3,224,619 bytes raw, 672,893
+   compressed** (Brotli q5, locally) and there is exactly one other chunk — `heic-to`, 2,995,641
+   raw / 592,166 compressed, already split out because the give flow imports it dynamically. So
+   the split that exists is the one someone did by hand for a single dependency, and everything
+   else a visitor could ever reach is in the file the feed downloads. Expo labels web
+   `asyncRoutes` alpha, so this wants an `expo-atlas` pass and a careful check of direct links
+   before it is worth the risk.
+3. **Bounding a long feed.** Pagination appends without limit and the masonry renders every card it
+   has. Profile it with several hundred listings before choosing virtualisation — the current feed
+   has nothing like that many.
+4. **A pre-hydration feed prefetch.** The location preference the first query needs is in
+   `localStorage`, which the pre-hydration script can already read, so `/api/feed` could be in
+   flight before the bundle has finished downloading. It is a real cut to the waterfall and it
+   changes the inline script's CSP hash; worth doing only with a measurement either side.
+5. **Lighthouse, on the real site.** Everything above is reasoned from the artifact and the
+   container's own measurements. None of it is a field measurement, and this container cannot make
+   one.

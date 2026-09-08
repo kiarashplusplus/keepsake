@@ -5,7 +5,11 @@
 # The font filenames carry no content hash, so every URL that references one
 # carries a `?v=` content token instead (FONT_VERSION in apps/web/app/+html.tsx,
 # repeated in apps/site/public/site.css, recomputed from the font bytes by
-# preflight's `fonts` check). Without it, `immutable` means a browser that has
+# preflight's `fonts` check). Both formats live here: the `.woff2` every
+# browser actually fetches, and the `.ttf` behind it as the fallback and as
+# the byte-source apps/web/test/guards/ogCardFonts.test.ts compares the OG
+# card's fonts against. WOFF2 is already Brotli-compressed, so there is
+# nothing for the edge to compress on the file that ships. Without it, `immutable` means a browser that has
 # cached Fraunces-VF.ttf will not revalidate it for a year even on a reload —
 # so replacing a font in place would leave returning visitors rendering the
 # old one, invisibly, while new visitors got the new one.

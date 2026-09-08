@@ -16,7 +16,7 @@ import { act, renderHook, waitFor } from "@testing-library/react-native";
 import type { FeedPage } from "@keepsake/contracts/feed";
 import type { PublicListing } from "@keepsake/contracts/listing";
 import { getFeed, type FeedQueryInput } from "@/api/feed";
-import { useFeed } from "@/features/feed/useFeed";
+import { clearFeedCache, useFeed } from "@/features/feed/useFeed";
 
 jest.mock("@/api/feed", () => ({ getFeed: jest.fn() }));
 
@@ -43,6 +43,11 @@ function ids(items: readonly PublicListing[]): string[] {
 describe("useFeed", () => {
   beforeEach(() => {
     jest.mocked(getFeed).mockReset();
+    // The page-1 cache is module state, so it outlives a test. A hit left
+    // over from the case above would make the next one pass without ever
+    // calling `getFeed` — the exact "test that cannot fail" this repo keeps
+    // finding.
+    clearFeedCache();
   });
 
   it("appends page 2 to page 1 and advances the cursor", async () => {
@@ -148,5 +153,90 @@ describe("useFeed", () => {
       await newPage1.promise;
     });
     expect(ids(result.current.items)).toEqual(["new-1"]);
+  });
+
+  it("reports loading while the caller is still deciding what to ask for", async () => {
+    // `app/index.tsx` holds `enabled: false` until the saved location comes
+    // back from storage. This used to report `loading: false` with no items,
+    // which the feed screen renders as "Nothing here yet. Be the first to
+    // give something." — to a visitor whose feed is one tick away. It is
+    // also what the static export baked into the HTML of `/` as its first
+    // paint.
+    jest.mocked(getFeed).mockResolvedValue(page(["a-1"], null));
+
+    const { result, rerender } = renderHook(({ enabled }: { enabled: boolean }) => useFeed({ q: "a" }, { enabled }), {
+      initialProps: { enabled: false },
+    });
+
+    expect(result.current.loading).toBe(true);
+    expect(result.current.items).toEqual([]);
+    expect(jest.mocked(getFeed)).not.toHaveBeenCalled();
+
+    rerender({ enabled: true });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(ids(result.current.items)).toEqual(["a-1"]);
+  });
+
+  it("serves the same query from cache on a remount, and does not refetch", async () => {
+    // Feed -> keepsake -> back is the app's most common movement. Without
+    // this it was a fresh mount, four skeletons, and a round trip for a list
+    // the visitor was looking at seconds ago.
+    jest.mocked(getFeed).mockResolvedValue(page(["a-1"], "cursor-2"));
+
+    const first = renderHook(() => useFeed({ q: "cached" }));
+    await waitFor(() => expect(ids(first.result.current.items)).toEqual(["a-1"]));
+    first.unmount();
+
+    const second = renderHook(() => useFeed({ q: "cached" }));
+    // Synchronously, on the first render — no skeleton frame at all.
+    expect(ids(second.result.current.items)).toEqual(["a-1"]);
+    expect(second.result.current.loading).toBe(false);
+    expect(second.result.current.hasMore).toBe(true);
+    expect(jest.mocked(getFeed)).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not serve a different query, or an explicit reload, from that cache", async () => {
+    jest.mocked(getFeed).mockImplementation((query: FeedQueryInput) => Promise.resolve(page([`${query.q ?? "all"}-1`], null)));
+
+    const first = renderHook(() => useFeed({ q: "one" }));
+    await waitFor(() => expect(ids(first.result.current.items)).toEqual(["one-1"]));
+    first.unmount();
+
+    // A different query is a different key.
+    const other = renderHook(() => useFeed({ q: "two" }));
+    expect(other.result.current.items).toEqual([]);
+    await waitFor(() => expect(ids(other.result.current.items)).toEqual(["two-1"]));
+    other.unmount();
+
+    // And "Try again" must reach the server even for a query in the cache:
+    // the visitor is asking precisely because what they were shown was
+    // wrong.
+    const reloaded = renderHook(() => useFeed({ q: "one" }, { reloadToken: 1 }));
+    expect(reloaded.result.current.items).toEqual([]);
+    await waitFor(() => expect(ids(reloaded.result.current.items)).toEqual(["one-1"]));
+    expect(jest.mocked(getFeed)).toHaveBeenCalledTimes(3);
+  });
+
+  it("aborts a page-1 request the visitor has moved on from", async () => {
+    // Typing in the search box or tapping through categories leaves page-1
+    // requests behind. Ignoring their results was never the same as not
+    // paying for them: each one still costs the visitor's connection, a
+    // Worker invocation and a D1 query.
+    const abandoned = deferred();
+    const signals: (AbortSignal | undefined)[] = [];
+    jest.mocked(getFeed).mockImplementation((query: FeedQueryInput, signal?: AbortSignal) => {
+      signals.push(signal);
+      if (query.q === "old") return abandoned.promise;
+      return Promise.resolve(page(["new-1"], null));
+    });
+
+    const { result, rerender } = renderHook(({ q }: { q: string }) => useFeed({ q }), { initialProps: { q: "old" } });
+    await waitFor(() => expect(signals.length).toBe(1));
+    expect(signals[0]?.aborted).toBe(false);
+
+    rerender({ q: "new" });
+
+    expect(signals[0]?.aborted).toBe(true);
+    await waitFor(() => expect(ids(result.current.items)).toEqual(["new-1"]));
   });
 });

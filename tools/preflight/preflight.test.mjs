@@ -69,44 +69,48 @@ function runOne(name, files) {
 
 // ── fonts ──────────────────────────────────────────────────────────────
 
-/** The token the fixture tree's two fonts hash to. */
+/** The token the fixture tree's fonts hash to. Both formats of both faces
+ * count: replacing either has to move the token. */
 const FIXTURE_FONT_FILES = [
   ["Fraunces.ttf", Buffer.from("x")],
+  ["Fraunces.woff2", Buffer.from("w")],
   ["Inter.ttf", Buffer.from("x")],
+  ["Inter.woff2", Buffer.from("w")],
 ];
 const FIXTURE_TOKEN = fontVersionToken(FIXTURE_FONT_FILES);
+const FIXTURE_FONT_TREE = {
+  "apps/web/public/fonts/Fraunces.ttf": "x",
+  "apps/web/public/fonts/Fraunces.woff2": "w",
+  "apps/web/public/fonts/Inter.ttf": "x",
+  "apps/web/public/fonts/Inter.woff2": "w",
+};
 
 /** `+html.tsx` as it really is: a FONT_VERSION constant, `?v=${FONT_VERSION}`
- * inside the CSS template literal, and the same token on the preload links. */
+ * inside the CSS template literal, woff2 ahead of the ttf fallback, and the
+ * same token on the preload links. */
 function htmlGood({ version = FIXTURE_TOKEN, css = null } = {}) {
   return `
   const FONT_VERSION = "${version}";
   <style>
-    ${css ?? `@font-face { font-family: Fraunces; src: url(/fonts/Fraunces.ttf?v=\${FONT_VERSION}); }
-    @font-face { font-family: Inter; src: url("/fonts/Inter.ttf?v=\${FONT_VERSION}"); }`}
+    ${css ?? `@font-face { font-family: Fraunces; src: url(/fonts/Fraunces.woff2?v=\${FONT_VERSION}) format("woff2"), url(/fonts/Fraunces.ttf?v=\${FONT_VERSION}); }
+    @font-face { font-family: Inter; src: url("/fonts/Inter.woff2?v=\${FONT_VERSION}") format("woff2"), url("/fonts/Inter.ttf?v=\${FONT_VERSION}"); }`}
   </style>
 `;
 }
 
-const SITE_CSS_GOOD = `@font-face { src: url("/fonts/Fraunces.ttf?v=${FIXTURE_TOKEN}"); }`;
+const SITE_CSS_GOOD = `@font-face { src: url("/fonts/Fraunces.woff2?v=${FIXTURE_TOKEN}") format("woff2"), url("/fonts/Fraunces.ttf?v=${FIXTURE_TOKEN}"); }`;
 
 test("fonts: passes when every referenced font exists and every font is referenced", () => {
-  const result = runOne("fonts", {
-    "apps/web/app/+html.tsx": htmlGood(),
-    "apps/web/public/fonts/Fraunces.ttf": "x",
-    "apps/web/public/fonts/Inter.ttf": "x",
-  });
+  const result = runOne("fonts", { "apps/web/app/+html.tsx": htmlGood(), ...FIXTURE_FONT_TREE });
   assert.equal(result.status, "pass");
 });
 
 test("fonts: fails when a referenced font file is missing", () => {
-  const result = runOne("fonts", {
-    "apps/web/app/+html.tsx": htmlGood(),
-    "apps/web/public/fonts/Fraunces.ttf": "x",
-    // Inter.ttf missing
-  });
+  const withoutInterWoff2 = { ...FIXTURE_FONT_TREE };
+  delete withoutInterWoff2["apps/web/public/fonts/Inter.woff2"];
+  const result = runOne("fonts", { "apps/web/app/+html.tsx": htmlGood(), ...withoutInterWoff2 });
   assert.equal(result.status, "fail");
-  assert.match(result.details.join("\n"), /Inter\.ttf/);
+  assert.match(result.details.join("\n"), /Inter\.woff2/);
 });
 
 test("fonts: warns on an unreferenced ttf without failing", () => {
@@ -116,8 +120,7 @@ test("fonts: warns on an unreferenced ttf without failing", () => {
   const files = [...FIXTURE_FONT_FILES, ["Extra.ttf", Buffer.from("x")]];
   const result = runOne("fonts", {
     "apps/web/app/+html.tsx": htmlGood({ version: fontVersionToken(files) }),
-    "apps/web/public/fonts/Fraunces.ttf": "x",
-    "apps/web/public/fonts/Inter.ttf": "x",
+    ...FIXTURE_FONT_TREE,
     "apps/web/public/fonts/Extra.ttf": "x",
   });
   assert.equal(result.status, "warn");
@@ -132,9 +135,9 @@ test("fonts: warns on an unreferenced ttf without failing", () => {
 test("fonts: fails when a font is replaced but FONT_VERSION is not bumped", () => {
   const result = runOne("fonts", {
     "apps/web/app/+html.tsx": htmlGood(),
+    ...FIXTURE_FONT_TREE,
     // Different bytes → a different hash → the declared token is now stale.
-    "apps/web/public/fonts/Fraunces.ttf": "a new cut of Fraunces",
-    "apps/web/public/fonts/Inter.ttf": "x",
+    "apps/web/public/fonts/Fraunces.woff2": "a new cut of Fraunces",
   });
   assert.equal(result.status, "fail");
   assert.match(result.details.join("\n"), /FONT_VERSION is/);
@@ -143,10 +146,9 @@ test("fonts: fails when a font is replaced but FONT_VERSION is not bumped", () =
 test("fonts: fails when a reference carries no ?v= token at all", () => {
   const result = runOne("fonts", {
     "apps/web/app/+html.tsx": htmlGood({
-      css: '@font-face { src: url("/fonts/Fraunces.ttf"); }\n    @font-face { src: url("/fonts/Inter.ttf?v=${FONT_VERSION}"); }',
+      css: '@font-face { src: url("/fonts/Fraunces.woff2"); }\n    @font-face { src: url("/fonts/Inter.woff2?v=${FONT_VERSION}"); }',
     }),
-    "apps/web/public/fonts/Fraunces.ttf": "x",
-    "apps/web/public/fonts/Inter.ttf": "x",
+    ...FIXTURE_FONT_TREE,
   });
   assert.equal(result.status, "fail");
   assert.match(result.details.join("\n"), /no \?v= token/);
@@ -157,22 +159,34 @@ test("fonts: fails when site.css's copy of the token goes stale", () => {
   // token by hand — the copy most likely to be forgotten.
   const result = runOne("fonts", {
     "apps/web/app/+html.tsx": htmlGood(),
-    "apps/site/public/site.css": '@font-face { src: url("/fonts/Fraunces.ttf?v=0badcafe"); }',
-    "apps/web/public/fonts/Fraunces.ttf": "x",
-    "apps/web/public/fonts/Inter.ttf": "x",
+    "apps/site/public/site.css": '@font-face { src: url("/fonts/Fraunces.woff2?v=0badcafe"); }',
+    ...FIXTURE_FONT_TREE,
   });
   assert.equal(result.status, "fail");
-  assert.match(result.details.join("\n"), /site\.css references \/fonts\/Fraunces\.ttf at \?v=0badcafe/);
+  assert.match(result.details.join("\n"), /site\.css references \/fonts\/Fraunces\.woff2 at \?v=0badcafe/);
 });
 
 test("fonts: passes with site.css carrying the same token", () => {
   const result = runOne("fonts", {
     "apps/web/app/+html.tsx": htmlGood(),
     "apps/site/public/site.css": SITE_CSS_GOOD,
-    "apps/web/public/fonts/Fraunces.ttf": "x",
-    "apps/web/public/fonts/Inter.ttf": "x",
+    ...FIXTURE_FONT_TREE,
   });
   assert.equal(result.status, "pass");
+});
+
+test("fonts: fails when the ttf fallback is listed ahead of the woff2", () => {
+  // `src:` is an ordered list and a browser stops at the first format it
+  // supports, so this ships 360 KB of TTF to everyone while looking, in a
+  // diff, like a font declaration that mentions woff2.
+  const result = runOne("fonts", {
+    "apps/web/app/+html.tsx": htmlGood({
+      css: '@font-face { src: url("/fonts/Fraunces.ttf?v=${FONT_VERSION}"), url("/fonts/Fraunces.woff2?v=${FONT_VERSION}"); }\n    @font-face { src: url("/fonts/Inter.woff2?v=${FONT_VERSION}") format("woff2"), url("/fonts/Inter.ttf?v=${FONT_VERSION}"); }',
+    }),
+    ...FIXTURE_FONT_TREE,
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /no \/fonts\/Fraunces\.woff2 ahead of it/);
 });
 
 test("fonts: skips when +html.tsx is not present", () => {

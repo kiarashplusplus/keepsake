@@ -4,6 +4,7 @@
 // exported route's shell once, at export time.
 import { ScrollViewStyleReset } from "expo-router/html";
 import * as React from "react";
+import { themeCssVariables } from "@keepsake/tokens/colors";
 import { config } from "@/lib/config";
 
 // The pre-hydration script runs before React attaches, so the very first
@@ -185,7 +186,7 @@ const ROOT_JSON_LD = JSON.stringify([
 ]);
 
 /**
- * The cache-busting token on every `/fonts/*.ttf` URL in this file and in
+ * The cache-busting token on every `/fonts/*` URL in this file and in
  * `apps/site/public/site.css`.
  *
  * `apps/web/public/_headers` serves `/fonts/*` as
@@ -199,6 +200,34 @@ const ROOT_JSON_LD = JSON.stringify([
  * new one. The two would not be reconcilable by anything short of renaming
  * the file.
  *
+ * ## Why WOFF2 with a TTF fallback
+ *
+ * The faces below list `.woff2` first and the `.ttf` second, and a browser
+ * takes the first format it supports — so every browser since ~2016 fetches
+ * the WOFF2 and the TTF is dead weight nobody downloads. It stays declared
+ * for two reasons: it is the fallback for anything that predates WOFF2, and
+ * it is the byte-source `apps/web/test/guards/ogCardFonts.test.ts` compares
+ * the OG card's own Courier Prime against. **Order is the whole point** —
+ * listing the TTF first would silently ship the big file to everyone —
+ * so preflight's `fonts` check fails a `.ttf` reference that is not
+ * preceded by its `.woff2`.
+ *
+ * Uncompressed, the two preloaded faces go 431,628 -> 221,708 bytes
+ * (Fraunces-VF 360,440 -> 194,660; CourierPrime-Regular 71,188 -> 27,048).
+ * The honest caveat: a TTF served with Brotli is already close to a WOFF2
+ * (199,171 for Fraunces at q11, measured locally), so the win is only that
+ * large if the edge was serving these uncompressed — which is not knowable
+ * from a container that cannot reach the site. WOFF2 makes it moot: it is
+ * pre-compressed, so it does not depend on whether Cloudflare decides
+ * `font/ttf` is compressible today.
+ *
+ * **Not subsetted, deliberately.** Fraunces covers 624 codepoints and they
+ * are all Latin (no Greek, no Cyrillic); 190 of them are Latin-1 and Latin
+ * Extended-A, which is what spells Zoë, José and Łukasz. The stories on this
+ * site are written by strangers about their own things, so dropping accented
+ * Latin to save ~30% of the glyphs would mangle real people's words in the
+ * one place this product is about.
+ *
  * The `?v=` makes the URL, and therefore the cache key, a function of the
  * bytes: replace a font and the token changes, so every visitor fetches the
  * new object once and keeps caching it for a year. It is a plain literal
@@ -206,12 +235,34 @@ const ROOT_JSON_LD = JSON.stringify([
  * static file with no build step of its own and has to carry the same value
  * — one hand-written token in two files, with a check that recomputes it.
  *
- * That check is preflight's `fonts`: it hashes `apps/web/public/fonts/*.ttf`
+ * That check is preflight's `fonts`: it hashes every font file on disk
  * and fails if either file's token is not the hash of what is actually on
  * disk. So the failure mode is "preflight is red until you paste the new
  * token", not "returning visitors silently keep the old font".
  */
-const FONT_VERSION = "a20ee29a";
+const FONT_VERSION = "798ad45b";
+
+/**
+ * The theme, as CSS custom properties, in the one place they can be set
+ * before a single byte of JavaScript runs.
+ *
+ * Generated from `@keepsake/tokens/colors` — a `:root` block of the light
+ * values and a `[data-theme="dark"]` block of the dark ones, for the eight
+ * tokens that differ between the two. The pre-hydration script above puts
+ * `data-theme` on `<html>` from localStorage before the body is parsed, so
+ * the correct palette is in force at the first paint, on markup that is
+ * identical either way. That is what lets `src/ui/theme.tsx` render the app
+ * on the server instead of waiting for a storage read — see its header.
+ *
+ * `--ks-grain-*` are not colours and are not in the tokens package: they are
+ * the two properties `src/ui/KraftTable.web.tsx` used to switch on `mode`,
+ * which is the other thing that made the table's markup theme-dependent.
+ */
+const THEME_CSS = `
+${themeCssVariables()}
+:root { --ks-grain-blend: multiply; --ks-grain-opacity: 1; }
+[data-theme="dark"] { --ks-grain-blend: overlay; --ks-grain-opacity: 0.55; }
+`;
 
 const ROOT_CSS = `
 html, body, #root { height: 100%; }
@@ -220,8 +271,7 @@ html {
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
-body { margin: 0; background: #D2BC97; }
-[data-theme="dark"] body { background: #2B2119; }
+body { margin: 0; background: var(--ks-bg, #D2BC97); }
 
 /* Focus ring: the \`focus\` token, 2px, offset 3px — the same treatment the
    marketing site uses. Inputs suppress this (their border is the ring). */
@@ -232,9 +282,30 @@ body { margin: 0; background: #D2BC97; }
   :root { --ks-reduce: 1; }
 }
 
+/* A print dropping onto the table — src/ui/Print.web.tsx's entrance, in CSS
+   so it runs at the first paint instead of waiting for hydration. It
+   animates opacity and the individual "scale" property and never
+   "transform", because each print's tilt is an inline transform:rotate() an
+   animation on transform would replace, standing every card up straight.
+   "both" holds the from-state before the animation starts and the to-state
+   after it ends. Values from packages/tokens/src/motion.ts (dropMs 350, the
+   1.03 -> 1 settle). */
+@keyframes ks-print-drop {
+  from { opacity: 0; scale: 1.03; }
+  to { opacity: 1; scale: 1; }
+}
+[data-ks-print="drop"] {
+  animation: ks-print-drop 350ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-ks-print="drop"] { animation: none; }
+}
+
 @font-face {
   font-family: "Fraunces";
-  src: url("/fonts/Fraunces-VF.ttf?v=${FONT_VERSION}") format("truetype-variations");
+  src:
+    url("/fonts/Fraunces-VF.woff2?v=${FONT_VERSION}") format("woff2"),
+    url("/fonts/Fraunces-VF.ttf?v=${FONT_VERSION}") format("truetype-variations");
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
@@ -242,7 +313,9 @@ body { margin: 0; background: #D2BC97; }
 }
 @font-face {
   font-family: "Fraunces";
-  src: url("/fonts/Fraunces-Italic-VF.ttf?v=${FONT_VERSION}") format("truetype-variations");
+  src:
+    url("/fonts/Fraunces-Italic-VF.woff2?v=${FONT_VERSION}") format("woff2"),
+    url("/fonts/Fraunces-Italic-VF.ttf?v=${FONT_VERSION}") format("truetype-variations");
   font-weight: 100 900;
   font-style: italic;
   font-display: swap;
@@ -250,28 +323,36 @@ body { margin: 0; background: #D2BC97; }
 }
 @font-face {
   font-family: "CourierPrime";
-  src: url("/fonts/CourierPrime-Regular.ttf?v=${FONT_VERSION}") format("truetype");
+  src:
+    url("/fonts/CourierPrime-Regular.woff2?v=${FONT_VERSION}") format("woff2"),
+    url("/fonts/CourierPrime-Regular.ttf?v=${FONT_VERSION}") format("truetype");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "CourierPrime";
-  src: url("/fonts/CourierPrime-Bold.ttf?v=${FONT_VERSION}") format("truetype");
+  src:
+    url("/fonts/CourierPrime-Bold.woff2?v=${FONT_VERSION}") format("woff2"),
+    url("/fonts/CourierPrime-Bold.ttf?v=${FONT_VERSION}") format("truetype");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "CourierPrime";
-  src: url("/fonts/CourierPrime-Italic.ttf?v=${FONT_VERSION}") format("truetype");
+  src:
+    url("/fonts/CourierPrime-Italic.woff2?v=${FONT_VERSION}") format("woff2"),
+    url("/fonts/CourierPrime-Italic.ttf?v=${FONT_VERSION}") format("truetype");
   font-weight: 400;
   font-style: italic;
   font-display: swap;
 }
 @font-face {
   font-family: "CourierPrime";
-  src: url("/fonts/CourierPrime-BoldItalic.ttf?v=${FONT_VERSION}") format("truetype");
+  src:
+    url("/fonts/CourierPrime-BoldItalic.woff2?v=${FONT_VERSION}") format("woff2"),
+    url("/fonts/CourierPrime-BoldItalic.ttf?v=${FONT_VERSION}") format("truetype");
   font-weight: 700;
   font-style: italic;
   font-display: swap;
@@ -369,16 +450,16 @@ export default function Root({ children }: { children: React.ReactNode }): React
         <link rel="icon" href="/favicon.png" type="image/png" sizes="64x64" />
         <link
           rel="preload"
-          href={`/fonts/Fraunces-VF.ttf?v=${FONT_VERSION}`}
+          href={`/fonts/Fraunces-VF.woff2?v=${FONT_VERSION}`}
           as="font"
-          type="font/ttf"
+          type="font/woff2"
           crossOrigin="anonymous"
         />
         <link
           rel="preload"
-          href={`/fonts/CourierPrime-Regular.ttf?v=${FONT_VERSION}`}
+          href={`/fonts/CourierPrime-Regular.woff2?v=${FONT_VERSION}`}
           as="font"
-          type="font/ttf"
+          type="font/woff2"
           crossOrigin="anonymous"
         />
 
@@ -386,6 +467,7 @@ export default function Root({ children }: { children: React.ReactNode }): React
             react-native-web's default ScrollView-as-body behavior. */}
         <ScrollViewStyleReset />
 
+        <style dangerouslySetInnerHTML={{ __html: THEME_CSS }} />
         <style dangerouslySetInnerHTML={{ __html: ROOT_CSS }} />
         <script dangerouslySetInnerHTML={{ __html: PREHYDRATION_SCRIPT }} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: ROOT_JSON_LD }} />
