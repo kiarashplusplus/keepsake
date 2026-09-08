@@ -57,7 +57,7 @@ describe("run_worker_first configuration", () => {
     expect(runWorkerFirstBooleans()).toHaveLength(2);
   });
 
-  it("routes /robots.txt, /sitemap.xml and /admin through the Worker on production", () => {
+  it("routes /robots.txt, /sitemap.xml, /admin and /og/* through the Worker on production", () => {
     // [env.production.assets] is the one remaining list — kept narrow on
     // purpose so a hashed static asset request doesn't pay for a Worker hop
     // on the live site.
@@ -66,6 +66,7 @@ describe("run_worker_first configuration", () => {
     expect(list).toContain('"/robots.txt"');
     expect(list).toContain('"/sitemap.xml"');
     expect(list).toContain('"/admin"');
+    expect(list).toContain('"/og/*"');
   });
 });
 
@@ -102,6 +103,16 @@ describe("the vitest run_worker_first fixture mirrors production", () => {
     // miniflare's local assets emulation does not reproduce the precedence
     // rule, so no other test in this suite can see it.
     expect(fixture).toContain("/admin");
+  });
+
+  it("includes /og/*", () => {
+    // The share card. Its absence is invisible everywhere except production:
+    // dev and preview use `run_worker_first = true`, and miniflare ignores
+    // the setting entirely, so `test/ogCard.test.ts` would stay green while
+    // every `og:image` in the wild returned the SPA shell as `text/html` —
+    // which unfurlers render as a broken image, not as an error. This
+    // assertion is the only mechanism in the repo that can catch it.
+    expect(fixture).toContain("/og/*");
   });
 
   it("reads the boolean and list forms, and refuses to guess", () => {

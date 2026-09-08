@@ -28,6 +28,7 @@ import { serializeOwnerListing, serializePublicListing } from "../lib/serialize.
 import { fetchAspectRows, fetchListingRow, fetchPhotoRows, replaceListingAspects } from "../lib/listingsDb.js";
 import { reembedListing } from "../search/reembed.js";
 import { deleteListingVector } from "../search/vectorize.js";
+import { deleteCardObjects } from "../og/store.js";
 
 type Vars = { owner: OwnerRow; validatedBody: unknown };
 export const listingRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -462,6 +463,11 @@ listingRoutes.delete("/:id", ownerAuth(), async (c) => {
   // the index once the listing it represents is gone.
   await c.env.DB.prepare("DELETE FROM listings WHERE id = ?").bind(id).run();
   c.executionCtx.waitUntil(deleteListingVector(c.env, id));
+  // The rendered share cards are copies of the same photo, story and place
+  // line the objects above carried, under `og/<id>/`. They are never
+  // invalidated while a listing lives (content-addressed — see
+  // `og/fingerprint.ts`), so deletion is the one moment anything sweeps them.
+  c.executionCtx.waitUntil(deleteCardObjects(c.env, id));
 
   return ok(c, { id });
 });

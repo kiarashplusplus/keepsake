@@ -118,30 +118,11 @@ export function masonryContainerHeight<T>(placements: readonly MasonryPlacement<
 // always leans the same way on every render/reload/screenshot — a visual
 // requirement, not just a testability nicety.
 
-/** A small, stable string hash (FNV-1a), used only to seed the deterministic
- * tilt/offset below — not for anything security-sensitive. */
-export function hashString(input: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i += 1) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
-/** A deterministic tilt in degrees within [-rangeDeg, rangeDeg], derived from
- * `id`. Two different ids landing on the same tilt is fine (and expected);
- * what matters is that a given id always lands on the same tilt. */
-export function tiltDegForId(id: string, rangeDeg: number): number {
-  const hash = hashString(id);
-  const unit = (hash % 2001) / 1000 - 1; // [-1, 1]
-  return unit * rangeDeg;
-}
-
-/** A deterministic vertical offset in [0, maxOffset], derived from `id` with
- * a different mixing constant than `tiltDegForId` so the two don't correlate
- * (a print that leans hard right isn't also always pushed furthest down). */
-export function verticalOffsetForId(id: string, maxOffset: number): number {
-  const hash = hashString(`v:${id}`);
-  return (hash % 1000) / 1000 * maxOffset;
-}
+/**
+ * The deterministic table-tilt moved to `@keepsake/tokens/tilt` when the
+ * share-card renderer (`apps/api/src/og/card.ts`) needed the same angles: a
+ * print must lean the same way in the feed and on the card it unfurls as, and
+ * two copies of an FNV hash is exactly how that quietly stops being true.
+ * Re-exported here so this module's existing call sites are unchanged.
+ */
+export { hashString, tiltDegForId, verticalOffsetForId } from "@keepsake/tokens/tilt";

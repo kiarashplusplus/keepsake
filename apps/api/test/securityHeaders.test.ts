@@ -30,7 +30,7 @@ function expectSecurityHeaders(res: Response): void {
   // script (apps/web/app/+html.tsx's PREHYDRATION_SCRIPT — the no-flash
   // theme read, plus, since issue #44, the new-visitor root redirect) and
   // Expo Router's own hydration-flag script.
-  expect(csp).toContain("'sha256-Fv9zzPneZXpo0yUSzp9eTrF6T5uzfynr6qZUJVoOQ8g='");
+  expect(csp).toContain("'sha256-0+1/dyhem/DQyJcleu1QSKhUVK/gq5R519iI9mtWheM='");
   expect(csp).toContain("'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8='");
   expect(csp).toContain("https://challenges.cloudflare.com");
   // Issue #132: `connect-src` was absent entirely, so it fell back to

@@ -19,7 +19,9 @@
     "@keepsake/contracts": "workspace:*",
     "@keepsake/observability": "workspace:*",
     "@keepsake/tokens": "workspace:*",
+    "@resvg/resvg-wasm": "2.6.2",
     "hono": "^4.13.7",
+    "jpeg-js": "^0.4.4",
     "zod": "^4.5.4"
   },
   "devDependencies": {

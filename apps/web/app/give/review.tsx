@@ -60,6 +60,9 @@ export default function GiveReview(): React.ReactElement {
   const [turnstileStatus, setTurnstileStatus] = React.useState<TurnstileStatus>({ status: "pending" });
   const turnstileRef = React.useRef<TurnstileHandle>(null);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
+  // The card preview is best-effort: a rasterisation failure must not leave
+  // a broken image on the one screen that says "It's live."
+  const [cardFailed, setCardFailed] = React.useState(false);
   const [dateOfBirth, setDateOfBirth] = React.useState("");
   const [dobTouched, setDobTouched] = React.useState(false);
   const ageGateValid = isAgeGateValid(dateOfBirth);
@@ -177,7 +180,7 @@ export default function GiveReview(): React.ReactElement {
 
   async function handleShare(): Promise<void> {
     if (listing === null) return;
-    const result = await shareListing({ id: listing.id, title: listing.title });
+    const result = await shareListing({ id: listing.id, title: listing.title, surface: "give_review" });
     if (result === "copied") toast.show("Link copied.");
     if (result === "failed") toast.show("Couldn't share — try copying the link from the address bar.");
   }
@@ -232,6 +235,39 @@ export default function GiveReview(): React.ReactElement {
                   {"It's live."}
                 </Text>
               </View>
+
+              {/* The share card, exactly as a friend will see it when the link
+                  unfurls in iMessage or WhatsApp. This is the only moment the
+                  giver can see that artifact at all, and it doubles as a warm
+                  cache: fetching it here renders the card and stores it in R2
+                  and at the edge before anyone clicks the link.
+
+                  No `?v=` fingerprint. The route treats `v` as advisory and
+                  never as a selector, and this listing was created seconds
+                  ago, so there is no earlier version to bust — while putting
+                  the fingerprint on `PublicListing` (the plan's original
+                  shape) would mean computing a SHA-256 per listing on every
+                  feed response for a field one screen uses.
+
+                  Hidden on error rather than left as a broken image: if
+                  rasterisation fails the unfurl still degrades to the raw
+                  photo (see `routes/ogCard.ts`), and there is nothing useful
+                  to say about it here. */}
+              {cardFailed ? null : (
+                <View style={{ width: "100%", maxWidth: 480, gap: space.xs }}>
+                  <ExpoImage
+                    source={`/og/item/${listing.id}/card.png`}
+                    style={{ width: "100%", aspectRatio: 1200 / 630 }}
+                    contentFit="contain"
+                    accessibilityLabel="Preview of the link card your friends will see"
+                    onError={() => setCardFailed(true)}
+                  />
+                  <Text variant="caption" color="textSecondary" style={{ textAlign: "center" }}>
+                    This is what your friends will see.
+                  </Text>
+                </View>
+              )}
+
               <View style={{ flexDirection: "row", alignItems: "center", gap: space.xl, flexWrap: "wrap", justifyContent: "center" }}>
                 <Button label="Share" onPress={() => void handleShare()} />
                 <Button

@@ -27,6 +27,23 @@ export const COUNTRY_LABELS: Record<Country, string> = {
   CA: "Canada",
 };
 
+/**
+ * ISO 4217 currency per country, for structured data only.
+ *
+ * Keepsake never handles money — every listing is free — but schema.org's
+ * `Offer` requires `priceCurrency` whenever `price` is present, and `price`
+ * is what says "free" in a way a search engine understands. So this exists to
+ * make `"price": "0"` well-formed, not because anything is priced.
+ *
+ * It lives next to `COUNTRIES` so the two cannot drift: adding a country
+ * without a currency here is a type error rather than a rich result that
+ * silently fails validation.
+ */
+export const CURRENCY_BY_COUNTRY: Record<Country, string> = {
+  US: "USD",
+  CA: "CAD",
+};
+
 /** Shown as placeholder/help text next to the postcode field. */
 export const COUNTRY_POSTCODE_HINTS: Record<Country, string> = {
   US: "5-digit ZIP code",

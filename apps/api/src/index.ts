@@ -19,6 +19,7 @@ import { imageRoutes } from "./routes/images.js";
 import { feedRoutes } from "./routes/feed.js";
 import { itemRoutes } from "./routes/item.js";
 import { robotsRoutes } from "./routes/robots.js";
+import { ogCardRoutes } from "./routes/ogCard.js";
 import { sitemapRoutes } from "./routes/sitemap.js";
 import { recoverRoutes } from "./routes/recover.js";
 import { adminRoutes } from "./routes/admin.js";
@@ -329,6 +330,12 @@ app.route("/i", imageRoutes);
 // these exact paths, overriding the static-assets system that would
 // otherwise serve them as SPA-shell/404 before this Worker code ever runs.
 app.route("/item", itemRoutes);
+// The share card (`/og/item/:id/card.png`) — same `run_worker_first` caveat.
+// Without `/og/*` in production's list this returns the SPA shell as
+// `text/html`, which every unfurler renders as a broken image, and dev and
+// preview (`run_worker_first = true`) cannot reproduce it. Asserted by
+// `test/wranglerConfig.test.ts`, since miniflare ignores the setting.
+app.route("/og", ogCardRoutes);
 app.route("/sitemap.xml", sitemapRoutes);
 // Same deal as `/sitemap.xml`: reached only because `run_worker_first` lists
 // `/robots.txt`, so this handler answers instead of the static asset that
