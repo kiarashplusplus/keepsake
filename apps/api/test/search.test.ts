@@ -434,6 +434,10 @@ const VALID_LISTING_BODY = {
   // checkbox for a DOB prompt, and this file was written before that landed.
   // Kept identical to `test/listings.test.ts`'s body so the two don't drift.
   date_of_birth: "1990-01-01",
+  // Required since the give flow stopped offering a "Skip" on its email
+  // step: `POST /api/listings` refuses a first listing with no way back to
+  // its giver (neither the body nor the owner row carrying an address).
+  email: "giver@keepsake.ing",
 };
 
 async function createListingWithPhoto(token: string, overrides: Record<string, unknown> = {}): Promise<OwnerListing> {

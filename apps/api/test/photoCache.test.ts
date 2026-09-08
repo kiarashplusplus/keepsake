@@ -297,6 +297,7 @@ describe("issue #94: a failing purge never breaks the caller", () => {
           country: "US",
           postal_code: "02144",
           date_of_birth: "1990-01-01",
+          email: "giver@keepsake.ing",
           photo_ids: [photo.id],
         }),
       }),

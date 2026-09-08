@@ -23,12 +23,22 @@ import { ulid } from "../src/lib/ids.js";
 import { sha256Hex } from "../src/lib/digest.js";
 import { authHeaders, fakeFile, fakeJpegBytes, freshOwnerToken, readErr, readOk, seedStandardPostalCodes, waitFor } from "./helpers.js";
 
-async function seedOwner(token: string): Promise<string> {
+/**
+ * A fresh owner row, with an address on it.
+ *
+ * The address is not decoration: `POST /batches/:id/submit` refuses a batch
+ * whose owner has no way to be told that someone asked, the same invariant
+ * `POST /api/listings` enforces for a single give. `app/bulk/new.tsx` asks
+ * for it as the batch is started, so an owner reaching submit without one is
+ * the case the route is there to catch — `emailless: true` is how the test
+ * below builds exactly that owner.
+ */
+async function seedOwner(token: string, options: { emailless?: boolean } = {}): Promise<string> {
   const id = ulid();
   const tokenHash = await sha256Hex(token);
   const now = Date.now();
-  await env.DB.prepare("INSERT INTO owners (id, token_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?)")
-    .bind(id, tokenHash, now, now)
+  await env.DB.prepare("INSERT INTO owners (id, token_hash, email, email_verified_at, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .bind(id, tokenHash, options.emailless === true ? null : "giver@keepsake.ing", options.emailless === true ? null : now, now, now)
     .run();
   return id;
 }
@@ -414,6 +424,31 @@ describe("bulk submission routes", () => {
       .bind(batchId)
       .first<{ n: number }>();
     expect(stillListingCount?.n).toBe(ITEMS_PER_INVOCATION);
+  });
+
+  it("400s a submission from an owner with no address — a batch nobody could be told about", async () => {
+    // The same invariant `POST /api/listings` enforces for a single give,
+    // at the one place a batch becomes live listings. `app/bulk/new.tsx`
+    // asks for the address as the batch is started, so reaching here
+    // without one means it was removed in between.
+    await seedStandardPostalCodes();
+    const token = freshOwnerToken();
+    const ownerId = await seedOwner(token, { emailless: true });
+
+    const batch = await bulk("/batches", {
+      method: "POST",
+      headers: bulkHeaders(token),
+      body: JSON.stringify({ client_batch_key: `batch-${ownerId}`, name: "Estate", country: "US", postal_code: "02144" }),
+    }).then((res) => readOk<BatchBody>(res));
+
+    const res = await submitOnce(token, batch.id, "no-email-key", [{ client_item_id: "item-1", revision: 1 }]);
+
+    expect(res.status).toBe(400);
+    expect((await readErr(res)).message).toMatch(/email/i);
+    const operations = await env.DB.prepare("SELECT COUNT(*) AS n FROM bulk_operations WHERE batch_id = ?")
+      .bind(batch.id)
+      .first<{ n: number }>();
+    expect(operations?.n).toBe(0);
   });
 
   it("submit on an unknown or someone else's batch id is 404, not 500 or 403", async () => {

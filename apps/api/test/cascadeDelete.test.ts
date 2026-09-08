@@ -137,6 +137,7 @@ describe("issue #90: the delete path's ON DELETE CASCADE is enforced, not assume
           country: "US",
           postal_code: "02144",
           date_of_birth: "1990-01-01",
+          email: "giver@keepsake.ing",
           photo_ids: [photo.id],
           // Populates `listing_aspects` through the real create path.
           aspects: [
