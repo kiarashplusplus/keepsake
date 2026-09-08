@@ -502,6 +502,41 @@ name = "RL_UPLOAD"
 namespace_id = "1003"
 simple = { limit = 10, period = 60 }
 
+# `RL_BULK_UPLOAD` is deliberately not the same number as `RL_UPLOAD` above.
+# `RL_UPLOAD` guards the give flow, one photo at a time (5 max), and 10/60s
+# is generous for that. The estate bulk-upload workspace
+# (`PUT /batches/:id/photos/:clientPhotoId`, `routes/bulk.ts`) needs a batch
+# of up to `MAX_BATCH_PHOTOS` (300) uploaded in one sitting; at `RL_UPLOAD`'s
+# 10/60s that is 30+ minutes of forced waiting even before the "26 through
+# before the first 429" slack this comment already names, and the feature's
+# own acceptance gate ("a 100-item, 300-photo batch can be prepared and
+# submitted") cannot pass under it.
+#
+# Sized for a client uploading with roughly two requests in flight at once —
+# a reasonable concurrency for a bulk uploader on an ordinary connection,
+# not so many lanes that one photo's bytes fight another's on a slow
+# upstream. Assuming each `full` + `thumb` multipart upload completes in
+# something like a second end to end (small-to-medium photos; the give
+# flow's own per-photo ceiling is comparable), two lanes sustain roughly
+# 2 requests/second — 120/60s — under continuous upload. `limit = 120` sits
+# at that assumed sustained rate with headroom for jitter between requests,
+# so an ordinarily-paced bulk client is not the thing this binding catches;
+# a 300-photo batch at that rate finishes in well under five minutes of
+# upload time, not 30+. This is *not* meant to be exact — see this file's
+# own "not a hard cap" comment two sections up — and it is safe to be
+# generous here specifically because it is not doing the rationing:
+# `photos_remaining` on the batch's `bulk_grants` row is the exact D1-guarded
+# ceiling on total volume (`src/bulk/grants.ts`), so this binding's only job
+# is to blunt a burst within one minute, not to bound how many photos a
+# batch may ever upload. Restated identically under `[env.preview]` and
+# `[env.production]` below, and `test/bulkCaps.test.ts` asserts all three
+# agree and that this stays strictly above `RL_UPLOAD`'s own limit in every
+# block.
+[[ratelimits]]
+name = "RL_BULK_UPLOAD"
+namespace_id = "1009"
+simple = { limit = 120, period = 60 }
+
 [[ratelimits]]
 name = "RL_CREATE"
 namespace_id = "1004"
@@ -676,6 +711,14 @@ simple = { limit = 60, period = 60 }
 name = "RL_UPLOAD"
 namespace_id = "2003"
 simple = { limit = 10, period = 60 }
+
+# See the top-level `[[ratelimits]]` block's comment on `RL_BULK_UPLOAD` for
+# the sizing rationale — restated verbatim here per environment, same as
+# every other binding in this file.
+[[env.preview.ratelimits]]
+name = "RL_BULK_UPLOAD"
+namespace_id = "2009"
+simple = { limit = 120, period = 60 }
 
 [[env.preview.ratelimits]]
 name = "RL_CREATE"
@@ -916,6 +959,14 @@ simple = { limit = 60, period = 60 }
 name = "RL_UPLOAD"
 namespace_id = "3003"
 simple = { limit = 10, period = 60 }
+
+# See the top-level `[[ratelimits]]` block's comment on `RL_BULK_UPLOAD` for
+# the sizing rationale — restated verbatim here per environment, same as
+# every other binding in this file.
+[[env.production.ratelimits]]
+name = "RL_BULK_UPLOAD"
+namespace_id = "3009"
+simple = { limit = 120, period = 60 }
 
 [[env.production.ratelimits]]
 name = "RL_CREATE"

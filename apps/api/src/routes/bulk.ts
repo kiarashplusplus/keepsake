@@ -44,13 +44,20 @@ import { Hono } from "hono";
 import type { Country, PostalLookup } from "@keepsake/contracts/geo";
 import { CreateBatchInput, UpdateBatchInput, UpsertBatchItemInput } from "@keepsake/contracts/bulk";
 import type { Env } from "../env.js";
-import { bulkDraftRetentionDays, bulkOwnerDailyItems, bulkOwnerDailyPhotos, bulkUploadEnabled } from "../env.js";
+import {
+  bulkDraftRetentionDays,
+  bulkOwnerDailyItems,
+  bulkOwnerDailyPhotos,
+  bulkUploadEnabled,
+  DEFAULT_SUGGEST_DAILY_BUDGET,
+  parseIntVar,
+} from "../env.js";
 import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
 import { requireParam } from "../lib/params.js";
 import { todayISO } from "../lib/day.js";
 import { sha256Hex } from "../lib/digest.js";
-import { secondsUntilMidnightUTC } from "../moderation/budget.js";
+import { checkAndBump, secondsUntilMidnightUTC } from "../moderation/budget.js";
 import { ownerAuth, type OwnerRow } from "../middleware/ownerAuth.js";
 import { requireGrant, type GrantVariables } from "../middleware/bulkGrant.js";
 import { featureFlag } from "../middleware/featureFlag.js";
@@ -58,7 +65,14 @@ import { burst } from "../middleware/rateLimit.js";
 import { validateBody } from "../middleware/validate.js";
 import { lookupPostalCode } from "../geo/lookup.js";
 import { deletePhotoAndObjects, storePhotoUpload } from "../photos/store.js";
-import { bindGrantToBatch, buildItemDebitStatements, buildPhotoDebitStatements, settleDebit } from "../bulk/grants.js";
+import {
+  bindGrantToBatch,
+  buildItemDebitStatements,
+  buildPhotoDebitStatements,
+  buildSuggestionDebitStatements,
+  settleDebit,
+} from "../bulk/grants.js";
+import { suggestFromPhoto } from "../suggest/suggest.js";
 import {
   activityBump,
   assembleBatchDetail,
@@ -438,7 +452,12 @@ bulkRoutes.delete("/batches/:id/items/:clientItemId", ownerAuth(), async (c) => 
 // ---------------------------------------------------------------------------
 // PUT /batches/:id/photos/:clientPhotoId
 // ---------------------------------------------------------------------------
-bulkRoutes.put("/batches/:id/photos/:clientPhotoId", burst("RL_UPLOAD"), ownerAuth(), requireGrant(), async (c) => {
+// `RL_BULK_UPLOAD`, not the give flow's `RL_UPLOAD` — see `wrangler.toml`'s
+// `[[ratelimits]]` comment for why a 300-photo estate needs its own burst
+// binding sized for roughly two uploads in flight, and this file's header
+// for why burst protection stays mounted here even though total volume is
+// already bounded exactly by the grant.
+bulkRoutes.put("/batches/:id/photos/:clientPhotoId", burst("RL_BULK_UPLOAD"), ownerAuth(), requireGrant(), async (c) => {
   const owner = c.get("owner");
   const grant = c.get("grant");
   const batchId = requireParam(c, "id");
@@ -558,4 +577,90 @@ bulkRoutes.delete("/batches/:id/photos/:clientPhotoId", ownerAuth(), async (c) =
     .run();
 
   return ok(c, { id: mapping.photo_id });
+});
+
+// ---------------------------------------------------------------------------
+// POST /batches/:id/photos/:clientPhotoId/suggest
+// ---------------------------------------------------------------------------
+interface BulkSuggestPhotoRow {
+  id: string;
+  owner_id: string;
+  r2_key_thumb: string;
+  content_type: string;
+}
+
+/**
+ * The batch workspace's cover suggestion — same job as `POST
+ * /api/photos/:id/suggest` (`routes/photos.ts`), reusing `suggestFromPhoto`
+ * rather than a second implementation, and returning the identical
+ * `{ suggestion }` shape (`PhotoSuggestionSchema` from
+ * `@keepsake/contracts/photo`; `suggestion` is `null` on a failed or
+ * unparseable model reply, same as the give flow — never a 500).
+ *
+ * Two things differ from the give-flow route, both deliberate:
+ *
+ *  - **Lookup.** Scoped to owner *and* batch — `findBatchById` first, then
+ *    `findBatchPhotoByClientId` — so naming a batch or photo id that isn't
+ *    the caller's, or isn't in this batch, 404s exactly like one that
+ *    doesn't exist, matching every other lookup in this router (never 403).
+ *  - **Admission.** Charged against `bulk_grants.suggestions_remaining` with
+ *    a guarded D1 decrement (`buildSuggestionDebitStatements`), not the give
+ *    flow's per-IP KV `suggest` budget — see this file's header for why a
+ *    bulk caller's admission lives in D1, never KV: `SUGGEST_IP_DAILY_BUDGET`
+ *    defaults to 30/day, which a 100-item estate exhausts on item 31, and a
+ *    KV counter is eventually consistent by its own documentation so it
+ *    could not bound a batch exactly at any size.
+ *
+ * The **global** `SUGGEST_DAILY_BUDGET` runaway ceiling still applies, and
+ * that is a deliberate choice, not an oversight: unlike the per-IP KV budget
+ * (which rations *one caller*, a job the grant already does exactly and
+ * exactly once per batch), the global counter protects the shared Workers AI
+ * allocation the whole account draws from — the same reason
+ * `search/reembed.ts`'s `embed` kind checks the global ceiling with no
+ * `ipDailyLimit` even though its only caller is an already-authenticated
+ * write path. A bulk vision call spends the same allocation a give-flow
+ * autofill call does, so it must count against the same account-wide ceiling
+ * that protects it; only the per-caller half of `checkAndBump` is skipped
+ * here, not both.
+ */
+bulkRoutes.post("/batches/:id/photos/:clientPhotoId/suggest", ownerAuth(), requireGrant(), async (c) => {
+  const owner = c.get("owner");
+  const grant = c.get("grant");
+  const batchId = requireParam(c, "id");
+  const clientPhotoId = requireParam(c, "clientPhotoId");
+
+  const batch = await findBatchById(c.env, batchId, owner.id);
+  if (!batch) return fail(c, "not_found", "Batch not found.", 404);
+
+  const mapping = await findBatchPhotoByClientId(c.env, batchId, clientPhotoId);
+  if (!mapping) return fail(c, "not_found", "Photo not found.", 404);
+
+  const photo = await c.env.DB.prepare("SELECT id, owner_id, r2_key_thumb, content_type FROM photos WHERE id = ?")
+    .bind(mapping.photo_id)
+    .first<BulkSuggestPhotoRow>();
+  if (!photo || photo.owner_id !== owner.id) return fail(c, "not_found", "Photo not found.", 404);
+
+  // Global runaway ceiling only — see this route's own doc comment for why
+  // the give flow's per-IP KV budget is not inherited here.
+  const dailyLimit = parseIntVar("SUGGEST_DAILY_BUDGET", c.env.SUGGEST_DAILY_BUDGET, DEFAULT_SUGGEST_DAILY_BUDGET);
+  const globalBudget = await checkAndBump(c.env.KV, { kind: "suggest", dailyLimit });
+  if (!globalBudget.allowed) {
+    return fail(c, "rate_limited", "Daily suggestion limit reached — please try again tomorrow.", 429, {
+      ...(globalBudget.retryAfter !== undefined ? { retryAfter: globalBudget.retryAfter } : {}),
+    });
+  }
+
+  // Admission is checked, and spent, *before* the AI call — fail closed on
+  // an exhausted grant with no vision call made. One guarded statement, no
+  // `settleDebit`: see `buildSuggestionDebitStatements`'s own comment for
+  // why there is no second constraint here for it to disagree with.
+  const debit = buildSuggestionDebitStatements(c.env, { grant });
+  const debitResults = await c.env.DB.batch(debit.statements);
+  const grantOk = (debitResults[debit.grantResultIndex]?.meta.changes ?? 0) > 0;
+  if (!grantOk) {
+    return fail(c, "rate_limited", "Your admission grant has no suggestions left — ask the operator for a fresh one.", 429);
+  }
+
+  const result = await suggestFromPhoto(c.env, photo);
+  return ok(c, { suggestion: result.suggestion });
 });
