@@ -27,4 +27,14 @@ describe("feed URL params round trip", () => {
   it("drops an empty string rather than reflecting it", () => {
     expect(feedQueryFromUrlParams({ q: "" })).toEqual({});
   });
+
+  it("explicitly clears every inactive router param", () => {
+    expect(urlParamsFromFeedQuery({})).toStrictEqual({
+      q: undefined,
+      category: undefined,
+      country: undefined,
+      postal: undefined,
+      radius_mi: undefined,
+    });
+  });
 });

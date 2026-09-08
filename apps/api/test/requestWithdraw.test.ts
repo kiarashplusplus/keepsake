@@ -68,6 +68,19 @@ function withdraw(token: string): Promise<Response> {
 describe("POST /api/requests/withdraw", () => {
   afterEach(() => removeFakeEmail());
 
+  it("claims the single-use token in the redaction write itself", () => {
+    const modules = import.meta.glob<string>("../src/routes/requestWithdraw.ts", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    });
+    const source = modules["../src/routes/requestWithdraw.ts"];
+    expect(source).toBeTruthy();
+    expect(source).toMatch(
+      /UPDATE requests SET[\s\S]*WHERE withdraw_token_hash = \? AND withdrawn_at IS NULL RETURNING id, listing_id/,
+    );
+  });
+
   it("erases note/email/phone, sets status withdrawn, and decrements request_count", async () => {
     const ownerId = await insertOwner();
     const listingId = await insertApprovedListing({ ownerId });
@@ -130,6 +143,26 @@ describe("POST /api/requests/withdraw", () => {
 
     const second = await withdraw(token);
     expect(second.status).toBe(401);
+  });
+
+  it("allows exactly one of two concurrent uses to withdraw and decrement the count", async () => {
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({ ownerId });
+    const { withdrawLink } = await createRequest(listingId);
+    const token = tokenFromLink(withdrawLink as string);
+
+    // Keep a second live request represented in the aggregate. Starting at
+    // two makes a double decrement visible; MAX(..., 0) would hide it if the
+    // withdrawing request were the only one on the listing.
+    await env.DB.prepare("UPDATE listings SET request_count = 2 WHERE id = ?").bind(listingId).run();
+
+    const responses = await Promise.all([withdraw(token), withdraw(token)]);
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 401]);
+
+    const row = await env.DB.prepare("SELECT request_count FROM listings WHERE id = ?")
+      .bind(listingId)
+      .first<{ request_count: number }>();
+    expect(row?.request_count).toBe(1);
   });
 
   it("never lets a second withdrawal on the same listing double-decrement request_count below zero", async () => {

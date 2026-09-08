@@ -11,11 +11,11 @@ import { CATEGORIES, type Category } from "@keepsake/contracts/listing";
 import { COUNTRIES, type Country } from "@keepsake/contracts/geo";
 
 export type FeedUrlParams = {
-  q?: string;
-  category?: string;
-  country?: string;
-  postal?: string;
-  radius_mi?: string;
+  q: string | undefined;
+  category: string | undefined;
+  country: string | undefined;
+  postal: string | undefined;
+  radius_mi: string | undefined;
 };
 
 export type FeedUrlQuery = {
@@ -74,16 +74,16 @@ export function feedQueryFromUrlParams(params: Record<string, string | string[] 
   return query;
 }
 
-/** The inverse: only the fields present in `query` appear in the returned
- * params object, so `router.setParams` doesn't leave stale keys behind when
- * a filter is cleared (callers should pass `undefined` for cleared fields,
- * which expo-router removes from the URL). */
+/** The inverse for `router.setParams`. Every managed field is present: Expo
+ * Router removes a stale query-string key only when its replacement is
+ * explicitly `undefined`, so omitting an inactive filter would leave the old
+ * value in the address bar and make it come back after a reload. */
 export function urlParamsFromFeedQuery(query: FeedUrlQuery): FeedUrlParams {
-  const params: FeedUrlParams = {};
-  if (query.q !== undefined) params.q = query.q;
-  if (query.category !== undefined) params.category = query.category;
-  if (query.country !== undefined) params.country = query.country;
-  if (query.postal !== undefined) params.postal = query.postal;
-  if (query.radius_mi !== undefined) params.radius_mi = String(query.radius_mi);
-  return params;
+  return {
+    q: query.q,
+    category: query.category,
+    country: query.country,
+    postal: query.postal,
+    radius_mi: query.radius_mi !== undefined ? String(query.radius_mi) : undefined,
+  };
 }

@@ -39,19 +39,6 @@ requestWithdrawRoutes.post("/withdraw", validateBody(RequestWithdrawInput), asyn
   const input = c.get("validatedBody");
   const tokenHash = await sha256Hex(input.token);
 
-  const row = await c.env.DB.prepare(
-    `SELECT id, listing_id FROM requests WHERE withdraw_token_hash = ? AND withdrawn_at IS NULL`,
-  )
-    .bind(tokenHash)
-    .first<WithdrawableRequestRow>();
-
-  // Same "don't distinguish reasons" posture as `POST /api/recover/:token`:
-  // unknown token, already-used token, and a typo all look identical from
-  // the outside, so a caller can't learn anything by probing.
-  if (!row) {
-    return fail(c, "unauthorized", "This link is invalid or has already been used.", 401);
-  }
-
   const now = Date.now();
   // `ip_digest = NULL` alongside the three obvious columns, issue #169. It
   // was absent from this list, so the one control a requester has over their
@@ -67,13 +54,25 @@ requestWithdrawRoutes.post("/withdraw", validateBody(RequestWithdrawInput), asyn
   // email put the request back — reviving a note and an address this row was
   // just asked to forget. Nulling it also frees the row from
   // `requests_confirm_token`, which is a UNIQUE index.
-  await c.env.DB.prepare(
+  // Claim and redact in one compare-and-set. The old SELECT followed by an
+  // unconditional UPDATE let two simultaneous uses both observe a live
+  // token and both decrement request_count. RETURNING is the single-use
+  // decision: exactly one caller can receive the row and proceed to the
+  // aggregate update below.
+  const row = await c.env.DB.prepare(
     `UPDATE requests SET status = 'withdrawn', withdrawn_at = ?, note = NULL, email = NULL, phone = NULL, ip_digest = NULL,
                          confirm_token_hash = NULL
-     WHERE id = ?`,
+     WHERE withdraw_token_hash = ? AND withdrawn_at IS NULL RETURNING id, listing_id`,
   )
-    .bind(now, row.id)
-    .run();
+    .bind(now, tokenHash)
+    .first<WithdrawableRequestRow>();
+
+  // Same "don't distinguish reasons" posture as `POST /api/recover/:token`:
+  // unknown token, already-used token, and a typo all look identical from
+  // the outside, so a caller can't learn anything by probing.
+  if (!row) {
+    return fail(c, "unauthorized", "This link is invalid or has already been used.", 401);
+  }
 
   // Keep the listing's request_count honest: a withdrawn request is no
   // longer a live ask. Floored at 0 defensively — it should never go
