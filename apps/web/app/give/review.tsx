@@ -30,6 +30,8 @@ import { getMyListing } from "@/api/me";
 import { ApiError } from "@/api/client";
 import { getOwnerToken } from "@/lib/ownerToken";
 import { config } from "@/lib/config";
+import { clampCardAspectRatio } from "@/lib/masonry";
+import { storyExcerpt } from "@/lib/storyExcerpt";
 import { shareListing } from "@/lib/share";
 import { useToast } from "@/ui/Toast";
 import { track } from "@/lib/analytics";
@@ -302,38 +304,78 @@ export default function GiveReview(): React.ReactElement {
           <Text variant="displayLg">Take a last look.</Text>
         </View>
 
-        {/* The listing as it will lie on the table: an actual print. */}
-        <Print tiltDeg={-1.5} style={{ alignSelf: "stretch", padding: space.sm }}>
-          <View style={{ paddingTop: space.xl, paddingHorizontal: space.md, paddingBottom: space.md, gap: space.sm }}>
-            {/* Source ladder: the local object URL from this session's
-                upload; else the owner-token-authed thumb route (covers a
-                reload or a `?edit=` prefill, where the object URL is
-                always null); else the blurhash alone. */}
-            <View style={{ width: 96, height: 96, alignSelf: "flex-start", overflow: "hidden", backgroundColor: colors.tableEdge }}>
-              <ExpoImage
-                source={coverImageSource(cover)}
-                placeholder={cover !== null && cover.blurhash !== "" ? { blurhash: cover.blurhash } : null}
-                style={{ width: "100%", height: "100%" }}
-                contentFit="cover"
-                accessibilityLabel="Cover photo"
-              />
-            </View>
-            <Text variant="storyExcerpt" color="textSecondary" hangingPunctuation>
-              “{draft.story.slice(0, 140)}
-              {draft.story.length > 140 ? "…" : ""}”
+        {/* The listing as it will lie on the table: an actual print, laid
+            out as the card this listing is about to become.
+
+            Issue #218: the cover used to be a fixed 96x96 thumbnail pinned
+            to the top-left of a full-width print, with the rest of the frame
+            empty — so the one screen whose entire job is "this is what you
+            are about to publish" was the one screen that did not look like
+            the result. Everything below mirrors
+            `src/features/feed/ListingCard.tsx`: the same 10px print padding,
+            the photo filling the width at its own clamped aspect ratio, then
+            the story excerpt, the title and one caption line, in that order
+            and at the same type variants.
+
+            Why not just render `ListingCard` here? It takes a
+            `PublicListing` — an id, a resolved `place_name`/`admin1`, a
+            `published_at`, `url_thumb`s the server has minted — and none of
+            that exists yet at this point in the flow (the whole point of
+            this screen is that nothing has been created). It also wraps
+            itself in a `Link` to `/item/[id]`, which for a draft is a link
+            to a page that does not exist. Mirroring its geometry against a
+            `GiveDraft` is the honest version; the two are meant to be read
+            side by side, so change them together. */}
+        <Print tiltDeg={-1.5} style={{ alignSelf: "stretch", padding: 10 }}>
+          {/* Source ladder: the local object URL from this session's
+              upload; else the owner-token-authed thumb route (covers a
+              reload or a `?edit=` prefill, where the object URL is
+              always null); else the blurhash alone. */}
+          <View
+            style={{
+              width: "100%",
+              // The draft photo carries the real pixel dimensions
+              // (`giveDraft.ts`), so the print can be the right shape before
+              // a single byte of the image has decoded — the same reason the
+              // feed's masonry can lay itself out ahead of any load. `1`
+              // only stands in for "no cover yet", which the Give it button
+              // already refuses to submit.
+              aspectRatio: cover !== null ? clampCardAspectRatio(cover.width, cover.height) : 1,
+              overflow: "hidden",
+              backgroundColor: colors.tableEdge,
+            }}
+          >
+            <ExpoImage
+              source={coverImageSource(cover)}
+              placeholder={cover !== null && cover.blurhash !== "" ? { blurhash: cover.blurhash } : null}
+              style={{ width: "100%", height: "100%" }}
+              contentFit="cover"
+              accessibilityLabel="Cover photo"
+            />
+          </View>
+          <View style={{ paddingTop: space.md, paddingHorizontal: space.xs, gap: space.xxs }}>
+            {/* `storyExcerpt` rather than the `slice(0, 140)` that used to
+                be inlined here: the card and this preview have to cut the
+                story at the same place, or the preview is a preview of
+                something else. That function's own header comment has
+                pointed at this file since it was extracted. */}
+            <Text variant="storyExcerpt" color="textSecondary" numberOfLines={2} hangingPunctuation>
+              “{storyExcerpt(draft.story)}”
             </Text>
-            <Text variant="title">{draft.title || "Untitled"}</Text>
-            <View style={{ paddingTop: space.sm, gap: space.xxs }}>
-              {/* Issue #35: no category shown here anymore — the giver
-                  never picked one, so surfacing the AI-assigned value would
-                  read as an unexplained surprise rather than a summary. */}
-              <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
-                {COUNTRY_LABELS[draft.country]} {draft.postalCode}
-              </Text>
-              <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
-                {photoIds.length} photo{photoIds.length === 1 ? "" : "s"}
-              </Text>
-            </View>
+            <Text variant="title" numberOfLines={1}>
+              {draft.title || "Untitled"}
+            </Text>
+            {/* One caption line, as on the card — which spends it on
+                place · distance. Neither exists yet (the postcode has not
+                been resolved server-side, and there is no viewer to be a
+                distance from), so it carries what the giver can still act
+                on: where they said it is, and how many photos are going up.
+                Issue #35: still no category — the giver never picked one, so
+                surfacing the AI-assigned value would read as an unexplained
+                surprise rather than a summary. */}
+            <Text variant="caption" color="textTertiary" style={{ textTransform: "lowercase" }}>
+              {COUNTRY_LABELS[draft.country]} {draft.postalCode} · {photoIds.length} photo{photoIds.length === 1 ? "" : "s"}
+            </Text>
           </View>
         </Print>
 

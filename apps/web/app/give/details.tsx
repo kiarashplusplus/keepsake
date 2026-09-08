@@ -117,9 +117,25 @@ export default function GiveDetails(): React.ReactElement {
   const cover = coverPhoto(draft);
   const showSuggestionNote = cover !== null && draft.appliedSuggestionPhotoId !== null && draft.appliedSuggestionPhotoId === cover.id;
 
+  // Issue #224: this line used to repeat `COUNTRY_POSTCODE_HINTS[country]`
+  // — the exact string already sitting in the field as its placeholder, so
+  // the giver read "5-digit ZIP code" twice, two lines apart, and learned
+  // nothing from the second one. The format is the placeholder's job; the
+  // helper's job is the question a giver actually has when a free gifting
+  // site asks where they live.
+  //
+  // The claim is precise, and the code backs it: a listing carries
+  // `postal_code` on `OwnerListing` only — `PublicListing`
+  // (`packages/contracts/src/listing.ts`) exposes `place_name`/`admin1` and
+  // nothing finer, which is what `ListingCard`'s and the item page's caption
+  // lines render. The postcode is resolved to the centroid of a whole ZIP
+  // (US) or Forward Sortation Area (CA) against a bundled GeoNames table,
+  // never to a street (`docs/design/geo.md`). Do not soften this into "we
+  // keep your location private" or sharpen it into a promise about an
+  // address we never ask for in the first place.
   const postcodeHelper =
     normalized === null || !isResolvedForCurrent
-      ? COUNTRY_POSTCODE_HINTS[draft.country]
+      ? "Only the town it resolves to appears on your listing — never the postcode itself."
       : lookupResult !== null
         ? `${lookupResult.place_name}${lookupResult.admin1 !== null ? `, ${lookupResult.admin1}` : ""}`
         : "We don't know that postcode yet.";
@@ -175,7 +191,17 @@ export default function GiveDetails(): React.ReactElement {
               onChangeText={(postalCode) => dispatch({ type: "set_postal_code", postalCode })}
               placeholder={COUNTRY_POSTCODE_HINTS[draft.country]}
               helper={postcodeHelper}
-              style={{ minWidth: 160 }}
+              // Issue #224: this was `minWidth: 160` alone, which in a
+              // wrapping flex row is a floor and nothing else — the field
+              // never grew, so its ink baseline stopped short of the Title
+              // field's directly above it and read as an unfinished control
+              // rather than a deliberately smaller one. `flexGrow` makes it
+              // take whatever the row has left after the button; the basis
+              // is what decides whether the button fits beside it (wide) or
+              // wraps below it (a phone), and once wrapped the field is
+              // alone on its row and grows to the full width, matching
+              // Title exactly. `minWidth` stays as the floor it always was.
+              style={{ flexGrow: 1, flexBasis: 200, minWidth: 160 }}
             />
             <Button label={locating ? "Locating…" : "Use my location"} variant="secondary" loading={locating} onPress={handleUseMyLocation} />
           </View>

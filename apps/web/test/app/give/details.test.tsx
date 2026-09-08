@@ -1,6 +1,7 @@
 import * as React from "react";
 import { TextInput } from "react-native";
 import { act, fireEvent, render } from "@testing-library/react-native";
+import { COUNTRY_POSTCODE_HINTS } from "@keepsake/contracts/geo";
 import { GiveDraftProvider } from "@/features/give/GiveDraftContext";
 import { lookupPostalCode } from "@/api/geo";
 import GiveDetails from "../../../app/give/details";
@@ -19,6 +20,11 @@ jest.mock("@/api/geo", () => ({
 
 describe("give/details", () => {
   beforeEach(() => {
+    // `GiveDraftProvider` rehydrates from `sessionStorage`, which persists
+    // across tests in a file — so without this each case inherits whatever
+    // postcode the one before it typed, and the order of the cases becomes
+    // part of what they assert.
+    window.sessionStorage.clear();
     jest.useFakeTimers();
     jest.mocked(lookupPostalCode).mockReset();
   });
@@ -84,5 +90,32 @@ describe("give/details", () => {
     });
 
     expect(JSON.stringify(toJSON())).toContain("We don't know that postcode yet.");
+  });
+
+  /**
+   * Issue #224. Before a lookup resolves, the helper under the postcode
+   * field used to be `COUNTRY_POSTCODE_HINTS[country]` — the exact string
+   * already sitting in the field as its placeholder, printed twice two lines
+   * apart.
+   *
+   * Asserting only that the two strings now differ would pass for any second
+   * copy of the format ("five digits", "e.g. 02144"), so this counts: the
+   * hint appears exactly ONCE in the rendered screen, as the placeholder.
+   * The second assertion pins what replaced it — the one thing a giver
+   * actually wants to know at this field, and a claim the contracts back
+   * (`postal_code` is on `OwnerListing` only; `PublicListing` carries
+   * `place_name`/`admin1` and nothing finer).
+   */
+  it("does not repeat the postcode placeholder as its own helper line", () => {
+    const { toJSON } = render(
+      <GiveDraftProvider>
+        <GiveDetails />
+      </GiveDraftProvider>,
+    );
+
+    const json = JSON.stringify(toJSON());
+    // The draft starts on "US" (`GIVE_DRAFT_INITIAL`), so this is the hint in play.
+    expect(json.split(COUNTRY_POSTCODE_HINTS.US)).toHaveLength(2);
+    expect(json).toContain("never the postcode itself");
   });
 });
