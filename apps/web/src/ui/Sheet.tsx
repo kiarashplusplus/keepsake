@@ -44,15 +44,21 @@ export function Sheet({
   const panelRef = React.useRef<View>(null);
   // Callers routinely pass an inline `onClose` (a fresh function every
   // render), and typing into any field inside the sheet re-renders it. A ref
-  // lets the effect below read the latest `onClose` without depending on its
-  // identity — depending on it directly reran the focus trap on every
-  // keystroke, which stole focus back to whatever was focused before the
-  // sheet opened and blurred the field the person was typing into: the
-  // keyboard flashing open and shut, and a date `<input>` losing focus
-  // mid-pick committing whatever date its native picker happened to be
-  // showing (e.g. today).
+  // lets the focus trap below read the latest `onClose` without listing it as
+  // a dependency — depending on it directly reran the trap on every
+  // keystroke, and its cleanup restored focus to whatever was focused before
+  // the sheet opened, blurring the field being typed into: the keyboard
+  // flashing open and shut, and a date `<input>` losing focus mid-pick, which
+  // makes WebKit commit whatever date its picker was showing (today).
+  //
+  // Mirrored in an effect rather than assigned during render, the same way
+  // `SearchBar` and `useFileDrop` keep their own callback refs current:
+  // `react-hooks/refs` (rightly) rejects a render-phase ref write. Only the
+  // Escape handler reads it, on a keypress, long after this has flushed.
   const onCloseRef = React.useRef(onClose);
-  onCloseRef.current = onClose;
+  React.useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   React.useEffect(() => {
     if (!visible || typeof document === "undefined") return undefined;
