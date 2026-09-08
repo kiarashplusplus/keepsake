@@ -1,6 +1,7 @@
 /**
  * Estate bulk upload's per-batch ceilings must never exceed the contract's
- * caps, and the pilot must not be live in production.
+ * caps, and `BULK_UPLOAD` must be live in production (approved 2026-09-08 —
+ * this test guards it staying on, not off, now that graduation has happened).
  *
  * Modeled on `test/email-mode-config.test.ts` and `test/robotsConfig.test.ts`:
  * the real `wrangler.toml` text is asserted directly, via `WRANGLER_TOML_TEXT`
@@ -60,8 +61,8 @@ describe("estate bulk upload caps (wrangler.toml vs packages/contracts/src/bulk.
     expect(photos).toBeLessThanOrEqual(MAX_BATCH_PHOTOS);
   });
 
-  it('BULK_UPLOAD is "0" in [env.production.vars] — the pilot has not been approved for production', () => {
-    expect(stringVar(section(wrangler, "env.production.vars"), "BULK_UPLOAD")).toBe("0");
+  it('BULK_UPLOAD is "1" in [env.production.vars] — approved for production 2026-09-08', () => {
+    expect(stringVar(section(wrangler, "env.production.vars"), "BULK_UPLOAD")).toBe("1");
   });
 });
 

@@ -3,16 +3,16 @@
  * for the traffic they're sized against — not just be "some number bigger
  * than the old one".
  *
- * The pilot runs on `[env.preview.vars]` only (`BULK_UPLOAD` is `"1"` there
- * and `"0"` everywhere else — `test/bulkCaps.test.ts` guards that half). This
- * guards the other half: that `MOD_TEXT_DAILY_BUDGET`/`MOD_IMAGE_DAILY_BUDGET`
- * there actually give a bulk owner's worst realistic day of moderation calls
- * comfortable headroom inside the *general* pool (`dailyLimit` minus
- * `moderation/pipeline.ts`'s `RESERVED_FLOOR_RATIO` slice) — the pool bulk
- * traffic actually draws from, since neither the create-time call
- * (`bulk/submit.ts`) nor the retry cron ever carries a `clientIP` and so can
- * never reach the reserved floor itself (see `cron/moderationRetry.ts`'s own
- * comment on that).
+ * `BULK_UPLOAD` is `"1"` in both `[env.preview.vars]` and, since 2026-09-08,
+ * `[env.production.vars]` too (`test/bulkCaps.test.ts` guards that half).
+ * This guards the other half, in both blocks: that
+ * `MOD_TEXT_DAILY_BUDGET`/`MOD_IMAGE_DAILY_BUDGET` actually give a bulk
+ * owner's worst realistic day of moderation calls comfortable headroom
+ * inside the *general* pool (`dailyLimit` minus `moderation/pipeline.ts`'s
+ * `RESERVED_FLOOR_RATIO` slice) — the pool bulk traffic actually draws from,
+ * since neither the create-time call (`bulk/submit.ts`) nor the retry cron
+ * ever carries a `clientIP` and so can never reach the reserved floor itself
+ * (see `cron/moderationRetry.ts`'s own comment on that).
  *
  * "Worst realistic day" is one owner spending their entire daily allowance
  * (`BULK_OWNER_DAILY_ITEMS`/`BULK_OWNER_DAILY_PHOTOS` — the ceiling that
@@ -66,10 +66,10 @@ function generalPool(dailyLimit: number): number {
   return dailyLimit * (1 - RESERVED_FLOOR_RATIO);
 }
 
-describe("estate bulk-upload budget headroom (wrangler.toml [env.preview.vars])", () => {
-  const preview = section(wrangler, "env.preview.vars");
-  const textLimit = numberVar(preview, "MOD_TEXT_DAILY_BUDGET");
-  const imageLimit = numberVar(preview, "MOD_IMAGE_DAILY_BUDGET");
+describe.each(["env.preview.vars", "env.production.vars"])("estate bulk-upload budget headroom (wrangler.toml [%s])", (sectionName) => {
+  const block = section(wrangler, sectionName);
+  const textLimit = numberVar(block, "MOD_TEXT_DAILY_BUDGET");
+  const imageLimit = numberVar(block, "MOD_IMAGE_DAILY_BUDGET");
 
   it("a single full pilot batch (100 items / 300 photos) costs well under the text general pool", () => {
     const batchTextCalls = MAX_BATCH_ITEMS; // one text check per listing

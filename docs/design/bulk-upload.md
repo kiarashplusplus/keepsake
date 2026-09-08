@@ -287,9 +287,11 @@ permanently documenting a broken feature as working. The fixture was fixed
 instead.
 
 **What has NOT been done, and what that means:** nothing here has run against
-`workerd` end to end, nothing has been deployed, and `BULK_UPLOAD` is `"0"`
-everywhere except preview. No person has used this feature — the web workspace
-below exists now, but only Jest has driven it.
+`workerd` end to end, nothing has been deployed, and — as of 2026-09-08 —
+`BULK_UPLOAD` is `"1"` in both `[env.preview]` and `[env.production]`. No
+person has used this feature — the web workspace below exists now, but only
+Jest has driven it. Production was approved ahead of a real-browser run
+rather than after one; watch it like a pilot still, not a finished feature.
 
 **2026-09-08 — the web workspace landed on a separate branch. Screens exist; still nobody's
 driven them from a browser.**
