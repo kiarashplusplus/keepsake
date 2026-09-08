@@ -4,6 +4,7 @@ import {
   classifyBulkError,
   createBatch,
   getBatch,
+  hasAdmission,
   submitBatch,
   suggestBatchPhoto,
   updateBatch,
@@ -199,13 +200,37 @@ describe("reads (getBatch, submitBatch) — plain ApiError like every other src/
 });
 
 describe("suggestBatchPhoto", () => {
-  it("returns null when the model declined, without throwing", async () => {
+  it("resolves ok:true with null when the model declined — never treated as an error", async () => {
     mockFetchOnce({ ok: true, data: { suggestion: null } });
-    await expect(suggestBatchPhoto("01BATCHA000000000000000000", "photo-a", { grantId: "grant-1" })).resolves.toBeNull();
+    await expect(suggestBatchPhoto("01BATCHA000000000000000000", "photo-a", { grantId: "grant-1" })).resolves.toEqual({
+      ok: true,
+      data: null,
+    });
   });
 
-  it("still throws a plain ApiError when the request itself fails — same contract as src/api/photos.ts", async () => {
-    mockFetchOnce({ ok: false, error: { code: "not_found", message: "Photo not found." } });
-    await expect(suggestBatchPhoto("01BATCHA000000000000000000", "missing", { grantId: "grant-1" })).rejects.toBeInstanceOf(ApiError);
+  // The behavior the coordinator's follow-up note asked for: running out of
+  // suggestion admission (its own counter, `BulkGrantSummary.
+  // suggestions_remaining`, separate from items/photos) must not read like a
+  // generic failure or like running out of photo/item admission.
+  it("surfaces suggestion-admission exhaustion as a typed BulkResult, not a thrown ApiError", async () => {
+    mockFetchOnce({ ok: false, error: { code: "rate_limited", message: "Your admission grant has no suggestions left." } });
+    const result = await suggestBatchPhoto("01BATCHA000000000000000000", "photo-a", { grantId: "grant-1" });
+    expect(result).toEqual({ ok: false, error: { kind: "admission_exhausted", message: "Your admission grant has no suggestions left." } });
+  });
+
+  it("still classifies a genuine failure unrelated to admission (a validation bug, a 500) as 'unexpected'", async () => {
+    mockFetchOnce({ ok: false, error: { code: "internal", message: "Something went wrong." } });
+    const result = await suggestBatchPhoto("01BATCHA000000000000000000", "missing", { grantId: "grant-1" });
+    expect(result).toEqual({ ok: false, error: { kind: "unexpected", message: "Something went wrong.", code: "internal", status: undefined } });
+  });
+});
+
+describe("hasAdmission", () => {
+  const grant = { id: "01GRANTX000000000000000000", batch_id: null, items_remaining: 0, photos_remaining: 3, suggestions_remaining: 0, expires_at: 1 };
+
+  it("checks each of the three counters independently — a batch can still be finished with zero suggestions", () => {
+    expect(hasAdmission(grant, "items")).toBe(false);
+    expect(hasAdmission(grant, "photos")).toBe(true);
+    expect(hasAdmission(grant, "suggestions")).toBe(false);
   });
 });

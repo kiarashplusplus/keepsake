@@ -37,6 +37,7 @@ import {
   BatchPhotoSummary,
   BatchStateSchema,
   BatchSummary,
+  BulkGrantSummary,
   BulkOperationSummary,
   CreateBatchInput as CreateBatchInputSchema,
   SubmitBatchInput as SubmitBatchInputSchema,
@@ -322,24 +323,39 @@ export async function deleteBatchPhoto(
 
 const SuggestBatchPhotoResult = z.object({ suggestion: PhotoSuggestionSchema.nullable() });
 
-/** `POST /api/bulk/batches/:id/photos/:clientPhotoId/suggest` — same
- * null-means-"model declined" contract as `src/api/photos.ts`'s
- * `suggestPhoto`; a rejected promise here means the request itself failed. */
+/**
+ * `POST /api/bulk/batches/:id/photos/:clientPhotoId/suggest` — spends the
+ * grant's own `suggestions_remaining` (`BulkGrantSummary`, separate from
+ * `items_remaining`/`photos_remaining`), so running out of suggestions is a
+ * `BulkResult` outcome here, not a thrown `ApiError` the way `src/api/
+ * photos.ts`'s `suggestPhoto` treats every request failure — this is a
+ * *write* on `bulkRoutes` (metered, and gated the same as the item/photo
+ * admission paths) even though it reads like a query. `ok:true, data:null`
+ * still covers the model itself declining (timed out, hit the daily model
+ * budget) — that was never an admission problem and isn't one now.
+ *
+ * Screens are expected to treat `"admission_exhausted"`/`"throttled"` here
+ * as "no suggestion this time", never as a reason to block the item or the
+ * batch: a giver can title, categorize, and submit every item by hand with
+ * zero suggestions spent, same as the ordinary give flow always could.
+ */
 export async function suggestBatchPhoto(
   batchId: string,
   clientPhotoId: string,
   options: BulkWriteOptions,
-): Promise<PhotoSuggestion | null> {
-  const data = await apiFetch<unknown>(
-    `/api/bulk/batches/${encodeURIComponent(batchId)}/photos/${encodeURIComponent(clientPhotoId)}/suggest`,
-    {
-      method: "POST",
-      owner: true,
-      headers: grantHeaders(options.grantId),
-      ...(options.signal !== undefined ? { signal: options.signal } : {}),
-    },
-  );
-  return SuggestBatchPhotoResult.parse(data).suggestion;
+): Promise<BulkResult<PhotoSuggestion | null>> {
+  return asBulkResult(async () => {
+    const data = await apiFetch<unknown>(
+      `/api/bulk/batches/${encodeURIComponent(batchId)}/photos/${encodeURIComponent(clientPhotoId)}/suggest`,
+      {
+        method: "POST",
+        owner: true,
+        headers: grantHeaders(options.grantId),
+        ...(options.signal !== undefined ? { signal: options.signal } : {}),
+      },
+    );
+    return SuggestBatchPhotoResult.parse(data).suggestion;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -406,4 +422,29 @@ export async function deleteOperation(id: string, options: BulkWriteOptions): Pr
     });
     return DeleteOperationResult.parse(data);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Admission grant
+// ---------------------------------------------------------------------------
+
+/** Re-exported so a caller holding a `BulkGrantSummary` (handed to a giver
+ * by the operator who minted it — no route here fetches one; the pilot's
+ * `POST /api/admin/bulk/grants` is admin-only) can type it without a second
+ * import from `@keepsake/contracts/bulk`. */
+export type { BulkGrantSummary };
+
+/**
+ * Three independent ceilings, not one — `items_remaining`,
+ * `photos_remaining`, and `suggestions_remaining` are spent by different
+ * writes and can each hit zero on their own schedule. A screen must not
+ * read `hasAdmission(grant, "suggestions") === false` as "this batch is
+ * stuck": every other kind of work continues normally, and a giver can
+ * title, categorize, and submit an entire batch by hand with zero
+ * suggestions ever spent, the same as the ordinary give flow always could.
+ */
+export function hasAdmission(grant: BulkGrantSummary, kind: "items" | "photos" | "suggestions"): boolean {
+  if (kind === "items") return grant.items_remaining > 0;
+  if (kind === "photos") return grant.photos_remaining > 0;
+  return grant.suggestions_remaining > 0;
 }
