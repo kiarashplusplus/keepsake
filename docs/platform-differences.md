@@ -57,7 +57,9 @@ so a bar meant to hug the bottom of the screen is actually anchored to that tran
 Layered on top, mobile Safari's keyboard resizes `window.innerHeight` in ways that make
 `visualViewport` math built on `offsetTop`/`scrollY` self-certifying-wrong: the "error" the
 correction computes reads 0 while the element is plainly off-screen, because the same flawed
-formula produced both the measurement and the fix.
+formula produced both the measurement and the fix. WebKit bug #297779 makes this worse on iOS
+26: `visualViewport.offsetTop` and `height` can remain stale after keyboard and scroll
+interactions, so no JavaScript correction based on those values is reliable.
 
 The fix that actually holds up: **do not fight `fixed` at all.** Render the bar in **normal
 document flow**, at the bottom of a flex column sized against `100dvh` (or the equivalent), so it
@@ -65,7 +67,8 @@ moves with layout rather than being separately anchored and separately corrected
 both the containing-block problem and the layout/visual-viewport axis entirely, at the cost of
 laying out the rest of the screen to leave room for it. Any Keepsake surface with an
 always-visible bottom element on web (a sheet's action row, a future sticky composer) should
-default to this pattern rather than `position: fixed`.
+default to this pattern rather than `position: fixed`. The shared web `Sheet` follows this rule:
+its overlay is an in-flow `100dvh` box and does not read or correct `visualViewport.offsetTop`.
 
 ## Quick symptom → cause index
 

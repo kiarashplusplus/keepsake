@@ -1,18 +1,14 @@
 import * as React from "react";
 import {
-  Modal,
   Pressable,
   ScrollView,
-  useWindowDimensions,
   View,
   type ViewStyle,
 } from "react-native";
 import { radii, shadow } from "@keepsake/tokens/radii";
 import { space } from "@keepsake/tokens/spacing";
 import { useColors } from "@/ui/theme";
-import { useMotion } from "@/ui/MotionProvider";
 import { Text } from "@/ui/Text";
-import { useVisualViewport } from "@/ui/useVisualViewport";
 
 const BOTTOM_SHEET_BREAKPOINT = 720;
 const FOCUSABLE_SELECTOR =
@@ -39,8 +35,8 @@ export function Sheet({
   children,
 }: SheetProps): React.ReactElement | null {
   const colors = useColors();
-  const motion = useMotion();
-  const { width, height: windowHeight } = useWindowDimensions();
+  const isBottomSheet =
+    typeof window !== "undefined" && window.innerWidth < BOTTOM_SHEET_BREAKPOINT;
   // `useWindowDimensions` tracks `window.innerWidth`/`innerHeight` (the
   // layout viewport), which iOS Safari deliberately leaves unchanged when
   // the on-screen keyboard opens — react-native-web's own `Dimensions`
@@ -49,8 +45,6 @@ export function Sheet({
   // measurement that does, for both how tall the visible area is and where
   // it currently sits — see `useVisualViewport`'s own comment for why this
   // sheet needs both, not just the height.
-  const { height, offsetTop } = useVisualViewport(windowHeight);
-  const isBottomSheet = width < BOTTOM_SHEET_BREAKPOINT;
   const panelRef = React.useRef<View>(null);
   // Callers routinely pass an inline `onClose` (a fresh function every
   // render), and typing into any field inside the sheet re-renders it. A ref
@@ -112,7 +106,8 @@ export function Sheet({
   // several fields plus Turnstile) scrolls inside it instead of growing
   // taller than the viewport and clipping its own submit button, exactly
   // the invisible-overflow failure `src/ui/Page.tsx` fixes for full pages.
-  const maxHeight = height - space.xxl * 2;
+  const viewportHeight = "100dvh" as unknown as ViewStyle["height"];
+  const maxHeight = `calc(100dvh - ${space.xxl * 2}px)` as unknown as ViewStyle["maxHeight"];
 
   const panelStyle: ViewStyle = {
     backgroundColor: colors.surface,
@@ -131,41 +126,27 @@ export function Sheet({
     } as ViewStyle),
   };
 
-  const animationType = motion.reduce ? "none" : isBottomSheet ? "slide" : "fade";
-
   return (
-    <Modal visible={visible} transparent animationType={animationType} onRequestClose={onClose}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Close"
+      onPress={onClose}
+      style={
+        {
+          height: viewportHeight,
+          width: "100%",
+          backgroundColor: colors.overlay,
+          justifyContent: isBottomSheet ? "flex-end" : "center",
+          alignItems: "center",
+        } as ViewStyle
+      }
+    >
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Close"
         onPress={onClose}
         style={{
-          // An explicit `height`, not `flex: 1`: this sits inside the
-          // `Modal`'s own `position: fixed` full-screen box, which (like
-          // `windowHeight` above) keeps its full height even once the
-          // keyboard covers its bottom portion. `flex: 1` would keep
-          // filling that whole box and `justifyContent: "flex-end"` would
-          // keep flushing the panel to ITS bottom edge — still under the
-          // keyboard — no matter how short `maxHeight` below makes the
-          // panel itself. Sizing this box to `height` is what actually
-          // moves the flush-bottom edge up to the visible area.
-          height,
-          // `translateY` by `offsetTop`: `position: fixed` (the `Modal`'s
-          // own box, one level up) pins this to the *layout* viewport's
-          // origin, which doesn't move when iOS pans the page to keep a
-          // focused input above the keyboard — only the *visual* viewport
-          // does. Without this, the box is the right height but sitting
-          // wherever the layout viewport's y=0 is, which drifts further
-          // from the visible window with every further pan (typing into a
-          // field that keeps pushing the caret down keeps re-triggering
-          // one) — built correctly for a screen that has since scrolled out
-          // from under it, which reads as the sheet sliding away rather
-          // than merely mis-sized.
-          transform: [{ translateY: offsetTop }],
           width: "100%",
-          backgroundColor: colors.overlay,
-          justifyContent: isBottomSheet ? "flex-end" : "center",
-          alignItems: "center",
         }}
       >
         <Pressable
@@ -194,6 +175,6 @@ export function Sheet({
           </ScrollView>
         </Pressable>
       </Pressable>
-    </Modal>
+    </Pressable>
   );
 }
