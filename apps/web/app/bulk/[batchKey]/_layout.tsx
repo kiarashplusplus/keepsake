@@ -90,13 +90,13 @@ function WorkspaceShell({ batchKey, children }: { batchKey: string; children: Re
   return (
     <ReadableWidth variant="prose" style={{ flex: 1, paddingVertical: space.xxl, gap: space.xl }}>
       <Card style={{ gap: space.sm, transform: [{ rotate: "0.3deg" }] }}>
-        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-          <Link href="/bulk" accessibilityRole="link">
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: space.sm }}>
+          <Link href="/bulk" accessibilityRole="link" style={{ flexShrink: 0 }}>
             <Text variant="label" color="ink" style={{ fontSize: 12 }}>
               ← Your batches
             </Text>
           </Link>
-          <Text variant="caption" color="textTertiary" numberOfLines={1}>
+          <Text variant="caption" color="textTertiary" numberOfLines={1} style={{ flexShrink: 1, textAlign: "right" }}>
             {workspace.state.batch.name}
           </Text>
         </View>
