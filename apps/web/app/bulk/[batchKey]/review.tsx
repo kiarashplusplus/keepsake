@@ -35,6 +35,23 @@ const STATE_LABEL: Record<BulkDraftItem["state"], string> = {
   failed: "Needs attention",
 };
 
+/**
+ * `item.state` is the raw `upload_batch_items.state` column, and nothing
+ * ever writes it to `"ready"` — the API's own doc comment on
+ * `BATCH_ITEM_STATES` (and PR #263's "What was NOT faked") says so plainly:
+ * readiness is computed live by `checkItemReadiness`
+ * (`apps/api/src/bulk/batches.ts`) and returned as the separate `ready`
+ * boolean, never persisted back onto `state`. Reading `STATE_LABEL` off
+ * `item.state` alone therefore showed "Editing" for a fully ready item
+ * forever, in whatever color this same badge picked for readiness below —
+ * a green (or amber) "Editing" is not a state a giver could make sense of.
+ * This is the one place that gap has to be bridged for a human to see it.
+ */
+function stateLabelFor(item: BulkDraftItem): string {
+  if (item.state === "editing" && item.ready === true) return "Ready";
+  return STATE_LABEL[item.state];
+}
+
 function ItemCard({ item, selected, onToggleSelected }: { item: BulkDraftItem; selected: boolean; onToggleSelected: () => void }): React.ReactElement {
   const colors = useColors();
   const workspace = useBulkWorkspaceContext();
@@ -73,7 +90,7 @@ function ItemCard({ item, selected, onToggleSelected }: { item: BulkDraftItem; s
             </Text>
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
               <Text variant="label" color={item.state === "failed" ? "dangerText" : item.ready === true ? "accent2Text" : "foilText"} style={{ fontSize: 10 }}>
-                {STATE_LABEL[item.state]}
+                {stateLabelFor(item)}
               </Text>
               <Chip label={selected ? "Selected" : "Select"} selected={selected} onPress={onToggleSelected} />
             </View>
