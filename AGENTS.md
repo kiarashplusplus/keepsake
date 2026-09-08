@@ -19,9 +19,11 @@ The product is the story. Anything that makes a listing feel like a classified a
   (`.github/workflows/deploy.yml`). So preview means exactly one knowable thing, the newest
   commit on `main`. This is the resolution of #66/#73 — preview used to redeploy on every open
   pull request too, which made the commit it served at any instant belong to whichever branch
-  pushed last. **Verify a branch locally instead** (`pnpm --filter @keepsake/web e2e`, real
-  `workerd` + local D1/R2/KV); see "Verifying against preview" below for what preview is still
-  good for and what still needs a commit check.
+  pushed last. **A branch is verified by its pull request's CI run** — lint, typecheck, preflight,
+  every unit suite and the whole e2e suite (real `workerd` + local D1/R2/KV) on the merged tree —
+  plus the one targeted local check that covers your change; "Before you say you are done" says
+  which. See "Verifying against preview" below for what preview is still good for and what
+  still needs a commit check.
 - **Production**: <https://keepsake.ing> — live. The custom domain is attached to
   `keepsake-production` and both of that Worker's `workers.dev` hostnames are disabled, so the
   apex is the only way in (#46, 2026-09-07). Production deploys stay **manual**
@@ -81,6 +83,8 @@ in parallel, and it does it again on every push — so the loop is push, look at
 is red. Verify locally once, on the change itself, because a local run is faster than a round trip
 and CI is not a substitute for having looked at your own work; but re-running e2e locally after each
 merge of `main` is re-doing work the PR already does, and it is the slowest way to learn nothing.
+"Verify locally once" means the *narrowest* check that can fail on your change, not the whole
+matrix — "Before you say you are done" has the table.
 
 ## Admin tokens
 
@@ -163,10 +167,12 @@ and whatever you did next. This happened for real verifying #14 — a probe ran 
 unrelated branch redeployed over it, and would have silently "confirmed" the wrong commit if the
 endpoint under test hadn't 404'd instead.
 
-**That trigger is now gone** (#73): preview deploys from `main` only. Verify your branch locally
-with `pnpm --filter @keepsake/web e2e`, which runs the real Worker against local D1/R2/KV. Preview
-is still worth checking *after* a merge, and there the commit check still applies, because "newest
-commit on `main`" stops being your commit as soon as someone else merges:
+**That trigger is now gone** (#73): preview deploys from `main` only. Your branch's whole-suite
+run is the pull request's `e2e` job, which runs the real Worker against local D1/R2/KV on the
+merged tree; locally, run the one spec that covers your change (same harness, `pnpm --filter
+@keepsake/web e2e e2e/<spec> --project=desktop`). Preview is still worth checking *after* a merge,
+and there the commit check still applies, because "newest commit on `main`" stops being your
+commit as soon as someone else merges:
 
 ```sh
 node tools/ci/verify-preview-commit.mjs https://preview.keepsake.ing <expected-sha>
@@ -220,13 +226,22 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
   migrations,migration-drift` enforces both halves; `docs/runbooks/migrations.md` has the detail.
 - **Never edit, rename or delete a migration that has landed on `main`, or that this branch has
   already pushed.** Add a new migration instead. There is no exception; a deploy cannot undo one.
-- **The e2e suite runs entirely locally — use it, it is the best verification available.**
-  `pnpm --filter @keepsake/web export` then `pnpm --filter @keepsake/web e2e` stands up real
-  `workerd` with local D1/R2/KV via `wrangler dev` (see `apps/web/playwright.config.ts`), which is
-  closer to production than preview ever was and needs no credentials. The suite runs in two
-  projects, mobile and desktop, so the spec count is not worth restating here — it has already gone
-  stale more than once (#274) and `apps/web/e2e/*.spec.ts` is the count that can't drift. Now that
-  pull requests no longer deploy anywhere, this is *the* way to verify a branch.
+- **The e2e suite runs entirely locally, needs no credentials, and is the slowest check in the
+  repo — so run it targeted.** `pnpm --filter @keepsake/web export` then
+  `pnpm --filter @keepsake/web e2e` stands up real `workerd` with local D1/R2/KV via `wrangler dev`
+  (see `apps/web/playwright.config.ts`), which is closer to production than preview ever was. The
+  suite runs in two projects, mobile and desktop, so the spec count is not worth restating here —
+  it has already gone stale more than once (#274) and `apps/web/e2e/*.spec.ts` is the count that
+  can't drift. CI runs the whole thing, both projects, on every pull request that touches code;
+  what a local run is for is the one spec that covers your change, in one project, once —
+  `pnpm --filter @keepsake/web e2e e2e/give.spec.ts --project=desktop`. "Before you say you are
+  done" says when even that is warranted.
+  - **`reuseExistingServer` is on outside CI.** If another session already has `wrangler dev` on
+    port 8787, your run silently uses *its* bundle and *its* database — and a local Worker reports
+    `commit: "dev"` from `/health`, so the response cannot tell you whose it is. `curl -s
+    127.0.0.1:8787/health` before you start: if it answers and you did not start it, it is another
+    session's. Run with `CI=1` set and Playwright refuses to reuse the port (it errors instead of
+    sharing), which is the honest failure; or wait.
   - If Playwright reports `Executable doesn't exist at .../chromium_headless_shell-<n>/...`, the
     container's browser build predates the pinned `@playwright/test`. Do not run
     `playwright install` blindly; point the expected path at the build that is present. Concretely,
@@ -305,16 +320,97 @@ See `docs/runbooks/deploy.md#verifying-against-preview`.
 
 ## Before you say you are done
 
-```
-pnpm lint                          # 0 errors; warnings are the zod const+type idiom
-pnpm -r typecheck
-pnpm test                          # preflight, packages, api, web
-pnpm --filter @keepsake/web e2e    # mobile and desktop projects
-node tools/preflight/preflight.mjs
-```
+This section used to be five commands to run, unconditionally, on every change. Sessions took it
+literally: full unit suites run "3x for stability", the whole e2e suite in both projects before
+*and* after merging `main`, a failing file re-run until it passed. None of that produced evidence
+the pull request's own CI run did not already produce, and most of it was measuring the container
+rather than the change. **The rule now: run the narrowest check that can fail on your change, run
+it once, break the guard once, push, and read the checks.** The full matrix is CI's job.
+
+### What CI runs, and what it costs
+
+Every pull request runs this on the *merged* tree (`refs/pull/N/merge`), on clean runners, in
+parallel, and again on every push. Timings from run 34247704054 (PR #326, 2026-09-08), test step
+only, setup excluded:
+
+| Job | Runs when | Time |
+| --- | --- | --- |
+| `preflight` | always | 1 s |
+| `lint`, `typecheck` | any change outside `docs/` | ~25 s each |
+| `test-web` (jest + `e2e/support` unit tests) | any code change | 34 s |
+| `test-api` (vitest in the Workers pool, real local D1/R2/KV) | `apps/api`, `packages/`, root manifests | 3 m 47 s |
+| `build-web` (the export) | whenever `test-web` ran | 57 s |
+| `e2e` (both projects) | whenever `build-web` passed and `test-api` did not fail | 4 m 39 s |
+| `ci-complete` | always — asserts the jobs the diff required actually ran | 1 s |
+
+Wall clock for the whole run: about eleven and a half minutes. A docs-only pull request runs
+`preflight` and `ci-complete` and nothing else, on purpose (the `docs` filter). **There is no code
+change the filters let through without the e2e suite**, in both projects, so a full local e2e run
+before pushing never adds coverage; at best it saves one round trip, and only if it finds
+something.
+
+### Why a local full suite is worse evidence here, not just slower
+
+Agent containers share four cores between sessions and carry a Chromium build that is not the
+suite's pinned one. The consequences are on record: PR #326's one full local api run reported ten
+failures, all `ogCard.test.ts` font rendering and one moderation timeout, none touching the diff —
+and every one passed when the file was re-run alone; PR #324 saw the same `ogCard` timeout; the
+`main` run for `451e7f9` (2026-09-08, the merge of #326) went red on two desktop specs with
+`net::ERR_CONNECTION_REFUSED` on all three attempts while 168 passed — `wrangler dev` dying
+mid-suite (#104), not the change. Each false red costs a re-run to prove it false, and a re-run of
+a full suite is another four minutes of the same noise. A targeted run has almost none of these
+failure modes because it does not load the machine.
+
+### What to run, by what you changed
+
+| You changed | Run locally, once | Local e2e? |
+| --- | --- | --- |
+| Docs, comments, runbooks, an issue or PR body | Nothing. CI runs `preflight`, and skips the rest deliberately. | No |
+| `wrangler.toml`, a migration, `cron/registry.ts`, `.env.example`, a workflow file, `tools/*` | `node tools/preflight/preflight.mjs` (seconds); for `tools/` also `pnpm --filter "./tools/*" test` | No |
+| An API route, `lib/`, moderation, email | `pnpm --filter @keepsake/api exec vitest run test/<the files that cover it>` plus the enumerating guards if you added, moved or unmounted a route (`writeSurfaceTurnstile`, `listingWriteMetering`, `bulkWriteMetering`); `pnpm --filter @keepsake/api typecheck`. The Workers pool runs the real Worker against real local bindings, so this already proves the HTTP behaviour end to end. | Only if the change is in how the Worker serves the *page*: `index.ts`'s catch-all or assets handling, HTMLRewriter, security headers, `/version.json`, the `/item/:id` inline payload. Then the one spec that covers it (`itemPayload`, `staticRender`, `chunkRecovery`, `versionSkew`, `deepLinkColdLoad`), one project. |
+| A web component, hook, reducer, feature logic | The jest files for it — `pnpm --filter @keepsake/web exec jest test/<path>` — and `pnpm --filter @keepsake/web typecheck` | Only when the behaviour lives where jest cannot see it: navigation between screens, scroll and layout, a real browser API (canvas decode, `localStorage` before first paint, third-party script loading), a flow that crosses several pages, or two browser contexts. Then the one spec, `--project=desktop` unless the change is phone layout. |
+| How a screen looks (spacing, palette, copy that moves layout, a new screen) | jest for any logic, then `pnpm --filter @keepsake/web e2e:ux` to refresh the baseline. In a container whose Chromium is not the pinned build the capture moves nearly every frame on font metrics alone (#325 measured 86 of 89) — do not commit that; say the baseline needs a refresh from a machine with the pinned build. | The capture, yes. `a11y.spec.ts` in one project only if you touched contrast, focus order, labels or landmarks — otherwise CI's run of it is the check. |
+| `apps/site/**` (privacy, terms, `consent.js`) | Copy-only: nothing. `consent.js`: `e2e/consent.spec.ts` in one project — it and two `a11y` cases are the only tests that look at these pages. | `consent.js` only |
+| A shared package (`packages/*`) | `pnpm -r typecheck` (finds every consumer), then the unit tests of the consumers that import what you changed | No |
+| The e2e harness itself (`playwright.config.ts`, `e2e/support/*`, `fixtures.ts`, `serve.mjs`, `global-setup.mjs`) | The full suite, once, one project. You are changing the instrument; CI's run tells you it broke but not why. | Yes — the one row where a full local run is the right call |
+| `pnpm-lock.yaml`, root manifests, a dependency bump | `pnpm install --frozen-lockfile`, `pnpm -r typecheck`, then push — the `root` filter makes CI run everything | No |
+
+Rules that hold across every row:
+
+- **Once.** If a check is red, read the failure. Re-run only the failing *file*, alone, once; a
+  second failure is real. A pass after a fail is a flake you name in the closing comment, not a
+  reason to run the suite a third time.
+- **One project.** `--project=desktop` locally; CI runs both. Mobile only when the change depends
+  on the viewport.
+- **Full `pnpm test` and full `pnpm --filter @keepsake/web e2e` locally** are for the harness row,
+  for diagnosing a CI failure the report and trace do not explain, and for a change so
+  cross-cutting you cannot name the spec — in which case say that in the comment. "I could not
+  name a spec" usually means the spec headers were not read: every `apps/web/e2e/*.spec.ts` opens
+  with a paragraph saying what it proves.
+- **Export only when you are about to run a browser spec**, and only if `dist/` is stale for what
+  you are testing: a web change, yes; an api-only change with a spec from the page-serving list,
+  the existing `dist/` is fine unless `versionSkew` is your spec.
+- **The guard rule is unchanged** — break the code and watch the guard fail, then restore — and it
+  costs one targeted run, never a suite.
+- **After `git merge origin/main`, push.** Do not re-verify locally; the pull request run is the
+  verification of the merged tree, and that is the only tree that ships.
+- **Lint and typecheck** are cheap and CI runs them; run them locally when the diff is large enough
+  that a round trip would hurt, or when your editor is not doing it for you.
+
+### What "done" means
+
+1. The targeted check ran once and passed, or its failure is explained in the closing comment.
+2. The guard was broken once and seen to fail.
+3. The pull request's run is green **including `ci-complete`**, and you looked at it rather than
+   assumed it. A run that failed to *start* shows in the Actions tab under the workflow path
+   (`.github/workflows/ci.yml`) rather than its name (#270); a `cancelled` run is neither red nor
+   green (#103). Both look like nothing happened.
+4. The closing comment says what you ran, links the CI run for what you did not, and says what
+   nobody ran.
 
 If the change moves a screen, also refresh the UX baseline (`pnpm --filter @keepsake/web e2e:ux`)
-and commit the frames it rewrites — see the bullet above and `docs/qa/baseline/README.md`.
+and commit the frames it rewrites — with the container caveat in the table above — see the bullet
+above and `docs/qa/baseline/README.md`.
 
 The accessibility specs carry **no per-rule or per-selector exclusions**. One thing still narrows
 what they can catch, so "green" is not quite "everything was scanned": `a11y.spec.ts` fails only
@@ -359,6 +455,8 @@ cannot pass by having scanned the light palette twice.
 ## Writing for Kiarash
 
 He reads the closing comment, not the diff. Say what changed, how you proved it, and what you did
-not do. If a test passed but you did not verify the real thing, say that. He has repeatedly caught
+not do. If a test passed but you did not verify the real thing, say that. A list of every suite
+you ran is not the evidence he wants; the one named test that could have failed, and the CI run
+that carried the rest, is. He has repeatedly caught
 problems by looking at the actual product on his phone; the fastest way to lose his trust is to
 not follow his set direction quickly.
