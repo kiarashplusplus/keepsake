@@ -89,21 +89,29 @@ export async function fetchAspectRowsForListings(env: Env, listingIds: string[])
  * Replaces every aspect row for `listingId` with `aspects`, in order —
  * delete-then-reinsert rather than a diff, matching how `PATCH
  * /api/listings/:id` already re-attaches `photo_ids` wholesale. Called from
- * both `POST /api/listings` (fresh insert, nothing to delete) and `PATCH`
- * (only when the request body actually included an `aspects` key — see
- * `routes/listings.ts`, which must not call this on every edit or a client
- * that never sends `aspects` would silently wipe a listing's existing ones).
+ * `PATCH` (only when the request body actually included an `aspects` key —
+ * see `routes/listings.ts`, which must not call this on every edit or a
+ * client that never sends `aspects` would silently wipe a listing's existing
+ * ones), `POST /api/admin/listings/:id/resuggest`, and the aspects backfill.
+ *
+ * Issue #285: the delete and every insert are collected as prepared
+ * statements and run as one `env.DB.batch()` — the same reason
+ * `src/listings/create.ts` batches its own writes, spelled out in that
+ * module's header. As separate un-batched awaits, an isolate evicted between
+ * the delete and the last insert left the listing durably holding only a
+ * prefix of its aspects, with no error surfaced anywhere.
  */
 export async function replaceListingAspects(env: Env, listingId: string, aspects: Aspect[]): Promise<void> {
-  await env.DB.prepare("DELETE FROM listing_aspects WHERE listing_id = ?").bind(listingId).run();
   const now = Date.now();
+  const statements: D1PreparedStatement[] = [env.DB.prepare("DELETE FROM listing_aspects WHERE listing_id = ?").bind(listingId)];
   for (let position = 0; position < aspects.length; position++) {
     const aspect = aspects[position];
     if (!aspect) continue;
-    await env.DB.prepare(
-      "INSERT INTO listing_aspects (id, listing_id, name, value, position, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    )
-      .bind(ulid(), listingId, aspect.name, aspect.value, position, now)
-      .run();
+    statements.push(
+      env.DB.prepare(
+        "INSERT INTO listing_aspects (id, listing_id, name, value, position, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).bind(ulid(), listingId, aspect.name, aspect.value, position, now),
+    );
   }
+  await env.DB.batch(statements);
 }

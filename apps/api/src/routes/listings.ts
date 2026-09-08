@@ -196,12 +196,24 @@ listingRoutes.post(
     // `input.aspects` defaults to `[]` (CreateListingInput), never undefined,
     // so a brand-new listing with no confidently-read aspects gets zero rows,
     // not a skipped write.
-    const { listingId: id } = await createListingForOwner(c.env, {
+    const { listingId: id, created } = await createListingForOwner(c.env, {
       ownerId: owner.id,
       input,
       place,
       now,
     });
+
+    // Issue #283: `created` is false when the insert's own guard found a
+    // requested photo no longer this owner's unattached orphan at the
+    // instant it ran — another concurrent submission won it between the
+    // pre-check `SELECT` above and this batch. Nothing was written in that
+    // case (the photo-attach and aspect statements are themselves gated on
+    // the listing existing), so there is nothing to clean up; the caller
+    // just needs to be told rather than shown a 201 for a listing that was
+    // never created.
+    if (!created) {
+      return fail(c, "conflict", "One or more photos were claimed by another listing — try again.", 409);
+    }
 
     if (input.email) {
       await c.env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = NULL WHERE id = ?")
@@ -328,7 +340,7 @@ listingRoutes.patch(
     // anything.
     const categoryChosenAt = input.category !== undefined ? now : row.category_chosen_at;
 
-    await c.env.DB.prepare(
+    const updateResult = await c.env.DB.prepare(
       `UPDATE listings SET
          title = ?, story = ?, category = ?, category_chosen_at = ?,
          country = ?, postal_code = ?, place_name = ?, admin1 = ?, lat = ?, lng = ?,
@@ -352,6 +364,19 @@ listingRoutes.patch(
         row.version,
       )
       .run();
+
+    // Issue #282: `WHERE version = ?` above is an optimistic-concurrency
+    // guard, and a guard that matches zero rows is not an error — it means a
+    // concurrent PATCH already bumped `version` out from under the row this
+    // request read. Every other version- or claim-gated write in this
+    // codebase (`bulk.ts`, `me.ts`, `recover.ts`, the report route further
+    // down this file) checks `meta.changes` for exactly this reason; this
+    // statement used to be the only one that didn't, which let a lost race
+    // fall through and half-apply the photo/aspects writes below against a
+    // row this request no longer owned.
+    if ((updateResult.meta.changes ?? 0) === 0) {
+      return fail(c, "conflict", "This keepsake changed elsewhere — reload and try again.", 409);
+    }
 
     if (input.photo_ids) {
       // Detach anything currently on this listing that isn't in the new set,
