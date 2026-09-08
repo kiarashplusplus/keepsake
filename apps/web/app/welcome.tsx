@@ -38,7 +38,8 @@ export default function Welcome(): React.ReactElement {
           <Link href="/" asChild>
             <Button label="See what's out there" />
           </Link>
-          <Link href="/give" asChild>
+          {/* `dangerouslySingular` — see `AppHeader`'s Give link. */}
+          <Link href="/give" dangerouslySingular asChild>
             <Button variant="link" label="Have something to give away?" />
           </Link>
         </View>
