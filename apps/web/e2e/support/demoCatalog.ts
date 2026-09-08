@@ -25,6 +25,7 @@
  */
 import type { APIRequestContext } from "@playwright/test";
 import { createApprovedListing, hideListingAsAdmin, ownerHeaders, sendRequest } from "./api";
+import { confirmDemoRequests, pinListingIds } from "./demoDb";
 import { DEMO_PHOTOS, type DemoPhoto } from "./demoPhotos";
 
 /** `OwnerTokenSchema` wants `ks_` + exactly 43 base64url characters; the
@@ -155,9 +156,36 @@ export const REQUESTED_KEYS_BY_PROJECT: Record<string, string> = {
   "ux-desktop": "quilt",
 };
 
+/**
+ * Issue #225: fixed ids for every listing above, one per `DemoListing.key`.
+ * The API always mints a fresh ULID on create, and `ListingCard` hashes that
+ * id into the print's tilt and vertical offset (`tiltDegForId()` /
+ * `verticalOffsetForId()`, `src/lib/masonry.ts`), so a re-seeded catalogue
+ * landed at a new angle on every capture even though every word on the card
+ * stayed the same — the churn `docs/qa/baseline/README.md` used to describe.
+ * `ensureDemoCatalog()` rewrites each minted id to its entry here
+ * (`./demoDb.ts`'s `pinListingIds()`) right after creating it, so the hash
+ * input — and therefore the tilt and offset — is the same on every run.
+ *
+ * Valid `UlidSchema` shape (Crockford base32, 26 chars, no ambiguous
+ * I/L/O/U) but never minted by `ulid()`: readable on purpose, so a listing
+ * id in a log or a failed assertion is recognisably one of this fixture's
+ * rather than a stray real one.
+ */
+export const PINNED_LISTING_IDS: Record<string, string> = {
+  kettle: "SEEDCARD010000000000000000",
+  brooch: "SEEDCARD020000000000000000",
+  letters: "SEEDCARD030000000000000000",
+  plane: "SEEDCARD040000000000000000",
+  records: "SEEDCARD050000000000000000",
+  quilt: "SEEDCARD060000000000000000",
+  hidden: "SEEDCARD070000000000000000",
+};
+
 export interface DemoCatalog {
   ownerToken: string;
-  /** `DemoListing.key` -> the id the API minted. */
+  /** `DemoListing.key` -> its pinned id (`PINNED_LISTING_IDS`) — what the
+   * API minted, rewritten by `pinListingIds()` (issue #225). */
   ids: Record<string, string>;
   /** The listing this project may choose a requester on, by project name. */
   requestedIdFor: (projectName: string) => string;
@@ -195,6 +223,7 @@ export async function ensureDemoCatalog(request: APIRequestContext): Promise<Dem
   if (complete) {
     for (const listing of all) ids[listing.key] = existing.get(listing.title) as string;
   } else {
+    const mintedToPinned: Record<string, string> = {};
     for (const listing of all) {
       const created = await createApprovedListing(request, {
         title: listing.title,
@@ -204,14 +233,30 @@ export async function ensureDemoCatalog(request: APIRequestContext): Promise<Dem
         photo: listing.photo,
         ownerToken: DEMO_OWNER_TOKEN,
       });
-      ids[listing.key] = created.id;
+      mintedToPinned[created.id] = PINNED_LISTING_IDS[listing.key] as string;
+      ids[listing.key] = PINNED_LISTING_IDS[listing.key] as string;
     }
 
+    // Issue #225. Every id above is still the one the real API minted —
+    // this is the one place that stops being true, on purpose, so
+    // `tiltDegForId()`/`verticalOffsetForId()` hash the same string on every
+    // capture. Everything below references `ids[key]`, which already holds
+    // the pinned value, so nothing downstream ever sees the minted one.
+    pinListingIds(mintedToPinned);
+
+    const requestIdToListingId: Record<string, string> = {};
     for (const key of Object.values(REQUESTED_KEYS_BY_PROJECT)) {
       for (const requester of DEMO_REQUESTS) {
-        await sendRequest(request, ids[key] as string, requester);
+        const sent = await sendRequest(request, ids[key] as string, requester);
+        requestIdToListingId[sent.id] = ids[key] as string;
       }
     }
+    // Issue #240. `sendRequest()` above only ever produces a *held*,
+    // unconfirmed ask — #188 working as designed — so the giver's dashboard
+    // cannot see either request yet. Confirm both directly, the same way the
+    // pin above rewrote ids, rather than adding any way for a caller to
+    // hand this (or any) route a confirmation token.
+    confirmDemoRequests(requestIdToListingId);
 
     await hideListingAsAdmin(request, ids.hidden as string, "ux baseline fixture");
   }
