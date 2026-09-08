@@ -23,10 +23,11 @@ export type GiveDraftPhoto = {
   /** The API's photo id once the upload succeeds; `null` while uploading
    * or if it failed. */
   id: string | null;
-  /** Local object URL for the thumb, for previewing before/instead of the
-   * `/i/:id/thumb` route (which pending photos can't be fetched from in an
-   * `<img>` tag — no way to attach the owner token header). `null` after a
-   * session reload, since blob URLs don't survive one. */
+  /** Local object URL for the thumb, for previewing without a round trip
+   * to the `/i/:id/thumb` route. `null` after a session reload or a return
+   * to the flow, since blob URLs don't survive the document that minted
+   * them — `features/give/photoSource.ts` then loads the owner-authed thumb
+   * route instead. */
   objectUrl: string | null;
   width: number;
   height: number;
@@ -243,6 +244,20 @@ export function deserializeGiveDraft(raw: string): GiveDraft | null {
             // held in memory, and that does not survive a reload. Offering a
             // button that could only no-op is worse than not offering one.
             canRetry: false,
+            // An upload is only ever in flight while the photos screen that
+            // started it is mounted, and this runs on a fresh provider mount
+            // — that screen is gone and its `AbortController`s have fired.
+            // Left as "uploading", the tile would say "uploading…" forever,
+            // offer no retry, and hold `Continue` disabled, with the trash
+            // icon as the giver's only (unlabelled) way out. Say what
+            // happened instead.
+            ...(photo.status === "uploading"
+              ? {
+                  status: "error" as const,
+                  error: "That upload didn't finish. Remove it and add it again.",
+                  errorCode: "interrupted",
+                }
+              : {}),
           }))
         : [],
       // Issue #35: a draft written to `sessionStorage` by a tab still

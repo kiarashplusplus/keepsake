@@ -28,8 +28,7 @@ import { editStepForReason, resolveReviewOutcome } from "@/features/give/reviewO
 import { createListing, updateListing } from "@/api/listings";
 import { getMyListing } from "@/api/me";
 import { ApiError } from "@/api/client";
-import { getOwnerToken } from "@/lib/ownerToken";
-import { config } from "@/lib/config";
+import { useDraftPhotoSource } from "@/features/give/photoSource";
 import { clampCardAspectRatio } from "@/lib/masonry";
 import { storyExcerpt } from "@/lib/storyExcerpt";
 import { shareListing } from "@/lib/share";
@@ -41,17 +40,6 @@ const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS = 2 * 60 * 1000;
 
 type Phase = "review" | "submitting" | "polling";
-
-function coverImageSource(photo: ReturnType<typeof coverPhoto>): { uri: string; headers?: Record<string, string> } | null {
-  if (photo === null || photo.id === null) return null;
-  if (photo.objectUrl !== null) return { uri: photo.objectUrl };
-  const origin = config.siteUrl || (typeof window !== "undefined" ? window.location.origin : "");
-  const token = getOwnerToken();
-  return {
-    uri: `${origin}/i/${photo.id}/thumb`,
-    ...(token !== null ? { headers: { Authorization: `Bearer ${token}` } } : {}),
-  };
-}
 
 export default function GiveReview(): React.ReactElement {
   const router = useRouter();
@@ -77,6 +65,7 @@ export default function GiveReview(): React.ReactElement {
 
   const photoIds = draft.photos.filter((photo) => photo.status === "done" && photo.id !== null).map((photo) => photo.id as string);
   const cover = coverPhoto(draft);
+  const coverSource = useDraftPhotoSource(cover);
 
   React.useEffect(() => {
     if (phase !== "polling" || listing === null || listing.status !== "pending") return undefined;
@@ -363,10 +352,9 @@ export default function GiveReview(): React.ReactElement {
             `GiveDraft` is the honest version; the two are meant to be read
             side by side, so change them together. */}
         <Print tiltDeg={-1.5} style={{ alignSelf: "stretch", padding: 10 }}>
-          {/* Source ladder: the local object URL from this session's
-              upload; else the owner-token-authed thumb route (covers a
-              reload or a `?edit=` prefill, where the object URL is
-              always null); else the blurhash alone. */}
+          {/* Source ladder in `features/give/photoSource.ts`, shared with
+              the photos step's tiles: this session's object URL, else the
+              owner-authed thumb route, else the blurhash alone. */}
           <View
             style={{
               width: "100%",
@@ -382,7 +370,7 @@ export default function GiveReview(): React.ReactElement {
             }}
           >
             <ExpoImage
-              source={coverImageSource(cover)}
+              source={coverSource}
               placeholder={cover !== null && cover.blurhash !== "" ? { blurhash: cover.blurhash } : null}
               style={{ width: "100%", height: "100%" }}
               contentFit="cover"
