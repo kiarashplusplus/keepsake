@@ -59,6 +59,25 @@ test("a first-time visitor to / is redirected to the explainer, not the feed", a
   await context.close();
 });
 
+test("a first-time visitor's campaign parameters survive the redirect", async ({ browser }) => {
+  // The redirect only ever runs for a first-time visitor, which is exactly
+  // the visitor who arrived from an ad or a shared link. Until 2026-09-08 it
+  // used a bare `location.replace("/welcome")`, so `utm_*`/`gclid`/`fbclid`
+  // were dropped on that hop and no analytics on the far side could ever see
+  // them. Run against the real export in a real browser, so what is asserted
+  // is the URL the visitor actually lands on, not the script's source text
+  // (`test/guards/rootOpenGraph.test.ts` holds that end).
+  const context = await freshContext(browser);
+  const page = await context.newPage();
+
+  await page.goto("/?utm_source=newsletter&utm_medium=email&gclid=abc123");
+
+  await expect(page).toHaveURL(`${BASE_URL}/welcome?utm_source=newsletter&utm_medium=email&gclid=abc123`);
+  await expect(page.getByText("No accounts. No money.")).toBeVisible();
+
+  await context.close();
+});
+
 test("going to the feed from the explainer means / never asks again", async ({ browser }) => {
   const context = await freshContext(browser);
   const page = await context.newPage();

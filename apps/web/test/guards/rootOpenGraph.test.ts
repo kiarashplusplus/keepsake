@@ -167,4 +167,15 @@ describe("the root shell's structured data", () => {
     // would never see it at all. Keepsake runs Google Ads.
     expect(SHELL_CODE).not.toContain("&& !window.location.search &&");
   });
+
+  it("carries the query string across to /welcome instead of dropping it", () => {
+    // The redirect fires for exactly one visitor — a first-timer at `/` with
+    // no `q` — and that is precisely the visitor who arrived from an ad or a
+    // shared link carrying `utm_*`, `gclid` or `fbclid`. A bare
+    // `location.replace("/welcome")` drops `location.search`, so every one of
+    // those died on the one hop nobody could see, and the campaign that paid
+    // for the click was unattributable.
+    expect(SHELL_CODE).toContain('window.location.replace("/welcome" + window.location.search)');
+    expect(SHELL_CODE).not.toContain('window.location.replace("/welcome")');
+  });
 });

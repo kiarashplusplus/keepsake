@@ -81,7 +81,17 @@ export function createContext(root) {
     return out;
   }
 
-  return { root, exists, readText, walk };
+  // Bytes, not text: the `fonts` check hashes font files, and reading a .ttf
+  // as UTF-8 would silently mangle it into a different (but stable) string.
+  function readBytes(relPath) {
+    try {
+      return readFileSync(abs(relPath));
+    } catch {
+      return null;
+    }
+  }
+
+  return { root, exists, readText, readBytes, walk };
 }
 
 // ── Small parsers, kept dependency-free on purpose ────────────────────────
@@ -156,29 +166,87 @@ export function parseEnvExample(text) {
 
 const HTML_PATH = "apps/web/app/+html.tsx";
 const FONTS_DIR = "apps/web/public/fonts";
+const SITE_CSS_PATH = "apps/site/public/site.css";
+
+/**
+ * The `?v=` token every `/fonts/*.ttf` URL must carry: a hash of the font
+ * bytes themselves, so replacing a file changes it.
+ *
+ * `apps/web/public/_headers` serves `/fonts/*` `max-age=31536000, immutable`
+ * under filenames that carry no content hash. `immutable` is a promise a
+ * browser takes literally — it will not revalidate for a year, reload
+ * included — so a font replaced in place would keep rendering as the old one
+ * for every returning visitor, invisibly, with nothing anywhere reporting
+ * it. The token is what makes the URL change when the bytes do, and it is
+ * written by hand in two files (`FONT_VERSION` in `+html.tsx`, repeated in
+ * `site.css`, which is static and has no build step), so it can go stale
+ * exactly the way a CSP hash can. This recomputes it.
+ */
+export function fontVersionToken(files) {
+  const hash = createHash("sha256");
+  for (const [name, bytes] of [...files].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    hash.update(name, "utf8");
+    hash.update("\0");
+    hash.update(bytes);
+    hash.update("\0");
+  }
+  return hash.digest("hex").slice(0, 8);
+}
+
+/** Every `/fonts/<file>.ttf[?v=<token>]` reference in a source text. */
+function fontRefs(text) {
+  const refs = [];
+  for (const match of text.matchAll(/\/fonts\/([A-Za-z0-9._-]+\.ttf)(\?v=([^"'`)\s]*))?/g)) {
+    refs.push({ file: match[1], version: match[3] });
+  }
+  return refs;
+}
 
 function checkFonts(ctx) {
   const html = ctx.readText(HTML_PATH);
   if (html === null) return { status: "skip", details: [`${HTML_PATH} not present`] };
   if (!ctx.exists(FONTS_DIR)) return { status: "skip", details: [`${FONTS_DIR} not present`] };
 
-  const referenced = new Set();
-  for (const match of html.matchAll(/url\(\s*["']?\/fonts\/([^"')]+)["']?\s*\)/g)) {
-    referenced.add(match[1]);
-  }
+  const ttfPaths = ctx.walk(FONTS_DIR).filter((f) => f.endsWith(".ttf"));
+  const onDisk = new Set(ttfPaths.map((f) => path.posix.basename(f)));
+  const expected = fontVersionToken(ttfPaths.map((f) => [path.posix.basename(f), ctx.readBytes(f)]));
 
-  const onDisk = new Set(
-    ctx.walk(FONTS_DIR)
-      .filter((f) => f.endsWith(".ttf"))
-      .map((f) => path.posix.basename(f)),
-  );
+  // `+html.tsx` interpolates the constant into a template literal, so the
+  // reference reads `?v=${FONT_VERSION}` in source — resolve it to the
+  // declared value before comparing, and fail on a reference that carries no
+  // token at all.
+  const declared = /const\s+FONT_VERSION\s*=\s*"([^"]*)"/.exec(html)?.[1] ?? null;
 
   const details = [];
-  for (const file of [...referenced].sort()) {
-    if (!onDisk.has(file)) {
-      details.push(`fail: ${HTML_PATH} references /fonts/${file}, not found under ${FONTS_DIR}/`);
+  const referenced = new Set();
+
+  const sources = [[HTML_PATH, html]];
+  const siteCss = ctx.readText(SITE_CSS_PATH);
+  if (siteCss !== null) sources.push([SITE_CSS_PATH, siteCss]);
+
+  for (const [source, text] of sources) {
+    for (const ref of fontRefs(text)) {
+      referenced.add(ref.file);
+      if (!onDisk.has(ref.file)) {
+        details.push(`fail: ${source} references /fonts/${ref.file}, not found under ${FONTS_DIR}/`);
+      }
+      const version = ref.version === "${FONT_VERSION}" ? declared : ref.version;
+      if (ref.version === undefined) {
+        details.push(`fail: ${source} references /fonts/${ref.file} with no ?v= token (see FONT_VERSION in ${HTML_PATH})`);
+      } else if (version !== expected) {
+        details.push(
+          `fail: ${source} references /fonts/${ref.file} at ?v=${version ?? "(unresolved)"}, but the fonts on disk hash to ${expected}`,
+        );
+      }
     }
   }
+
+  if (declared === null) {
+    details.push(`fail: ${HTML_PATH} declares no FONT_VERSION constant`);
+  } else if (declared !== expected) {
+    details.push(`fail: ${HTML_PATH}'s FONT_VERSION is ${declared}, but ${FONTS_DIR}/*.ttf hash to ${expected}`);
+  }
+
   const unreferenced = [...onDisk].filter((f) => !referenced.has(f)).sort();
   for (const file of unreferenced) {
     details.push(`warn: ${FONTS_DIR}/${file} is not referenced by any @font-face in ${HTML_PATH}`);
@@ -187,7 +255,10 @@ function checkFonts(ctx) {
   const hasFail = details.some((d) => d.startsWith("fail:"));
   if (hasFail) return { status: "fail", details };
   if (details.length > 0) return { status: "warn", details };
-  return { status: "pass", details: [`${referenced.size} font(s) referenced, all present`] };
+  return {
+    status: "pass",
+    details: [`${referenced.size} font(s) referenced, all present, all at ?v=${expected}`],
+  };
 }
 
 const MIGRATIONS_DIR = "apps/api/migrations";

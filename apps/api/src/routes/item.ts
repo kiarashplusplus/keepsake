@@ -18,6 +18,15 @@
  * added it back, so every item page unfurled with no site name. It is in
  * `buildOgTags` now, and `test/item.test.ts` asserts it.
  *
+ * The same shape one tag over: until 2026-09-08 this route rewrote the title
+ * and every `og:`/`twitter:` tag but left `<meta name="description">` alone,
+ * so every listing page carried the shell's site-wide "Give a keepsake a
+ * second life." — the plain description a search engine reads, identical on
+ * every item URL in the sitemap. It is rewritten from the same
+ * `storyExcerpt` the OG description uses (one sentence, one source), and the
+ * selector below drops the shell's copy first for the same reason it drops
+ * the shell's title: the first one in `<head>` is the one that counts.
+ *
  * `HTMLRewriter` can't target an HTML comment (`<!--KEEPSAKE_OG-->` in the
  * exported shell's `<head>`) directly, so per the plan this appends the new
  * tags at the end of `<head>` instead and leaves the marker alone — both are
@@ -88,6 +97,7 @@ function buildOgTags(params: {
 
   return `
     <title>${title} — Keepsake</title>
+    <meta name="description" content="${description}">
     <link rel="canonical" href="${url}">
     <meta property="og:type" content="article">
     <meta property="og:site_name" content="Keepsake">
@@ -249,7 +259,7 @@ itemRoutes.get("/:id", burst("RL_READ"), async (c) => {
   // first og:* they see, and the exported shell already carries the site-wide
   // defaults ahead of the marker.
   const rewriter = new HTMLRewriter()
-    .on('title, link[rel="canonical"], meta[property^="og:"], meta[name^="twitter:"]', {
+    .on('title, link[rel="canonical"], meta[name="description"], meta[property^="og:"], meta[name^="twitter:"]', {
       element(el) {
         el.remove();
       },

@@ -36,7 +36,16 @@ import { config } from "@/lib/config";
 // first-time visitor arrives from an ad or a shared link, and skipping the
 // explainer for them would ALSO set `VISITED_KEY` on the way past — so they
 // would never see it, then or later. Keepsake runs Google Ads; this is the
-// common case, not the edge case. Editing the script below changes its CSP hash —
+// common case, not the edge case. The other half of that, added 2026-09-08:
+// the redirect carries `location.search` across to `/welcome` instead of
+// dropping it. `location.replace("/welcome")` discarded the whole query
+// string, so every `utm_*`, `gclid` and `fbclid` on the single most-linked
+// URL this product has died at exactly the visitor it describes — a
+// first-timer arriving from an ad or a shared link, which is the only
+// visitor this branch ever runs for. Attribution for the campaign that paid
+// for the click was therefore never observable. `q` is still the one
+// parameter that skips the explainer entirely; everything else now rides
+// along to it. Editing the script below changes its CSP hash —
 // see the note above `PREHYDRATION_SCRIPT`'s enumeration in
 // `apps/web/public/_headers` and `apps/api/src/middleware/securityHeaders.ts`,
 // which must be updated together, byte for byte.
@@ -83,7 +92,7 @@ const PREHYDRATION_SCRIPT = `
     var searching = new URLSearchParams(window.location.search).has("q");
     if (window.location.pathname === "/" && !searching && !returning) {
       window.localStorage.setItem(VISITED_KEY, "1");
-      window.location.replace("/welcome");
+      window.location.replace("/welcome" + window.location.search);
       return;
     }
     if (!returning) window.localStorage.setItem(VISITED_KEY, "1");
@@ -175,6 +184,35 @@ const ROOT_JSON_LD = JSON.stringify([
   },
 ]);
 
+/**
+ * The cache-busting token on every `/fonts/*.ttf` URL in this file and in
+ * `apps/site/public/site.css`.
+ *
+ * `apps/web/public/_headers` serves `/fonts/*` as
+ * `max-age=31536000, immutable` under filenames that carry no content hash —
+ * `Fraunces-VF.ttf` is `Fraunces-VF.ttf` forever. `immutable` is a promise
+ * that the bytes at a URL will never change, and a browser that has one
+ * takes it literally: it will not revalidate for a year, not even on a
+ * reload. So replacing a font file in place — a new Fraunces cut, a
+ * subsetted CourierPrime — would leave every returning visitor rendering the
+ * old one, invisibly, for up to twelve months, while a fresh visitor got the
+ * new one. The two would not be reconcilable by anything short of renaming
+ * the file.
+ *
+ * The `?v=` makes the URL, and therefore the cache key, a function of the
+ * bytes: replace a font and the token changes, so every visitor fetches the
+ * new object once and keeps caching it for a year. It is a plain literal
+ * rather than something computed at export time because `site.css` is a
+ * static file with no build step of its own and has to carry the same value
+ * — one hand-written token in two files, with a check that recomputes it.
+ *
+ * That check is preflight's `fonts`: it hashes `apps/web/public/fonts/*.ttf`
+ * and fails if either file's token is not the hash of what is actually on
+ * disk. So the failure mode is "preflight is red until you paste the new
+ * token", not "returning visitors silently keep the old font".
+ */
+const FONT_VERSION = "a20ee29a";
+
 const ROOT_CSS = `
 html, body, #root { height: 100%; }
 html {
@@ -196,7 +234,7 @@ body { margin: 0; background: #D2BC97; }
 
 @font-face {
   font-family: "Fraunces";
-  src: url("/fonts/Fraunces-VF.ttf") format("truetype-variations");
+  src: url("/fonts/Fraunces-VF.ttf?v=${FONT_VERSION}") format("truetype-variations");
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
@@ -204,7 +242,7 @@ body { margin: 0; background: #D2BC97; }
 }
 @font-face {
   font-family: "Fraunces";
-  src: url("/fonts/Fraunces-Italic-VF.ttf") format("truetype-variations");
+  src: url("/fonts/Fraunces-Italic-VF.ttf?v=${FONT_VERSION}") format("truetype-variations");
   font-weight: 100 900;
   font-style: italic;
   font-display: swap;
@@ -212,28 +250,28 @@ body { margin: 0; background: #D2BC97; }
 }
 @font-face {
   font-family: "CourierPrime";
-  src: url("/fonts/CourierPrime-Regular.ttf") format("truetype");
+  src: url("/fonts/CourierPrime-Regular.ttf?v=${FONT_VERSION}") format("truetype");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "CourierPrime";
-  src: url("/fonts/CourierPrime-Bold.ttf") format("truetype");
+  src: url("/fonts/CourierPrime-Bold.ttf?v=${FONT_VERSION}") format("truetype");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "CourierPrime";
-  src: url("/fonts/CourierPrime-Italic.ttf") format("truetype");
+  src: url("/fonts/CourierPrime-Italic.ttf?v=${FONT_VERSION}") format("truetype");
   font-weight: 400;
   font-style: italic;
   font-display: swap;
 }
 @font-face {
   font-family: "CourierPrime";
-  src: url("/fonts/CourierPrime-BoldItalic.ttf") format("truetype");
+  src: url("/fonts/CourierPrime-BoldItalic.ttf?v=${FONT_VERSION}") format("truetype");
   font-weight: 700;
   font-style: italic;
   font-display: swap;
@@ -316,17 +354,29 @@ export default function Root({ children }: { children: React.ReactNode }): React
         */}
         <template dangerouslySetInnerHTML={{ __html: "<!--KEEPSAKE_OG-->" }} />
 
-        <link rel="icon" href="/favicon.png" />
+        {/* Two icon declarations reach the browser, and that is deliberate
+            rather than a leftover: this one, and a bare
+            `<link rel="icon" href="/favicon.ico">` Expo injects into every
+            exported page from `app.base.json`'s `web.favicon`. They are the
+            same artwork — Expo generates the .ico from this very PNG — so a
+            browser choosing either shows the same mark, and the .ico is what
+            the crawlers and old clients that only ask for `/favicon.ico`
+            find. What this one now carries is `type` and `sizes`, which the
+            injected one has no way to state: without them a browser has to
+            fetch an icon to learn what it is. Do not add a third.
+            `apps/site`'s static pages declare none and fall back to
+            `/favicon.ico`, which is in `dist/` for exactly that reason. */}
+        <link rel="icon" href="/favicon.png" type="image/png" sizes="64x64" />
         <link
           rel="preload"
-          href="/fonts/Fraunces-VF.ttf"
+          href={`/fonts/Fraunces-VF.ttf?v=${FONT_VERSION}`}
           as="font"
           type="font/ttf"
           crossOrigin="anonymous"
         />
         <link
           rel="preload"
-          href="/fonts/CourierPrime-Regular.ttf"
+          href={`/fonts/CourierPrime-Regular.ttf?v=${FONT_VERSION}`}
           as="font"
           type="font/ttf"
           crossOrigin="anonymous"

@@ -38,6 +38,7 @@ import {
   resolveNumericExpr,
   callArguments,
   extractWorkflowRunBlocks,
+  fontVersionToken,
 } from "./preflight.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -68,16 +69,30 @@ function runOne(name, files) {
 
 // ── fonts ──────────────────────────────────────────────────────────────
 
-const HTML_GOOD = `
+/** The token the fixture tree's two fonts hash to. */
+const FIXTURE_FONT_FILES = [
+  ["Fraunces.ttf", Buffer.from("x")],
+  ["Inter.ttf", Buffer.from("x")],
+];
+const FIXTURE_TOKEN = fontVersionToken(FIXTURE_FONT_FILES);
+
+/** `+html.tsx` as it really is: a FONT_VERSION constant, `?v=${FONT_VERSION}`
+ * inside the CSS template literal, and the same token on the preload links. */
+function htmlGood({ version = FIXTURE_TOKEN, css = null } = {}) {
+  return `
+  const FONT_VERSION = "${version}";
   <style>
-    @font-face { font-family: Fraunces; src: url(/fonts/Fraunces.ttf); }
-    @font-face { font-family: Inter; src: url("/fonts/Inter.ttf"); }
+    ${css ?? `@font-face { font-family: Fraunces; src: url(/fonts/Fraunces.ttf?v=\${FONT_VERSION}); }
+    @font-face { font-family: Inter; src: url("/fonts/Inter.ttf?v=\${FONT_VERSION}"); }`}
   </style>
 `;
+}
+
+const SITE_CSS_GOOD = `@font-face { src: url("/fonts/Fraunces.ttf?v=${FIXTURE_TOKEN}"); }`;
 
 test("fonts: passes when every referenced font exists and every font is referenced", () => {
   const result = runOne("fonts", {
-    "apps/web/app/+html.tsx": HTML_GOOD,
+    "apps/web/app/+html.tsx": htmlGood(),
     "apps/web/public/fonts/Fraunces.ttf": "x",
     "apps/web/public/fonts/Inter.ttf": "x",
   });
@@ -86,7 +101,7 @@ test("fonts: passes when every referenced font exists and every font is referenc
 
 test("fonts: fails when a referenced font file is missing", () => {
   const result = runOne("fonts", {
-    "apps/web/app/+html.tsx": HTML_GOOD,
+    "apps/web/app/+html.tsx": htmlGood(),
     "apps/web/public/fonts/Fraunces.ttf": "x",
     // Inter.ttf missing
   });
@@ -95,14 +110,69 @@ test("fonts: fails when a referenced font file is missing", () => {
 });
 
 test("fonts: warns on an unreferenced ttf without failing", () => {
+  // Extra.ttf is unreferenced AND changes the hash of what is on disk, so the
+  // fixture's token has to be computed over all three or this "warn" case
+  // would fail on the token instead.
+  const files = [...FIXTURE_FONT_FILES, ["Extra.ttf", Buffer.from("x")]];
   const result = runOne("fonts", {
-    "apps/web/app/+html.tsx": HTML_GOOD,
+    "apps/web/app/+html.tsx": htmlGood({ version: fontVersionToken(files) }),
     "apps/web/public/fonts/Fraunces.ttf": "x",
     "apps/web/public/fonts/Inter.ttf": "x",
     "apps/web/public/fonts/Extra.ttf": "x",
   });
   assert.equal(result.status, "warn");
   assert.match(result.details.join("\n"), /Extra\.ttf/);
+});
+
+// The three cases below are the whole point of the `?v=` token: `_headers`
+// serves /fonts/* `immutable` for a year under filenames that never change,
+// so a font replaced in place is invisible to every returning visitor. Each
+// mutation here is one a real change would make.
+
+test("fonts: fails when a font is replaced but FONT_VERSION is not bumped", () => {
+  const result = runOne("fonts", {
+    "apps/web/app/+html.tsx": htmlGood(),
+    // Different bytes → a different hash → the declared token is now stale.
+    "apps/web/public/fonts/Fraunces.ttf": "a new cut of Fraunces",
+    "apps/web/public/fonts/Inter.ttf": "x",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /FONT_VERSION is/);
+});
+
+test("fonts: fails when a reference carries no ?v= token at all", () => {
+  const result = runOne("fonts", {
+    "apps/web/app/+html.tsx": htmlGood({
+      css: '@font-face { src: url("/fonts/Fraunces.ttf"); }\n    @font-face { src: url("/fonts/Inter.ttf?v=${FONT_VERSION}"); }',
+    }),
+    "apps/web/public/fonts/Fraunces.ttf": "x",
+    "apps/web/public/fonts/Inter.ttf": "x",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /no \?v= token/);
+});
+
+test("fonts: fails when site.css's copy of the token goes stale", () => {
+  // The static marketing stylesheet has no build step, so it repeats the
+  // token by hand — the copy most likely to be forgotten.
+  const result = runOne("fonts", {
+    "apps/web/app/+html.tsx": htmlGood(),
+    "apps/site/public/site.css": '@font-face { src: url("/fonts/Fraunces.ttf?v=0badcafe"); }',
+    "apps/web/public/fonts/Fraunces.ttf": "x",
+    "apps/web/public/fonts/Inter.ttf": "x",
+  });
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /site\.css references \/fonts\/Fraunces\.ttf at \?v=0badcafe/);
+});
+
+test("fonts: passes with site.css carrying the same token", () => {
+  const result = runOne("fonts", {
+    "apps/web/app/+html.tsx": htmlGood(),
+    "apps/site/public/site.css": SITE_CSS_GOOD,
+    "apps/web/public/fonts/Fraunces.ttf": "x",
+    "apps/web/public/fonts/Inter.ttf": "x",
+  });
+  assert.equal(result.status, "pass");
 });
 
 test("fonts: skips when +html.tsx is not present", () => {
@@ -1721,10 +1791,16 @@ test("csp-script-hash: this repository's real hashes match the scripts they auth
   // sha256-0+1/dyhe… against a 1261-char script by hand; this asserts the
   // check computes the same thing, so an extractor grabbing the wrong bytes
   // cannot look like a policy that is genuinely in sync.
+  //
+  // The pinned value moves whenever `PREHYDRATION_SCRIPT` really changes —
+  // it is sha256-Xrcu2v… over 1374 chars since 2026-09-08, when the root
+  // redirect started carrying `location.search` across to `/welcome`. Pinned
+  // rather than recomputed on purpose: a test that hashed the same source the
+  // check hashes would agree with any bytes at all.
   const result = runChecks(["csp-script-hash"], REPO_ROOT)[0];
   assert.equal(result.status, "pass", result.details.join("\n"));
   const text = result.details.join("\n");
-  assert.match(text, /PREHYDRATION_SCRIPT: sha256-0\+1\/dyhem\/DQyJcleu1QSKhUVK\/gq5R519iI9mtWheM= — apps\/web\/app\/\+html\.tsx \(1349 chars\)/);
+  assert.match(text, /PREHYDRATION_SCRIPT: sha256-Xrcu2vG2x\+FPB1xtg6DFrNGNiO3x0AQ6vK5XstpOJM8= — apps\/web\/app\/\+html\.tsx \(1374 chars\)/);
   assert.match(text, /apps\/site inline script: sha256-d6qbtEYff\/sB38YyzuzhASbVmmOidU\/UFC9mNit47j4=/);
   // The one hash it cannot compute must say so rather than blending in.
   assert.match(text, /NOT against Expo's actual output/);

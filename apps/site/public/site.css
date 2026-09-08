@@ -12,45 +12,52 @@
 /* ---------- Fonts ---------- */
 /* Fraunces (variable, serif headlines/story) + CourierPrime (static, mono
    captions/labels/stamps/buttons) — served by the app at these exact paths;
-   this stylesheet only references them. */
+   this stylesheet only references them.
+
+   The `?v=` on every URL is a content token over apps/web/public/fonts/*.ttf,
+   because those files are served `max-age=31536000, immutable` under names
+   that never change — see FONT_VERSION in apps/web/app/+html.tsx for what
+   goes wrong without it. The same value has to appear in both files, and
+   preflight's `fonts` check recomputes it from the font bytes and fails if
+   either is stale. */
 @font-face {
   font-family: "Fraunces";
-  src: url("/fonts/Fraunces-VF.ttf") format("truetype-variations");
+  src: url("/fonts/Fraunces-VF.ttf?v=a20ee29a") format("truetype-variations");
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "Fraunces";
-  src: url("/fonts/Fraunces-Italic-VF.ttf") format("truetype-variations");
+  src: url("/fonts/Fraunces-Italic-VF.ttf?v=a20ee29a") format("truetype-variations");
   font-weight: 100 900;
   font-style: italic;
   font-display: swap;
 }
 @font-face {
   font-family: "CourierPrime";
-  src: url("/fonts/CourierPrime-Regular.ttf") format("truetype");
+  src: url("/fonts/CourierPrime-Regular.ttf?v=a20ee29a") format("truetype");
   font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "CourierPrime";
-  src: url("/fonts/CourierPrime-Bold.ttf") format("truetype");
+  src: url("/fonts/CourierPrime-Bold.ttf?v=a20ee29a") format("truetype");
   font-weight: 700;
   font-style: normal;
   font-display: swap;
 }
 @font-face {
   font-family: "CourierPrime";
-  src: url("/fonts/CourierPrime-Italic.ttf") format("truetype");
+  src: url("/fonts/CourierPrime-Italic.ttf?v=a20ee29a") format("truetype");
   font-weight: 400;
   font-style: italic;
   font-display: swap;
 }
 @font-face {
   font-family: "CourierPrime";
-  src: url("/fonts/CourierPrime-BoldItalic.ttf") format("truetype");
+  src: url("/fonts/CourierPrime-BoldItalic.ttf?v=a20ee29a") format("truetype");
   font-weight: 700;
   font-style: italic;
   font-display: swap;

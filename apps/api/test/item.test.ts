@@ -130,13 +130,45 @@ describe("GET /item/:id", () => {
     );
   });
 
+  it("replaces the shell's site-wide meta description with the listing's own", async () => {
+    // The plain `<meta name="description">` — the one a search result shows —
+    // was the last tag this rewriter left alone, so every listing page in the
+    // sitemap carried the shell's "Give a keepsake a second life.", identical
+    // on all of them. Both halves are asserted: the shell's copy is gone (the
+    // first description in <head> is the one that counts) and the listing's
+    // own is there.
+    const ownerId = await insertOwner();
+    const listingId = await insertApprovedListing({
+      ownerId,
+      title: "A quiet teacup",
+      story: "She used it every single day for her first cup of tea.",
+    });
+
+    const html = await (await SELF.fetch(`http://x/item/${listingId}`)).text();
+
+    expect(html).toContain(
+      '<meta name="description" content="She used it every single day for her first cup of tea.">',
+    );
+    expect(html).not.toContain('content="Give a keepsake a second life."');
+    // Exactly one, not the shell's plus ours.
+    expect(html.match(/<meta name="description"/g)).toHaveLength(1);
+  });
+
   it("404s the unchanged shell for an unknown id", async () => {
     const res = await SELF.fetch("http://x/item/01UNKNOWNIDXXXXXXXXXXXXXXX");
     expect(res.status).toBe(404);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
     const html = await res.text();
-    expect(html).not.toContain("og:title");
+    // The shell comes back as it is served everywhere else — its own title
+    // and its site-wide OG defaults intact — with nothing listing-specific
+    // added. (It used to assert `not.toContain("og:title")`, which only held
+    // because the fixture had no OG tags at all; the fixture now carries the
+    // ones the real export ships, so this has to name what "unchanged"
+    // means.)
     expect(html).toContain("keepsake test fixture");
+    expect(html).toContain('<meta property="og:title" content="Keepsake" />');
+    expect(html).not.toContain("og:url");
+    expect(html).not.toContain('rel="canonical"');
   });
 
   it("404s the unchanged shell for a pending listing", async () => {
@@ -150,7 +182,12 @@ describe("GET /item/:id", () => {
     const res = await SELF.fetch(`http://x/item/${listingId}`);
     expect(res.status).toBe(404);
     const html = await res.text();
-    expect(html).not.toContain("og:title");
+    // The strongest form of "never confirm it exists": the row's own title
+    // appears nowhere in the response, and no per-listing tag was injected.
+    expect(html).not.toContain("Not public yet");
+    expect(html).not.toContain("og:url");
+    expect(html).not.toContain('rel="canonical"');
+    expect(html).toContain("keepsake test fixture");
   });
 });
 

@@ -73,10 +73,18 @@ appear (only `status='approved'`); given/hidden/pending are all excluded from th
 
 `GET /item/:id` (`src/routes/item.ts`) reads the exported shell through `env.ASSETS`, injects
 `og:title`/`og:description`/`og:image` (+width/height)/`og:url`/`twitter:card`/`<title>`/canonical
-via `HTMLRewriter().on("head", { element })`, and serves the *unchanged* shell at 404 for any
+and the plain `<meta name="description">` via `HTMLRewriter().on("head", { element })`, and serves
+the *unchanged* shell at 404 for any
 non-public id — never confirming existence to a caller who can't see it, the same rule
-`src/routes/images.ts` already followed for photos. `GET /sitemap.xml` (`src/routes/sitemap.ts`)
-lists the four static pages plus every `approved` listing with `lastmod`; both routes only run at
+`src/routes/images.ts` already followed for photos. (The plain description was the one tag this
+rewriter left alone until 2026-09-08, so every listing page in the sitemap carried the shell's
+site-wide "Give a keepsake a second life." — the same sentence a search result would show for all
+of them. It now comes from the same `storyExcerpt` as `og:description`.) `GET /sitemap.xml`
+(`src/routes/sitemap.ts`) lists the four static pages plus every `approved` listing; only the
+listings carry `<lastmod>`, from `listings.updated_at`. The static four used to be stamped with
+the generation time, which told a crawler /about, /privacy and /terms had changed every ten
+minutes forever — a `lastmod` that is always "now" is not a date, and Google's guidance is that it
+disregards the field on a site whose dates it cannot trust, listings included. Both routes only run at
 all because **production's** `run_worker_first` list (and the vitest fixture's mirror in
 `vitest.config.ts`) names `/item/*`, `/sitemap.xml` and `/robots.txt` explicitly — otherwise the
 static-assets system's SPA fallback would answer first. Dev and preview set
