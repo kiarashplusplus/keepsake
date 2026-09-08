@@ -8,11 +8,13 @@ import { dailyDigest } from "./cron/dailyDigest.js";
 import { moderationRetry } from "./cron/moderationRetry.js";
 import { orphanSweep } from "./cron/orphanSweep.js";
 import { searchIndexRetry } from "./cron/searchIndexRetry.js";
+import { bulkRunner } from "./cron/bulkRunner.js";
 import { type CronJobName, writeCronHeartbeat } from "./cron/registry.js";
 import { ukBlock } from "./middleware/ukBlock.js";
 import { securityHeaders } from "./middleware/securityHeaders.js";
 import { geoRoutes } from "./routes/geo.js";
 import { photoRoutes } from "./routes/photos.js";
+import { bulkRoutes } from "./routes/bulk.js";
 import { listingRoutes } from "./routes/listings.js";
 import { meRoutes } from "./routes/me.js";
 import { imageRoutes } from "./routes/images.js";
@@ -317,6 +319,11 @@ app.get("/version.json", (c) => {
 
 app.route("/api/geo", geoRoutes);
 app.route("/api/photos", photoRoutes);
+// Estate bulk upload (docs/design/bulk-upload.md). Its own router-level
+// `featureFlag(bulkUploadEnabled)` answers 404 — never 403 — everywhere the
+// flag is off, so a tier that has not enabled the pilot is indistinguishable
+// from one where the feature does not exist.
+app.route("/api/bulk", bulkRoutes);
 app.route("/api/listings", listingRoutes);
 app.route("/api/me", meRoutes);
 app.route("/api/feed", feedRoutes);
@@ -447,6 +454,9 @@ async function scheduled(controller: ScheduledController, env: Env, ctx: Executi
       break;
     case "7 0 * * *":
       await runCron("dailyDigest", dailyDigest, env, ctx);
+      break;
+    case "*/3 * * * *":
+      await runCron("bulkRunner", bulkRunner, env, ctx);
       break;
     default:
       console.warn("scheduled: unrecognized cron pattern", { cron: controller.cron });

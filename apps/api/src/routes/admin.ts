@@ -29,6 +29,7 @@ import {
   type AdminTestErrorResult,
 } from "@keepsake/contracts/admin";
 import { LISTING_STATUSES, type Category, type ListingStatus, type OwnerListing } from "@keepsake/contracts/listing";
+import { AdminMintBulkGrantInput } from "@keepsake/contracts/bulk";
 import { readCronHeartbeats } from "../cron/registry.js";
 import { ObservatoryQuery, type Observatory } from "@keepsake/contracts/observatory";
 import { buildAppMetrics } from "../observatory/appMetrics.js";
@@ -39,7 +40,15 @@ import { maskEmail, type RequestStatus } from "@keepsake/contracts/request";
 import type { ReportReason } from "@keepsake/contracts/report";
 import { captureException, captureMessage } from "@keepsake/observability/capture";
 import type { Env } from "../env.js";
-import { DEFAULT_SUGGEST_DAILY_BUDGET, emailProviderName, parseIntVar, reportAutohideThreshold } from "../env.js";
+import {
+  bulkMaxItemsPerBatch,
+  bulkMaxPhotosPerBatch,
+  DEFAULT_SUGGEST_DAILY_BUDGET,
+  emailProviderName,
+  parseIntVar,
+  reportAutohideThreshold,
+} from "../env.js";
+import { mintGrant, serializeBulkGrant } from "../bulk/grants.js";
 import { ok, fail } from "../lib/respond.js";
 import { ulid } from "../lib/ids.js";
 import { requireParam } from "../lib/params.js";
@@ -1139,4 +1148,33 @@ adminRoutes.post("/listings/:id/resuggest", async (c) => {
     after: { category: nextCategory, aspects: await fetchAspectRows(c.env, id) },
   };
   return ok(c, applied);
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/bulk/grants
+// ---------------------------------------------------------------------------
+/**
+ * Minting admission for the estate bulk-upload pilot. There is no self-serve
+ * path to this — an operator mints a grant for one `owner_id` by hand, and
+ * hands the resulting `id` to the giver out of band, exactly as
+ * `packages/contracts/src/bulk.ts`'s doc comment on `AdminMintBulkGrantInput`
+ * says. Behind the same `burst("RL_ADMIN")` + `adminAuth()` every other
+ * route in this file sits behind (mounted once, above).
+ *
+ * `items`/`photos` default to the same per-batch ceilings
+ * `packages/contracts/src/bulk.ts` caps a single batch at
+ * (`bulkMaxItemsPerBatch`/`bulkMaxPhotosPerBatch`) — an operator minting a
+ * grant with no opinion about size gets exactly enough for one full batch,
+ * not an arbitrary number that happens to be convenient here.
+ */
+adminRoutes.post("/bulk/grants", validateBody(AdminMintBulkGrantInput), async (c) => {
+  const input = c.get("validatedBody") as AdminMintBulkGrantInput;
+
+  const grant = await mintGrant(c.env, {
+    ownerId: input.owner_id,
+    items: input.items ?? bulkMaxItemsPerBatch(c.env),
+    photos: input.photos ?? bulkMaxPhotosPerBatch(c.env),
+  });
+
+  return ok(c, serializeBulkGrant(grant), 201);
 });
