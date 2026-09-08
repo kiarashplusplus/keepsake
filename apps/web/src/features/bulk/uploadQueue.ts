@@ -353,10 +353,20 @@ export class UploadQueue {
     this.pump();
   }
 
-  /** Re-arms a photo that failed (retryable) or needed reselection, with
-   * either its still-resident source or a freshly picked replacement. */
-  retry(clientPhotoId: string, source: Blob): void {
-    this.enqueue(clientPhotoId, source);
+  /** Re-arms a photo that failed (retryable) or needed reselection. Pass a
+   * freshly picked `source` when the giver had to re-select the file
+   * (`needsReselection`); omit it to retry against whatever this batch's
+   * IndexedDB still holds for this id — the resident-source path
+   * `handleFailure`'s `savePhotoSource` call exists for (#293). If neither
+   * a source nor a resident one exists, this reports `needsReselection`
+   * again rather than silently doing nothing. */
+  async retry(clientPhotoId: string, source?: Blob): Promise<void> {
+    const resolved = source ?? (await getPhotoSource(this.driver, this.batchKey, clientPhotoId));
+    if (resolved === null) {
+      this.onPhotoUpdate(clientPhotoId, { needsReselection: true, hasLocalSource: false });
+      return;
+    }
+    this.enqueue(clientPhotoId, resolved);
   }
 
   /** Seeds the queue from whatever `storage.ts` has left over from a prior

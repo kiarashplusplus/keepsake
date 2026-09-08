@@ -350,6 +350,15 @@ export default function BulkPhotos(): React.ReactElement {
                 onToggle={() => toggleSelected(photo.clientPhotoId)}
                 onRemove={() => void workspace.removePhoto(photo.clientPhotoId)}
                 onRetry={() => {
+                  // The queue keeps a retryable photo's source resident in
+                  // IndexedDB when it can (`needsReselection: false`)
+                  // specifically so a retry doesn't need a re-pick — only
+                  // fall back to the file picker when the source is
+                  // genuinely gone (#293).
+                  if (!photo.needsReselection) {
+                    workspace.retryPhoto(photo.clientPhotoId);
+                    return;
+                  }
                   void pickImages({ multiple: false }).then((files) => {
                     const file = files[0];
                     if (file !== undefined) workspace.retryPhoto(photo.clientPhotoId, file);

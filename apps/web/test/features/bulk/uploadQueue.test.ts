@@ -442,6 +442,44 @@ describe("UploadQueue", () => {
     expect(calls).toBe(2);
   });
 
+  it("retry() with no source argument re-enqueues from the resident source in IndexedDB, no re-selection needed (#293)", async () => {
+    const driver = createMemoryDriver();
+    await savePhotoSource(driver, "batch-1", "photo-a", new Blob(["resident"]));
+    const updates: Partial<BulkDraftPhoto>[] = [];
+
+    const queue = new UploadQueue({
+      batchKey: "batch-1",
+      driver,
+      uploadPhoto: async () => ({ ok: true, data: photoSummary("photo-a") }),
+      prepareUpload: async () => preparedUpload(),
+      onPhotoUpdate: (_id, patch) => updates.push(patch),
+    });
+
+    await queue.retry("photo-a");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(updates.some((p) => p.needsReselection === true)).toBe(false);
+    expect(updates.at(-1)).toMatchObject({ status: "complete" });
+  });
+
+  it("retry() with no source and no resident one reports needsReselection instead of doing nothing (#293)", async () => {
+    const driver = createMemoryDriver();
+    const updates: Partial<BulkDraftPhoto>[] = [];
+
+    const queue = new UploadQueue({
+      batchKey: "batch-1",
+      driver,
+      uploadPhoto: async () => ({ ok: true, data: photoSummary("photo-a") }),
+      prepareUpload: async () => preparedUpload(),
+      onPhotoUpdate: (_id, patch) => updates.push(patch),
+    });
+
+    await queue.retry("photo-a");
+
+    expect(updates).toEqual([{ needsReselection: true, hasLocalSource: false }]);
+  });
+
   it("destroy() aborts in-flight work and stops the queue from continuing", async () => {
     const driver = createMemoryDriver();
     let uploadCalls = 0;

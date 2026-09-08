@@ -129,7 +129,10 @@ export type UseBulkWorkspaceResult = {
   // photos
   addPhotos: (files: File[]) => Promise<void>;
   removePhoto: (clientPhotoId: string) => Promise<void>;
-  retryPhoto: (clientPhotoId: string, file: File) => void;
+  /** `file` is only needed when the photo's source didn't survive
+   * (`needsReselection`); omitted, this retries against the resident
+   * source the queue kept in IndexedDB for exactly this case (#293). */
+  retryPhoto: (clientPhotoId: string, file?: File) => void;
 
   // grouping
   groupAsOneItem: (photoClientIds: string[]) => Promise<{ ok: boolean; error?: string; itemClientId?: string }>;
@@ -458,9 +461,9 @@ export function useBulkWorkspace(clientBatchKey: string): UseBulkWorkspaceResult
     [clientBatchKey, driver, pushItemToServer],
   );
 
-  const retryPhoto = React.useCallback((clientPhotoId: string, file: File) => {
+  const retryPhoto = React.useCallback((clientPhotoId: string, file?: File) => {
     dispatchSync({ type: "update_photo", clientPhotoId, patch: { status: "queued", error: null, errorCode: null, canRetry: false } });
-    uploadQueueRef.current?.retry(clientPhotoId, file);
+    void uploadQueueRef.current?.retry(clientPhotoId, file);
   }, []);
 
   // ---------------------------------------------------------------------
