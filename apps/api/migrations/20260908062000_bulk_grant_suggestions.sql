@@ -1,0 +1,22 @@
+-- Cover suggestions get their own admission counter on `bulk_grants`.
+--
+-- A separate migration rather than an edit to 20260908043946_bulk_upload.sql,
+-- which added that table: the column was written into that file while the
+-- bulk-upload branch was still unmerged, and the argument for editing in place
+-- was that the file had never been applied anywhere. PR #257 merged, so that
+-- argument expired — `tools/preflight`'s `migration-drift` check compares every
+-- migration against its landed state on `origin/main` and is right to refuse.
+--
+-- Why a third counter rather than a share of `photos_remaining`: a suggestion
+-- is optional work. A batch that never asks for one should not thereby be
+-- allowed more photos, and a batch that spends every suggestion must still be
+-- able to finish uploading and submit. `DEFAULT 0` so a grant minted before
+-- this migration cannot spend suggestions it was never admitted for; the
+-- operator route fills it in explicitly from `MAX_BATCH_SUGGESTIONS`.
+--
+-- It cannot inherit the give flow's ceiling either: `POST
+-- /api/photos/:id/suggest` is bounded by `SUGGEST_IP_DAILY_BUDGET`, a per-IP KV
+-- counter defaulting to 30 a day — a 100-item estate exhausts it on item 31 —
+-- and a KV counter is eventually consistent by its own documentation, so it
+-- could not bound a batch exactly even at a larger number.
+ALTER TABLE bulk_grants ADD COLUMN suggestions_remaining INTEGER NOT NULL DEFAULT 0;
