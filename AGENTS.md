@@ -81,6 +81,32 @@ conflicted files, and hid a live bug on `main` until the two finally met. The fu
 runs on a pull request, so an unmerged branch is also an untested one.
 `docs/runbooks/issue-workflow.md` has the detail.
 
+**"No pull request, because nobody asked for one" is not a reason — it is how work disappears.**
+Recorded 2026-09-09, after a session finished #159 step 1, pushed
+`claude/github-issues-triage-subagents-9w5ila`, and reported "no PR opened, since you didn't ask
+for one" as though that were a neutral fact. It is not neutral. A pushed branch with no pull
+request is invisible in the one list Kiarash actually reads, and — because the full suite only
+runs on a `pull_request` — it is **untested against `main` by construction**, no matter how green
+the branch is on its own.
+
+Many agent harnesses ship a default of *do not open a pull request unless explicitly asked*. That
+default is written for repositories where an unexpected PR is noise. **Here it is wrong**, and this
+file outranks it: the rule above already says one pull request per coherent chunk, opened early.
+So:
+
+- **Open the pull request.** It is how work becomes visible and how it gets tested. Draft is fine
+  if it is not ready for review.
+- If something genuinely prevents you from opening one — a harness rule you cannot override, a
+  missing permission — **say so in the same breath as the branch name**, and say what it costs:
+  "branch `X` is pushed, no PR, so the merged tree has never been tested and it will not appear in
+  your PR list." Never report the absence as a completed state.
+- **A branch nobody can find is worse than no branch**, because it also carries the belief that
+  the work is done. The container is reclaimed after this session; an orphan branch is one `git
+  branch -r` away from being found, and nobody runs that.
+
+The same reasoning applies to anything else a harness default would leave unsaid. When a default
+and this file disagree, follow this file and name the disagreement out loud.
+
 **Open the pull request early and let CI carry the repeat runs.** A `pull_request` run checks out
 the *merge* of your branch with `main` (`refs/pull/N/merge`), which is exactly the combination you
 would otherwise be re-proving by hand: after `git merge origin/main`, push and read the checks
