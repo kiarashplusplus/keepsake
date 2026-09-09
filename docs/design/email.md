@@ -201,10 +201,19 @@ inherits both automatically instead of restating them:
   isn't a company — `apps/site/public/terms.html` says so plainly — so identification names the
   person, not just the trade name, alongside the `hello@keepsake.ing` contact every template
   already carries elsewhere.
-- **Unsubscribe**: "To unsubscribe from messages like this, email hello@keepsake.ing and say so —
-  requests are honored within 10 business days." CASL accepts a stated electronic address the
-  recipient can write to; it does not require a one-click mechanism. This line stays exactly as
-  it was — see below for what was *added* next to it.
+- **Unsubscribe**: "To stop optional notifications — someone asking for something you posted —
+  email hello@keepsake.ing and say so; requests are honored within 10 business days." CASL accepts
+  a stated electronic address the recipient can write to; it does not require a one-click
+  mechanism. See below for the real link now offered next to it.
+- **What still arrives**: "Messages you asked for — verifying your email, confirming a request,
+  being chosen, recovering access — are part of what you started, and still arrive."
+
+  This third line is what keeps the second one true. The footer goes out on all eight kinds, and
+  `TRANSACTIONAL_EMAIL_KINDS` sends seven of them regardless of suppression. An earlier draft said
+  "unsubscribe from messages like this", which is false the moment it rides on a `chosen` or a
+  `confirm_request` — the reader is told they can stop a message that will arrive either way.
+  s.6(2)(c) lets a mechanism cover "a specified class" of messages, so naming the class is both
+  accurate and sufficient; claiming to cover everything and then not doing so is neither.
 
 **What was open, and what closed it.** The first pass left two things unclosed rather than papered
 over. One is still open:
@@ -249,7 +258,17 @@ a real per-recipient URL right before a message is actually sent: `unsubscribeWe
 `/api/unsubscribe/:token`) in the `List-Unsubscribe` header alongside RFC 8058's
 `List-Unsubscribe-Post: List-Unsubscribe=One-Click` — both providers' send paths (`cf`'s
 `EmailMessageBuilder.headers` and Resend's `headers` field) support arbitrary headers, so both get
-this identically. When `UNSUBSCRIBE_SECRET` is unset, both URLs come back `null` and the
+this identically.
+
+**The headers are gated by kind; the body link is not.** The link in the body rides on every
+message — it is the s.6(2)(c) mechanism, and it suppresses exactly the class the footer says it
+does. `List-Unsubscribe-Post` is a different promise, made to the mail client rather than the
+reader: it asks Gmail and Yahoo to show their own Unsubscribe button and to treat one press as the
+end of this kind of mail. On a kind `TRANSACTIONAL_EMAIL_KINDS` exempts, that promise is not kept —
+the next `chosen` arrives anyway — and a recipient who presses Unsubscribe and keeps hearing from
+us reaches for the spam button instead, which costs the deliverability of every transactional
+message the product depends on. So an exempt kind carries `mailto:` alone in `List-Unsubscribe` and
+no `List-Unsubscribe-Post` at all: a real mechanism, no one-click claim. When `UNSUBSCRIBE_SECRET` is unset, both URLs come back `null` and the
 substitution falls back to the same `mailto:hello@keepsake.ing` address the unchanged CASL line
 already names — a working, less convenient mechanism, never a dead placeholder shipped into a real
 inbox.

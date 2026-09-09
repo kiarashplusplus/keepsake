@@ -95,18 +95,28 @@ export function plainLinkLine(link: string): string {
  *
  * **Unsubscribe (s.6(2)(c)/6(3)).** CASL accepts a stated electronic
  * address the recipient can write to, provided requests are given effect
- * within 10 business days at no cost — it does not require a one-click
- * mechanism. That's what this line offers. It is NOT the one-click flow
- * CASL also permits (no token, no route, no storage exist for this yet),
- * and *honouring* a request against a message like `chosen` ("you were
- * chosen") or `confirmRequest` ("confirm your request") is a product
- * decision nobody has made — silently dropping either message defeats the
- * transaction it's part of. Both gaps are named in `docs/design/email.md`
- * rather than papered over here.
+ * within 10 business days at no cost, and separately permits a one-click
+ * mechanism. Both are offered: the address below, and a real per-recipient
+ * link `sendMail` substitutes at send time.
+ *
+ * **These lines must be true of every message that can carry them**, and
+ * that is why they name what stops rather than saying "messages like this".
+ * s.6(2)(c) lets a mechanism cover "a specified class" of messages, and the
+ * class this one covers is the suppressible kinds — in practice
+ * `new_request`. `sendMail`'s `TRANSACTIONAL_EMAIL_KINDS` sends the other
+ * seven regardless of suppression, because silently dropping `chosen` or
+ * `confirm_request` would defeat the transaction the recipient themselves
+ * started. A footer promising to stop "messages like this" on one of those
+ * seven would be false on the face of it, and — with
+ * `List-Unsubscribe-Post` attached — would invite a recipient to press
+ * their client's Unsubscribe button and then keep hearing from us, which is
+ * how a sender earns spam complaints. So the wording enumerates instead,
+ * and `withUnsubscribeLink` withholds the one-click *headers* from the
+ * exempt kinds while still carrying the mechanism itself.
  */
 export const CASL_IDENTIFICATION_LINE = "Sent by Kiarash Adl, an individual doing business as Keepsake.";
 export const CASL_UNSUBSCRIBE_LINE =
-  "To unsubscribe from messages like this, email hello@keepsake.ing and say so — requests are honored within 10 business days.";
+  "To stop optional notifications — someone asking for something you posted — email hello@keepsake.ing and say so; requests are honored within 10 business days.";
 
 /**
  * Substituted by `sendMail` (`../sendMail.ts`) for a real, per-recipient
@@ -131,9 +141,25 @@ export const UNSUBSCRIBE_LINK_PLACEHOLDER = "{{unsubscribe-url}}";
 /** The one-click line CASL accepts as an alternative to (not a replacement
  * for) the stated-address line above — see `docs/design/email.md`'s "CASL:
  * sender identification and unsubscribe" for why both stay. */
-export const CASL_UNSUBSCRIBE_LINK_LINE = `Or use this one-click link: ${UNSUBSCRIBE_LINK_PLACEHOLDER}`;
+export const CASL_UNSUBSCRIBE_LINK_LINE = `Or use this link: ${UNSUBSCRIBE_LINK_PLACEHOLDER}`;
 
-export const CASL_FOOTER_LINES = [CASL_IDENTIFICATION_LINE, CASL_UNSUBSCRIBE_LINE, CASL_UNSUBSCRIBE_LINK_LINE];
+/**
+ * The sentence that keeps the two lines above honest on the seven kinds
+ * `TRANSACTIONAL_EMAIL_KINDS` exempts. Without it a `chosen` or
+ * `confirm_request` footer would offer an unsubscribe beside a message that
+ * arrives whether or not anyone uses it. Naming the exempt kinds costs one
+ * line on the six templates where it is merely reassuring, and is the
+ * difference between an accurate footer and a false one on the rest.
+ */
+export const CASL_TRANSACTIONAL_LINE =
+  "Messages you asked for — verifying your email, confirming a request, being chosen, recovering access — are part of what you started, and still arrive.";
+
+export const CASL_FOOTER_LINES = [
+  CASL_IDENTIFICATION_LINE,
+  CASL_UNSUBSCRIBE_LINE,
+  CASL_UNSUBSCRIBE_LINK_LINE,
+  CASL_TRANSACTIONAL_LINE,
+];
 
 export function renderShell(params: { bodyHtml: string; footerReason: string }): string {
   return `<!doctype html>

@@ -423,16 +423,31 @@ async function withUnsubscribeLink(
     .join(`<a href="${escapeHtmlAttr(bodyHref)}">${escapeHtmlAttr(bodyHref)}</a>`);
   const text = message.text.split(UNSUBSCRIBE_LINK_PLACEHOLDER).join(bodyHref);
 
+  // The body link goes on every message — it is the s.6(2)(c) mechanism, and
+  // it works: it suppresses the class of messages that can be suppressed,
+  // which is what the footer now says it does.
+  //
+  // The *headers* do not. `List-Unsubscribe-Post` is a promise to the mail
+  // client, not to the reader: it tells Gmail and Yahoo to show their own
+  // Unsubscribe button and to treat one press of it as the end of this kind
+  // of mail. On a kind `TRANSACTIONAL_EMAIL_KINDS` exempts that promise is
+  // one we do not keep — the next `chosen` or `confirm_request` arrives
+  // anyway — and a recipient who presses Unsubscribe and keeps hearing from
+  // us reaches for the spam button instead, which costs the deliverability
+  // of every transactional message the product depends on. So an exempt
+  // kind carries `mailto:` alone: a real mechanism, no one-click claim.
+  const oneClick = apiUrl !== null && !TRANSACTIONAL_EMAIL_KINDS.has(message.kind);
+
   const headers: Record<string, string> = {
     // Order matters to some clients that only honor the first entry: the
     // real one-click URL first, `mailto:` as the fallback every client
     // already understands.
-    "List-Unsubscribe": [apiUrl ? `<${apiUrl}>` : null, `<${mailtoFallback}>`].filter((v): v is string => v !== null).join(", "),
+    "List-Unsubscribe": [oneClick ? `<${apiUrl}>` : null, `<${mailtoFallback}>`].filter((v): v is string => v !== null).join(", "),
   };
   // Only promise one-click POST semantics when there is a real POST target
-  // to promise them against — a `mailto:`-only header has nothing for a
-  // client to POST to.
-  if (apiUrl) headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+  // to promise them against, and only on a kind that press would actually
+  // stop.
+  if (oneClick) headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
 
   return { html, text, headers };
 }

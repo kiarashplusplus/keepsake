@@ -33,6 +33,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CASL_IDENTIFICATION_LINE,
+  CASL_TRANSACTIONAL_LINE,
   CASL_UNSUBSCRIBE_LINE,
   UNSUBSCRIBE_LINK_PLACEHOLDER,
   type EmailTemplate,
@@ -147,6 +148,7 @@ describe("issue #310: every template's footer carries CASL identification + unsu
     const { html } = (FIXTURES[key] as () => EmailTemplate)();
     expect(html, `${key}: missing CASL identification line in HTML`).toContain(CASL_IDENTIFICATION_LINE);
     expect(html, `${key}: missing CASL unsubscribe line in HTML`).toContain(CASL_UNSUBSCRIBE_LINE);
+    expect(html, `${key}: missing the line naming what still arrives in HTML`).toContain(CASL_TRANSACTIONAL_LINE);
   });
 
   it.each(Object.keys(FIXTURES))("%s text carries identification and unsubscribe", (key) => {
@@ -157,6 +159,10 @@ describe("issue #310: every template's footer carries CASL identification + unsu
     expect(text, `${key}: missing CASL unsubscribe line in text — a hand-built text: part that never reached footerLine()`).toContain(
       CASL_UNSUBSCRIBE_LINE,
     );
+    expect(
+      text,
+      `${key}: missing the line naming what still arrives in text — a hand-built text: part that never reached footerLine()`,
+    ).toContain(CASL_TRANSACTIONAL_LINE);
   });
 
   it("the unsubscribe line names a real electronic address and an honoring window, not just the word 'unsubscribe'", () => {
@@ -168,6 +174,16 @@ describe("issue #310: every template's footer carries CASL identification + unsu
     // gesture at one.
     expect(CASL_UNSUBSCRIBE_LINE).toContain("hello@keepsake.ing");
     expect(CASL_UNSUBSCRIBE_LINE).toMatch(/10 business days/);
+
+    // The footer goes out on all eight kinds, seven of which
+    // `TRANSACTIONAL_EMAIL_KINDS` sends regardless of suppression. So it may
+    // never claim to stop "messages like this" — that sentence is false the
+    // moment it rides on a `chosen` or a `confirm_request` — and it has to
+    // say what does keep arriving.
+    expect(CASL_UNSUBSCRIBE_LINE, "the footer must not promise to stop the message carrying it").not.toMatch(
+      /messages like this/i,
+    );
+    expect(CASL_TRANSACTIONAL_LINE).toMatch(/still arrive/i);
   });
 
   it.each(Object.keys(FIXTURES))(

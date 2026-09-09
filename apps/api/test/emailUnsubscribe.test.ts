@@ -125,7 +125,10 @@ describe("the footer link becomes a real URL by send time", () => {
   it("substitutes a real per-recipient URL into html and text, and sets List-Unsubscribe headers", async () => {
     const to = "link-check@keepsake.ing";
     const sent = installFakeEmail();
-    const result = await sendMail(env as unknown as Env, testMessage("chosen", to));
+    // `new_request`, not `chosen`: the one-click headers belong only on a
+    // kind pressing Unsubscribe actually stops. See the exempt-kind test
+    // directly below, which is the other half of this assertion.
+    const result = await sendMail(env as unknown as Env, testMessage("new_request", to));
     expect(result.sent).toBe(true);
 
     const message = sent[0] as CapturedEmail;
@@ -142,6 +145,38 @@ describe("the footer link becomes a real URL by send time", () => {
     expect(message.headers?.["List-Unsubscribe"]).toContain(`<${expectedApiUrl}>`);
     expect(message.headers?.["List-Unsubscribe"]).toContain("<mailto:hello@keepsake.ing");
     expect(message.headers?.["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
+  });
+
+  /**
+   * The footer's body link rides on every message — it is the s.6(2)(c)
+   * mechanism and it does something real. `List-Unsubscribe-Post` is a
+   * different promise, made to the mail client rather than the reader: it
+   * asks Gmail and Yahoo to show their own Unsubscribe button and treat one
+   * press as the end of this kind of mail. On a kind
+   * `TRANSACTIONAL_EMAIL_KINDS` exempts we do not keep that promise — the
+   * next `chosen` arrives anyway — and a recipient who presses Unsubscribe
+   * and keeps hearing from us reaches for the spam button instead, which
+   * costs the deliverability of every transactional message the product
+   * depends on. So an exempt kind carries `mailto:` alone.
+   */
+  it("withholds the one-click headers from a kind suppression will not stop", async () => {
+    const to = "exempt-headers@keepsake.ing";
+    const sent = installFakeEmail();
+    await sendMail(env as unknown as Env, testMessage("chosen", to));
+
+    const message = sent[0] as CapturedEmail;
+    const apiUrl = await unsubscribeApiUrl(env as unknown as Env, to);
+    expect(apiUrl).toBeTruthy();
+
+    expect(message.headers?.["List-Unsubscribe"]).toBe("<mailto:hello@keepsake.ing?subject=Unsubscribe>");
+    expect(message.headers?.["List-Unsubscribe"]).not.toContain(apiUrl as string);
+    expect(message.headers?.["List-Unsubscribe-Post"]).toBeUndefined();
+
+    // The mechanism itself is still there: an exempt message loses the
+    // one-click claim, not the working link.
+    const webUrl = await unsubscribeWebUrl(env as unknown as Env, to);
+    expect(message.html).toContain(`href="${webUrl}"`);
+    expect(message.html).not.toContain(UNSUBSCRIBE_LINK_PLACEHOLDER);
   });
 
   it("two different recipients of the same template get two different tokens", async () => {
