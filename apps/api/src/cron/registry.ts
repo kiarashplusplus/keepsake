@@ -93,6 +93,20 @@ export const CRON_JOBS = [
     // ceiling moderationRetry uses rather than a tighter one.
     staleAfterMs: 30 * MINUTE,
   },
+  {
+    name: "errorEventSweep",
+    // Nightly, 24 minutes after `orphanSweep` rather than sharing its
+    // schedule: `scheduled()` in `index.ts` switches on the literal cron
+    // string, so two jobs on one expression make one of the two `case`s
+    // unreachable — see `bulkRunner` above for the same reasoning.
+    cron: "41 3 * * *",
+    // The same 26-hour reasoning as the other nightly jobs. What a stale
+    // heartbeat means here is narrower than for `orphanSweep`: nothing a
+    // giver can see breaks, but `error_events` stops being bounded, and the
+    // table that grows fastest on the worst day is the wrong one to leave
+    // unswept quietly (issue #159).
+    staleAfterMs: 26 * HOUR,
+  },
 ] as const satisfies readonly CronJobSpec[];
 
 export type CronJobName = (typeof CRON_JOBS)[number]["name"];

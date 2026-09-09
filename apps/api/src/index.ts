@@ -7,6 +7,7 @@ import { assertBindings, isProduction, semanticSearchEnabled, type Env } from ".
 import { dailyDigest } from "./cron/dailyDigest.js";
 import { moderationRetry } from "./cron/moderationRetry.js";
 import { orphanSweep } from "./cron/orphanSweep.js";
+import { errorEventSweep } from "./cron/errorEventSweep.js";
 import { searchIndexRetry } from "./cron/searchIndexRetry.js";
 import { bulkRunner } from "./cron/bulkRunner.js";
 import { type CronJobName, writeCronHeartbeat } from "./cron/registry.js";
@@ -525,6 +526,9 @@ async function scheduled(controller: ScheduledController, env: Env, ctx: Executi
       break;
     case "*/3 * * * *":
       await runCron("bulkRunner", bulkRunner, env, ctx);
+      break;
+    case "41 3 * * *":
+      await runCron("errorEventSweep", errorEventSweep, env, ctx);
       break;
     default:
       console.warn("scheduled: unrecognized cron pattern", { cron: controller.cron });

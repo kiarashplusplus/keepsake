@@ -601,3 +601,56 @@ export function installRecordingRateLimiter(name: RateLimitBindingName): { keys:
     },
   };
 }
+
+/**
+ * Issue #159. The single `tail_deliveries` row the Tail Worker stamps on
+ * every delivery — the evidence that a tail consumer is attached at all, and
+ * what `observatory/errorEvents.ts` refuses to report a feed without. Seeded
+ * directly here so a test can set up the "pipeline is live" state without
+ * driving a whole delivery through `persistTailEvents`.
+ */
+export async function seedTailDelivery(at: number = Date.now()): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO tail_deliveries (id, first_delivery_at, last_delivery_at) VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET last_delivery_at = excluded.last_delivery_at`,
+  )
+    .bind(at, at)
+    .run();
+}
+
+export interface InsertErrorEventOptions {
+  observedAt: number;
+  receivedAt?: number;
+  level?: "error" | "warning";
+  kind?: string;
+  message?: string;
+  scriptName?: string | null;
+  requestId?: string | null;
+}
+
+/**
+ * An `error_events` row, inserted directly rather than through the Tail
+ * Worker's own writer — for the tests that need a row at a chosen age (the
+ * window and retention cases), where driving a real delivery would mean
+ * lying to `Date.now()` instead.
+ */
+export async function insertErrorEvent(options: InsertErrorEventOptions): Promise<string> {
+  const id = ulid();
+  await env.DB.prepare(
+    `INSERT INTO error_events
+       (id, observed_at, received_at, script_name, level, kind, message, request_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(
+      id,
+      options.observedAt,
+      options.receivedAt ?? options.observedAt,
+      options.scriptName ?? "keepsake-test",
+      options.level ?? "error",
+      options.kind ?? "capture",
+      options.message ?? "something went wrong",
+      options.requestId ?? null,
+    )
+    .run();
+  return id;
+}

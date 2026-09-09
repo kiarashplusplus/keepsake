@@ -1,25 +1,34 @@
 /**
- * The two Cloudflare-side reads behind the Observatory: edge traffic from the
- * GraphQL Analytics API, and the Worker's own log lines from the Workers
- * Observability telemetry API.
+ * The Cloudflare-side read behind the Observatory: edge traffic from the
+ * GraphQL Analytics API.
  *
- * Both are plain `fetch` calls against `api.cloudflare.com`, not bindings.
- * There is no binding for either dataset — the Worker cannot query its own
- * analytics from inside itself — so this needs a real API credential, which
- * is the one genuinely awkward thing about the whole feature and the reason
- * for the care below.
+ * It is a plain `fetch` against `api.cloudflare.com`, not a binding. There is
+ * no binding for this dataset — the Worker cannot query its own analytics from
+ * inside itself — so this needs a real API credential, which is the one
+ * genuinely awkward thing about the whole feature and the reason for the care
+ * below.
+ *
+ * This module used to carry a second read: the Worker's own log lines, from
+ * the Workers Observability telemetry API. That is gone (issue #159, step 1).
+ * Workers Logs retains 3 days on the Free plan, so the panel whose job is
+ * "what went wrong" could not answer anything about last weekend; the lines
+ * are now written to D1 by the Tail Worker and read back by
+ * `./errorEvents.ts`, with no credential at all. The `Workers Observability
+ * Read` half of `CF_OBSERVATORY_TOKEN`'s scope is unused as of that change —
+ * it is left on the token rather than re-minted, since narrowing a read-only
+ * token is not worth a rotation, but a token minted fresh only needs
+ * `Account Analytics Read`.
  *
  * ## The credential
  *
  * `CF_OBSERVATORY_TOKEN` is a *separate, read-only* token from
- * `CF_CACHE_PURGE_TOKEN`, scoped to exactly two account permission groups:
- * `Account Analytics Read` and `Workers Observability Read`. It is not the
- * broad account token used from a laptop, and it deliberately cannot write
- * anything, cannot read D1/R2/KV, and cannot touch DNS. If it leaks, what
- * leaks is the ability to read request counts and log lines for this
- * account — bad, but bounded, and revocable without touching anything the
- * running site depends on. A Worker that holds a credential able to redeploy
- * itself is a much worse trade for a dashboard.
+ * `CF_CACHE_PURGE_TOKEN`, scoped to account permission groups that can read
+ * analytics and nothing else. It is not the broad account token used from a
+ * laptop, and it deliberately cannot write anything, cannot read D1/R2/KV, and
+ * cannot touch DNS. If it leaks, what leaks is the ability to read request
+ * counts for this account — bad, but bounded, and revocable without touching
+ * anything the running site depends on. A Worker that holds a credential able
+ * to redeploy itself is a much worse trade for a dashboard.
  *
  * Unset is a normal, supported state (`{ state: "unconfigured" }`), not an
  * error: local `wrangler dev`, every test, and any deploy made before the
@@ -39,42 +48,21 @@
  * guarantee a token never lands in the DOM is for no code here to be able to
  * put one there.
  */
-import type {
-  ObservatoryEdge,
-  ObservatoryEdgeDay,
-  ObservatoryLogEvent,
-  ObservatoryLogs,
-  ObservatorySource,
-} from "@keepsake/contracts/observatory";
+import type { ObservatoryEdge, ObservatoryEdgeDay, ObservatorySource } from "@keepsake/contracts/observatory";
 import type { Env } from "../env.js";
 import { withTimeout } from "../lib/withTimeout.js";
 
 const CLOUDFLARE_API = "https://api.cloudflare.com/client/v4";
 
 /**
- * Both calls are made while an admin sits watching a spinner, and both are
- * strictly optional garnish on a page that has already rendered its D1 half.
+ * The call is made while an admin sits watching a spinner, and it is strictly
+ * optional garnish on a page that has already rendered its D1 half.
  * 8 seconds is long enough for a cold GraphQL aggregation over 30 days
  * (measured: ~0.8s for a week, and it grows sub-linearly) and short enough
  * that a Cloudflare-side stall shows up as a named timeout on the page
  * rather than as a page that never finishes loading.
  */
 const TELEMETRY_TIMEOUT_MS = 8_000;
-
-/** Most recent log lines returned. A feed, not an archive — `counts` in the
- * same payload carries the magnitude, so this cap costs no information about
- * *how much* is wrong, only about the long tail of what. */
-const LOG_EVENT_LIMIT = 50;
-
-/**
- * Workers Logs retention on the Free plan is 3 days (see `[observability]` in
- * `wrangler.toml`). Asking for 7 or 30 does not error — it silently returns
- * only what is retained, which would put a "30 days" label above three days
- * of data. Clamped here instead, and the clamped value is what
- * `ObservatoryLogs.window_days` reports back, so the label always matches
- * the data underneath it.
- */
-const LOG_RETENTION_DAYS = 3;
 
 /**
  * Widest window the GraphQL Analytics API will accept for this account,
@@ -305,251 +293,5 @@ export async function fetchEdgeTelemetry(
     };
   } catch (err) {
     return { state: "error", error: errorLine(err, "Cloudflare GraphQL") };
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Log lines — Workers Observability
-// ---------------------------------------------------------------------------
-
-interface TelemetryMetadata {
-  level?: string;
-  message?: string;
-  service?: string;
-  requestId?: string;
-}
-
-/** The raw log object the Worker itself wrote — `capture.ts`'s single plain
- * object, verbatim. Cloudflare does not merge it with its own annotations;
- * `$metadata` and `$workers` are siblings of `source`, not keys inside it. */
-interface TelemetryEventSource {
-  timestamp?: number;
-  ts?: string;
-  level?: string;
-  message?: string;
-  service?: string;
-  /** `captureException`'s `tags`, as `capture.ts` wrote them. `index.ts`'s
-   * error handler puts this Worker's own `requestId` here — see the
-   * correlation note on `request_id` below. */
-  tags?: { requestId?: string };
-}
-
-/**
- * One row of `view: "events"`.
- *
- * `$metadata` sits **beside** `source`, not inside it. This module read it as
- * `source.$metadata` until a production walkthrough went looking for a
- * synthetic error it had just fired and found the feed empty: Cloudflare's
- * schema for this endpoint makes `dataset`, `timestamp`, `source` and
- * `$metadata` four required top-level properties of the event, under
- * `additionalProperties: false`. Reading one level too deep yielded `{}` for
- * every event, so every rendered line degraded to the `"(no message)"` /
- * `null` fallbacks below — a feed that could only ever describe events as
- * anonymous.
- */
-interface TelemetryEvent {
-  timestamp?: number;
-  dataset?: string;
-  source?: TelemetryEventSource;
-  $metadata?: TelemetryMetadata;
-}
-
-interface TelemetryQueryResponse {
-  success?: boolean;
-  errors?: { message: string }[];
-  result?: {
-    /** `view: "events"`. `count`/`fields`/`series` also ride along here and
-     * are deliberately unread — the feed wants rows, and `counts` in the
-     * payload already carries magnitude from its own query. */
-    events?: { events?: TelemetryEvent[] };
-    // `view: "calculations"` fills this instead; shape kept loose because
-    // only the single aggregate number is read out of it.
-    calculations?: { aggregates?: { value?: number }[] }[];
-  };
-}
-
-async function telemetryQuery(
-  config: TelemetryConfig,
-  timeframe: { from: number; to: number },
-  level: "error" | "warning",
-  view: "events" | "calculations",
-): Promise<TelemetryQueryResponse> {
-  const response = await withTimeout(
-    fetch(`${CLOUDFLARE_API}/accounts/${config.accountId}/workers/observability/telemetry/query`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        queryId: `keepsake-observatory-${level}-${view}`,
-        timeframe,
-        limit: view === "events" ? LOG_EVENT_LIMIT : 1,
-        view,
-        parameters: {
-          datasets: ["cloudflare-workers"],
-          // Both filters matter. Without `scriptName` this reads every
-          // Worker on the account — the probe that established this endpoint
-          // scanned 700k rows across unrelated projects — and without
-          // `level` it returns ordinary request logs, which are not what an
-          // error feed is for.
-          filters: [
-            { key: "$workers.scriptName", operation: "eq", value: config.scriptName, type: "string" },
-            { key: "$metadata.level", operation: "eq", value: level, type: "string" },
-          ],
-          ...(view === "calculations" ? { calculations: [{ operator: "COUNT", alias: "total" }] } : {}),
-        },
-      }),
-    }),
-    TELEMETRY_TIMEOUT_MS,
-    "cloudflare observability",
-  );
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-  return (await response.json()) as TelemetryQueryResponse;
-}
-
-export async function fetchLogTelemetry(
-  env: Env,
-  requestedWindowDays: number,
-  now: number = Date.now(),
-): Promise<ObservatorySource<ObservatoryLogs>> {
-  const configured = telemetryConfig(env);
-  if (!configured.ok) return { state: "unconfigured", reason: configured.reason };
-  const { config } = configured;
-
-  const windowDays = Math.min(requestedWindowDays, LOG_RETENTION_DAYS);
-  const timeframe = { from: now - windowDays * DAY_MS, to: now };
-
-  try {
-    // A feed and a count for each of the two levels. The counts exist
-    // because the feeds are capped at `LOG_EVENT_LIMIT` — without them, one
-    // stray error and four thousand identical ones render identically, which
-    // is exactly the distinction an on-call reader needs and the cap
-    // destroys.
-    //
-    // Warnings used to be counted and never shown, which made the one number
-    // on the panel that nothing could act on: `admin/health` deliberately
-    // routes its "needs a human" signals — a stale cron, a listing
-    // auto-hidden by reports and awaiting review — through `console.warn` so
-    // that one Workers Logs filter catches all of them, and this panel could
-    // report that two such things had happened while giving no way to learn
-    // what either was.
-    //
-    // Two `eq` queries rather than one query filtered to both levels: the
-    // events view is already returning fewer rows than the count view says
-    // exist (see the mismatch guard below), and widening a filter whose
-    // behaviour is not yet understood would confuse a second variable with
-    // the first. Same filter shape, twice, is the boring option on purpose.
-    const [errorEvents, warningEvents, errorCount, warningCount] = await Promise.all([
-      telemetryQuery(config, timeframe, "error", "events"),
-      telemetryQuery(config, timeframe, "warning", "events"),
-      telemetryQuery(config, timeframe, "error", "calculations"),
-      telemetryQuery(config, timeframe, "warning", "calculations"),
-    ]);
-
-    // `success === false` is not the only way this endpoint says no. A
-    // rejected query can also come back as a 200 carrying a populated
-    // `errors` array and no `success` field at all, and the old check —
-    // `success === false` alone — read that as a success with nothing in it.
-    const failed = [errorEvents, warningEvents, errorCount, warningCount].find(
-      (r) => r.success === false || (r.errors?.length ?? 0) > 0,
-    );
-    if (failed) {
-      return {
-        state: "error",
-        error: `Cloudflare observability: ${(failed.errors ?? []).map((e) => e.message).join("; ") || "request rejected"}`,
-      };
-    }
-
-    const readEvents = (response: TelemetryQueryResponse, level: "error" | "warning"): ObservatoryLogEvent[] =>
-      (response.result?.events?.events ?? []).map((event) => {
-      const source = event.source ?? {};
-      // `$metadata` first (Cloudflare's own annotations, always present on a
-      // real row), then the Worker's own log object. `capture.ts` writes
-      // `service` as the app name (`keepsake-api`) while `$metadata.service`
-      // is the script name (`keepsake-production`); the annotation wins
-      // because it is the one that is always there.
-      const metadata = event.$metadata ?? {};
-      return {
-        ts: event.timestamp ?? source.timestamp ?? 0,
-        level: metadata.level ?? source.level ?? level,
-        message: metadata.message ?? source.message ?? "(no message)",
-        service: metadata.service ?? source.service ?? null,
-        // This Worker's own `requestId` first, Cloudflare's second — they
-        // are two different identifiers for the same request and only the
-        // first one is reachable by the person reporting the problem.
-        // `index.ts` mints `crypto.randomUUID()` per request, returns it as
-        // `X-Request-Id`, and tags every `captureException` with it;
-        // `$metadata.requestId` is Cloudflare's ray-derived id, which never
-        // leaves their side. Preferring the annotation meant an admin
-        // holding the `X-Request-Id` from a user's failed request could not
-        // find that request in this feed.
-        request_id: source.tags?.requestId ?? metadata.requestId ?? null,
-      };
-    });
-
-    const errorFeed = readEvents(errorEvents, "error");
-    const warningFeed = readEvents(warningEvents, "warning");
-
-    const readCount = (response: TelemetryQueryResponse): number =>
-      response.result?.calculations?.[0]?.aggregates?.[0]?.value ?? 0;
-
-    const counts = { error: readCount(errorCount), warning: readCount(warningCount) };
-
-    // Two answers to the same question, from the same API, over the same
-    // window and the same filters: the count query says N errors, the feed
-    // query returns rows. They cannot disagree about whether *any* exist —
-    // and when they do, the feed is the half that is wrong, because a count
-    // has no shape to misparse.
-    //
-    // This is here because that disagreement is exactly what a production
-    // walkthrough hit: `POST /api/admin/test-error` fired a real exception,
-    // `counts.error` went 0 → 1, and `events` stayed `[]`. Rendered as an
-    // empty feed under a nonzero count, that reads as "nothing to see" on
-    // the one panel whose entire job is to show what went wrong — the
-    // confident-empty lie `ObservatorySource`'s doc comment exists to
-    // prevent, arriving through the back door because `?? []` cannot tell
-    // "no rows" from "rows I could not find in this response".
-    //
-    // The result keys are named in the message because they are the whole
-    // diagnosis and cannot leak anything: they are schema key names, never
-    // values. `run, statistics, calculations` back from a `view: "events"`
-    // query means the view was not honored; `events` present but empty means
-    // the rows are elsewhere in it.
-    // Checked per level, and *before* the merge is capped below: a level
-    // whose rows were all pushed out of a shared cap is not the same failure
-    // as a level that returned none, and only the uncapped arrays can tell
-    // them apart.
-    const mismatch = (
-      [
-        ["error", counts.error, errorFeed, errorEvents],
-        ["warning", counts.warning, warningFeed, warningEvents],
-      ] as const
-    ).find(([, count, feed]) => count > 0 && feed.length === 0);
-
-    if (mismatch) {
-      const [level, count, , response] = mismatch;
-      const shape = Object.keys(response.result ?? {}).join(", ") || "(no result object)";
-      return {
-        state: "error",
-        error: `Cloudflare observability: ${count} ${level} log(s) counted in this window but the events feed returned none — response carried [${shape}]`,
-      };
-    }
-
-    // Most recent first across both levels, then capped once. A window with
-    // 50 warnings and one error must not bury the error, so the cap is
-    // applied after the merge sorts by time rather than per level.
-    const events = [...errorFeed, ...warningFeed].sort((a, b) => b.ts - a.ts).slice(0, LOG_EVENT_LIMIT);
-
-    return {
-      state: "ok",
-      data: {
-        window_days: windowDays,
-        counts,
-        events,
-      },
-    };
-  } catch (err) {
-    return { state: "error", error: errorLine(err, "Cloudflare observability") };
   }
 }

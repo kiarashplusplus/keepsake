@@ -1,0 +1,115 @@
+# keepsake-tail — the Tail Worker (issue #159, step 1).
+#
+# A tail consumer is a separate Worker script with its own `main`, so it needs
+# its own config; it does not need its own *package*, and deliberately does not
+# have one. The handler lives at `src/tail/index.ts` inside `apps/api`, sharing
+# that package's D1 migrations, its `@keepsake/observability` dependency and its
+# test suite — a second workspace package would have meant a second
+# `wrangler types`, a second vitest pool, and a second place for the schema's
+# opinions to drift.
+#
+# Deploy it with:
+#
+#   pnpm --filter @keepsake/api exec wrangler deploy -c wrangler.tail.toml --env <tier>
+#
+# `.github/workflows/deploy.yml` does exactly that, **before** deploying the API
+# Worker: `wrangler.toml`'s `[[tail_consumers]]` names this script by its
+# deployed name, and a Worker cannot name a tail consumer that does not exist.
+#
+# ## Everything here is restated per environment, on purpose
+#
+# The same rule `wrangler.toml` documents at length: wrangler inherits `main`,
+# `compatibility_date` and the other unscoped keys, and inherits **no** binding
+# and **no** var into a named environment. Every `[env.*]` block below therefore
+# repeats the D1 database and the vars in full. Two specific hazards this file
+# is one typo away from, both of which `apps/api/test/tailConfig.test.ts`
+# asserts against the real text of both configs:
+#
+#   1. A tier whose D1 binding points at another tier's database. Preview's
+#      error lines landing in the production database would be a privacy
+#      incident, not a mix-up: these rows are error text from real requests.
+#   2. A tier whose script name does not match what `wrangler.toml` lists as
+#      its tail consumer, which deploys cleanly and silently sends that tier's
+#      error stream nowhere.
+#
+# ## What it is not bound to
+#
+# No R2, no KV, no AI, no Vectorize, no email, no assets, no rate limits, and
+# no `ADMIN_TOKEN`. It reads a stream of already-produced log lines and writes
+# rows; nothing else. A tail consumer sees every log line the API Worker
+# writes, so it is the one script in this repo where a stray binding would be
+# a genuinely dangerous piece of reach.
+
+name = "keepsake-tail"
+main = "src/tail/index.ts"
+compatibility_date = "2026-09-01"
+
+# This Worker's own errors go to Workers Logs like any other Worker's — with
+# the 3-day retention this feature exists to escape, which is the right trade
+# here: if the tail consumer itself is broken, the thing that would have made
+# its errors durable is the broken thing. Nothing tails this Worker (see
+# `src/tail/index.ts`'s header on why a self-consuming tail Worker is a loop).
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[vars]
+ENVIRONMENT = "development"
+
+# The same local placeholder id `wrangler.toml`'s top-level block uses: local
+# `wrangler dev` keys its SQLite file on the binding name and ignores this
+# value entirely.
+[[d1_databases]]
+binding = "DB"
+database_name = "keepsake-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+# No `migrations_dir`: `apps/api/wrangler.toml` owns the migrations for this
+# database and `deploy.yml` applies them through that config. Two configs both
+# claiming to own one D1 ledger is how the same migration gets applied twice.
+
+# ============================================================================
+# [env.preview] — consumes keepsake-preview's trace events, writes to
+# keepsake-db-preview. Same database ids as [env.preview] in wrangler.toml.
+# ============================================================================
+[env.preview]
+compatibility_date = "2026-09-01"
+
+# Same reasoning as `wrangler.toml`'s (#245): a workers.dev hostname is
+# off-zone and unmanaged. This Worker has no fetch handler at all, so a
+# hostname pointed at it would answer nothing useful — but "nothing useful"
+# is not "nothing", and there is no reason for it to be reachable.
+workers_dev = false
+preview_urls = false
+
+[env.preview.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.preview.vars]
+ENVIRONMENT = "preview"
+
+[[env.preview.d1_databases]]
+binding = "DB"
+database_name = "keepsake-db-preview"
+database_id = "2cfbc1c8-39b9-4653-814e-9fa737d1689f"
+
+# ============================================================================
+# [env.production]
+# ============================================================================
+[env.production]
+compatibility_date = "2026-09-01"
+
+workers_dev = false
+preview_urls = false
+
+[env.production.observability]
+enabled = true
+head_sampling_rate = 1
+
+[env.production.vars]
+ENVIRONMENT = "production"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "keepsake-db-production"
+database_id = "ef57b121-265c-4e23-a0d9-c9b2c47cf689"

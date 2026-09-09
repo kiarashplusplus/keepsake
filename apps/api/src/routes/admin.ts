@@ -32,7 +32,8 @@ import { LISTING_STATUSES, type Category, type ListingStatus, type OwnerListing 
 import { readCronHeartbeats } from "../cron/registry.js";
 import { ObservatoryQuery, type Observatory } from "@keepsake/contracts/observatory";
 import { buildAppMetrics } from "../observatory/appMetrics.js";
-import { fetchEdgeTelemetry, fetchLogTelemetry } from "../observatory/cloudflare.js";
+import { fetchEdgeTelemetry } from "../observatory/cloudflare.js";
+import { fetchPersistedLogs } from "../observatory/errorEvents.js";
 import { buildDailyReport } from "../report/daily.js";
 import type { FeedPage } from "@keepsake/contracts/feed";
 import { maskEmail, type RequestStatus } from "@keepsake/contracts/request";
@@ -1079,16 +1080,19 @@ adminRoutes.post("/backfill-aspects", validateBody(AdminBackfillAspectsInput), a
  * The three sections fail independently and on purpose. `app` comes from D1
  * and is awaited normally — if that throws, the request 500s, because a
  * Worker that cannot read its own database has nothing useful to render.
- * `edge` and `logs` call out to Cloudflare's API and can be unconfigured,
- * slow, or rejected; both are wrapped in `ObservatorySource` by the client
- * module and neither can throw, so a revoked telemetry token degrades two
- * panels instead of taking down the page. `Promise.all` is still correct
- * here — the two telemetry calls resolve to error *values*, never rejections.
+ * `edge` calls out to Cloudflare's GraphQL API and can be unconfigured, slow
+ * or rejected; `logs` reads D1 but can honestly be "no Tail Worker has ever
+ * delivered here" (issue #159). Both are wrapped in `ObservatorySource` by
+ * their own module and neither can throw, so a revoked telemetry token or an
+ * unattached tail consumer degrades one panel instead of taking down the
+ * page. `Promise.all` is still correct here — both resolve to error *values*,
+ * never rejections.
  *
  * The window is clamped by `ObservatoryQuery` to 1, 7 or 30 days; see the
- * schema for why it is a closed set. Note the logs half silently clamps
- * further to Workers Logs' 3-day Free-plan retention and reports the window
- * it actually used, rather than labelling three days of data as thirty.
+ * schema for why it is a closed set. `logs` used to clamp further to Workers
+ * Logs' 3-day Free-plan retention; since #159 it is backed by `error_events`
+ * with a 30-day sweep, so the window it reports is the window that was asked
+ * for.
  */
 adminRoutes.get("/observatory", validateQuery(ObservatoryQuery), async (c) => {
   const query = c.get("validatedQuery") as ObservatoryQuery;
@@ -1098,7 +1102,7 @@ adminRoutes.get("/observatory", validateQuery(ObservatoryQuery), async (c) => {
   const [app, edge, logs, report] = await Promise.all([
     buildAppMetrics(c.env, windowDays, now),
     fetchEdgeTelemetry(c.env, windowDays, now),
-    fetchLogTelemetry(c.env, windowDays, now),
+    fetchPersistedLogs(c.env, windowDays, now),
     buildDailyReport(c.env, now),
   ]);
 
