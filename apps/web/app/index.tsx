@@ -2,10 +2,11 @@
 // tag cards. URL state (`q`/`category`/`country`/`postal`/`radius_mi`) round
 // trips through expo-router so a shared feed link reproduces the same view.
 import * as React from "react";
-import { Pressable, useWindowDimensions, View, type ViewStyle } from "react-native";
+import { Pressable, View, type ViewStyle } from "react-native";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import type { Category } from "@keepsake/contracts/listing";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
+import { type } from "@keepsake/tokens/typography";
 import { useColors } from "@/ui/theme";
 import { Page } from "@/ui/Page";
 import { Text } from "@/ui/Text";
@@ -31,8 +32,7 @@ import { describeLocationChoice, resolveFeedEmptyState, type FeedEmptyAction } f
 import { DEFAULT_LOCATION_PREF, loadLocationPref, saveLocationPref, type LocationPref } from "@/lib/geo";
 import { track } from "@/lib/analytics";
 import { AnalyticsEvents } from "@/lib/analyticsEvents";
-
-const NARROW_BREAKPOINT = 640;
+import { useViewport } from "@/ui/viewport";
 
 type RawParams = { q?: string; category?: string; country?: string; postal?: string; radius_mi?: string };
 
@@ -78,6 +78,14 @@ function SkeletonCards(): React.ReactElement {
  * only (`createDOMProps/index.js`) and never reads `accessibilityState`, the
  * same gap `Chip.tsx` documents for `aria-pressed`. Without it the state
  * would be invisible to a screen reader and to axe.
+ *
+ * Both halves are always rendered and CSS decides which is on screen (see
+ * `packages/tokens/src/breakpoints.ts`). This used to be a JS branch between
+ * this component and a bare `LocationBar`, which meant the static export
+ * baked the collapsed phone summary into the HTML every desktop got, and the
+ * full controls appeared only once React hydrated. The `LocationBar` is
+ * rendered once either way — it owns a text field, and a second hidden copy
+ * of one is a thing browsers autofill and screen readers announce.
  */
 function LocationDisclosure({
   summary,
@@ -91,6 +99,7 @@ function LocationDisclosure({
   children: React.ReactNode;
 }): React.ReactElement {
   const colors = useColors();
+  const vp = useViewport();
 
   return (
     <View style={{ gap: space.md }}>
@@ -101,6 +110,7 @@ function LocationDisclosure({
         {...({ "aria-expanded": expanded } as object)}
         onPress={onToggle}
         style={({ pressed }): ViewStyle => ({
+          ...vp.narrowOnly,
           flexDirection: "row",
           alignItems: "center",
           justifyContent: "space-between",
@@ -135,15 +145,20 @@ function LocationDisclosure({
           {expanded ? "Done" : "Change"}
         </Text>
       </Pressable>
-      {expanded ? children : null}
+      {/* Expanded, this is on screen at every width. Collapsed, it is the
+          wide layout's always-open controls and the phone's hidden ones —
+          which is one `display` keyword, not two component trees. */}
+      <View style={expanded ? undefined : vp.wideOnly}>{children}</View>
     </View>
   );
 }
 
 export default function Feed(): React.ReactElement {
   const router = useRouter();
-  const { width } = useWindowDimensions();
-  const narrow = width < NARROW_BREAKPOINT;
+  // Width comes from CSS, not from `useWindowDimensions()`, so the static
+  // export's markup is right at every viewport instead of at whichever one
+  // the build assumed — see `packages/tokens/src/breakpoints.ts`.
+  const vp = useViewport();
   const rawParams = useLocalSearchParams<RawParams>();
 
   // Read once, at mount, to seed initial state and the location-hydration
@@ -158,8 +173,9 @@ export default function Feed(): React.ReactElement {
   const [location, setLocation] = React.useState<LocationPref>(DEFAULT_LOCATION_PREF);
   const [locationHydrated, setLocationHydrated] = React.useState(false);
   const [reloadToken, setReloadToken] = React.useState(0);
-  // Issue #219: only consulted under `narrow` — at wide widths the
-  // `LocationBar` is always on screen and this never comes into it.
+  // Issue #219: only has an effect below the narrow breakpoint — at wide
+  // widths the `LocationBar` is on screen whatever this says, because the
+  // stylesheet, not this flag, is what hides it (`LocationDisclosure`).
   const [locationOpen, setLocationOpen] = React.useState(false);
 
   // `LocationBar` persists every change it makes itself, deliberately (see
@@ -281,7 +297,11 @@ export default function Feed(): React.ReactElement {
   return (
     <Page
       variant="grid"
-      contentContainerStyle={{ paddingTop: narrow ? sectionRhythm.normal : sectionRhythm.loose, paddingBottom: sectionRhythm.bookend, gap: sectionRhythm.tight }}
+      contentContainerStyle={{
+        paddingTop: vp.step(sectionRhythm.normal, sectionRhythm.loose),
+        paddingBottom: sectionRhythm.bookend,
+        gap: sectionRhythm.tight,
+      }}
     >
       {/* A note pinned to the table announcing the site — the one place body
           copy sits inside a paper card, so it reads regardless of the room's
@@ -294,36 +314,47 @@ export default function Feed(): React.ReactElement {
           this width (`AppHeader.tsx`) — three lines of body copy and a
           second copy of the same CTA were most of the reason the first card
           was below the fold. The full hero stays at wide widths, where it
-          costs nothing. */}
-      <Card style={{ maxWidth: 680, gap: narrow ? space.md : space.lg, transform: [{ rotate: "-0.4deg" }] }}>
+          costs nothing.
+
+          Which of the two a visitor sees is now CSS's decision rather than a
+          JS branch, so it is right at the first paint instead of after
+          hydration — see `packages/tokens/src/breakpoints.ts`. The heading
+          steps between `displayLg` and `displayXl` a property at a time for
+          the same reason: `variant` picks markup, and one static export
+          cannot pick it per viewport. */}
+      <Card style={{ maxWidth: 680, gap: vp.step(space.md, space.lg), transform: [{ rotate: "-0.4deg" }] }}>
         <Eyebrow tick>A free gifting marketplace</Eyebrow>
-        <Text variant={narrow ? "displayLg" : "displayXl"}>Give a keepsake a second life.</Text>
-        {narrow ? null : (
-          <>
-            <Text variant="bodyLg" color="textSecondary">
-              Some things are too full of memory to sell and too good to throw away. Post the story, and let someone nearby who’ll love it come
-              and get it.
-            </Text>
-            <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: space.xl, marginTop: space.sm }}>
-              {/* `dangerouslySingular` — see `AppHeader`'s Give link. */}
-              <Link href="/give" dangerouslySingular asChild>
-                <Button label="Give something" />
-              </Link>
-            </View>
-          </>
-        )}
+        <Text
+          variant="displayXl"
+          fontVariationSettings="var(--ks-hero-fvs)"
+          style={{
+            fontSize: vp.step(type.displayLg.fontSize, type.displayXl.fontSize),
+            lineHeight: vp.step(type.displayLg.lineHeight, type.displayXl.lineHeight),
+            letterSpacing: vp.step(type.displayLg.letterSpacing, type.displayXl.letterSpacing),
+          }}
+        >
+          Give a keepsake a second life.
+        </Text>
+        <View style={[{ gap: vp.step(space.md, space.lg) }, vp.wideOnly]}>
+          <Text variant="bodyLg" color="textSecondary">
+            Some things are too full of memory to sell and too good to throw away. Post the story, and let someone nearby who’ll love it come and
+            get it.
+          </Text>
+          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: space.xl, marginTop: space.sm }}>
+            {/* `dangerouslySingular` — see `AppHeader`'s Give link. */}
+            <Link href="/give" dangerouslySingular asChild>
+              <Button label="Give something" />
+            </Link>
+          </View>
+        </View>
       </Card>
 
       <Card style={{ gap: space.lg }}>
         <SearchBar value={q} onChange={setQ} />
         <CategoryChips value={category} onChange={setCategory} />
-        {narrow ? (
-          <LocationDisclosure summary={describeLocationChoice(location)} expanded={locationOpen} onToggle={() => setLocationOpen((open) => !open)}>
-            <LocationBar value={location} onChange={setLocation} />
-          </LocationDisclosure>
-        ) : (
+        <LocationDisclosure summary={describeLocationChoice(location)} expanded={locationOpen} onToggle={() => setLocationOpen((open) => !open)}>
           <LocationBar value={location} onChange={setLocation} />
-        )}
+        </LocationDisclosure>
       </Card>
 
       <View style={{ gap: space.xl }}>

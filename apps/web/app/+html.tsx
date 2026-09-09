@@ -5,6 +5,7 @@
 import { ScrollViewStyleReset } from "expo-router/html";
 import * as React from "react";
 import { themeCssVariables } from "@keepsake/tokens/colors";
+import { viewportCssVariables } from "@keepsake/tokens/breakpoints";
 import { config } from "@/lib/config";
 
 // The pre-hydration script runs before React attaches, so the very first
@@ -263,6 +264,30 @@ ${themeCssVariables()}
 :root { --ks-grain-blend: multiply; --ks-grain-opacity: 0.5; }
 [data-theme="dark"] { --ks-grain-blend: overlay; --ks-grain-opacity: 0.55; }
 `;
+
+/**
+ * The viewport switch — the same trick as THEME_CSS above, for the same
+ * reason, one axis over.
+ *
+ * The theme is set before the first paint because the markup is identical in
+ * light and dark and only the palette differs. Width was not: components
+ * branched on `useWindowDimensions()`, which is 0 in a static render, so the
+ * one exported HTML file every device receives carried the *phone* header,
+ * hero and location controls — and a desktop visitor watched them snap to the
+ * wide layout the moment React hydrated and read the real width. Measured in
+ * production's own bytes, 2026-09-09.
+ *
+ * A media query is the only thing that knows the viewport before JavaScript
+ * runs, so the decision moves here and the markup becomes identical at every
+ * width — which is what keeps `/` cacheable with no `Vary`, exactly as the
+ * pre-hydration script's comment above requires. `src/ui/viewport.web.ts`
+ * consumes these; `packages/tokens/src/breakpoints.ts` generates them and
+ * carries the full reasoning.
+ *
+ * A `<style>`, not a script, so this needs no CSP `script-src` hash the way
+ * PREHYDRATION_SCRIPT does — `style-src` carries `'unsafe-inline'`.
+ */
+const VIEWPORT_CSS = viewportCssVariables();
 
 const ROOT_CSS = `
 html, body, #root { height: 100%; }
@@ -552,6 +577,7 @@ export default function Root({ children }: { children: React.ReactNode }): React
         <ScrollViewStyleReset />
 
         <style dangerouslySetInnerHTML={{ __html: THEME_CSS }} />
+        <style dangerouslySetInnerHTML={{ __html: VIEWPORT_CSS }} />
         <style dangerouslySetInnerHTML={{ __html: ROOT_CSS }} />
         <script dangerouslySetInnerHTML={{ __html: PREHYDRATION_SCRIPT }} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: ROOT_JSON_LD }} />

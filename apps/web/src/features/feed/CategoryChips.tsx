@@ -1,25 +1,15 @@
 import * as React from "react";
-import { ScrollView, useWindowDimensions, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ViewStyle } from "react-native";
+import { ScrollView, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ViewStyle } from "react-native";
 import { CATEGORIES, CATEGORY_LABELS, type Category } from "@keepsake/contracts/listing";
 import { space } from "@keepsake/tokens/spacing";
 import { useColors } from "@/ui/theme";
+import { useViewport } from "@/ui/viewport";
 import { Chip } from "@/ui/Chip";
 
 export type CategoryChipsProps = {
   value: Category | null;
   onChange: (category: Category | null) => void;
 };
-
-/**
- * Below this, the chips scroll sideways instead of wrapping. Issue #136 took
- * the list from five categories to eleven, and thirteen wrapped chips (the
- * eleven plus "All", plus "Other") stacked four rows deep on a phone, above
- * the location controls and before a visitor had seen a single keepsake —
- * the feed's own filters pushing the feed itself off the screen. On a
- * desktop width they still wrap, where there is room for them on one or two
- * lines and a horizontal scroller would be the worse of the two.
- */
-const SCROLL_BELOW_WIDTH = 700;
 
 /** How much of the trailing chip the fade covers. Wide enough to read as a
  * deliberate soft edge rather than a rendering artefact, narrow enough that
@@ -31,10 +21,19 @@ const FADE_WIDTH = space.xxl;
  * exactly on `contentSize`. */
 const END_SLACK_PX = 1;
 
+/**
+ * One row, at both widths. It used to be two component trees chosen by
+ * `useWindowDimensions()` — a horizontal `ScrollView` on a phone, a wrapping
+ * `View` on a desktop — which meant the static export baked the phone's
+ * scroller into the HTML every desktop got, fade and all, until hydration
+ * replaced it. Now the scroller is always the markup and CSS decides whether
+ * its content wraps (`--ks-chips-wrap`), which at a desktop width leaves
+ * nothing to scroll and so renders exactly as the wrapping row did. See
+ * `packages/tokens/src/breakpoints.ts`.
+ */
 export function CategoryChips({ value, onChange }: CategoryChipsProps): React.ReactElement {
-  const { width } = useWindowDimensions();
   const colors = useColors();
-  const scroll = width < SCROLL_BELOW_WIDTH;
+  const vp = useViewport();
 
   // Issue #219: at 390px the row is cut mid-word ("Jewelry & w…") at the
   // right edge with nothing to say it scrolls — it reads as a layout bug,
@@ -87,60 +86,63 @@ export function CategoryChips({ value, onChange }: CategoryChipsProps): React.Re
     </>
   );
 
-  if (scroll) {
-    // The fade is painted in `colors.surface` because the chips sit inside a
-    // `Card`, which fills exactly that — the row appears to dissolve into
-    // its own paper. `${colors.surface}00` is the same token with a zero
-    // alpha channel rather than the keyword `transparent`: `transparent` is
-    // transparent *black* in CSS, and interpolating kraft toward it leaves a
-    // visible grey bruise across the middle of the gradient in every
-    // browser. Nothing new enters the palette either way.
-    //
-    // `linear-gradient` is a CSS value with no React Native style
-    // equivalent, so it goes through the same `as ViewStyle` escape hatch
-    // the codebase already uses for `boxShadow` (`Button.tsx`, `Surface.tsx`)
-    // and `backgroundImage` (`KraftTable.web.tsx`).
-    const fade: ViewStyle = {
-      position: "absolute",
-      top: 0,
-      bottom: 0,
-      right: 0,
-      width: FADE_WIDTH,
-      ...({ backgroundImage: `linear-gradient(to right, ${colors.surface}00, ${colors.surface})` } as ViewStyle),
-    };
+  // The fade is painted in `colors.surface` because the chips sit inside a
+  // `Card`, which fills exactly that — the row appears to dissolve into its
+  // own paper. `${colors.surface}00` is the same token with a zero alpha
+  // channel rather than the keyword `transparent`: `transparent` is
+  // transparent *black* in CSS, and interpolating kraft toward it leaves a
+  // visible grey bruise across the middle of the gradient in every browser.
+  // Nothing new enters the palette either way.
+  //
+  // `linear-gradient` is a CSS value with no React Native style equivalent,
+  // so it goes through the same `as ViewStyle` escape hatch the codebase
+  // already uses for `boxShadow` (`Button.tsx`, `Surface.tsx`) and
+  // `backgroundImage` (`KraftTable.web.tsx`).
+  //
+  // `vp.chipsFade` is what takes it off screen once the row wraps: past the
+  // breakpoint there is no overflow, so an edge fade would be a gradient
+  // over nothing.
+  const fade: ViewStyle = {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    right: 0,
+    width: FADE_WIDTH,
+    ...({ backgroundImage: `linear-gradient(to right, ${colors.surface}00, ${colors.surface})` } as ViewStyle),
+    ...vp.chipsFade,
+  };
 
-    return (
-      <View style={{ position: "relative" }}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          onLayout={handleLayout}
-          onContentSizeChange={handleContentSizeChange}
-          onScroll={handleScroll}
-          scrollEventThrottle={16}
-          // `paddingEnd` so the last chip doesn't sit flush against the card's
-          // edge when scrolled to the end.
-          contentContainerStyle={{ flexDirection: "row", gap: space.sm, paddingEnd: space.sm }}
-        >
-          {chips}
-        </ScrollView>
-        {moreToEnd ? (
-          // Purely decorative, and it must never eat a tap meant for the chip
-          // underneath it: `pointerEvents="none"` for the pointer half,
-          // hidden from assistive technology for the other (the chips are
-          // all still reachable in the accessibility tree whether or not
-          // they are scrolled into view).
-          <View
-            testID="category-overflow-fade"
-            pointerEvents="none"
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-            style={fade}
-          />
-        ) : null}
-      </View>
-    );
-  }
-
-  return <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>{chips}</View>;
+  return (
+    <View style={{ position: "relative" }}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        onLayout={handleLayout}
+        onContentSizeChange={handleContentSizeChange}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
+        // `paddingEnd` so the last chip doesn't sit flush against the card's
+        // edge when scrolled to the end. `flexWrap` is the whole width
+        // switch: `nowrap` and this scrolls, `wrap` and it is the wrapping
+        // row a desktop always had, with nothing left to scroll.
+        contentContainerStyle={{ flexDirection: "row", flexWrap: vp.chipsWrap, gap: space.sm, paddingEnd: space.sm }}
+      >
+        {chips}
+      </ScrollView>
+      {moreToEnd ? (
+        // Purely decorative, and it must never eat a tap meant for the chip
+        // underneath it: `pointerEvents="none"` for the pointer half, hidden
+        // from assistive technology for the other (the chips are all still
+        // reachable in the accessibility tree whether or not they are
+        // scrolled into view).
+        <View
+          testID="category-overflow-fade"
+          pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={fade}
+        />
+      ) : null}
+    </View>
+  );
 }
