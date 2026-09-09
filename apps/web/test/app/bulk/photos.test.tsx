@@ -19,6 +19,21 @@ function trayPhoto(clientPhotoId: string) {
   return makeBulkDraftPhoto(clientPhotoId, {}, 1000);
 }
 
+// react-test-renderer's `toJSON()` keeps each `{expression}` in a JSX
+// template as its own text-node string ("Add everything… far.", "2", "
+// photo", "s", " added so far." are four siblings, not one), so a plain
+// `JSON.stringify(toJSON()).toContain(...)` can only match text that never
+// crossed an interpolation boundary — this walks the tree and concatenates
+// every string leaf, the way a reader actually sees the words on screen.
+function renderedText(node: unknown): string {
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) return node.map(renderedText).join("");
+  if (node !== null && typeof node === "object" && "children" in node) {
+    return renderedText((node as { children: unknown }).children);
+  }
+  return "";
+}
+
 describe("bulk photos screen", () => {
   beforeEach(() => {
     mockWorkspace = makeWorkspaceFixture();
@@ -151,6 +166,38 @@ describe("bulk photos screen", () => {
     });
 
     expect(JSON.stringify(toJSON())).not.toContain("already added");
+  });
+
+  it("states the photo count once, as a running total with no cap, when nowhere near the limit (#373 finding 10)", () => {
+    const state = fixtureBatchState({
+      photos: { "photo-a": trayPhoto("photo-a"), "photo-b": trayPhoto("photo-b") },
+    });
+    mockWorkspace = makeWorkspaceFixture({ state });
+    const { toJSON } = render(<BulkPhotos />);
+
+    const text = renderedText(toJSON());
+    expect(text).toContain("2 photos added so far.");
+    // The add tile does not restate that same fact in a second unit ("298
+    // left") — a reader would have to subtract to notice it's the same
+    // number the intro just gave them.
+    expect(text).not.toContain("left");
+    expect(text).not.toContain("of 300");
+  });
+
+  it("surfaces the remaining-slot count on the add tile only once the cap is actually close (#373 finding 10)", () => {
+    // 285 of 300 used — 15 left, inside NEAR_CAP_SLOTS — is the point where
+    // "how many more can I add" changes what the giver does next, so this is
+    // the one place the same fact earns a second appearance, in the unit
+    // that matters at the add button: how many more fit.
+    const photos: Record<string, ReturnType<typeof trayPhoto>> = {};
+    for (let i = 0; i < MAX_BATCH_PHOTOS - 15; i += 1) photos[`photo-${i}`] = trayPhoto(`photo-${i}`);
+    const state = fixtureBatchState({ photos });
+    mockWorkspace = makeWorkspaceFixture({ state });
+    const { toJSON } = render(<BulkPhotos />);
+
+    const text = renderedText(toJSON());
+    expect(text).toContain(`${MAX_BATCH_PHOTOS - 15} photos added so far.`);
+    expect(text).toContain("15 left");
   });
 
   it("retries against the resident source, with no file picker, when the source survived (needsReselection: false)", async () => {
