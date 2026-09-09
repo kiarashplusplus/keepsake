@@ -30,6 +30,17 @@ import { useInViewOnce } from "@/lib/useInViewOnce";
 
 const TILE = 120;
 
+// The 300-photo ceiling is not what a giver mid-upload is tracking — "how
+// many have I added" is the running total in the intro paragraph below, and
+// restating it against the cap a second time on the add tile as "N left"
+// just makes the reader subtract to notice it's the same fact (#373 finding
+// 10). The cap only becomes something to act on once it is close, the way
+// the admin report-pressure strip only calls out "One report away" near its
+// own threshold (`StatsStrip.tsx`) rather than showing a live count from
+// zero — so the tile stays a plain "+ Add" until there is little enough
+// room left that the number changes what the giver does next.
+const NEAR_CAP_SLOTS = 20;
+
 function fileKey(file: File): string {
   return `${file.name}:${file.size}`;
 }
@@ -353,7 +364,7 @@ export default function BulkPhotos(): React.ReactElement {
             <Eyebrow>Photos</Eyebrow>
             <Text variant="displayLg">Add and group photos.</Text>
             <Text variant="bodyLg" color="textSecondary">
-              Add everything first, then select photos and choose how they group into items. {totalPhotos} of {MAX_BATCH_PHOTOS} photos.
+              Add everything first, then select photos and choose how they group into items. {totalPhotos} photo{totalPhotos === 1 ? "" : "s"} added so far.
             </Text>
           </View>
 
@@ -403,9 +414,11 @@ export default function BulkPhotos(): React.ReactElement {
                 <Text variant="label" color="ink" style={{ fontSize: 12 }}>
                   {isDraggingOver ? "Drop here" : "+ Add"}
                 </Text>
-                <Text variant="caption" color="textTertiary">
-                  {remainingSlots} left
-                </Text>
+                {remainingSlots <= NEAR_CAP_SLOTS ? (
+                  <Text variant="caption" color="textTertiary">
+                    {remainingSlots} left
+                  </Text>
+                ) : null}
               </Pressable>
             ) : null}
           </View>
