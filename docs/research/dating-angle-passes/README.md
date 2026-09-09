@@ -1,6 +1,6 @@
 # Dating-angle research passes — raw subagent reports, 2026-09-09
 
-Twenty-six parallel web research passes, one per question, each run by a Sonnet subagent with web
+Twenty-eight parallel web research passes, one per question, each run by a Sonnet subagent with web
 search and fetch only (no repository access) and returned as a single report. **These are the
 reports verbatim** — a short italic header naming the brief has been added to each, HTML entities
 have been unescaped, and nothing else has been changed. No synthesis is in this folder; the
@@ -90,6 +90,13 @@ to resolve.
 | 24 | [`24-moderation-load-one-person.md`](./24-moderation-load-one-person.md) | What load a two-week campus burst puts on a one-person review queue |
 | 25 | [`25-houston-wedding-object-channels.md`](./25-houston-wedding-object-channels.md) | The strongest angle (wedding objects) had nothing Houston-local |
 | 26 | [`26-student-email-deliverability.md`](./26-student-email-deliverability.md) | Whether confirm-then-forward email from a new domain reaches Rice and UH inboxes (#6 open) |
+
+## Re-runs after the premise correction
+
+| # | File | Re-runs |
+|---|---|---|
+| 27 | [`27-minors-laws-accurate-identity-model.md`](./27-minors-laws-accurate-identity-model.md) | Pass 17: which minors' laws reach a persistent, email-verified giver identity with no profile, and what an age affirmation does |
+| 28 | [`28-abuse-controls-email-anchored-identity.md`](./28-abuse-controls-email-anchored-identity.md) | Pass 21: abuse controls and local scoping for an email-anchored giver and an email-only requester; what "no requester ban" costs |
 
 ## Reading them
 
