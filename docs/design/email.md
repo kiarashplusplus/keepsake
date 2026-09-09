@@ -35,6 +35,12 @@ in `EMAIL_FROM`, and DKIM signs with `d=keepsake.ing`. The apex SPF record above
 Routing's, and authenticates nothing we send. Don't "fix" a sending problem by editing the
 `cf-bounce` records — they are the only reason mail passes today.
 
+Sent mail carries a **second** DKIM signature, `d=cloudflare-email.net` selector `cf2024-1`. It
+verifies, and it is worth nothing to DMARC: its organizational domain is not `keepsake.ing`, so it
+cannot align under `adkim=r`. A receiver report showing `dkim=pass` on that signature alone would
+still be a DMARC failure. Alignment rests on the `cf-bounce` SPF and DKIM records and on nothing
+else — a single point of failure, confirmed as such by the first aggregate report below.
+
 ### Inbound (2026-09-07)
 
 Until this date the apex had **no MX at all**, so every reply to `hello@keepsake.ing` bounced. That
@@ -56,7 +62,10 @@ Two consequences worth holding onto:
 Verified so far: all records above resolve publicly (`dig @1.1.1.1`), and a production
 `POST /api/admin/test-email` to `dmarc@keepsake.ing` returned `sent: true, provider: cf`. As
 everywhere else in this doc, that is provider acceptance, not delivery — the catch-all is only
-proven once a message is seen in the destination inbox.
+proven once a message is seen in the destination inbox. **That proof arrived 2026-09-09**: Google's
+first aggregate report was addressed to `dmarc@keepsake.ing` and read in the destination inbox, so
+the catch-all does deliver. It is the one path in this doc confirmed by receipt rather than by a
+provider's acceptance.
 
 ### DMARC reporting
 
@@ -70,6 +79,27 @@ that ruled out the same-domain escape, is why `p=reject` ran with no reporting u
 What this buys is a trail, not an alarm. Aggregate reports are gzipped XML, arrive up to a day
 late, and nothing parses them yet, so a DMARC break is still effectively invisible in real time —
 which is exactly the failure mode the `EMAIL_PROVIDER` note in `wrangler.toml` warns about.
+
+#### First report (Google, window 2026-09-08 00:00–23:59 UTC)
+
+Received 2026-09-09. Three messages, in two rows by source IP (`104.30.8.126` ×1,
+`104.30.10.153` ×2 — both Cloudflare). Every row: `header_from=keepsake.ing`, SPF pass on
+`cf-bounce.keepsake.ing`, DKIM pass on `d=keepsake.ing` selector `cf-bounce`, disposition `none`.
+No failures and no sources we do not recognize.
+
+Two things this settles, both of which had been reasoning until now:
+
+- The relaxed-alignment mechanism described above is real, as observed by a receiver rather than
+  inferred from the zone. The aligned identifiers are exactly the two `cf-bounce` records; the
+  `cf2024-1` signature passes and aligns with nothing.
+- It measures what the `EMAIL_PROVIDER` note in `wrangler.toml` warns about. Both aligned
+  identifiers are Cloudflare's, so a switch to `resend` removes both at once against `p=reject`.
+
+What it does not settle: three messages from one receiver over one day is no evidence about
+spoofing. Read an empty failure list as "nothing yet", not as "nobody is trying".
+
+Google reports `sp=reject` and `np=reject` in `policy_published` though the TXT record sets
+neither. Receivers default both to `p`; the record has not drifted.
 
 ### The one place a reply had nowhere to go
 
