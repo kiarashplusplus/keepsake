@@ -145,12 +145,34 @@ describe("RequestSheet", () => {
   // sheet reaches for that component on BOTH phases, and exactly what wording
   // it hands over.
   //
-  // Issue #308 changed that wording: the pre-submit note gained "or tell
-  // someone else the time and place" as an alternative to bringing a friend,
-  // and the post-submit note gained permission to back out — both already on
-  // `terms.html`'s "Meeting up safely" list, neither previously in the
-  // product. These constants moved with the copy; if they drift from
-  // `RequestSheet.tsx` again, that is the bug, not this test.
+  // Issue #308 had added "or tell someone else the time and place" to the
+  // pre-submit note and permission to back out to the post-submit note, both
+  // already on `terms.html`'s "Meeting up safely" list.
+  //
+  // Issue #373 finding 9: the two notes had grown to say much the same thing
+  // at similar length, back to back — a stranger read the whole safety case
+  // once before sending and once again immediately after. `terms.html`'s
+  // list has five distinct points; before this fix, four of them (all but
+  // the back-out permission #308 added) appeared in BOTH notes, word for
+  // word. Each point now appears exactly once, homed by which moment it
+  // matters for:
+  //
+  //   1. Meet somewhere public and well-lit         -> SENT_COPY only
+  //   2. Bring a friend, or tell someone the plan    -> SENT_COPY only
+  //   3. Keep talking in Keepsake, not text/numbers  -> FORM_COPY only
+  //   4. A porch handoff / no in-person meetup is OK -> FORM_COPY only
+  //   5. You can back out if anything feels off      -> SENT_COPY only (#308)
+  //
+  // FORM_COPY keeps what's decision-relevant before sending (how you'll keep
+  // talking, and that meeting in person isn't required at all). SENT_COPY
+  // keeps what matters once being chosen is a live possibility: the meetup
+  // itself, and the standing permission to back out of it. Nothing from
+  // `terms.html`'s list was dropped — see the point-by-point coverage test
+  // below, which fails if any of the five goes missing from both notes, not
+  // just if the exact sentence changes.
+  //
+  // These constants moved with the copy; if they drift from `RequestSheet.tsx`
+  // again, that is the bug, not this test.
   //
   // Asserted through `UNSAFE_getAllByType`, which reads the composite
   // element's authored props before react-native-web's host translation, for
@@ -160,17 +182,14 @@ describe("RequestSheet", () => {
   // age-gate hint — so "no caption anywhere" would fail on copy that is
   // correctly set as small print.
   const FORM_COPY =
-    "A note before you send this: if you two meet up, pick a public spot, bring a " +
-    "friend if you can — or tell someone else the time and place — and keep talking " +
-    "here in Keepsake rather than trading numbers early. A porch handoff works too, " +
-    "if you'd both rather skip meeting in person.";
+    "A note before you send this: if you're chosen, keep working out the details here " +
+    "in Keepsake rather than trading numbers early — and if you'd both rather skip " +
+    "meeting in person, a porch handoff works just as well.";
 
   const SENT_COPY =
-    "If you're chosen: meet somewhere public and well-lit, bring a friend or tell " +
-    "someone the plan, and keep working out the details here in Keepsake rather than " +
-    "switching to text. Leaving it on a porch instead of meeting face to face is always " +
-    "fine too — just say so. And if anything feels off, you can back out — that's worth " +
-    "more than any obligation you feel to a stranger you agreed to meet.";
+    "If you're chosen: meet somewhere public and well-lit, and bring a friend or tell " +
+    "someone the plan. And if anything feels off, you can back out — that's worth more " +
+    "than any obligation you feel to a stranger you agreed to meet.";
 
   it("sets the form's safety guidance as a note, not as small print", () => {
     const instance = render(<RequestSheet visible onClose={jest.fn()} listingId="listing-1" />);
@@ -189,6 +208,40 @@ describe("RequestSheet", () => {
     const notes = instance.UNSAFE_getAllByType(SafetyNote);
     expect(notes).toHaveLength(1);
     expect(notes[0]?.props.children).toBe(SENT_COPY);
+  });
+
+  // Issue #373 finding 9: pins the five ideas themselves, not just the exact
+  // sentences above — this is the test that fails if a fix "shortens" one of
+  // the notes by quietly dropping a point from `terms.html`'s list rather
+  // than moving it to its new home. Each phrase is checked for appearing in
+  // exactly the note this fix assigned it to, and NOT in the other note —
+  // that second half is what would have caught the duplication finding 9
+  // reports in the first place.
+  it("keeps every terms.html safety point exactly once, in its assigned note", async () => {
+    jest.mocked(createRequest).mockResolvedValue({ id: "req-1", created_at: Date.now() });
+
+    // Form phase: ideas 3 (stay in Keepsake) and 4 (porch handoff is fine)
+    // live here; ideas 1, 2 and 5 (meetup specifics and backing out) do not
+    // belong yet — nobody has been chosen.
+    const formInstance = render(<RequestSheet visible onClose={jest.fn()} listingId="listing-1" />);
+    const formCopy = String(formInstance.UNSAFE_getAllByType(SafetyNote)[0]?.props.children);
+    expect(formCopy).toContain("here in Keepsake rather than trading numbers early");
+    expect(formCopy).toContain("porch handoff");
+    expect(formCopy).not.toContain("public and well-lit");
+    expect(formCopy).not.toContain("bring a friend");
+    expect(formCopy).not.toContain("back out");
+
+    // Sent phase: ideas 1 (public/well-lit), 2 (bring a friend/tell someone)
+    // and 5 (back out) live here; ideas 3 and 4 don't repeat — the form note
+    // already said them.
+    const sentInstance = render(<RequestSheet visible onClose={jest.fn()} listingId="listing-2" />);
+    await fillAndSubmit(sentInstance, "Tell them why it should be mine, please and thank you.", "person@keepsake.ing");
+    const sentCopy = String(sentInstance.UNSAFE_getAllByType(SafetyNote)[0]?.props.children);
+    expect(sentCopy).toContain("public and well-lit");
+    expect(sentCopy).toContain("bring a friend");
+    expect(sentCopy).toContain("back out");
+    expect(sentCopy).not.toContain("here in Keepsake rather than trading numbers early");
+    expect(sentCopy).not.toContain("porch handoff");
   });
 
   // Issue #373 finding 1's second half: `item-request-sent.jpg` showed DONE

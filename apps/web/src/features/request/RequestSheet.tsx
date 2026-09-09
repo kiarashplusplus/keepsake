@@ -147,9 +147,11 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
   // The `sent` phase had the same shape and was missed the first time round:
   // `item-request-sent.jpg` shows DONE sitting on the very bottom edge of the
   // same 390×844 viewport, pushed there by its own ten-line `SafetyNote`
-  // (#224/#308 — also load-bearing, also staying put). Same sheet, same
-  // phone, same cause, so it gets the same fix: DONE moves to `footer` too,
-  // rather than growing a second mechanism for one button.
+  // (#224/#308 — load-bearing at the time; finding 9 below shortened it, but
+  // the mechanism this comment describes doesn't depend on the note's
+  // length, so it's unchanged). Same sheet, same phone, same cause, so it
+  // gets the same fix: DONE moves to `footer` too, rather than growing a
+  // second mechanism for one button.
   const sheetFooter =
     phase === "sent" ? (
       // Row-wrapped so `Button`'s intrinsic width holds here the same way it
@@ -214,17 +216,30 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
               stranger. `SafetyNote` carries the argument and the contrast
               number.
 
-              Issue #308 added the last sentence: `terms.html`'s "Meeting up
-              safely" list has always carried permission to back out, and
-              this screen — the moment the reader has already said yes to a
+              Issue #308 added permission to back out: `terms.html`'s
+              "Meeting up safely" list has always carried it, and this
+              screen — the moment the reader has already said yes to a
               stranger — is exactly where that pressure lives and exactly
-              where the product had never said it. */}
+              where the product had never said it.
+
+              Issue #373 finding 9: this paragraph used to also carry "keep
+              working out the details here in Keepsake" and "a porch handoff
+              is fine", word-for-word what the form's note (below) already
+              says — a stranger read the whole safety case twice, once before
+              sending and once immediately after. Those two ideas are the
+              form note's job now, because they're about *how you'll talk*
+              from the moment you send, not about the meetup itself; what's
+              specific to this later screen — public and well-lit, bring
+              someone, and the back-out permission #308 added — is what a
+              reader needs once being chosen is a live possibility, not a
+              hypothetical. All five ideas from `terms.html`'s list still
+              appear once each across the two notes; none were dropped, only
+              re-homed. See `RequestSheet.test.tsx`'s header comment on
+              `SENT_COPY` for the map. */}
           <SafetyNote>
-            {"If you're chosen: meet somewhere public and well-lit, bring a friend or tell " +
-              "someone the plan, and keep working out the details here in Keepsake rather than " +
-              "switching to text. Leaving it on a porch instead of meeting face to face is always " +
-              "fine too — just say so. And if anything feels off, you can back out — that's worth " +
-              "more than any obligation you feel to a stranger you agreed to meet."}
+            {"If you're chosen: meet somewhere public and well-lit, and bring a friend or tell " +
+              "someone the plan. And if anything feels off, you can back out — that's worth more " +
+              "than any obligation you feel to a stranger you agreed to meet."}
           </SafetyNote>
         </View>
       ) : (
@@ -254,20 +269,33 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
 
           <AgeGateField value={dateOfBirth} onChangeText={setDateOfBirth} touched={touched} onBlur={() => setTouched(true)} />
 
-          {/* The same setting change as the form's other note (#224 item 2)
-              — the two paragraphs are the same guidance at two moments, so
-              they are set the same way.
+          {/* The same setting change as the sent screen's note (#224 item 2)
+              — both paragraphs are set the same way, as a note the reader is
+              meant to read rather than small print.
 
-              Issue #308: this note's only fallback used to be "bring a
-              friend if you can", which has nothing for a reader who has
-              nobody free that afternoon — most people. `terms.html`'s own
-              list offers telling someone the time and place as the
-              alternative; this note now does too. */}
+              Issue #308 had added "or tell someone else the time and place"
+              here as a fallback for a reader with nobody free that afternoon
+              — most people — alongside "bring a friend". That idea now lives
+              on the sent screen's note instead (issue #373 finding 9,
+              below), because it pairs with "meet somewhere public": both are
+              about the meetup itself, and belong where a reader is closer to
+              one actually happening.
+
+              Issue #373 finding 9: this note used to also say "pick a public
+              spot" and "bring a friend", the same ground the sent screen's
+              note covers — a stranger read the case for meeting safely
+              twice, back to back, once before sending and once right after.
+              What stays here is what's decision-relevant *before* you send:
+              that conversation continues inside Keepsake rather than moving
+              to text, and that no in-person meetup is required at all — a
+              porch handoff is a normal outcome, not a failure to arrange
+              one. See `RequestSheet.test.tsx`'s header comment on `FORM_COPY`
+              for the full map of where each of `terms.html`'s five points
+              ended up. */}
           <SafetyNote>
-            {"A note before you send this: if you two meet up, pick a public spot, bring a " +
-              "friend if you can — or tell someone else the time and place — and keep talking " +
-              "here in Keepsake rather than trading numbers early. A porch handoff works too, " +
-              "if you'd both rather skip meeting in person."}
+            {"A note before you send this: if you're chosen, keep working out the details here " +
+              "in Keepsake rather than trading numbers early — and if you'd both rather skip " +
+              "meeting in person, a porch handoff works just as well."}
           </SafetyNote>
 
           <Turnstile ref={turnstileRef} onStatus={setTurnstileStatus} />
