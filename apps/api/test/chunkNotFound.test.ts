@@ -31,16 +31,23 @@ describe("chunk-path miss vs. app-route miss (#272)", () => {
     expect(text).toContain("existing chunk");
   });
 
-  it("still answers a nonexistent app route with the SPA shell, not a 404", async () => {
+  it("answers a nonexistent app route with the 404 page, and says so in the status", async () => {
     // Same "no file on disk at this path" shape as the chunk case above, but
-    // outside the _expo/static prefix — this is the one #272 must not touch:
-    // a route like this is exactly what a hard refresh on client-side
-    // routing depends on getting the shell for.
+    // outside the _expo/static prefix. This assertion is the inverse of what
+    // it was until 2026-09-09: it used to require the SPA shell at 200,
+    // because `not_found_handling = "single-page-application"` had no other
+    // answer and a hard refresh of a dynamic route depended on it. The
+    // discoverability pass measured what that cost on the live site — every
+    // unexported path on `keepsake.ing`, `/sitemap` and `/Welcome` included,
+    // answered 200 with `/`'s exact bytes — and `404-page` handling plus
+    // `src/index.ts`'s `DYNAMIC_ROUTE_SHELLS` replaced it. The dynamic
+    // routes that used to rely on the fallback are covered by
+    // `notFound.test.ts`; this is the case that must NOT get a shell.
     const res = await SELF.fetch("http://x/give/some/deep/route/nothing/serves");
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(404);
     expect(res.headers.get("content-type")).toContain("text/html");
     expect(res.headers.get("cache-control")).toBe("no-store");
     const text = await res.text();
-    expect(text).toContain("stub");
+    expect(text).toContain("not found stub");
   });
 });

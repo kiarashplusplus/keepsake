@@ -1,0 +1,16 @@
+<!doctype html>
+<!--
+  Test-only stand-in for `apps/web/dist/404.html`, which
+  `apps/web/scripts/seo-html.mjs` writes from expo-router's own `+not-found`
+  export. Its only job here is to be the body Cloudflare's
+  `not_found_handling = "404-page"` substitutes for a miss — the thing
+  `test/notFound.test.ts` proves comes back at a real 404 status now that
+  every unexported path used to come back as the homepage at 200.
+-->
+<html>
+  <head>
+    <title>keepsake test 404 fixture</title>
+    <meta name="robots" content="noindex, follow" />
+  </head>
+  <body>not found stub</body>
+</html>

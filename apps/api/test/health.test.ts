@@ -210,13 +210,20 @@ describe("GET /version.json", () => {
   });
 });
 
-describe("GET * (assets fallback)", () => {
+describe("GET * (assets passthrough)", () => {
   it("serves the ASSETS binding and forces no-store on the HTML document", async () => {
-    // vitest.config.ts stubs ASSETS (wrangler.toml's directory, ../web/dist,
-    // doesn't exist yet) with an in-memory text/html response. This also
-    // proves that stub is actually wired up, not silently shadowed by a
+    // vitest.config.ts points ASSETS at test/fixtures/public (wrangler.toml's
+    // real directory, ../web/dist, isn't built here). This also proves that
+    // fixture is actually wired up, not silently shadowed by a
     // real-but-empty assets handler.
-    const res = await SELF.fetch("http://x/some/spa/route");
+    //
+    // `/`, not an arbitrary path: since 2026-09-09 the assets binding answers
+    // a miss with `dist/404.html` at 404 rather than the shell at 200
+    // (`not_found_handling = "404-page"` — see wrangler.toml and
+    // `notFound.test.ts`), so a made-up path no longer exercises the
+    // passthrough this test is about. It exercises the not-found path, which
+    // has its own file.
+    const res = await SELF.fetch("http://x/");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
     expect(res.headers.get("cache-control")).toBe("no-store");

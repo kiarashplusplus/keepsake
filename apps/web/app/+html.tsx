@@ -472,15 +472,22 @@ export default function Root({ children }: { children: React.ReactNode }): React
             unconditional `X-Robots-Tag: noindex, nofollow`
             (`apps/api/src/routes/robots.ts`). Don't "fix" it.
 
-            **No `og:url` and no `<link rel="canonical">` here.** Both are
-            per-page values and this file is ONE shell shared by every
-            exported route — a canonical of `https://keepsake.ing/` in it
-            tells a crawler that `/welcome`, `/give`, `/mine` and `/about`
-            are all duplicates of the homepage, which is worse than declaring
-            nothing. (Verified in `dist/` when it was briefly added: 17 pages
-            carried it.) `/item/:id` gets a real canonical and `og:url` from
-            the Worker's rewriter, and `apps/site`'s static pages carry their
-            own; the remaining routes are app screens with nothing to index.
+            **No `og:url` and no `<link rel="canonical">` here, and that is
+            still right.** Both are per-page values and this file is ONE shell
+            shared by every exported route — a canonical of
+            `https://keepsake.ing/` in it tells a crawler that `/welcome`,
+            `/give`, `/mine` and `/about` are all duplicates of the homepage,
+            which is worse than declaring nothing. (Verified in `dist/` when
+            it was briefly added: 17 pages carried it.)
+
+            They are no longer simply absent, though. `scripts/seo-html.mjs`
+            writes a real per-route canonical and `og:url` into the exported
+            *files* after `expo export` — which is where a per-route value
+            can be true, since the files are per-route even though this
+            component is not — and gives every other exported page
+            `<meta name="robots" content="noindex, follow">`. `/item/:id`
+            gets its canonical and `og:url` from the Worker's rewriter, and
+            `apps/site`'s static pages carry their own.
 
             `og:image` was relative (`/og-default.png`) until 2026-09-07.
             Facebook and WhatsApp both want an absolute URL and mishandle a

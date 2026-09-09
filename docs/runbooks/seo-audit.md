@@ -81,7 +81,10 @@ live site, which this audit could not make.
 - No `<link rel="canonical">` and no `og:url` in `app/+html.tsx`. It is one shell shared by ~17
   exported routes; a homepage canonical in it declares every other route a duplicate of `/`.
   `/item/:id` gets a real one from the Worker, and `apps/site`'s static pages carry their own.
-  `apps/web/test/guards/rootOpenGraph.test.ts` holds this.
+  `apps/web/test/guards/rootOpenGraph.test.ts` holds this. **Still true of the shell**, but the
+  conclusion drawn from it here — that the other routes therefore get none — was wrong, and the
+  third pass below fixes it: the exported *files* are per-route even though the component is not,
+  so `scripts/seo-html.mjs` writes each one its own.
 - `style-src 'unsafe-inline'` stays: react-native-web writes layout as inline `style` attributes.
 - The empty `ks-google-ads-id` meta is the kill switch (#175), not drift, and the absent Google
   reporting origins in `connect-src` follow from it.
@@ -211,3 +214,195 @@ people's words in the one place this product is about.
 5. **Lighthouse, on the real site.** Everything above is reasoned from the artifact and the
    container's own measurements. None of it is a field measurement, and this container cannot make
    one.
+
+---
+
+# Third pass, 2026-09-09: measured against production
+
+The two passes above both open with the same caveat — the agent container could not reach
+`keepsake.ing`, so everything in them is reasoned from the repository and a local `expo export`.
+**That is no longer true.** `curl https://keepsake.ing/` answers `200` from the container now, and
+this pass is the first one whose findings are the live site's own bytes, status codes and headers
+rather than an inference about them.
+
+It also answers the open question the first pass left at the top: `curl -sS https://keepsake.ing/ |
+head -c 4000` shows the inline `<script>`, `<style>` and `application/ld+json` blocks **raw**, with
+no `&#34;` anywhere. The saved-copy artifact was an artifact. Nothing to fix, and the question is
+closed rather than deferred.
+
+## What production was actually doing
+
+| Measured on the live site | Status |
+|---|---|
+| `GET /nonexistent-page-xyz` → `200 text/html`, `ETag: "48d6c1fd…"` — byte-identical to `/`. So did `/sitemap`, `/Welcome`, and every other path nobody exported. | Fixed |
+| No `<link rel="canonical">` and no `og:url` on any Expo route (`/`, `/welcome`, `/give`). `/about`, `/privacy`, `/terms` had both all along. | Fixed |
+| `/welcome` and `/give` were live, indexable and **orphaned**: absent from `/sitemap.xml`, and linked from no crawlable markup on any page (the header/footer links are in-app navigations, so the only `href`s in the served HTML are `/`, `/about`, `/mine`, `/privacy`, `/terms`). | Fixed |
+| `/give/details`, `/give/story`, `/give/review`, `/give/email` — four mid-flow form steps — each `200`, indexable, each carrying the site-wide description. | Fixed |
+| `/_sitemap` — expo-router's built-in route index, which lists every route in the app including `/admin` and `/bulk` — live at `200`. | Fixed |
+| `/welcome` unfurled as the site default ("Keepsake" / "Give a keepsake a second life.") while its own `<meta name="description">` was three sentences about the product. `RouteHead` writes `<title>` and `description`; the OG tags come from the shell and nothing rewrote them. | Fixed |
+| Two opposite trailing-slash rules on one site: `/about/` → `307` → `/about`, but `/give` → `307` → `/give/`. All three static pages link `href="/give"`, so every "Give something" click and crawl cost a redirect hop. | Fixed |
+| `www.keepsake.ing` → `301` → apex, `http://` → `301` → `https://`, `/item/<unknown>` → real `404`, `/mine` and `/recover` → `X-Robots-Tag: noindex, nofollow`. | Already right |
+
+`/sitemap.xml` itself was well-formed and correct for what it listed — four URLs, no listings,
+because production has no approved listings yet (`GET /api/feed` returns `items: []`). Nothing
+below is a fix to the sitemap's *shape*; the `lastmod` reasoning from the first pass stands
+unchanged.
+
+## The soft 404, which is the one that mattered
+
+`not_found_handling = "single-page-application"` answers **every** miss with `index.html` at
+`200`. That is the correct setting for a client-routed app whose deep links must survive a hard
+refresh, and it is why it was chosen. What it costs on a public site is that the site has an
+unbounded supply of URLs that all resolve, all serve the homepage's exact bytes, and — with no
+canonical anywhere on the Expo routes — offer a crawler nothing to consolidate them onto. Every
+typo'd link, every stale inbound URL, every path a scraper invents is a live page. Google calls
+these soft 404s and treats them as a crawl-budget and quality problem; here they were also
+duplicates of the single page this product most wants ranked.
+
+The fix is `not_found_handling = "404-page"` plus a real `dist/404.html`, which
+`apps/web/scripts/seo-html.mjs` writes from expo-router's own `+not-found` export — so the page a
+visitor lands on is exactly the one they saw before, now with a truthful status under it.
+
+**What made that safe** is the part worth reading before touching it again. Five routes
+(`/mine/:id`, `/recover/:token`, `/withdraw/:token`, `/confirm/:token`, `/bulk/:batchKey/…`) have
+no file at their own path — Expo Router exports them under the literal `[param]` filename — and
+were relying on the SPA fallback to come back at all. `apps/api/src/index.ts`'s catch-all now maps
+each to its own exported shell (`DYNAMIC_ROUTE_SHELLS`). That is not merely restoring the old
+behaviour: the fallback was handing them `index.html`, which is the **feed's** markup, so a hard
+refresh of `/mine/abc` painted the header, search field and category chips for the moment before
+hydration. It is the same defect the second pass fixed for `/item/:id`, for the five routes that
+were left. `apps/api/test/notFound.test.ts` asserts both halves against the served bytes;
+`e2e/deepLinkColdLoad.spec.ts` cold-loads every one of them in a real browser.
+
+### What the soft 404 had been hiding
+
+Turning the fallback off made one existing test fail, and it was not the test's fault.
+
+`routes/ogCard.ts`'s `serveDefault` streams `/og-default.png` through the `ASSETS` binding when a
+listing has no photo, and guards it with `if (!asset.ok) return fail(...)`. The api suite's fixture
+tree has no `og-default.png` — so under `single-page-application` that fetch came back as
+`index.html` at **200**, `asset.ok` was true, and the route streamed the SPA shell's HTML out under
+`Content-Type: image/png`. The test asserted the status and the fallback header, both of which were
+right, and never looked at the bytes. On a real deploy the same path would hand every unfurler the
+homepage's HTML labelled as a PNG the moment that asset went missing — silently, since nothing
+errors.
+
+A 1×1 PNG now stands in for it (`apps/api/test/fixtures/public/og-default.png`, and that directory
+gained a README explaining why), and the fallback exercises the code it was written for. Nothing in
+`src/` changed for this: the guard was already correct, it just had nothing to guard against.
+
+`/health`'s ASSETS probe was the other thing leaning on the fallback — it fetched `/index.html`
+knowing any path would answer. It still fetches `/index.html`, but now that is a real file check
+rather than a tautology. That it survives `drop-trailing-slash` (which redirects an *incoming*
+`/index.html` to `/`) was verified against real workerd via `wrangler dev`, not assumed: a direct
+binding fetch resolves by path and the trailing-slash rules do not apply to it. Miniflare's
+emulation would not have distinguished the two.
+
+## Where the per-route metadata lives now, and why not in the shell
+
+`app/+html.tsx` still declares no canonical and no `og:url`, and
+`test/guards/rootOpenGraph.test.ts` still holds that. The reasoning in the first pass's "still true
+and worth not re-litigating" was right about the shell and wrong about the conclusion: the shell is
+one file shared by ~17 routes, but the *exported files* are per-route. `scripts/seo-html.mjs` runs
+after `fix-html-head.mjs` and writes, per file:
+
+- `<link rel="canonical">` and `<meta property="og:url">` on the three indexable Expo routes
+  (`/`, `/welcome`, `/give`), absolute, from the same hardcoded origin `+html.tsx` already uses for
+  `og:image`.
+- `og:title`/`og:description` rewritten **in place** — not appended, since a crawler takes the
+  first it sees — on any page that carries its own `RouteHead` description. Today that is
+  `/welcome`.
+- `<meta name="robots" content="noindex, follow">` on every other exported page: the give flow's
+  interior steps, `/admin`, `/bulk*`, `/mine*`, `/recover`, the `[param]` routes and the 404 page.
+  `follow`, not `nofollow` — these pages carry the shared header and footer and there is no reason
+  to dead-end a crawl at them.
+- `_sitemap.html` deleted outright. Noindexing it would leave it fetchable and linkable, and it is
+  a development affordance.
+
+**The one file that must never be touched** is `dist/item/[id].html`. It is the shell the Worker
+rewrites into every listing page, and its rewriter removes the shell's `title`, `description`,
+`og:*`, `twitter:*` and canonical — but not a robots meta. One landing there would deindex every
+listing on the site from what reads in a diff like adding a route to a list, with nothing failing
+at runtime and nothing in the export log. `NEVER_TOUCH` is the guard and
+`test/guards/seoHtml.test.ts` is what holds it.
+
+The script defaults an unknown route to `noindex`, so a new route has to be added to `INDEXABLE`
+on purpose. For an app with three indexable Expo pages and twenty flow steps behind a token, that
+is the safe direction — but it is the direction that makes the mistake above cheap, hence the
+guard.
+
+## One trailing-slash rule
+
+`html_handling = "drop-trailing-slash"` (from the default `auto-trailing-slash`) in all three
+`[assets]` blocks. Under the default, a route exported as `dist/give/index.html` is canonical at
+`/give/` while `dist/welcome.html` is canonical at `/welcome` — the site had two opposite rules
+depending on an export detail nobody chose. Now no page URL ends in a slash except `/`, which is
+what `apps/site/public/*.html` already link to, what the sitemap lists, and what the canonicals
+say. `apps/api/test/assetsHandlingConfig.test.ts` asserts both keys agree across all three blocks,
+because wrangler inherits neither into a named environment and "set it at the top level and forget
+the other two" is silent.
+
+## The finding this pass did NOT act on, and why it needs Kiarash
+
+**`/` very likely resolves to `/welcome` for Googlebot, and that is a product decision, not a
+bug.** `+html.tsx`'s pre-hydration script redirects a first-time visitor from `/` to `/welcome`,
+where "first-time" means neither `keepsake.ownerToken.v1` nor `keepsake.visited.v1` is in
+`localStorage`. Google's Web Rendering Service executes page JavaScript and is explicitly stateless
+across page loads — it clears local and session storage — so every render of `/` is a first visit,
+`location.replace("/welcome" + location.search)` fires, and Google follows a JS-initiated
+`location.replace` as a redirect. The most valuable URL this product has would then be recorded as
+a redirect to `/welcome`, and `/welcome` is what ranks for the brand.
+
+This was not measured — nothing in this container can drive Googlebot — and it is reasoned from
+Google's documented renderer behaviour plus the script's own condition. Treat it as likely, not
+certain; Search Console's URL Inspection on `https://keepsake.ing/` settles it in one click, and
+that is the first thing to do with it.
+
+It is not fixed here because every fix is a product change, not a technical one:
+
+- **Show the explainer at `/` instead of navigating to it.** The first-time branch sets state
+  rather than the URL, and `/welcome` stays a real linkable page. Keeps one canonical front door.
+  The pre-hydration script would set an attribute the root route reads, so there is still no
+  flash and no `Vary` — the reason that script exists at all (see its comment) is unaffected. This
+  is the option I would take.
+- **Drop the first-visit redirect** and let `/` always be the feed, with the explainer reached from
+  a link. Simplest, and loses the thing the redirect was built for.
+- **Leave it.** Defensible if `/welcome` ranking for the brand is acceptable — it is a good page
+  and, as of this pass, a well-formed one.
+
+What this pass did do is make the second-best outcome much less bad: if Google does settle on
+`/welcome`, it now has its own canonical, its own `og:title`/`og:description` (it was unfurling as
+the site default), and a place in the sitemap. Before this pass it had none of the three.
+
+## Deliberately not done
+
+**`robots.txt` still says `Allow: /`.** Adding `Disallow: /give/story` and friends would be
+actively worse than the noindex meta now on those pages: a disallowed URL is never fetched, so the
+noindex is never *seen*, and a URL Google finds linked from elsewhere can still be indexed
+url-only. Crawl-and-noindex is the correct combination here, and it is what shipped.
+
+**`/give`'s `<title>` is still "Give a keepsake: Photos — Keepsake".** It is a step name from
+`GIVE_STEP_NAMES` and it reads like one in a search result. It is also the target of the "Give
+something" call to action on all three static pages, so the page stays indexed; what its title
+should say is a copy decision for Kiarash, the same call the first pass made about the homepage's.
+
+**Real server-side rendering of `/item/:id`'s content** — unchanged, still item 1 below.
+
+**301 instead of 307 on the canonicalising redirects.** `/index.html` → `/`, `/about.html` →
+`/about`, `/welcome/` → `/welcome` are all `307`/`308` from Cloudflare's static-assets system, which
+does not expose the status as a setting. `308` is permanent and consolidates the same as `301`;
+the `307`s are for the drop-trailing-slash direction. Neither is worth a Worker hop on every
+document request to change, and Google follows both.
+
+## Still open, in the order I would take them
+
+1. **Real server-side rendering of `/item/:id`'s content.** Unchanged from the second pass: the
+   payload is inlined but the markup still comes from hydration.
+2. **Bounding a long feed** — unchanged.
+3. **A pre-hydration feed prefetch** — unchanged.
+4. **Lighthouse on the real site.** Still not done, but no longer impossible from here: the
+   container can reach production now. What it cannot do is install Chrome-for-Testing's pinned
+   build, so a run from here would measure this container.
+5. **Resubmit `/sitemap.xml` in Search Console after this deploys**, and watch the "Excluded →
+   Soft 404" and "Duplicate without user-selected canonical" buckets drain. That is the field
+   measurement none of these three passes has.
