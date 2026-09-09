@@ -391,6 +391,30 @@ describe("GET /api/admin/observatory", () => {
       expect(observatory.logs.data.events[0]?.message).toBe("cron heartbeat stale");
     });
 
+    it("tolerates one level coming back empty when the other returned rows", async () => {
+      // The events view is sampled and eventually consistent where the count
+      // view is exact — measured on preview, repeated identical requests over
+      // an unchanging window returned 2, then 4, then 2 rows against steady
+      // counts of 2 and 2. A short or briefly empty level is that, not a
+      // regression, and going red on it would make the panel cry wolf on
+      // every other load.
+      stubCloudflare({
+        graphql: edgeResponse,
+        telemetry: (body) =>
+          body.view === "calculations"
+            ? Response.json({ success: true, result: { calculations: [{ aggregates: [{ value: 2 }] }] } })
+            : body.parameters.filters.some((f) => f.value === "warning")
+              ? Response.json({ success: true, result: { events: { events: [], count: 0 } } })
+              : logsResponse({ ...body, parameters: { ...body.parameters, filters: [{ key: "$metadata.level", value: "error" }] } }),
+      });
+      const observatory = await getObservatory();
+
+      if (observatory.logs.state !== "ok") throw new Error(`expected ok, got ${JSON.stringify(observatory.logs)}`);
+      expect(observatory.logs.data.events).toHaveLength(1);
+      // The count still tells the truth about magnitude beside the short feed.
+      expect(observatory.logs.data.counts).toEqual({ error: 2, warning: 2 });
+    });
+
     it("refuses to render an empty feed under a nonzero error count", async () => {
       // Exactly what production returned during the walkthrough that found
       // this: the count query sees the error, the events query comes back

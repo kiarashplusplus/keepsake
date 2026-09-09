@@ -54,12 +54,20 @@ const CLOUDFLARE_API = "https://api.cloudflare.com/client/v4";
 /**
  * Both calls are made while an admin sits watching a spinner, and both are
  * strictly optional garnish on a page that has already rendered its D1 half.
- * 8 seconds is long enough for a cold GraphQL aggregation over 30 days
- * (measured: ~0.8s for a week, and it grows sub-linearly) and short enough
- * that a Cloudflare-side stall shows up as a named timeout on the page
- * rather than as a page that never finishes loading.
+ * Long enough to cover a cold query, short enough that a Cloudflare-side
+ * stall shows up as a named timeout on the page rather than as a page that
+ * never finishes loading.
+ *
+ * Raised from 8s once the log queries started returning rows. The GraphQL
+ * half is the fast one (~0.8s for a week, growing sub-linearly); the
+ * telemetry half is not. Measured against production and preview: whole
+ * `/observatory` loads landing at 5.9s, 7.2s, 7.5s, 7.6s, 8.3s, and one real
+ * `timed out after 8000ms` — a scan whose cost is set by how much the
+ * account logged, not by our window (a one-day query read 5.2M rows in
+ * 4.8s). A ceiling that a normal load crosses on a bad day is not a ceiling,
+ * it is a flake generator.
  */
-const TELEMETRY_TIMEOUT_MS = 8_000;
+const TELEMETRY_TIMEOUT_MS = 12_000;
 
 /** Most recent log lines returned. A feed, not an archive — `counts` in the
  * same payload carries the magnitude, so this cap costs no information about
@@ -551,19 +559,28 @@ export async function fetchLogTelemetry(
     // values. `run, statistics, calculations` back from a `view: "events"`
     // query means the view was not honored; `events` present but empty means
     // the rows are elsewhere in it.
-    // Checked per level, and *before* the merge is capped below: a level
-    // whose rows were all pushed out of a shared cap is not the same failure
-    // as a level that returned none, and only the uncapped arrays can tell
-    // them apart.
-    const mismatch = (
-      [
-        ["error", counts.error, errorFeed, errorEvents],
-        ["warning", counts.warning, warningFeed, warningEvents],
-      ] as const
-    ).find(([, count, feed]) => count > 0 && feed.length === 0);
+    // Both feeds empty while something was counted — not one of them.
+    //
+    // This guard was written when the feed was *always* empty (the missing
+    // `filterCombination` above), and per-level it was right for that. Once
+    // the rows started arriving, measurement showed the events view is
+    // sampled and eventually consistent where the count view is exact:
+    // repeated identical requests over an unchanging window returned 2, then
+    // 4, then 2 rows against steady counts of 2 errors and 2 warnings. A
+    // level coming back short, or briefly empty, is that — not a lie.
+    //
+    // So the signature this fires on is narrowed to the one that cannot be
+    // sampling: *nothing at all* returned while the exact counts say
+    // otherwise, which is what a regression here looks like and what a
+    // partial result never does. The counts render beside the feed either
+    // way, so a short feed is already visibly short.
+    const totalCounted = counts.error + counts.warning;
+    const nothingReturned = errorFeed.length === 0 && warningFeed.length === 0;
 
-    if (mismatch) {
-      const [level, count, , response] = mismatch;
+    if (totalCounted > 0 && nothingReturned) {
+      const level = counts.error > 0 ? "error" : "warning";
+      const count = counts.error > 0 ? counts.error : counts.warning;
+      const response = counts.error > 0 ? errorEvents : warningEvents;
       const shape = Object.keys(response.result ?? {}).join(", ") || "(no result object)";
       // `result.events.count` is the question the first round of this
       // diagnostic left open. `[run, events, statistics]` came back from
