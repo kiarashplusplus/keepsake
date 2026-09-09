@@ -78,7 +78,8 @@ rest of this document is about whether anyone can take it and whether it is wort
   toggle and a rebuilt feed.
 - **Scale.** Self-reported "14M+ members, 50+ countries"; Wikipedia's figure is 7.5M across 4,000+
   volunteer-led groups. Either way most of that is Facebook, not the app: the US App Store shows
-  **~2.1K ratings** (4.3★) as of 2026-09-02's v3.1.5.
+  **~2.1K ratings** (4.3★) as of 2026-09-02's v3.1.5, and Google Play shows **1.8★ on ~1.25K
+  ratings** (crashes, broken navigation, location filter, paywall).
 - **Model.** Free tier: unlimited gives/asks, one location, basic messaging. **Paid**: Sustaining
   Member ($5.49/mo or $54.99/yr) and a newer **Buy Nothing Pro** ($3.99 / $29.99 in-app prices)
   gating extra saved locations, a 100-mile radius, post bumps, saved searches/wishlists, group
@@ -87,7 +88,8 @@ rest of this document is about whether anyone can take it and whether it is wort
   independent Facebook groups using "Buy Nothing" were taken down; the 116K-member San Francisco
   group came back as "Buy Not a Thing No Rules San Francisco", others became "Buy Absolutely
   Nothing", "Gifting in the Bay Area", "BN". SF Standard's read: the paid app "struggled attracting
-  users, while independent Facebook groups remained popular." (2) **The 3.0 launch was rough**:
+  users, while independent Facebook groups remained popular." The SF group was reinstated under a
+  new name within a week. (2) **The 3.0 launch was rough**:
   password-reset bug, "Create an Account" shown to existing users, location filter showing other
   cities; store reviews call the update "a million times worse" and complain about a paywall.
 - **Moderation.** Volunteer admins per group, with documented burnout ("some administrators have
@@ -156,8 +158,9 @@ rest of this document is about whether anyone can take it and whether it is wort
   crypto (BTZ) pivot triggered an exodus. Rebuilt Dec 2025 with a Silicon Valley design firm.
 - **2026.** Owner Firat Eren published DAU daily from May 15: **<200 DAU in June**, mostly
   Toronto. He committed to shut down 2026-09-01 unless any city hit 1,000 DAU. **Outcome after the
-  deadline could not be confirmed** from sources reachable today; BetaKit's last report ("The
-  problem is not Bunz. The problem is me.") was pre-deadline.
+  deadline could not be confirmed** as of 2026-09-09: no shutdown notice on bunz.com, no
+  announcement either way, last app update 2026-08-22; BetaKit's last report ("The problem is not
+  Bunz. The problem is me.", 2026-08-31) said it was nowhere near the bar.
 - **Read.** A no-cash community app with a beloved brand, a fresh redesign and a decade of history
   could not hold 200 daily users in Canada's largest city. Design quality and mission were not the
   constraint; trust and liquidity were.
@@ -170,7 +173,7 @@ rest of this document is about whether anyone can take it and whether it is wort
 |---|---|---|---|---|---|
 | **Facebook Marketplace** | Price = $0 filter; plus thousands of local gifting groups (formerly "Buy Nothing", now renamed) | Mostly yes | Yes | Global | Stats sites claim ~1.2B MAU (unverified). Where the liquidity actually is. Scam guidance is safety-tips content, not enforced. |
 | **Craigslist "free"** | Dedicated `/zip` (free) section per city | No | No (anonymised email relay) | US/CA | ~50M US monthly users, down from 80M in 2015 (secondary source). Still cited as leading for free and large/odd items. Closest to Keepsake's *no-account, email-relay* mechanic. |
-| **Nextdoor Free Finds** | Free-only view of the "Finds" marketplace, launched June 2021 | **No** — explicitly browsable by non-members | Yes | US, CA, UK, EU, AU | At launch ¼ of Finds listings were free. 2025–26 platform pivot is toward a news/alerts feed and AI search; Finds is not the headline. Moderation: neighbour reports + volunteers + ops team + automation. |
+| **Nextdoor Free Finds** | Free-only view of the marketplace, launched June 2021; the section was rebranded "Nextdoor Finds" in 2026 with "Neighbor Made" and "Neighbor Services" sub-categories | **No** — explicitly browsable by non-members | Yes | US, CA, UK, EU, AU | At launch ¼ of Finds listings were free. 2025–26 platform pivot is toward a news/alerts feed and AI search; Finds is not the headline. Moderation: neighbour reports + volunteers + ops team + automation. |
 | **Kijiji "Free Stuff"** (CA) | A category | No | Yes | Canada | Low thousands of national listings on the day checked (two Kijiji pages disagreed: 749 vs 6,472). The default Canadian answer to "where do I give this away." |
 | **Karrot (Daangn)** | None distinct — "type 'free' in search" | Yes | Yes | NA launch: Toronto, Vancouver, NYC | 30M+ users globally, super-app ambitions (jobs, real estate, payments). Buy/sell first. |
 | **OfferUp** | $0 listings | Yes | Yes | US | Sale-first; aggregated by Freebie Alerts. |

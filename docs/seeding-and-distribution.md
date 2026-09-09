@@ -85,7 +85,7 @@ Since the late-Oct-2025 trademark takedowns, many groups run under renamed banne
 | **Nextdoor Free Finds** | No — manual per item; Search API is read-only beta, Public Agency Feed API is for governments; Business Pages not shown to list into For Sale & Free | **High — Houston's free page is live with real listings** (unlike Facebook's) | High — browsable without account, photo-first | Low manual; high scripted | The best manual channel today. Nextdoor requires true identity; posting "on behalf of" needs proof of affiliation |
 | **Craigslist Houston `free`** | No — bulk posting interface is case-by-case, high-volume, **paid categories only**; ToS bans scripts | Medium-high — ~200 active listings with real turnover on the day checked | Medium — anonymous email relay matches Keepsake; no story field | High if automated or linked; low if manual and linkless | URLs are stripped/flagged in free posts |
 | **Freecycle Houston** | No — member-only, volunteer-moderated | High — **Houston Town group: 16,380 members**, plus Houston-Westchase and Heights/Montrose groups | Medium — free-only ethos, keyword feed | Low | Post per group; some ask a day's wait before reposting elsewhere |
-| **Trash Nothing** | **Read: yes** — public API v1.4 (`/posts`, `/posts/search` by lat/lng/radius, `api_key` param). **Write: could not verify** — a search summary claimed OAuth + CRUD; the OpenAPI spec I fetched exposes only GET | High — federates the Freecycle groups above | Medium | Low (read) | Keepsake could *read* nearby free listings; publishing in is unconfirmed |
+| **Trash Nothing** | **Read: yes** — public API v1.4 (`/posts`, `/posts/search` by lat/lng/radius, `api_key` param). **Write: no** — the full OpenAPI spec was read on 2026-09-09: 12 endpoints, all `GET`, no create/update/delete anywhere. Key registration needs a logged-in human at `/app/developer` (Cloudflare-gated); the exact Houston query is in [`research/supply-signal-houston.md`](./research/supply-signal-houston.md) §5 | High — federates the Freecycle groups above | Medium | Low (read) | Keepsake can *read* nearby free listings; publishing in is not possible via the API |
 | **OfferUp** | No public posting API | Unverified for Houston | Low-medium — sale-first | Medium | Price 0 auto-labels "Free"; ~200 free postings/month cap is a fee limit, not a $0 ban |
 | **Freebie Alerts** (aggregator) | No self-serve source submission found; it scrapes Nextdoor, Craigslist, Marketplace, OfferUp, Trash Nothing | High, indirectly, if it chose to scrape Keepsake | High conceptually | n/a | Becoming a source is their decision; a clean public feed makes it cheap for them |
 | **Reddit r/houston** | No | Medium-high, but no r/HoustonFree found | Low-medium | Medium-high | Rules page 503'd; assume self-promo limits |
@@ -152,10 +152,13 @@ only where a public source names them. Phone numbers were deliberately left in t
 
 ### Venues for many handoffs in one place
 
-HCPL Repair Café dates (recurring, free, indoor) · Sweet Salvage monthly market at POST Houston ·
-The Houston Flea Market · Cole's Antique Village (weekly, 1,300+ vendor spaces) · Urban Harvest
+HCPL Repair Café dates (recurring, free, indoor; 2026-09-26 West University, 2026-11-14 Maud
+Marks) · Urban Harvest's weekly nonprofit outreach booth · The Houston Flea Market · Cole's Antique Village (weekly, 1,300+ vendor spaces) · Urban Harvest
 Saturday Farmers Market (vendor interest form; no gifting precedent) · a library room or church
-hall (the format every "Free Store" precedent uses, because it needs no city permit).
+hall (the format every "Free Store" precedent uses, because it needs no city permit). A "Sweet
+Salvage at POST Houston" market that an earlier draft listed here could not be corroborated; every
+source places Sweet Salvage in Phoenix. Dates, room policies and vendor routes are in
+[`research/events-and-press-houston.md`](./research/events-and-press-houston.md).
 
 ---
 
@@ -222,18 +225,112 @@ Each is a `product-decisions.md` row if taken. None is a workaround of the hones
    Nothing or a search engine ever doing so, and it costs one route. Postcode-level geo only.
 3. **An "also offered elsewhere" flag on a listing**, shown to requesters. Cross-posting is the
    cheapest early tactic and the one with a social cost; disclosure is what makes it honest.
-4. **A Keepsake Facebook Page mirror** via the Pages API. Small, compliant, schedulable. Decide
-   whether the Page posts every approved listing or a daily digest.
+4. **A Keepsake Facebook Page mirror** via the Pages API. Small, compliant with Meta, schedulable.
+   **Blocked by Keepsake's own terms as written**: `terms.html`'s content licence names six uses
+   and says "not on another site"; republishing a giver's photo and story to a Page needs a
+   separate opt-in at listing time that also names Meta's licence. See
+   [`research/legal-edges-seeding.md`](./research/legal-edges-seeding.md) §5. Decide the opt-in
+   before deciding per-listing vs digest.
 5. **Reading Trash Nothing's API for Houston** — not to republish, but to know what free supply
    looks like nearby and whether Keepsake's sentimental slice is real. Read-only, `api_key`.
 6. **An operator-side "post on behalf of a partner" path** for the estate partners in §3: the
    giver is a business owner clearing a client's house, the handoff is real. `seed-catalogue.md`
    already names the shape (an admin-authenticated create route) and says nobody has asked for
-   it. If #1–#3 in §4 land, someone will.
+   it. If #1–#3 in §4 land, someone will. If built: the operator transcribes the partner's own
+   written representations, the listing still goes through the human queue, and the audit trail
+   marks it as operator-entered (the §230 posture in
+   [`research/legal-edges-seeding.md`](./research/legal-edges-seeding.md) §3).
 
 ---
 
-## 6. Sources
+## 7. Second pass, same day: what eight more research passes changed
+
+Full reports are in [`research/`](./research/README.md). This is what moved, in the order it
+changes the plan above.
+
+**The supply partners in §3 mostly see the pile *after* the sentimental layer is gone.**
+Every guide to running an estate sale says the same thing: family pulls the heirlooms first,
+marks them "not for sale," and only then does a liquidator catalogue the house
+([`research/estate-workflow.md`](./research/estate-workflow.md) §3). What a liquidator has left
+after the sale is a second-order pile: unchosen, unsellable, not quite trash. Still worth asking
+for, but the better-fit estate user is the family member in the week *before* they call a
+liquidator, and the outreach should say so. Liquidators also work in lots, not items, at
+1,000–2,000 items a sale, with CSV import and filename-to-lot photo matching as table stakes; the
+gaps against `design/bulk-upload.md` are tabled there.
+
+**Demand is a different crowd, and it has its own seed partners.** Nobody had asked who *asks*.
+The answer splits: a curatorial crowd (Houston Genealogical Forum, Clayton Library Friends,
+Houston Area Postcard Club, the quilt guilds, TXRX Labs) that wants provenance and today shops
+paid channels, and a practical crowd (Nextdoor Free Finds' older, homeowner audience) that
+browses free feeds and is not documented as caring about story
+([`research/demand-houston.md`](./research/demand-houston.md)). Keepsake's feed puts both in front
+of the same card by construction. The genealogy and collector clubs are demand-side seed partners
+in exactly the sense the estate operators are supply-side ones, and Clayton Library Friends sits on
+both lists.
+
+**Measured, the sentimental slice of Houston's free supply is small in titles.** Of 276 free
+listings visible on Craigslist Houston and Nextdoor Houston on 2026-09-09, 8 (2.9%) used
+sentimental language in the title, and 51% were not household objects at all (car parts, tires,
+boxes, plants, pets, scams). Titles only, one day, two sources; the true fraction is higher because
+the backstory lives in bodies. The script and CSV in
+[`research/supply-sample/`](./research/supply-sample/) exist so this can be repeated for a week
+([`research/supply-signal-houston.md`](./research/supply-signal-houston.md)). Either way, the
+niche is not hiding inside the existing free feeds; it has to be made.
+
+**Two items in §5 changed status.** The Facebook Page mirror is blocked by Keepsake's own content
+licence until a separate opt-in exists (above). Trash Nothing's write API does not exist, not
+"unverified" (§2 table).
+
+**The legal edges, for the lawyer conversation**
+([`research/legal-edges-seeding.md`](./research/legal-edges-seeding.md), not legal advice): a
+Texas executor may distribute only after letters issue, a small-estate affidavit needs every
+distributee, and a gift does not cure conversion; so a business listing a client's items needs a
+written attestation of authority. Secondhand-dealer and pawn regimes are scoped to buy/sell/trade
+and plausibly do not reach $0 transfers, but that is inference from pattern, not a read of the
+Houston ordinance. Events are the largest undocumented exposure: library and church policies put
+liability on the using group, Texas charitable immunity does not cover Keepsake, and
+`legal-entity-and-insurance.md` is written for one-to-one meetups, not a hosted table. Cross-posting
+is clean. Charitable registration and the INFORM Consumers Act are confirmed out of scope.
+
+**Dates and doors** ([`research/events-and-press-houston.md`](./research/events-and-press-houston.md)):
+HCPL Repair Cafés on 2026-09-26 (West University) and 2026-11-14 (Maud Marks), with named HCPL
+contacts; HCPL and HPL rooms are free, need no nonprofit status, book 12 weeks and 90 days out,
+and ban sales but not giveaways; Urban Harvest rotates a weekly nonprofit outreach booth; the
+vendor markets are commercial and a poor fit. Press: KPRC's Bill Spencer wrote the 2025
+free-exchange-groups story; Hello Houston, Houston Landing and Community Impact's
+Heights-River Oaks-Montrose edition are the human-interest fits; The Leader has closed and Swamplot
+is dormant. Five pitch angles are drafted there.
+
+**Ready to send** ([`research/outreach-kit.md`](./research/outreach-kit.md)): a partner one-pager,
+seven email templates by partner type, a phone script with the three objections, a partner FAQ
+grounded in the terms, and a tracking CSV. Nothing in it promises an app, chat, pickup, receipts
+or money.
+
+**Ready to build** ([`research/share-and-feed-spec.md`](./research/share-and-feed-spec.md)):
+share buttons are 8–11 hours (the item page has only Web Share and copy today; `sms:` needs a
+device check); the JSON-LD already emitted is correct and needs one comment, not a change; a
+JSON Feed 1.1 plus RSS 2.0 public feed reusing the feed route's cursor and geo pipeline is 11–18
+hours, with one new privacy decision (rounding lat/lng to two decimals) to record in
+`product-decisions.md`.
+
+**Canada transfers, with two frictions** ([`research/canada-and-status.md`](./research/canada-and-status.md)):
+Toronto has every Houston channel and most are healthier (Freecycle Toronto 18,352 members,
+Facebook's Free tab populated, Nextdoor Free Finds built by Nextdoor's Toronto team, Karrot's
+North American engineering hub). Nothing there is programmatically writable either; Kijiji's only
+API is for paid auto dealers. CASL is opt-in, so partner outreach emails need the published
+business-address exception cited, and Quebec's Law 25 applies the moment a Quebec resident's data
+is processed. MaxSold, NASMM Toronto movers, Repair Café Toronto at the Tool Library, and Toronto
+Public Library rooms are the seed partners; Toronto's Furniture Bank charges donors for pickup,
+which makes Keepsake a free alternative rather than a downstream.
+
+**Status of the two cautionary tales.** Bunz's 2026-09-01 ultimatum is unresolved in public: no
+shutdown notice, no announcement, last published figure under 200 daily users. Buy Nothing's iOS
+rating is unchanged; its Android listing shows 1.8★ on 1.25K ratings, which `market-research.md`
+did not have.
+
+---
+
+## 8. Sources
 
 **Facebook.** [Facebook redesign, Aug 2026 (GCN)](https://gcn.com/facebook-overhauls-feed-redesign-five-changes/20667/) ·
 [Marketplace restrictions 2026 — ID verification, probation (CARVID, secondary)](https://www.carvidapp.com/dealer-questions/why-is-my-facebook-marketplace-account-restricted/) ·
