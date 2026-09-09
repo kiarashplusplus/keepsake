@@ -15,6 +15,7 @@ import * as React from "react";
 import { Pressable, View, type ViewStyle } from "react-native";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import type { Category } from "@keepsake/contracts/listing";
+import { radii } from "@keepsake/tokens/radii";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
 import { type } from "@keepsake/tokens/typography";
 import { useColors } from "@/ui/theme";
@@ -154,9 +155,38 @@ function LocationDisclosure({
             {summary}
           </Text>
         </View>
-        <Text variant="label" color="accentText" style={{ fontSize: 11 }}>
-          {expanded ? "Done" : "Change"}
-        </Text>
+        {/* Issue #373 finding 5: this used to render "Done" the same way as
+            "Change" — a bare red text label — so the control that actually
+            applies the choice and closes the panel was the quietest thing
+            on screen, under a "Use my location" that was filled ink
+            (LocationBar.tsx's half of this fix). `Button.tsx`'s doc comment
+            is explicit that a surface gets exactly one stamp-red filled
+            control; nothing else in this card fills `colors.accent`, so
+            "Done" can carry it without creating a second one. "Change" stays
+            a plain text label — it only opens the panel, it doesn't commit
+            anything, so it keeps the weight a "Use my location"-style
+            secondary action would get, not primary. This row (and so this
+            whole distinction) is `narrowOnly`: at 1280px there is no
+            disclosure to close, "Done" never renders, and the wide baseline
+            frame is untouched. */}
+        {expanded ? (
+          <View
+            style={{
+              backgroundColor: colors.accent,
+              paddingHorizontal: space.md,
+              paddingVertical: space.xs,
+              borderRadius: radii.sm,
+            }}
+          >
+            <Text variant="label" color="onAccent" style={{ fontSize: 11 }}>
+              Done
+            </Text>
+          </View>
+        ) : (
+          <Text variant="label" color="accentText" style={{ fontSize: 11 }}>
+            Change
+          </Text>
+        )}
       </Pressable>
       {/* Expanded, this is on screen at every width. Collapsed, it is the
           wide layout's always-open controls and the phone's hidden ones —
@@ -374,7 +404,7 @@ function Feed({ enabled }: { enabled: boolean }): React.ReactElement {
         </View>
       </Card>
 
-      <Card style={{ gap: space.lg }}>
+      <Card style={{ gap: space.lg }} testID="feed-controls-card">
         <SearchBar value={q} onChange={setQ} />
         <CategoryChips value={category} onChange={setCategory} />
         <LocationDisclosure summary={describeLocationChoice(location)} expanded={locationOpen} onToggle={() => setLocationOpen((open) => !open)}>

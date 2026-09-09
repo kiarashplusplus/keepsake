@@ -118,7 +118,24 @@ export function LocationBar({ value, onChange }: LocationBarProps): React.ReactE
             placeholder={COUNTRY_POSTCODE_HINTS[value.country]}
             style={{ minWidth: 160 }}
           />
-          <Button label={locating ? "Locating…" : "Use my location"} variant="secondary" loading={locating} onPress={handleUseMyLocation} />
+          {/* Issue #373 finding 5: this used to be `variant="secondary"`, the
+              same heavy ink-filled stamp the panel's actual apply/close
+              control ("Done", on the summary row above — see
+              `LocationDisclosure` in `app/index.tsx`) is a quiet text link.
+              That inverted the hierarchy: an optional convenience read
+              louder than the control that commits the choice. `link` is
+              already this file's treatment for the symmetric "leave
+              coordinate mode" action below (`handleUsePostcode`'s button),
+              so this now matches it rather than introducing a third
+              weight — same reasoning `Button.tsx`'s "the ONE" doc comment
+              gives for keeping the filled ranks to two. */}
+          <Button
+            label={locating ? "Locating…" : "Use my location"}
+            variant="link"
+            arrow={false}
+            loading={locating}
+            onPress={handleUseMyLocation}
+          />
         </View>
       )}
 

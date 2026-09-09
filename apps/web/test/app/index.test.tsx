@@ -1,8 +1,10 @@
 import * as React from "react";
-import { StyleSheet } from "react-native";
+import { StyleSheet, type ViewStyle } from "react-native";
+import type { ReactTestInstance } from "react-test-renderer";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import type { PublicListing } from "@keepsake/contracts/listing";
 import type { AspectShelf } from "@keepsake/contracts/shelves";
+import { colorsLight } from "@keepsake/tokens/colors";
 import { clearFeedCache } from "@/features/feed/useFeed";
 import { getFeed } from "@/api/feed";
 import { getShelves } from "@/api/shelves";
@@ -66,6 +68,34 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 6; i += 1) {
     await Promise.resolve();
   }
+}
+
+/** Every node under `root` whose own `style` prop — exactly what the JSX
+ * passed, before react-native-web resolves it down to a host `div` — flattens
+ * to the one stamp-red fill `Button.tsx`'s `primary` variant uses. A
+ * `Pressable`'s `style` is a function of press state, not a plain object
+ * (`Button.tsx`, `Chip.tsx`), so every filled `Button`/`Chip` in this tree is
+ * skipped rather than invoked with a guessed state — only a plain `View`
+ * passing a literal style object, which is exactly what `LocationDisclosure`'s
+ * "Done" pill is, can match. */
+function filledAccentNodes(root: ReactTestInstance): ReactTestInstance[] {
+  return root.findAll((node) => {
+    const style = (node.props as { style?: unknown }).style;
+    if (typeof style === "function") return false;
+    const flat = StyleSheet.flatten(style as ViewStyle | ViewStyle[] | undefined);
+    return flat.backgroundColor === colorsLight.accent;
+  });
+}
+
+/** The text `node` renders, read off the deepest matching descendants (a
+ * string prop's ancestors carry the same string too — react-native-web
+ * nests a `Text` inside a `span` inside a `div`, and each level's `children`
+ * prop is that same string — so only the leaves, the ones with no
+ * string-children descendant of their own, are kept). */
+function flattenText(node: ReactTestInstance): string {
+  const withStringChildren = node.findAll((n) => typeof n.props.children === "string");
+  const leaves = withStringChildren.filter((n) => !withStringChildren.some((other) => other !== n && n.findAll((d) => d === other).length > 0));
+  return leaves.map((n) => n.props.children as string).join("");
 }
 
 const DESKTOP_WIDTH = 1280;
@@ -309,6 +339,48 @@ describe("Feed", () => {
     expect(UNSAFE_getByProps({ accessibilityLabel: "Near · anywhere. Hide the location controls" }).props.accessibilityState).toEqual({
       expanded: true,
     });
+  });
+
+  // Issue #373 finding 5: the baseline screenshot (`feed-location.jpg`) showed
+  // an inverted hierarchy — "Use my location" (LocationBar.tsx, fixed
+  // separately) read louder than "Done", the control that actually applies
+  // the choice and closes this panel. Asserting a colour or a variant name
+  // here would pin the fix to this implementation; what the finding is
+  // actually about is *how many* filled controls the panel has and which one
+  // it is, so this walks the panel's own subtree (`feed-controls-card`, which
+  // holds search, category chips and the location controls together) and
+  // counts filled `colors.accent` fills directly — the same test that would
+  // catch a second primary sneaking in as it would catch "Done" losing its
+  // own.
+  it("issue #373: the expanded location panel has exactly one filled control, and it is Done", async () => {
+    setViewportWidth(PHONE_WIDTH);
+    jest.mocked(getFeed).mockResolvedValue({ items: [makeListing("listing-1", "Brass compass")], next_cursor: null });
+
+    const { UNSAFE_getByProps } = render(<Feed />);
+    await act(async () => {
+      await flush();
+    });
+
+    const panel = UNSAFE_getByProps({ testID: "feed-controls-card" });
+
+    // Collapsed, the panel carries no filled control at all — "Change" is a
+    // plain text label, same weight as every other quiet affordance here.
+    expect(filledAccentNodes(panel)).toHaveLength(0);
+
+    await act(async () => {
+      fireEvent.press(UNSAFE_getByProps({ accessibilityLabel: "Near · anywhere. Change where you are looking" }));
+      await flush();
+    });
+
+    // Expanded, exactly one thing in the panel is filled `colors.accent` —
+    // the same fill `Button.tsx`'s `primary` variant uses, and its doc
+    // comment's "the ONE" rule says a surface gets only one — and it carries
+    // the label that actually applies the choice and closes the panel.
+    const filled = filledAccentNodes(panel);
+    expect(filled).toHaveLength(1);
+    const [onlyFilled] = filled;
+    if (onlyFilled === undefined) throw new Error("Expected exactly one filled node");
+    expect(flattenText(onlyFilled)).toBe("Done");
   });
 
   it("issue #219: the summary row itself is the narrow-only half", async () => {
