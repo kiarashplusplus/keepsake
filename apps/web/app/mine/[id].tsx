@@ -8,12 +8,13 @@
 // at 1280x800 the 120px thumbnail band sat alone across the full measure
 // with one column of text underneath, while the same keepsake's public page
 // a click away already split print-left/story-right. See
-// `TWO_COLUMN_BREAKPOINT` below for why this page keeps its own copy of that
-// constant rather than importing one.
+// `breakpoint.detailTwoColumn` in `packages/tokens/src/breakpoints.ts` for
+// why — `item/[id].tsx` imports the same constant for its own split.
 import * as React from "react";
 import { useWindowDimensions, View } from "react-native";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import { Image as ExpoImage } from "expo-image";
+import { breakpoint } from "@keepsake/tokens/breakpoints";
 import { motion } from "@keepsake/tokens/motion";
 import { sectionRhythm, space } from "@keepsake/tokens/spacing";
 import { MODERATION_REASONS, type ListingStatus } from "@keepsake/contracts/listing";
@@ -62,16 +63,6 @@ const THUMB = 120;
 const THUMB_WIDE = 168;
 
 /**
- * Where this page stops stacking photos over the detail card and puts them
- * side by side instead. Deliberately the same number as `item/[id].tsx`'s
- * `TWO_COLUMN_BREAKPOINT` (#222) and for the same reason — that file's own
- * comment on the constant has the measurements; the two are not the same
- * import only because that file is owned by a different pull request in
- * this round of fixes. Move them together if either ever changes.
- */
-const TWO_COLUMN_BREAKPOINT = 1024;
-
-/**
  * Photos get the smaller share here, the opposite of `item/[id].tsx`'s
  * print/story split. There the print is one photograph the whole column
  * exists to show off; here it can be several thumbnails that only need
@@ -104,7 +95,7 @@ export default function MineDetail(): React.ReactElement {
   const router = useRouter();
   const colors = useColors();
   const { width } = useWindowDimensions();
-  const twoColumn = width >= TWO_COLUMN_BREAKPOINT;
+  const twoColumn = width >= breakpoint.detailTwoColumn;
   const [listing, setListing] = React.useState<OwnerListingDetail | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);

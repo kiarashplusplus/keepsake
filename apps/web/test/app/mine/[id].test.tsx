@@ -628,7 +628,7 @@ describe("mine/[id] desktop two-column layout (#373 finding 7)", () => {
   const PHONE = [390, 844] as const;
   const DESKTOP = [1280, 800] as const;
 
-  type Node = { props?: { style?: Record<string, unknown> }; children?: unknown };
+  type Node = { props?: Record<string, unknown>; children?: unknown };
 
   /** Depth-first walk of a `toJSON()` tree (whose root is an array). */
   function find(node: unknown, predicate: (n: Node) => boolean): Node | null {
@@ -646,7 +646,7 @@ describe("mine/[id] desktop two-column layout (#373 finding 7)", () => {
   }
 
   function styleOf(node: Node): Record<string, unknown> {
-    return node.props?.style ?? {};
+    return (node.props?.style as Record<string, unknown> | undefined) ?? {};
   }
 
   /** react-native-web serialises lengths with units, so 168 -> "168px". */
@@ -657,6 +657,18 @@ describe("mine/[id] desktop two-column layout (#373 finding 7)", () => {
   /** The photos/detail row, which only exists in the two-column layout. */
   function splitRow(tree: unknown): Node | null {
     return find(tree, (n) => styleOf(n)["flexDirection"] === "row" && styleOf(n)["alignItems"] === "flex-start");
+  }
+
+  /**
+   * The print itself, not just anywhere the number 120 or 168 shows up.
+   * `Print.web.tsx` sets `data-ks-print="drop"` on its own host node for the
+   * CSS entrance animation to select — a handle nothing else on this page
+   * carries, so it is also the reliable way to ask "how wide is the print",
+   * rather than searching the whole serialised tree for a width that some
+   * unrelated element could one day also happen to have.
+   */
+  function findPrint(tree: unknown): Node | null {
+    return find(tree, (n) => n.props?.["data-ks-print"] === "drop");
   }
 
   function listingWithPhoto(): OwnerListingDetail {
@@ -721,9 +733,10 @@ describe("mine/[id] desktop two-column layout (#373 finding 7)", () => {
 
   it("grows the print past its phone size once it has a column to itself", async () => {
     const { toJSON } = await renderAt(...DESKTOP);
-    const tree = toJSON();
-    expect(JSON.stringify(tree)).toContain(`"width":"${px(168)}"`);
-    expect(JSON.stringify(tree)).not.toContain(`"width":"${px(120)}"`);
+    const print = findPrint(toJSON());
+    expect(print).not.toBeNull();
+    expect(styleOf(print as Node)["width"]).toBe(px(168));
+    expect(styleOf(print as Node)["height"]).toBe(px(168));
   });
 
   it("keeps the single-column stacked layout and the 120px print on a phone", async () => {
@@ -731,7 +744,8 @@ describe("mine/[id] desktop two-column layout (#373 finding 7)", () => {
     const tree = toJSON();
 
     expect(splitRow(tree)).toBeNull();
-    expect(JSON.stringify(tree)).toContain(`"width":"${px(120)}"`);
-    expect(JSON.stringify(tree)).not.toContain(`"width":"${px(168)}"`);
+    const print = findPrint(tree);
+    expect(print).not.toBeNull();
+    expect(styleOf(print as Node)["width"]).toBe(px(120));
   });
 });

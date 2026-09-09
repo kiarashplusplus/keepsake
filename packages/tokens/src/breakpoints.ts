@@ -73,6 +73,45 @@ export const breakpoint = {
    * two lines and a horizontal scroller would be the worse of the two.
    */
   categoryChips: 700,
+  /**
+   * Where a keepsake's detail pages stop being one column and become
+   * print-left / story-right — `apps/web/app/item/[id].tsx` (#222) and
+   * `apps/web/app/mine/[id].tsx` (#373 finding 7), the giver's own copy of
+   * the same page. It used to be a local constant on each file, defined
+   * twice with a comment asking whoever changed one to change the other —
+   * exactly the coupling a shared token exists to remove.
+   *
+   * At 1280×800 the stacked layout on either page spent the entire viewport
+   * height on the photograph: the title was cut by the fold and everything
+   * else was well below it, so on a page whose whole proposition is *a
+   * photograph and the story attached to it* you could not see both at
+   * once.
+   *
+   * Deliberately not `narrow` or `categoryChips`. At 820 (`item/[id].tsx`'s
+   * own title breakpoint) the `grid` measure is the viewport itself, so
+   * after the page's 16px gutters and the 32px column gap each column would
+   * land around 378px — the phone column, twice — which is a worse page
+   * than the single column it replaced, not a better one. 1024 is the first
+   * width where the split is worth taking: on `item/[id].tsx`'s 5:6 print/
+   * story split the print column clears ~436px and the story ~524px, a
+   * print big enough to actually read the photograph off and a measure long
+   * enough that the story doesn't go ragged. It is also the conventional
+   * landscape-tablet / small-laptop width, so the change lands on the class
+   * of screen the issue is about, and the 1280×800 frame both issues open
+   * with sits well clear of it.
+   *
+   * Below this both pages are byte-for-byte the single-column layout they
+   * always were. Most visits are narrow and #222 says that layout is fine;
+   * the split is additive.
+   *
+   * Read with `useWindowDimensions()`, not baked into the CSS shell above:
+   * unlike `narrow`/`categoryChips`, nothing on either detail page needs to
+   * be correct in the zero-JS static render — there is no above-the-fold
+   * decision here that a crawler or a slow connection would see wrong, only
+   * a hydration-time layout change on a page that is already showing a
+   * skeleton while its one API call is in flight.
+   */
+  detailTwoColumn: 1024,
 } as const;
 
 export type Breakpoint = keyof typeof breakpoint;
