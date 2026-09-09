@@ -315,6 +315,20 @@ test("this proxy losing its own upstream socket is recorded, not swallowed", asy
   );
 });
 
+test("the crash report carries what memory looked like on the way down", async () => {
+  const { output } = await runServe({ E2E_MAX_WRANGLER_RESTARTS: "0" });
+
+  assert.match(output, /memory, sampled every \d+ms/);
+  if (process.platform === "linux") {
+    // The whole point is the numbers, so assert their shape rather than just
+    // the heading: #381's "or memory on the runner" needs `avail` to answer it.
+    assert.match(output, /avail=\d+MiB of \d+MiB .*workerd=\d+@\d+MiB proxyHeap=\d+MiB/);
+  } else {
+    // Elsewhere there is no `/proc`; it must degrade to a note, not a throw.
+    assert.match(output, /\(not sampled|memory sampling unavailable/);
+  }
+});
+
 // ── the ordinary path ──────────────────────────────────────────────────
 
 /** A child that just serves, so a request can be followed all the way through
@@ -398,23 +412,22 @@ test("requests and their bodies survive the round trip, over a reused socket", a
 
 // ── the restart threshold ──────────────────────────────────────────────
 
-test("the default threshold absorbs three restarts and fails on the fourth death", async () => {
+test("the default threshold absorbs one restart and fails on the second death", async () => {
   const { code, output } = await runServe();
-  // The budget #381 settled on: three deaths absorbed...
+  // Restart #1 happens...
   assert.match(output, /restart #1\./);
-  assert.match(output, /restart #3\./);
-  // ...and the fourth ends the run rather than restarting forever.
+  // ...and the second death ends the run rather than restarting forever.
   assert.equal(code, 1);
-  assert.match(output, /FATAL: wrangler dev died 4 time\(s\)/);
-  assert.match(output, /limit 3/);
+  assert.match(output, /FATAL: wrangler dev died 2 time\(s\)/);
+  assert.match(output, /limit 1/);
   // A run that restarts forever would never print this and never exit.
-  assert.doesNotMatch(output, /restart #4\./);
+  assert.doesNotMatch(output, /restart #3\./);
 });
 
 test("exceeding the threshold emits a ::error:: annotation under GitHub Actions", async () => {
   const { code, output } = await runServe({ GITHUB_ACTIONS: "true" });
   assert.equal(code, 1);
-  assert.match(output, /^::error::e2e: wrangler dev died 4 time\(s\)/m);
+  assert.match(output, /^::error::e2e: wrangler dev died 2 time\(s\)/m);
   // The tolerated restart is annotated too, so even a survivable blip is
   // visible on the run rather than buried in the log.
   assert.match(output, /^::warning::e2e: wrangler dev died and was restarted/m);
@@ -424,19 +437,19 @@ test("outside GitHub Actions the annotations are absent but the failure is not",
   const { code, output } = await runServe();
   assert.equal(code, 1);
   assert.doesNotMatch(output, /^::(error|warning)::/m);
-  assert.match(output, /FATAL: wrangler dev died 4 time\(s\)/);
+  assert.match(output, /FATAL: wrangler dev died 2 time\(s\)/);
 });
 
 test("E2E_MAX_WRANGLER_RESTARTS raises the threshold", async () => {
-  const { code, output } = await runServe({ E2E_MAX_WRANGLER_RESTARTS: "5" });
+  const { code, output } = await runServe({ E2E_MAX_WRANGLER_RESTARTS: "3" });
   assert.equal(code, 1);
-  assert.match(output, /restart #5\./);
-  assert.match(output, /FATAL: wrangler dev died 6 time\(s\)/);
+  assert.match(output, /restart #3\./);
+  assert.match(output, /FATAL: wrangler dev died 4 time\(s\)/);
 });
 
 test("an unparseable threshold falls back to the default instead of disabling the check", async () => {
   const { code, output } = await runServe({ E2E_MAX_WRANGLER_RESTARTS: "banana" });
   assert.equal(code, 1);
   assert.match(output, /ignoring E2E_MAX_WRANGLER_RESTARTS=banana/);
-  assert.match(output, /FATAL: wrangler dev died 4 time\(s\)/);
+  assert.match(output, /FATAL: wrangler dev died 2 time\(s\)/);
 });

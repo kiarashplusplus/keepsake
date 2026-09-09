@@ -117,27 +117,21 @@ const MAX_RETAINED_LINE_CHARS = 2_000;
 /**
  * How many unexpected exits to absorb before failing the run outright.
  *
- * Was one, on #104's evidence of runs with one restart and runs with three.
- * #381 priced that choice: four CI runs in sixteen minutes, every one of them
- * dying exactly twice — the first absorbed invisibly, the second tripping this
- * limit into `giveUp`, which frees the public port and hands every remaining
- * test an `ECONNREFUSED`. All four passed on a plain re-run with no code
- * change, so a budget of one was not catching a broken build; it was failing
- * roughly half of all runs over a fault the wrapper had already recovered
- * from. Three absorbs the observed rate (with Playwright's `retries: 2`
- * covering the tests each death costs) and still refuses a run whose server
- * is genuinely unable to stay up.
+ * One is deliberate rather than arbitrary: #104 saw runs with one restart and
+ * runs with three, so tolerating a single blip keeps the suite usable while
+ * still refusing to let a three-crash run look like a clean one. Set
+ * `E2E_MAX_WRANGLER_RESTARTS` to raise it, or to a negative value / the word
+ * `unlimited` for the old restart-forever behaviour when you are deliberately
+ * working through a flaky local environment.
  *
- * Raising it does not make a death quiet: every restart still prints the full
- * post-mortem, writes it to `e2e-diagnostics/`, and leaves a `::warning::`
- * annotation on the run.
- *
- * Set `E2E_MAX_WRANGLER_RESTARTS` to change it, or to a negative value / the
- * word `unlimited` for restart-forever when you are deliberately working
- * through a flaky local environment.
+ * Raising this is not a fix for a server that keeps dying: #381's four runs
+ * each died twice, and a budget that swallowed the second death would have
+ * turned a ~50% failure rate into a ~50% rate of runs that passed with a
+ * server that fell over mid-suite. The number stays where the evidence for it
+ * is; what a death costs is a question about why it happens.
  */
 const RESTART_LIMIT_ENV = "E2E_MAX_WRANGLER_RESTARTS";
-const DEFAULT_RESTART_LIMIT = 3;
+const DEFAULT_RESTART_LIMIT = 1;
 
 function readRestartLimit() {
   // Statically named rather than `process.env[RESTART_LIMIT_ENV]`: eslint's
@@ -239,6 +233,83 @@ function noteSettled(entry, outcome) {
   if (recentRequests.length > RECENT_REQUESTS) recentRequests.shift();
 }
 
+/**
+ * Memory, sampled on a timer, because the one hypothesis #381 raised that
+ * nothing here could test was "or memory on the runner".
+ *
+ * It is a live hypothesis rather than a hunch: wrangler's fatal error is the
+ * ProxyController losing its connection to workerd, and workerd being reaped
+ * under memory pressure looks exactly like that from the CLI — an empty
+ * `✘ [ERROR]`, `code=1`, and (as four crash reports show) nothing wrong on
+ * any request connection. It also fits what could not be reproduced: 400
+ * listings' worth of console output, 2,400 aborted image loads, 2,200 bare
+ * connect-and-reset probes and 60 truncated uploads, run against this stack
+ * on a developer machine, killed wrangler zero times.
+ *
+ * So rather than guess again, record it. `MemAvailable` is the number that
+ * matters (free + reclaimable), and the workerd processes are sampled beside
+ * it because a leak in the runtime and a runner that is simply full are
+ * different faults with different fixes. Linux-only by construction; a
+ * developer machine without `/proc` silently records nothing, which costs
+ * only a line in a report nobody is reading there.
+ */
+const MEMORY_SAMPLES = 40;
+const MEMORY_SAMPLE_MS = 2_000;
+const memorySamples = [];
+let memorySamplingBroken = false;
+
+function readMemorySample() {
+  const meminfo = fs.readFileSync("/proc/meminfo", "utf8");
+  const field = (name) => {
+    const match = new RegExp(`^${name}:\\s+(\\d+) kB`, "m").exec(meminfo);
+    return match ? Number(match[1]) : null;
+  };
+  const mib = (kb) => (kb === null ? "?" : `${Math.round(kb / 1024)}MiB`);
+
+  let workerdKb = 0;
+  let workerdCount = 0;
+  for (const entry of fs.readdirSync("/proc")) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      // `comm` rather than the full cmdline: it is one short read, and
+      // workerd is what the runtime is called in every wrangler version.
+      if (fs.readFileSync(`/proc/${entry}/comm`, "utf8").trim() !== "workerd") continue;
+      const status = fs.readFileSync(`/proc/${entry}/status`, "utf8");
+      const rss = /^VmRSS:\s+(\d+) kB/m.exec(status);
+      if (rss) workerdKb += Number(rss[1]);
+      workerdCount += 1;
+    } catch {
+      // The process exited between readdir and read. Nothing to record.
+    }
+  }
+
+  return (
+    `avail=${mib(field("MemAvailable"))} of ${mib(field("MemTotal"))} ` +
+    `swapFree=${mib(field("SwapFree"))} workerd=${workerdCount}@${mib(workerdKb)} ` +
+    `proxyHeap=${Math.round(process.memoryUsage().rss / 1024 / 1024)}MiB`
+  );
+}
+
+function sampleMemory() {
+  if (memorySamplingBroken) return;
+  try {
+    memorySamples.push(`${new Date().toISOString()} ${readMemorySample()}`);
+    if (memorySamples.length > MEMORY_SAMPLES) memorySamples.shift();
+  } catch (error) {
+    // No `/proc`, or a shape this does not understand. Say so once and stop:
+    // a sampler that throws every two seconds would bury the run's real output.
+    memorySamplingBroken = true;
+    console.error(
+      `[e2e:server] memory sampling unavailable (${error.message}); continuing without it.`,
+    );
+  }
+}
+
+/** Unref'd: this timer must never be the reason the process stays alive. */
+const memoryTimer = setInterval(sampleMemory, MEMORY_SAMPLE_MS);
+memoryTimer.unref();
+sampleMemory();
+
 /** Last `RETAINED_LINES` lines of the child's output, as `"out"`/`"err"` tags. */
 const retained = [];
 /** The debug log wrangler announces with `🪵  Logs were written to "…"`. */
@@ -314,6 +385,13 @@ function reportCrash(code, signal, inFlightAtExit) {
     ...(recentRequests.length > 0
       ? recentRequests.map((entry) => `[e2e:server]   ${entry}`)
       : ["[e2e:server]   (none)"]),
+  );
+
+  lines.push(
+    `[e2e:server] memory, sampled every ${MEMORY_SAMPLE_MS}ms (newest last):`,
+    ...(memorySamples.length > 0
+      ? memorySamples.map((entry) => `[e2e:server]   ${entry}`)
+      : ["[e2e:server]   (not sampled — see the note above, or this is not Linux)"]),
   );
 
   const tally = [...proxyEventCounts.entries()].map(([kind, count]) => `${kind}=${count}`);
