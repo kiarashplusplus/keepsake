@@ -12,8 +12,14 @@ jest.mock("expo-router", () => {
   const ReactActual = jest.requireActual("react");
   return {
     useLocalSearchParams: () => ({ id: "listing-1" }),
-    Link: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) =>
-      asChild ? children : ReactActual.createElement(ReactActual.Fragment, null, children),
+    // `asChild` merges `href` onto the child, which is how a `Button` inside
+    // a `Link` becomes a real `<a href>` (see `ButtonProps.href`). The mock
+    // dropped the href entirely until #359, so nothing here could tell a
+    // link-shaped button from one that navigates nowhere.
+    Link: ({ children, asChild, href }: { children: React.ReactNode; asChild?: boolean; href?: string }) =>
+      asChild && ReactActual.isValidElement(children)
+        ? ReactActual.cloneElement(children as React.ReactElement, { href })
+        : ReactActual.createElement(ReactActual.Fragment, null, children),
   };
 });
 
@@ -87,6 +93,50 @@ function setViewport(width: number, height: number): void {
 const PHONE = [390, 844] as const;
 /** The issue's own desktop frame — the one the title was cut by the fold on. */
 const DESKTOP = [1280, 800] as const;
+
+type Node = { props?: { style?: Record<string, unknown> }; children?: unknown };
+
+/** Depth-first walk of a `toJSON()` tree (whose root is an array). */
+function find(node: unknown, predicate: (n: Node) => boolean): Node | null {
+  if (Array.isArray(node)) {
+    for (const entry of node) {
+      const hit = find(entry, predicate);
+      if (hit !== null) return hit;
+    }
+    return null;
+  }
+  if (node === null || typeof node !== "object") return null;
+  const candidate = node as Node;
+  if (predicate(candidate)) return candidate;
+  return find(candidate.children, predicate);
+}
+
+function styleOf(node: Node): Record<string, unknown> {
+  return node.props?.style ?? {};
+}
+
+/** react-native-web serialises lengths with units, so 1100 -> "1100px". */
+function px(value: number): string {
+  return `${value}px`;
+}
+
+/**
+ * Is the action carrying this label the underlined one? `Button`'s `link`
+ * variant is the only thing on this page that draws a bottom border, so the
+ * first node that both has one and contains the label is that button. This
+ * is how #359's actual complaint is stated as an assertion: not "is Share
+ * present" (it always was) but "is Share the first, loudest, underlined
+ * thing offered to a stranger on a keepsake nobody can have".
+ */
+function underlined(tree: unknown, label: string): boolean {
+  return (
+    find(tree, (n) => {
+      const width = styleOf(n)["borderBottomWidth"];
+      if (width === undefined || width === 0 || width === "0px") return false;
+      return JSON.stringify(n).includes(label);
+    }) !== null
+  );
+}
 
 describe("item/[id]", () => {
   beforeEach(() => {
@@ -165,6 +215,89 @@ describe("item/[id]", () => {
   });
 
   /**
+   * Issue #359. A given keepsake is a live page — it is what a stranger
+   * reaches from an old link or a card that unfurled in a group chat — and
+   * the only thing it said about being over was a rubber stamp that, at
+   * desktop widths, sits in the other column entirely. Removing "I'd love
+   * this" also promoted Share into the vacated first slot, so the loudest
+   * offer on the page was to pass the link on.
+   */
+  describe("a given keepsake says so, and points onward (#359)", () => {
+    const givenListing: PublicListing = { ...listing, status: "given", given_at: Date.now() - 3 * 86_400_000 };
+
+    async function renderGiven(listingToServe: PublicListing = givenListing): Promise<ReturnType<typeof render>> {
+      jest.mocked(getListing).mockResolvedValue(listingToServe);
+      const utils = render(
+        <ToastProvider>
+          <Item />
+        </ToastProvider>,
+      );
+      await act(flush);
+      return utils;
+    }
+
+    it("says it in words, in the story column, not only as a stamp", async () => {
+      const { toJSON } = await renderGiven();
+
+      expect(JSON.stringify(toJSON())).toContain("This one has found a home.");
+    });
+
+    it("offers the feed as a real link", async () => {
+      const { UNSAFE_getByProps } = await renderGiven();
+
+      const onward = UNSAFE_getByProps({ accessibilityLabel: "See what else is nearby" });
+      // A crawler can follow it, a middle-click opens it in a tab, and a
+      // screen reader announces it as a link — see `ButtonProps.href`.
+      expect(onward.props.href).toBe("/");
+      expect(onward.props.accessibilityRole).toBe("link");
+    });
+
+    it("gives that link the underline Share used to inherit", async () => {
+      const { toJSON } = await renderGiven();
+      const tree = toJSON();
+
+      expect(underlined(tree, "See what else is nearby")).toBe(true);
+      // Still on the page for anyone who wants to show someone the story —
+      // just no longer the action the page leads with.
+      expect(JSON.stringify(tree)).toContain("Share");
+      expect(underlined(tree, "Share")).toBe(false);
+    });
+
+    it("leaves the live page exactly as it was: Share underlined, no onward line", async () => {
+      const { toJSON, UNSAFE_queryAllByProps } = await renderGiven(listing);
+      const tree = toJSON();
+
+      expect(underlined(tree, "Share")).toBe(true);
+      expect(JSON.stringify(tree)).not.toContain("This one has found a home.");
+      expect(UNSAFE_queryAllByProps({ accessibilityLabel: "See what else is nearby" })).toHaveLength(0);
+      expect(UNSAFE_queryAllByProps({ accessibilityLabel: "I'd love this" }).length).toBeGreaterThan(0);
+    });
+
+    it("dates the giving rather than the posting", async () => {
+      const { toJSON } = await renderGiven();
+      const rendered = JSON.stringify(toJSON());
+
+      expect(rendered).toContain("given 3 d ago");
+      expect(rendered).not.toContain("posted ");
+    });
+
+    /**
+     * `given_at` is optional on `PublicListing` and `serialize.ts` omits the
+     * key when the column is null, which is the shape of any row marked given
+     * before that column existed. The line falls back rather than rendering
+     * "given undefined".
+     */
+    it("falls back to the publish date when given_at never made it into the row", async () => {
+      const withoutGivenAt: PublicListing = { ...listing, status: "given" };
+      const { toJSON } = await renderGiven(withoutGivenAt);
+      const rendered = JSON.stringify(toJSON());
+
+      expect(rendered).toContain("posted ");
+      expect(rendered).not.toContain("given undefined");
+    });
+  });
+
+  /**
    * Issue #222. At 1280x800 the print filled the viewport, so the title was
    * cut by the fold and the story sat below it — on a page whose whole
    * proposition is a photograph and the story attached to it, you could not
@@ -177,32 +310,6 @@ describe("item/[id]", () => {
    * `e2e/ux.spec.ts`'s desktop frame, not for react-test-renderer.
    */
   describe("desktop two-column layout (#222)", () => {
-    type Node = { props?: { style?: Record<string, unknown> }; children?: unknown };
-
-    /** Depth-first walk of a `toJSON()` tree (whose root is an array). */
-    function find(node: unknown, predicate: (n: Node) => boolean): Node | null {
-      if (Array.isArray(node)) {
-        for (const entry of node) {
-          const hit = find(entry, predicate);
-          if (hit !== null) return hit;
-        }
-        return null;
-      }
-      if (node === null || typeof node !== "object") return null;
-      const candidate = node as Node;
-      if (predicate(candidate)) return candidate;
-      return find(candidate.children, predicate);
-    }
-
-    function styleOf(node: Node): Record<string, unknown> {
-      return node.props?.style ?? {};
-    }
-
-    /** react-native-web serialises lengths with units, so 1100 -> "1100px". */
-    function px(value: number): string {
-      return `${value}px`;
-    }
-
     /**
      * The measure the page itself is laid out on. Found by style rather than
      * by a `testID` because `Page` renders TWO `ReadableWidth`s — the content
@@ -305,6 +412,26 @@ describe("item/[id]", () => {
       const printColumn = (splitRow(toJSON())?.children as unknown[])[0];
       expect(JSON.stringify(printColumn)).toContain("Given");
       expect(UNSAFE_queryAllByProps({ accessibilityLabel: "I'd love this" })).toHaveLength(0);
+    });
+
+    /**
+     * The other half of #359, and the reason the words are not enough if they
+     * travel with the stamp: split, the stamp is in the left column and a
+     * reader's eye is in the right one. The sentence and the way out both
+     * have to be on the card.
+     */
+    it("puts the words and the way onward in the story column, beside the stamp", async () => {
+      jest.mocked(getListing).mockResolvedValue({ ...listing, status: "given", given_at: Date.now() - 3 * 86_400_000 });
+
+      const { toJSON } = await renderAt(...DESKTOP);
+      const storyColumn = (splitRow(toJSON())?.children as unknown[])[1];
+      const story = JSON.stringify(storyColumn);
+
+      expect(story).toContain("This one has found a home.");
+      expect(story).toContain("See what else is nearby");
+      expect(story).toContain("Somerville, MA · given 3 d ago");
+      expect(underlined(storyColumn, "See what else is nearby")).toBe(true);
+      expect(underlined(storyColumn, "Share")).toBe(false);
     });
 
     it("opens the RequestSheet from the story column", async () => {

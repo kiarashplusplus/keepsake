@@ -3,6 +3,13 @@
 // ever returns `approved`/`given` listings — anything else 404s, which this
 // renders as the same not-found state as `app/+not-found.tsx`.
 //
+// A `given` listing is a live page, not an error page: it is what a stranger
+// reaches from an old link or a card that unfurled in a group chat. So it
+// keeps the photograph and the story and changes three things (#359) — it
+// says "This one has found a home." in words, it swaps the request button for
+// a link onward to the feed rather than promoting Share into that slot, and
+// its meta line dates the giving instead of the posting.
+//
 // At desktop widths the print and the story sit side by side rather than
 // stacked (#222) — see `TWO_COLUMN_BREAKPOINT` below for why, and why it is
 // not the same number as the title's breakpoint.
@@ -71,9 +78,22 @@ const TWO_COLUMN_BREAKPOINT = 1024;
 const PRINT_COLUMN_PARTS = 5;
 const STORY_COLUMN_PARTS = 6;
 
+/**
+ * The last clause of the meta line. A given keepsake dating itself "posted 1
+ * min ago" was #359's smallest tell: the freshest-sounding thing on the page
+ * was the one fact that had stopped being true. `given_at` is optional on
+ * `PublicListing` — `serialize.ts` omits the key when the column is null, so
+ * a row marked given before that column was written still falls back to the
+ * publish date rather than rendering "given undefined".
+ */
+function whenLine(listing: PublicListing): string {
+  if (listing.status === "given" && listing.given_at !== undefined) return `given ${relativeTime(listing.given_at)}`;
+  return `posted ${relativeTime(listing.published_at)}`;
+}
+
 function metaLine(listing: PublicListing): string {
   const place = listing.admin1 !== null ? `${listing.place_name}, ${listing.admin1}` : listing.place_name;
-  return `${CATEGORY_LABELS[listing.category]} · ${place} · posted ${relativeTime(listing.published_at)}`;
+  return `${CATEGORY_LABELS[listing.category]} · ${place} · ${whenLine(listing)}`;
 }
 
 export default function Item(): React.ReactElement {
@@ -233,6 +253,17 @@ export default function Item(): React.ReactElement {
       <View style={{ gap: space.sm }}>
         <Eyebrow>{CATEGORY_LABELS[listing.category]}</Eyebrow>
         <Text variant={wide ? "displayXl" : "displayLg"}>{listing.title}</Text>
+        {/* The stamp says it in ink; this says it in words, and it says it
+            here — in the story column, under the title — because at desktop
+            widths the stamp is in the *other* column, and a visitor who
+            never looks left has otherwise been told nothing (#359). The
+            story below is still written in the present tense by whoever
+            posted it, so the page needs one sentence of its own that isn't. */}
+        {given ? (
+          <Text variant="bodyLg" color="textSecondary">
+            This one has found a home.
+          </Text>
+        ) : null}
       </View>
 
       <PencilRule />
@@ -250,9 +281,24 @@ export default function Item(): React.ReactElement {
         {metaLine(listing)}
       </Text>
 
+      {/* Exactly one underlined action, whatever the status. While the
+          keepsake is live that is Share, sitting after the red "I'd love
+          this"; once it is given, removing the request button used to
+          *promote* Share — so the first and loudest thing offered to a
+          stranger who arrived from an old link was to pass on a link to
+          something nobody can have (#359). The onward link takes that rank
+          instead, and Share drops to a ghost beside Report: still there for
+          anyone who wants to show someone the story, no longer the
+          suggestion the page leads with. */}
       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.xl }}>
-        {!given ? <Button label="I'd love this" onPress={() => setRequestOpen(true)} /> : null}
-        <Button label="Share" variant="link" onPress={() => void handleShare()} />
+        {given ? (
+          <Link href="/" asChild>
+            <Button label="See what else is nearby" variant="link" />
+          </Link>
+        ) : (
+          <Button label="I'd love this" onPress={() => setRequestOpen(true)} />
+        )}
+        <Button label="Share" variant={given ? "ghost" : "link"} onPress={() => void handleShare()} />
         <Button label="Report" variant="ghost" onPress={() => setReportOpen(true)} />
       </View>
     </Card>

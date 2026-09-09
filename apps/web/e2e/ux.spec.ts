@@ -256,6 +256,12 @@ test.describe("ux baseline", () => {
     await page.goto(`/item/${catalog.givenId}`);
     await expect(page.getByText(DEMO_GIVEN_LISTING.title, { exact: true })).toBeVisible();
     await expect(page.getByLabel("I'd love this")).toHaveCount(0);
+    // #359: the stamp is not the only thing that says so any more. The card
+    // says it in words and offers a way onward, and Share is no longer the
+    // action a stranger is led with — assert all three here so the frame
+    // below is a frame of that page and not of the one it replaced.
+    await expect(page.getByText("This one has found a home.")).toBeVisible();
+    await expect(page.getByLabel("See what else is nearby")).toHaveAttribute("href", "/");
     // Stacked at 390px the stamp is below the print, which is the half of
     // this screen the frame is for.
     const givenStamp = page.getByText("Given", { exact: true });
