@@ -57,6 +57,15 @@ function edgeResponse(): Response {
   });
 }
 
+/**
+ * The real row shape, transcribed from a production Workers Logs event and
+ * from Cloudflare's own schema for this endpoint: `$metadata` is a *sibling*
+ * of `source`, not a key inside it, and `source` is the untouched object
+ * `capture.ts` wrote. This mock used to nest `$metadata` under `source`,
+ * which is why the parser could read it from the wrong level for as long as
+ * it did — the test proved the parser agreed with itself, not with
+ * Cloudflare.
+ */
 function logsResponse(): Response {
   return Response.json({
     success: true,
@@ -65,8 +74,21 @@ function logsResponse(): Response {
       events: {
         events: [
           {
+            dataset: "cloudflare-workers",
             timestamp: 1_757_000_000_000,
-            source: { $metadata: { level: "error", message: "moderation failed", service: "keepsake-api", requestId: "req-1" } },
+            source: {
+              event: "capture",
+              level: "error",
+              message: "moderation failed",
+              service: "keepsake-api",
+              environment: "production",
+            },
+            $metadata: {
+              level: "error",
+              message: "moderation failed",
+              service: "keepsake-production",
+              requestId: "req-1",
+            },
           },
         ],
       },
@@ -241,6 +263,57 @@ describe("GET /api/admin/observatory", () => {
       // the magnitude.
       expect(observatory.logs.data.events).toHaveLength(1);
       expect(observatory.logs.data.counts.error).toBe(7);
+    });
+
+    it("reads each event's fields from `$metadata` beside `source`, not inside it", async () => {
+      stubCloudflare({ graphql: edgeResponse, telemetry: logsResponse });
+      const observatory = await getObservatory();
+
+      if (observatory.logs.state !== "ok") throw new Error("expected ok");
+      // Every one of these came back as a fallback — `"(no message)"`, a
+      // guessed level, `null` — while `$metadata` was read one level too
+      // deep, so a feed of real errors rendered as anonymous rows.
+      expect(observatory.logs.data.events[0]).toEqual({
+        ts: 1_757_000_000_000,
+        level: "error",
+        message: "moderation failed",
+        service: "keepsake-production",
+        request_id: "req-1",
+      });
+    });
+
+    it("refuses to render an empty feed under a nonzero error count", async () => {
+      // Exactly what production returned during the walkthrough that found
+      // this: the count query sees the error, the events query comes back
+      // without rows. Two answers to one question — the panel must say so
+      // rather than show "no errors" over a count of one.
+      stubCloudflare({
+        graphql: edgeResponse,
+        telemetry: () =>
+          Response.json({
+            success: true,
+            errors: [],
+            result: { run: {}, statistics: {}, calculations: [{ aggregates: [{ value: 1 }] }] },
+          }),
+      });
+      const observatory = await getObservatory();
+
+      if (observatory.logs.state !== "error") throw new Error("expected error");
+      expect(observatory.logs.error).toContain("events feed returned none");
+      // The keys that did come back are the diagnosis — `calculations` back
+      // from a `view: "events"` query means the view was not honored.
+      expect(observatory.logs.error).toContain("calculations");
+    });
+
+    it("treats a 200 carrying `errors` as a failure even with no `success` field", async () => {
+      stubCloudflare({
+        graphql: edgeResponse,
+        telemetry: () => Response.json({ errors: [{ message: "invalid filter key" }], result: {} }),
+      });
+      const observatory = await getObservatory();
+
+      if (observatory.logs.state !== "error") throw new Error("expected error");
+      expect(observatory.logs.error).toContain("invalid filter key");
     });
 
     it("clamps the log window to Workers Logs retention and says so", async () => {

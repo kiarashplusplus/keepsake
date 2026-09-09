@@ -266,6 +266,19 @@ export type AdminTestErrorInput = z.infer<typeof AdminTestErrorInput>;
 export type AdminTestErrorResult = {
   captured: true;
   kind: "exception" | "message";
+  /**
+   * The `requestId` the synthetic event was tagged with — the string to
+   * search Workers Logs (or the Observatory feed) for.
+   *
+   * `captured: true` only ever meant "the capture function returned without
+   * throwing", which is the one thing a unit test already proved. The whole
+   * point of this route is the half a unit test cannot reach: whether the
+   * line actually lands in Cloudflare's pipeline. Answering that used to
+   * mean firing the route and then hunting a dashboard for an event with no
+   * distinguishing mark, since every invocation writes the identical
+   * message. Handing back the id makes the check exact.
+   */
+  request_id: string;
 };
 
 /**

@@ -312,20 +312,58 @@ export async function fetchEdgeTelemetry(
 // Log lines — Workers Observability
 // ---------------------------------------------------------------------------
 
-interface TelemetryEventSource {
-  timestamp?: number;
+interface TelemetryMetadata {
   level?: string;
   message?: string;
-  $metadata?: { level?: string; message?: string; service?: string; requestId?: string };
+  service?: string;
+  requestId?: string;
+}
+
+/** The raw log object the Worker itself wrote — `capture.ts`'s single plain
+ * object, verbatim. Cloudflare does not merge it with its own annotations;
+ * `$metadata` and `$workers` are siblings of `source`, not keys inside it. */
+interface TelemetryEventSource {
+  timestamp?: number;
+  ts?: string;
+  level?: string;
+  message?: string;
+  service?: string;
+  /** `captureException`'s `tags`, as `capture.ts` wrote them. `index.ts`'s
+   * error handler puts this Worker's own `requestId` here — see the
+   * correlation note on `request_id` below. */
+  tags?: { requestId?: string };
+}
+
+/**
+ * One row of `view: "events"`.
+ *
+ * `$metadata` sits **beside** `source`, not inside it. This module read it as
+ * `source.$metadata` until a production walkthrough went looking for a
+ * synthetic error it had just fired and found the feed empty: Cloudflare's
+ * schema for this endpoint makes `dataset`, `timestamp`, `source` and
+ * `$metadata` four required top-level properties of the event, under
+ * `additionalProperties: false`. Reading one level too deep yielded `{}` for
+ * every event, so every rendered line degraded to the `"(no message)"` /
+ * `null` fallbacks below — a feed that could only ever describe events as
+ * anonymous.
+ */
+interface TelemetryEvent {
+  timestamp?: number;
+  dataset?: string;
+  source?: TelemetryEventSource;
+  $metadata?: TelemetryMetadata;
 }
 
 interface TelemetryQueryResponse {
   success?: boolean;
   errors?: { message: string }[];
   result?: {
-    events?: { events?: { timestamp?: number; source?: TelemetryEventSource }[] };
-    // `view: "count"` fills this instead; shape kept loose because only the
-    // single aggregate number is read out of it.
+    /** `view: "events"`. `count`/`fields`/`series` also ride along here and
+     * are deliberately unread — the feed wants rows, and `counts` in the
+     * payload already carries magnitude from its own query. */
+    events?: { events?: TelemetryEvent[] };
+    // `view: "calculations"` fills this instead; shape kept loose because
+    // only the single aggregate number is read out of it.
     calculations?: { aggregates?: { value?: number }[] }[];
   };
 }
@@ -394,7 +432,13 @@ export async function fetchLogTelemetry(
       telemetryQuery(config, timeframe, "warning", "calculations"),
     ]);
 
-    const failed = [errorEvents, errorCount, warningCount].find((r) => r.success === false);
+    // `success === false` is not the only way this endpoint says no. A
+    // rejected query can also come back as a 200 carrying a populated
+    // `errors` array and no `success` field at all, and the old check —
+    // `success === false` alone — read that as a success with nothing in it.
+    const failed = [errorEvents, errorCount, warningCount].find(
+      (r) => r.success === false || (r.errors?.length ?? 0) > 0,
+    );
     if (failed) {
       return {
         state: "error",
@@ -404,13 +448,27 @@ export async function fetchLogTelemetry(
 
     const events: ObservatoryLogEvent[] = (errorEvents.result?.events?.events ?? []).map((event) => {
       const source = event.source ?? {};
-      const metadata = source.$metadata ?? {};
+      // `$metadata` first (Cloudflare's own annotations, always present on a
+      // real row), then the Worker's own log object. `capture.ts` writes
+      // `service` as the app name (`keepsake-api`) while `$metadata.service`
+      // is the script name (`keepsake-production`); the annotation wins
+      // because it is the one that is always there.
+      const metadata = event.$metadata ?? {};
       return {
         ts: event.timestamp ?? source.timestamp ?? 0,
         level: metadata.level ?? source.level ?? "error",
         message: metadata.message ?? source.message ?? "(no message)",
-        service: metadata.service ?? null,
-        request_id: metadata.requestId ?? null,
+        service: metadata.service ?? source.service ?? null,
+        // This Worker's own `requestId` first, Cloudflare's second — they
+        // are two different identifiers for the same request and only the
+        // first one is reachable by the person reporting the problem.
+        // `index.ts` mints `crypto.randomUUID()` per request, returns it as
+        // `X-Request-Id`, and tags every `captureException` with it;
+        // `$metadata.requestId` is Cloudflare's ray-derived id, which never
+        // leaves their side. Preferring the annotation meant an admin
+        // holding the `X-Request-Id` from a user's failed request could not
+        // find that request in this feed.
+        request_id: source.tags?.requestId ?? metadata.requestId ?? null,
       };
     });
     events.sort((a, b) => b.ts - a.ts);
@@ -418,11 +476,41 @@ export async function fetchLogTelemetry(
     const readCount = (response: TelemetryQueryResponse): number =>
       response.result?.calculations?.[0]?.aggregates?.[0]?.value ?? 0;
 
+    const counts = { error: readCount(errorCount), warning: readCount(warningCount) };
+
+    // Two answers to the same question, from the same API, over the same
+    // window and the same filters: the count query says N errors, the feed
+    // query returns rows. They cannot disagree about whether *any* exist —
+    // and when they do, the feed is the half that is wrong, because a count
+    // has no shape to misparse.
+    //
+    // This is here because that disagreement is exactly what a production
+    // walkthrough hit: `POST /api/admin/test-error` fired a real exception,
+    // `counts.error` went 0 → 1, and `events` stayed `[]`. Rendered as an
+    // empty feed under a nonzero count, that reads as "nothing to see" on
+    // the one panel whose entire job is to show what went wrong — the
+    // confident-empty lie `ObservatorySource`'s doc comment exists to
+    // prevent, arriving through the back door because `?? []` cannot tell
+    // "no rows" from "rows I could not find in this response".
+    //
+    // The result keys are named in the message because they are the whole
+    // diagnosis and cannot leak anything: they are schema key names, never
+    // values. `run, statistics, calculations` back from a `view: "events"`
+    // query means the view was not honored; `events` present but empty means
+    // the rows are elsewhere in it.
+    if (counts.error > 0 && events.length === 0) {
+      const shape = Object.keys(errorEvents.result ?? {}).join(", ") || "(no result object)";
+      return {
+        state: "error",
+        error: `Cloudflare observability: ${counts.error} error log(s) counted in this window but the events feed returned none — response carried [${shape}]`,
+      };
+    }
+
     return {
       state: "ok",
       data: {
         window_days: windowDays,
-        counts: { error: readCount(errorCount), warning: readCount(warningCount) },
+        counts,
         events,
       },
     };

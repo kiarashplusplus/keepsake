@@ -9,11 +9,20 @@ about it.
 ("Re-check `/health` on the apex and post the first real listing") — that issue stays open until a
 human has actually run it, because nothing in an agent session can.
 
-> **Why this exists as a document rather than a script an agent runs.** Agent containers reach the
-> internet through an egress proxy that answers `403` to `CONNECT keepsake.ing:443`, so no session
-> working in this repo can curl the live site. A verification that cannot be performed must not be
-> reported as performed — see `AGENTS.md`, "A passing test is not evidence." Everything here needs
-> a human on an ordinary network.
+> **Why this exists as a document rather than a script an agent runs.** *Some* agent containers
+> reach the internet through an egress proxy that answers `403` to `CONNECT keepsake.ing:443`, and
+> a session in one of those cannot curl the live site at all. That is a policy denial, not a broken
+> tool: don't retry it and don't route around it — say plainly that you could not observe the thing.
+>
+> **But check before assuming it.** This paragraph used to say *no* session working in this repo
+> could reach production, and a session on 2026-09-09 curled `/health`, walked every
+> `/api/admin/*` route and fired `POST /api/admin/test-error` against the apex without trouble —
+> having nearly skipped all of it on the strength of this sentence. Egress policy varies by
+> environment; one `curl -s https://keepsake.ing/health` settles it in a second. A verification
+> that cannot be performed must not be reported as performed (`AGENTS.md`, "A passing test is not
+> evidence") — and one that *can* be performed should not be waved off as impossible either.
+>
+> §5 still needs a human regardless: it is a browser with a clean profile, not a shell.
 
 Prerequisites: `curl` and `jq`, plus a checkout of this repo for the commit check in §4, and a
 browser with a clean profile for §5 — that one cannot be done from a shell.

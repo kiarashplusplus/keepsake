@@ -69,7 +69,11 @@ import { suggestFromPhoto } from "../suggest/suggest.js";
 import { reembedListing } from "../search/reembed.js";
 import { checkAndBump } from "../moderation/budget.js";
 
-type Vars = { validatedBody: unknown; validatedQuery: unknown };
+/** `requestId` is not set by anything on this router — `index.ts`'s
+ * top-level middleware puts it on the context before any mount is reached,
+ * and it is declared here so `/test-error` can read the same id the response
+ * carries as `X-Request-Id`. */
+type Vars = { validatedBody: unknown; validatedQuery: unknown; requestId: string };
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 // Limiter first, auth second — deliberately, and load-bearing. `adminAuth`
@@ -952,16 +956,20 @@ adminRoutes.post("/test-email", validateBody(AdminTestEmailInput), async (c) => 
  */
 adminRoutes.post("/test-error", validateBody(AdminTestErrorInput), async (c) => {
   const input = c.get("validatedBody") as AdminTestErrorInput;
+  // Same `requestId` this Worker returns as `X-Request-Id` and tags real
+  // errors with, so a synthetic event is found the same way a real one is —
+  // and so `AdminTestErrorResult.request_id` names a line that exists.
+  const requestId = c.get("requestId");
   if (input.kind === "message") {
     captureMessage("Keepsake admin/test-error: synthetic warning message", "warning", {
-      tags: { source: "admin_test_error" },
+      tags: { source: "admin_test_error", requestId },
     });
   } else {
     captureException(new Error("Keepsake admin/test-error: synthetic exception"), {
-      tags: { source: "admin_test_error" },
+      tags: { source: "admin_test_error", requestId },
     });
   }
-  const result: AdminTestErrorResult = { captured: true, kind: input.kind };
+  const result: AdminTestErrorResult = { captured: true, kind: input.kind, request_id: requestId };
   return ok(c, result);
 });
 

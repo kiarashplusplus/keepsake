@@ -802,13 +802,19 @@ describe("admin routes", () => {
       });
       expect(res.status).toBe(200);
       const result = await readOk<AdminTestErrorResult>(res);
-      expect(result).toEqual({ captured: true, kind: "exception" });
+      expect(result).toMatchObject({ captured: true, kind: "exception" });
 
       expect(captureExceptionSpy).toHaveBeenCalledTimes(1);
       const [error, opts] = captureExceptionSpy.mock.calls[0] ?? [];
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toContain("admin/test-error");
       expect(opts?.tags?.source).toBe("admin_test_error");
+      // The id in the response must be the one the event was tagged with, or
+      // it sends the reader looking for a line that does not exist. It is
+      // also the `X-Request-Id` of this very response, so a failed request
+      // and its log line can be matched from either end.
+      expect(result.request_id).toBe(res.headers.get("X-Request-Id"));
+      expect(opts?.tags?.requestId).toBe(result.request_id);
     });
 
     it("kind: message calls captureMessage at warning level instead", async () => {
@@ -822,7 +828,8 @@ describe("admin routes", () => {
       });
       expect(res.status).toBe(200);
       const result = await readOk<AdminTestErrorResult>(res);
-      expect(result).toEqual({ captured: true, kind: "message" });
+      expect(result).toMatchObject({ captured: true, kind: "message" });
+      expect(result.request_id).toBe(res.headers.get("X-Request-Id"));
 
       expect(captureMessageSpy).toHaveBeenCalledTimes(1);
       const [message, level] = captureMessageSpy.mock.calls[0] ?? [];
