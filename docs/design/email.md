@@ -273,6 +273,16 @@ substitution falls back to the same `mailto:hello@keepsake.ing` address the unch
 already names — a working, less convenient mechanism, never a dead placeholder shipped into a real
 inbox.
 
+**Rotating `UNSUBSCRIBE_SECRET` is a breaking change, not hygiene.** The token is a deterministic
+HMAC of the address and `email_suppressions` is keyed by `sha256(token)`, so a new secret rehashes
+every address to a new token: unsubscribe links already in inboxes stop validating, and every
+existing suppression row is orphaned — the people who unsubscribed start receiving `new_request`
+mail again. Migrating the rows in the same change needs the old secret *plus* the suppressed
+addresses, and neither is kept in recoverable form (`email_suppressions` holds `token_hash` only;
+`email_events` holds `to_hash`, itself one-way). Treat it as set-once, with distinct values per
+environment so a preview token can never validate in production.
+`docs/runbooks/deploy.md#secrets` repeats this where the secret is actually provisioned.
+
 **Why the page never mutates on GET, and the API route does on POST.** Mail clients, link
 scanners, and corporate security proxies fetch URLs out of messages before a human ever sees them —
 the same reasoning `requestConfirm.ts` already gives for POST-only confirmation. `GET

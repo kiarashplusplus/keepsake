@@ -226,8 +226,23 @@ Set per environment, never committed (see root `.env.example`'s `# secrets:` blo
 wrangler secret put TURNSTILE_SECRET --env preview
 wrangler secret put ADMIN_TOKEN --env preview
 wrangler secret put RESEND_API_KEY --env preview   # fallback provider only
+wrangler secret put UNSUBSCRIBE_SECRET --env preview   # set once — see below
 # repeat with --env production
 ```
+
+**`UNSUBSCRIBE_SECRET` is set-once, not rotated on a schedule.** It keys the HMAC that turns a
+recipient's address into their unsubscribe token (`apps/api/src/email/unsubscribe.ts`), and
+`email_suppressions` is keyed by the SHA-256 of that token. Rotating the secret therefore does two
+things at once: every unsubscribe link already sitting in someone's inbox stops validating, and —
+worse — every existing suppression row is orphaned, because the same address now hashes to a
+different token, misses its old row, and starts receiving `new_request` mail again. That is a CASL
+regression, not a broken link: people who unsubscribed begin hearing from us.
+
+Migrating the rows in the same change is the only safe rotation, and it requires the old secret
+*plus* the list of suppressed addresses — which this system deliberately does not keep
+(`email_suppressions` stores only `token_hash`; `email_events` stores only `to_hash`, itself a
+one-way hash). So in practice: treat a rotation as a breaking change that needs a plan written
+first, and use distinct values per environment so a preview token can never validate in production.
 
 No `SENTRY_DSN` here (issue #14): observability runs on Workers Logs now
 (`[observability]` in `apps/api/wrangler.toml`), which is a config flag, not a secret — there is

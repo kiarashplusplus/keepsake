@@ -25,6 +25,21 @@
  * on a link; checking a never-unsubscribed address is a lookup miss, not a
  * pre-seeded "false" row for every address that has ever received mail.
  *
+ * **The secret is set-once, not rotated.** The token being a deterministic
+ * function of the address is what lets `sendMail` derive it at send time
+ * with nothing stored — but it also means the secret is load-bearing for
+ * every suppression already on file. Rotate it and the same address hashes
+ * to a new token, which misses its old `email_suppressions` row: every
+ * unsubscribe link already in an inbox stops validating, and everyone who
+ * had unsubscribed starts receiving `new_request` mail again. That is a
+ * CASL regression, not a broken link. Migrating the rows alongside a
+ * rotation would need the old secret *plus* the suppressed addresses, and
+ * this system keeps neither in recoverable form by design — the table holds
+ * `token_hash` only, and `email_events` holds `to_hash`, itself one-way. So
+ * a rotation is a breaking change that needs a plan before it, not a
+ * scheduled hygiene task; `docs/runbooks/deploy.md#secrets` says so where
+ * someone would actually reach for `wrangler secret put`.
+ *
  * **Missing secret fails open, not closed.** `UNSUBSCRIBE_SECRET` is a
  * `wrangler secret`, unset in this repo the same way `TURNSTILE_SECRET` and
  * `RESEND_API_KEY` are (`.dev.vars.example`). If it is ever unset in a real
