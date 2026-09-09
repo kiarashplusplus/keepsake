@@ -4,6 +4,7 @@
 import * as React from "react";
 import { StyleSheet, View } from "react-native";
 import type { OwnerViewRequest, RequestStatus } from "@keepsake/contracts/request";
+import type { ListingStatus } from "@keepsake/contracts/listing";
 import { space } from "@keepsake/tokens/spacing";
 import { Text, type TextColor } from "@/ui/Text";
 import { Button } from "@/ui/Button";
@@ -113,8 +114,34 @@ function RequestRow({ request, canChoose, busy, onChoose }: RequestRowProps): Re
   );
 }
 
+// What an empty list means depends on where the listing is in its life, and
+// only one of those places has a link worth sharing (issue #355: a given
+// listing told its giver to "Share the link" to something already handed
+// over). A `Record` over every status, so a status added later cannot fall
+// through to the invitation by default.
+//
+// - `approved` is live, so the ask is the fix.
+// - `given` is a record now; the giver found a home for it some other way.
+//   "found a home" is the item page's phrase for the same moment (#367).
+// - `pending`/`needs_review` are not live *yet*: nobody could have asked, and
+//   there is nothing to share until moderation says so.
+// - `withdrawn`/`hidden`/`rejected` are closed. Past tense, and not "while it
+//   was live", because withdraw is allowed from `pending` and a rejection
+//   means it never was.
+const EMPTY_STATE: Record<ListingStatus, string> = {
+  approved: "No one has asked yet. Share the link.",
+  given: "Nobody asked through Keepsake before this found its home.",
+  pending: "No one has asked yet.",
+  needs_review: "No one has asked yet.",
+  withdrawn: "No one asked.",
+  hidden: "No one asked.",
+  rejected: "No one asked.",
+};
+
 export type RequestListProps = {
   requests: readonly OwnerViewRequest[];
+  /** The listing's own status, which decides what an empty list means. */
+  status: ListingStatus;
   /** Whether any request can still be chosen (the listing has none chosen
    * yet and is still live). */
   canChoose: boolean;
@@ -122,11 +149,11 @@ export type RequestListProps = {
   onChoose: (requestId: string) => void;
 };
 
-export function RequestList({ requests, canChoose, busy, onChoose }: RequestListProps): React.ReactElement {
+export function RequestList({ requests, status, canChoose, busy, onChoose }: RequestListProps): React.ReactElement {
   if (requests.length === 0) {
     return (
       <Text variant="body" color="textSecondary">
-        No one has asked yet. Share the link.
+        {EMPTY_STATE[status]}
       </Text>
     );
   }

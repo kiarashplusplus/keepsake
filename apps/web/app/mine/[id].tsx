@@ -235,6 +235,7 @@ export default function MineDetail(): React.ReactElement {
           </View>
           <RequestList
             requests={listing.requests}
+            status={listing.status}
             canChoose={listing.chosen_request_id === null && listing.status === "approved"}
             busy={busy || choosing}
             onChoose={setChooseTarget}
