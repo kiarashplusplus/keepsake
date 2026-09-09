@@ -21,6 +21,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { Buffer } from "node:buffer";
 import http from "node:http";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -237,6 +238,59 @@ test("a request in flight when wrangler dies is named in the crash report", asyn
   }
 });
 
+/**
+ * The shape the black-hole test above cannot produce: a child that is *also*
+ * the upstream, so its death resets the sockets the proxy is holding.
+ *
+ * That is real wrangler, and it is why #381's four crash reports all said "0
+ * request(s) in flight" while a hundred tests were failing around them: the
+ * reset settles the entry before the exit is even delivered, and the report
+ * then waits a further 100ms to print. Nothing was wrong with the traffic; the
+ * instrument was reading an empty map and honestly reporting it as empty.
+ */
+const SELF_HOSTING_DYING_CHILD = (port) => `
+import http from "node:http";
+process.stdout.write("fake wrangler ready\\n");
+// Accepts the request and never answers it, so it is genuinely open when the
+// process — and with it this socket — goes away.
+http.createServer(() => {}).listen(${port}, "127.0.0.1");
+setTimeout(() => {
+  process.stderr.write("${CRASH_MARKER}\\n");
+  process.exit(1);
+}, 700);
+`;
+
+test("a request the crash itself reset is still named, not lost to the empty map", async () => {
+  const port = await findDeadPort();
+  const { output } = await runServe(
+    { E2E_MAX_WRANGLER_RESTARTS: "0" },
+    {
+      child: SELF_HOSTING_DYING_CHILD(port),
+      upstreamPort: port,
+      onListening: (publicPort) => {
+        const req = http.request({
+          host: "127.0.0.1",
+          port: publicPort,
+          path: "/reset-by-the-death-itself",
+        });
+        req.on("error", () => {});
+        req.end();
+      },
+    },
+  );
+
+  // The record that has to survive: what the request was, and that it ended by
+  // being reset rather than answered. Before the settled-request history this
+  // assertion had nothing to match — the report named no request at all.
+  assert.match(
+    output,
+    /GET \/reset-by-the-death-itself request failed \((ECONNRESET|ECONNREFUSED)[^)]*\) after \d+ms/,
+  );
+  // And the empty in-flight list now says why it is empty, so the next reader
+  // does not conclude from it that nothing was in flight.
+  assert.match(output, /\(none — wrangler's own death resets its sockets/);
+});
+
 test("this proxy losing its own upstream socket is recorded, not swallowed", async () => {
   // Nothing is listening on the upstream port, so the forward fails the way
   // it would if wrangler's socket went away mid-request: the browser is
@@ -259,6 +313,101 @@ test("this proxy losing its own upstream socket is recorded, not swallowed", asy
     output,
     /upstream-request-error GET \/no-one-home attempt=0 code=ECONNREFUSED reused=false/,
   );
+});
+
+test("the crash report carries what memory looked like on the way down", async () => {
+  const { output } = await runServe({ E2E_MAX_WRANGLER_RESTARTS: "0" });
+
+  assert.match(output, /memory, sampled every \d+ms/);
+  if (process.platform === "linux") {
+    // The whole point is the numbers, so assert their shape rather than just
+    // the heading: #381's "or memory on the runner" needs `avail` to answer it.
+    assert.match(output, /avail=\d+MiB of \d+MiB .*workerd=\d+@\d+MiB proxyHeap=\d+MiB/);
+  } else {
+    // Elsewhere there is no `/proc`; it must degrade to a note, not a throw.
+    assert.match(output, /\(not sampled|memory sampling unavailable/);
+  }
+});
+
+// ── the ordinary path ──────────────────────────────────────────────────
+
+/** A child that just serves, so a request can be followed all the way through
+ * the proxy and back. Everything else in this file kills the child on purpose;
+ * without this, a change to how requests are forwarded — the agent they go
+ * out on, the body they carry — could break every real run with the suite
+ * still green. */
+const ECHO_CHILD = (port) => `
+import http from "node:http";
+process.stdout.write("fake wrangler ready\\n");
+// Counted so the test can prove the second request really did come back on
+// the first one's connection, rather than merely assert that it did.
+let connections = 0;
+const server = http.createServer((req, res) => {
+  const chunks = [];
+  req.on("data", (c) => chunks.push(c));
+  req.on("end", () => {
+    res.writeHead(201, {
+      "content-type": "text/plain",
+      "x-seen-path": req.url,
+      "x-connections": String(connections),
+    });
+    res.end(Buffer.concat(chunks));
+  });
+});
+server.on("connection", () => { connections += 1; });
+server.listen(${port}, "127.0.0.1");
+// Long enough for the requests below, then exit so the test never hangs.
+setTimeout(() => process.exit(1), 3000);
+`;
+
+test("requests and their bodies survive the round trip, over a reused socket", async () => {
+  const port = await findDeadPort();
+  const seen = [];
+  await runServe(
+    { E2E_MAX_WRANGLER_RESTARTS: "0" },
+    {
+      child: ECHO_CHILD(port),
+      upstreamPort: port,
+      onListening: (publicPort) => {
+        // Two in sequence: the second goes out on the pooled keep-alive socket
+        // the first left behind, which is the path `upstreamAgent` owns.
+        const send = (n, after) => {
+          const req = http.request(
+            { host: "127.0.0.1", port: publicPort, method: "POST", path: `/echo/${n}` },
+            (res) => {
+              const chunks = [];
+              res.on("data", (c) => chunks.push(c));
+              res.on("end", () => {
+                seen.push({
+                  status: res.statusCode,
+                  path: res.headers["x-seen-path"],
+                  connections: res.headers["x-connections"],
+                  body: Buffer.concat(chunks).toString(),
+                });
+                after?.();
+              });
+            },
+          );
+          req.on("error", () => {});
+          req.end(`body-${n}`);
+        };
+        send(1, () => send(2));
+      },
+    },
+  );
+
+  assert.deepEqual(
+    seen.map(({ status, path: seenPath, body }) => ({ status, path: seenPath, body })),
+    [
+      { status: 201, path: "/echo/1", body: "body-1" },
+      { status: 201, path: "/echo/2", body: "body-2" },
+    ],
+  );
+  // The second request opened no new connection upstream: the pool handed it
+  // the socket the first left behind. Compared rather than pinned to a number
+  // because `waitForUpstream` may have already spent one connecting-and-
+  // dropping while it waited for the child's server to come up.
+  assert.equal(seen[1].connections, seen[0].connections);
 });
 
 // ── the restart threshold ──────────────────────────────────────────────
