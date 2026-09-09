@@ -99,6 +99,7 @@
         if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
       } catch (e) {}
     </script>
+    <script src="/theme-toggle.js" defer></script>
   </head>
   <!-- `data-ks-consent-quiet`: this page is the disclosure the consent bar
      points at, so the bar does not auto-open on top of it. Nothing is
@@ -110,11 +111,30 @@
     <header class="site-header">
       <div class="wrap">
         <a class="wordmark" href="/">Keepsake</a>
-        <nav class="site-nav" aria-label="Primary">
-          <a href="/">Browse</a>
-          <a href="/give">Give</a>
-          <a href="/about">About</a>
-        </nav>
+        <div class="site-header-actions">
+          <nav class="site-nav" aria-label="Primary">
+            <a href="/" class="wide-only">Browse</a>
+            <a href="/mine">Mine</a>
+            <a href="/about" class="wide-only">About</a>
+          </nav>
+          <a class="btn btn-primary" href="/give">
+            <span class="btn-give-wide">Give something</span>
+            <span class="btn-give-narrow">Give</span>
+          </a>
+          <button type="button" class="theme-toggle" data-theme-toggle hidden aria-label="Theme: System. Tap to change.">
+            <svg class="theme-icon theme-icon-light" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true" focusable="false">
+              <circle cx="10" cy="10" r="4.5" />
+              <path d="M10 1.5v2M10 16.5v2M1.5 10h2M16.5 10h2M4.05 4.05l1.42 1.42M14.54 14.54l1.42 1.42M4.05 15.95l1.42-1.42M14.54 5.46l1.42-1.42" />
+            </svg>
+            <svg class="theme-icon theme-icon-dark" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" focusable="false">
+              <path d="M15.5 12.6a6.5 6.5 0 0 1-8.1-8.1 6.5 6.5 0 1 0 8.1 8.1Z" />
+            </svg>
+            <svg class="theme-icon theme-icon-system" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+              <circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" stroke-width="1.5" />
+              <path d="M10 2.75a7.25 7.25 0 0 1 0 14.5Z" fill="currentColor" />
+            </svg>
+          </button>
+        </div>
       </div>
     </header>
 

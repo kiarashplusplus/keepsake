@@ -419,6 +419,17 @@ body::before {
   letter-spacing: -0.01em;
 }
 
+/* The header's right-hand cluster: the plain-link nav, the Give button and
+   the theme toggle, grouped so `.site-header .wrap` keeps exactly two flex
+   children (wordmark, cluster) and `justify-content: space-between` still
+   only has one gap to place — issue #373 finding 8. Mirrors
+   `apps/web/src/ui/AppHeader.tsx`'s single row after the wordmark. */
+.site-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xl);
+}
+
 .site-nav {
   display: flex;
   gap: var(--space-xl);
@@ -442,6 +453,86 @@ body::before {
 .site-nav a[aria-current="page"] {
   color: var(--accent2-text);
   border-bottom-color: var(--accent2-text);
+}
+
+/* Hidden below 640px, same as `AppHeader.tsx`'s `vp.wideOnly`: on a phone the
+   header keeps only Mine, Give and the theme toggle. A `display: none` link
+   drops out of the tab order and the accessibility tree on its own — no
+   `aria-hidden` needed alongside it. */
+@media (max-width: 640px) {
+  .wide-only {
+    display: none;
+  }
+}
+
+/* `.btn-give`'s two labels: same trick as the app's `Give something` /
+   `Give`, picked by CSS breakpoint rather than JS, because a static export
+   (there isn't one here, but the principle is the same one `AppHeader.tsx`'s
+   comment names) can't pick a label from the viewport for everyone. */
+.btn-give-narrow {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .btn-give-wide {
+    display: none;
+  }
+  .btn-give-narrow {
+    display: inline;
+  }
+}
+
+/* ---------- Theme toggle (issue #373 finding 8) ----------
+   `/theme-toggle.js` reads and writes the same `keepsake.theme.v1` key the
+   app's `ThemeProvider` does (apps/web/src/ui/theme.tsx) and cycles the same
+   light -> dark -> system order as `AppHeader.tsx`'s `NEXT_MODE`. It starts
+   `hidden`: with no JS there is nothing for it to do, so it stays out of the
+   page entirely rather than sitting there inert — every other header control
+   already works with JS off. The no-flash paint itself is the pre-hydration
+   `<script>` in `<head>`, unchanged by this control. */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background var(--duration-quick) var(--ease);
+}
+
+.theme-toggle[hidden] {
+  display: none;
+}
+
+.theme-toggle:hover {
+  background: var(--surface-sunken);
+}
+
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--accent2-text);
+  outline-offset: 2px;
+}
+
+.theme-icon {
+  display: none;
+  width: 20px;
+  height: 20px;
+}
+
+/* One of the three icons shows, picked by the `data-mode` the toggle's script
+   sets after reading `keepsake.theme.v1` — mirrors `AppHeader.tsx`'s
+   `MODE_ICON`. No `data-mode` yet (script hasn't run) reads as "system",
+   the same default `ThemeProvider` assumes before hydration. */
+.theme-toggle[data-mode="light"] .theme-icon-light,
+.theme-toggle[data-mode="dark"] .theme-icon-dark,
+.theme-toggle[data-mode="system"] .theme-icon-system,
+.theme-toggle:not([data-mode]) .theme-icon-system {
+  display: block;
 }
 
 /* ---------- Buttons: ONE pill (primary); secondary is a text link, not a second pill ---------- */
@@ -1206,6 +1297,9 @@ h2 {
 @media (max-width: 640px) {
   .site-header .wrap {
     min-height: 64px;
+  }
+  .site-header-actions {
+    gap: var(--space-md);
   }
   .site-nav {
     gap: var(--space-lg);
