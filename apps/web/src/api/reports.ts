@@ -3,8 +3,8 @@ import { CreateReportInput as CreateReportInputSchema, type CreateReportInput } 
 import { UlidSchema } from "@keepsake/contracts/common";
 import { apiFetch } from "@/api/client";
 
-const CreateReportResult = z.object({ id: UlidSchema });
-export type CreateReportResult = z.infer<typeof CreateReportResult>;
+const CreateReportResultSchema = z.object({ id: UlidSchema });
+export type CreateReportResult = z.infer<typeof CreateReportResultSchema>;
 
 export type CreateReportOptions = {
   turnstileToken: string;
@@ -25,5 +25,5 @@ export async function createReport(
     turnstileToken: options.turnstileToken,
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
   });
-  return CreateReportResult.parse(data);
+  return CreateReportResultSchema.parse(data);
 }

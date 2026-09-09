@@ -3,8 +3,8 @@ import { CreateRequestInput as CreateRequestInputSchema, type CreateRequestInput
 import { TimestampMs, UlidSchema } from "@keepsake/contracts/common";
 import { apiFetch } from "@/api/client";
 
-const CreateRequestResult = z.object({ id: UlidSchema, created_at: TimestampMs });
-export type CreateRequestResult = z.infer<typeof CreateRequestResult>;
+const CreateRequestResultSchema = z.object({ id: UlidSchema, created_at: TimestampMs });
+export type CreateRequestResult = z.infer<typeof CreateRequestResultSchema>;
 
 export type CreateRequestOptions = {
   turnstileToken: string;
@@ -29,5 +29,5 @@ export async function createRequest(
     ...(options.idempotencyKey !== undefined ? { idempotencyKey: options.idempotencyKey } : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
   });
-  return CreateRequestResult.parse(data);
+  return CreateRequestResultSchema.parse(data);
 }

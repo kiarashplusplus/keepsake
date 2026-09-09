@@ -84,8 +84,8 @@ export async function rejectListing(adminToken: string, listingId: string, input
   });
 }
 
-const BanResult = z.object({ id: z.string(), banned: z.boolean(), hidden_listings: z.number().int().nonnegative().optional() });
-export type BanResult = z.infer<typeof BanResult>;
+const BanResultSchema = z.object({ id: z.string(), banned: z.boolean(), hidden_listings: z.number().int().nonnegative().optional() });
+export type BanResult = z.infer<typeof BanResultSchema>;
 
 export async function banOwner(adminToken: string, ownerId: string, input: AdminBanInput = {}): Promise<BanResult> {
   const body = AdminBanInputSchema.parse(input);
@@ -94,7 +94,7 @@ export async function banOwner(adminToken: string, ownerId: string, input: Admin
     body,
     adminToken,
   });
-  return BanResult.parse(data);
+  return BanResultSchema.parse(data);
 }
 
 export async function unbanOwner(adminToken: string, ownerId: string): Promise<BanResult> {
@@ -102,7 +102,7 @@ export async function unbanOwner(adminToken: string, ownerId: string): Promise<B
     method: "POST",
     adminToken,
   });
-  return BanResult.parse(data);
+  return BanResultSchema.parse(data);
 }
 
 // #297: `AdminStats`/`AdminHealth` are plain TS types, not contracts' own

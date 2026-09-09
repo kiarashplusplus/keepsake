@@ -18,7 +18,7 @@ import { fixPhotoUrls } from "@/api/fixPhotoUrls";
  * Declared here rather than in `@keepsake/contracts` because it's a
  * client-facing composite, not a request/response body shape the API itself
  * validates against a single named schema. */
-export const OwnerListingDetail = OwnerDashboardListing.extend({
+export const OwnerListingDetailSchema = OwnerDashboardListing.extend({
   requests: z.array(OwnerViewRequest),
   moderation: z.object({
     status: ListingStatusSchema,
@@ -26,7 +26,7 @@ export const OwnerListingDetail = OwnerDashboardListing.extend({
     held: z.boolean(),
   }),
 });
-export type OwnerListingDetail = z.infer<typeof OwnerListingDetail>;
+export type OwnerListingDetail = z.infer<typeof OwnerListingDetailSchema>;
 
 export async function getMe(signal?: AbortSignal): Promise<OwnerMeT> {
   const data = await apiFetch<unknown>("/api/me", { owner: true, ...(signal !== undefined ? { signal } : {}) });
@@ -43,7 +43,7 @@ export async function getMyListing(id: string, signal?: AbortSignal): Promise<Ow
     owner: true,
     ...(signal !== undefined ? { signal } : {}),
   });
-  return OwnerListingDetail.parse(fixPhotoUrls(data));
+  return OwnerListingDetailSchema.parse(fixPhotoUrls(data));
 }
 
 export type SetEmailOptions = {

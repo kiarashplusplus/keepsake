@@ -1,7 +1,6 @@
 import * as React from "react";
 import { View, type ViewStyle } from "react-native";
-import { measure } from "@keepsake/tokens/spacing";
-import { space } from "@keepsake/tokens/spacing";
+import { measure, space } from "@keepsake/tokens/spacing";
 
 export type ReadableWidthProps = {
   variant: "prose" | "grid";

@@ -1,5 +1,4 @@
 import * as React from "react";
-import { useColors } from "@/ui/theme";
 import { FieldFrame, FIELD_FONT_FAMILY, FIELD_FONT_SIZE, FIELD_MIN_HEIGHT, useFieldControlLook } from "@/ui/FieldFrame";
 import type { DateFieldProps } from "@/ui/dateFieldTypes";
 
@@ -26,7 +25,6 @@ import type { DateFieldProps } from "@/ui/dateFieldTypes";
  * every other field rather than being a second look-alike.
  */
 export function DateField({ label, value, onChangeText, onBlur, helper, error, min, max, accessibilityHint }: DateFieldProps): React.ReactElement {
-  const colors = useColors();
   const [focused, setFocused] = React.useState(false);
   const look = useFieldControlLook({ focused, hasError: error !== undefined });
 

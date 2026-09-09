@@ -35,7 +35,7 @@ function Probe({ buildCommit }: { buildCommit: string }): React.ReactElement {
 
 async function flush(): Promise<void> {
   for (let i = 0; i < 4; i += 1) {
-    // eslint-disable-next-line no-await-in-loop -- deliberately sequential microtask drains.
+    // Deliberately drain microtasks sequentially.
     await act(async () => {
       await Promise.resolve();
     });

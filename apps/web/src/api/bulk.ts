@@ -185,7 +185,7 @@ export async function updateBatch(id: string, input: UpdateBatchInput, options: 
   });
 }
 
-const CancelBatchResult = z.object({
+const CancelBatchResultSchema = z.object({
   id: UlidSchema,
   state: BatchStateSchema,
   /** The listings this batch had already created before it was cancelled —
@@ -193,7 +193,7 @@ const CancelBatchResult = z.object({
    * remaining, unsubmitted work. */
   listing_ids: z.array(UlidSchema),
 });
-export type CancelBatchResult = z.infer<typeof CancelBatchResult>;
+export type CancelBatchResult = z.infer<typeof CancelBatchResultSchema>;
 
 /** `DELETE /api/bulk/batches/:id` — cancel. Never unwinds a listing this
  * batch already published; see `CancelBatchResult.listing_ids`. */
@@ -204,7 +204,7 @@ export async function cancelBatch(id: string, options: BulkWriteOptions = {}): P
       owner: true,
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
-    return CancelBatchResult.parse(data);
+    return CancelBatchResultSchema.parse(data);
   });
 }
 
