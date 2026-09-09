@@ -351,7 +351,12 @@ export default function GiveReview(): React.ReactElement {
             `src/features/feed/ListingCard.tsx`: the same 10px print padding,
             the photo filling the width at its own clamped aspect ratio, then
             the story excerpt, the title and one caption line, in that order
-            and at the same type variants.
+            and at the same type variants. That mirror is deliberate, not
+            incidental (see the "why not just render `ListingCard`" note
+            below) — the excerpt cut stays exactly as the card makes it,
+            because this preview's job is showing what a stranger scrolling
+            the table will actually see, cut included. The full story lives
+            below the print instead (issue #373 finding 3, below).
 
             Why not just render `ListingCard` here? It takes a
             `PublicListing` — an id, a resolved `place_name`/`admin1`, a
@@ -361,8 +366,21 @@ export default function GiveReview(): React.ReactElement {
             itself in a `Link` to `/item/[id]`, which for a draft is a link
             to a page that does not exist. Mirroring its geometry against a
             `GiveDraft` is the honest version; the two are meant to be read
-            side by side, so change them together. */}
-        <Print tiltDeg={-1.5} style={{ alignSelf: "stretch", padding: 10 }}>
+            side by side, so change them together.
+
+            Issue #373 finding 3: "mirroring `ListingCard`'s geometry" used
+            to mean copying its *width* too — `alignSelf: "stretch"` let the
+            print fill the full prose measure (720px), nearly 3x a real feed
+            card (a masonry column tops out around 250px at that width, see
+            `masonry.ts`). At 1280px that stretched a portrait photo tall
+            enough to push the title, the story, the age gate and "Give it"
+            entirely below the fold — this step's only job is letting the
+            giver look, and there was nothing to look at but a photograph.
+            Capping the width instead of the aspect ratio keeps the print
+            itself faithful (same padding, same clamped aspect, same
+            layered content) while sizing it like the card it is a preview
+            of, on every viewport. */}
+        <Print tiltDeg={-1.5} style={{ alignSelf: "center", width: "100%", maxWidth: 340, padding: 10 }}>
           {/* Source ladder in `features/give/photoSource.ts`, shared with
               the photos step's tiles: this session's object URL, else the
               owner-authed thumb route, else the blurhash alone. */}
@@ -393,7 +411,11 @@ export default function GiveReview(): React.ReactElement {
                 be inlined here: the card and this preview have to cut the
                 story at the same place, or the preview is a preview of
                 something else. That function's own header comment has
-                pointed at this file since it was extracted. */}
+                pointed at this file since it was extracted. Issue #373
+                finding 3: keep this cut, on purpose — it is what a stranger
+                scrolling the table will see, and the giver should be able to
+                notice it (and only it, not a rewritten one) before
+                publishing. What it cuts off is proofread below, in full. */}
             <Text variant="storyExcerpt" color="textSecondary" numberOfLines={2} hangingPunctuation>
               “{storyExcerpt(draft.story)}”
             </Text>
@@ -413,6 +435,25 @@ export default function GiveReview(): React.ReactElement {
             </Text>
           </View>
         </Print>
+
+        {/* Issue #373 finding 3: the card above is a preview of what a
+            stranger will see on the table — the excerpt cut and all — not a
+            place to proofread from. Before this, the full story appeared
+            nowhere on this step: `docs/qa/baseline/ux-mobile/give-5-review-
+            submit.jpg` shows the date-of-birth field sitting directly under
+            the card with nothing between them, so a story that ran past the
+            card's two lines was simply gone until it was already live. This
+            is the one place in the flow that shows the *whole* story rather
+            than a preview of it — same treatment as the item page's
+            `storyBlock` renders `listing.story` (`bodyLg`/`inkSoft`, no
+            quotes: read as the giver's own words, not a caption). "In your
+            words" names it as the thing being checked, not a second card. */}
+        <View style={{ gap: space.sm }}>
+          <Eyebrow>In your words</Eyebrow>
+          <Text variant="bodyLg" color="inkSoft">
+            {draft.story.trim()}
+          </Text>
+        </View>
 
         <AgeGateField value={dateOfBirth} onChangeText={setDateOfBirth} touched={dobTouched} onBlur={() => setDobTouched(true)} />
 

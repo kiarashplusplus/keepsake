@@ -2,6 +2,7 @@ import * as React from "react";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import type { OwnerListing } from "@keepsake/contracts/listing";
 import { clampCardAspectRatio } from "@/lib/masonry";
+import { storyExcerpt } from "@/lib/storyExcerpt";
 import { ToastProvider } from "@/ui/Toast";
 import { GiveDraftProvider } from "@/features/give/GiveDraftContext";
 import { GIVE_DRAFT_INITIAL, GIVE_DRAFT_STORAGE_KEY, serializeGiveDraft } from "@/features/give/giveDraft";
@@ -337,5 +338,116 @@ describe("give/review", () => {
 
     expect(Number(styleOf(photoBox).aspectRatio)).toBeCloseTo(expected, 6);
     expect(styleOf(photoBox).width).toBe("100%");
+  });
+
+  function seedLongStoryDraft(longStory: string): void {
+    window.sessionStorage.setItem(
+      GIVE_DRAFT_STORAGE_KEY,
+      serializeGiveDraft({
+        ...GIVE_DRAFT_INITIAL,
+        title: baseListing.title,
+        story: longStory,
+        category: baseListing.category,
+        country: baseListing.country,
+        postalCode: "02144",
+        photos: [
+          {
+            clientId: "p1",
+            id: "01PHOTOAAAAAAAAAAAAAAAAAA",
+            objectUrl: null,
+            width: 800,
+            height: 600,
+            blurhash: "LKO2?U%2Tw=w]~RBVZRi};RPxuwH",
+            status: "done",
+            error: null,
+            errorCode: null,
+            canRetry: false,
+          },
+        ],
+      }),
+    );
+  }
+
+  const LONG_STORY =
+    "It sat on my mother's table every Sunday of my childhood and has traveled with our family through four house moves since. " +
+    "I finally have to let it go because there is no room for it in my new apartment, but I want it to go to someone who will love it the way we did.";
+
+  /**
+   * Issue #373 finding 3 (mobile), first half. The review card is a
+   * deliberate mirror of `src/features/feed/ListingCard.tsx` — same excerpt
+   * cut, same `numberOfLines={2}` — because its job is showing what a
+   * stranger scrolling the table will actually see, cut included. An
+   * earlier version of this fix removed the clamp from the card itself,
+   * which meant the giver could no longer notice *that* their story gets
+   * cut, only read a full story nowhere resembling any real card. Revert to
+   * that (drop `numberOfLines={2}`/`storyExcerpt` from the print) and this
+   * fails: no node in the print carries the 2-line clamp any more.
+   */
+  it("keeps the feed's excerpt cut on the review card itself", () => {
+    seedLongStoryDraft(LONG_STORY);
+    const { toJSON } = renderReview();
+
+    const excerptNode = flatten(toJSON() as unknown as Node).find(
+      (node) =>
+        Array.isArray(node.children) &&
+        node.children.some((child) => typeof child === "string" && child === storyExcerpt(LONG_STORY)),
+    );
+    if (excerptNode === undefined) throw new Error("no node renders the card's story excerpt");
+    // react-native-web turns `numberOfLines` into a `-webkit-line-clamp`
+    // rule on the node's own style rather than passing it through as a DOM
+    // prop — there is no `numberOfLines` attribute to read back.
+    expect(Number(styleOf(excerptNode).WebkitLineClamp)).toBe(2);
+  });
+
+  /**
+   * Issue #373 finding 3 (mobile), second half. Before this, the full story
+   * appeared nowhere on this step at all — `docs/qa/baseline/ux-mobile/
+   * give-5-review-submit.jpg` shows the date-of-birth field sitting directly
+   * under the card with nothing between them. A story past the card's two
+   * lines was simply gone until it was already live; the baseline caught
+   * one cut mid-sentence. Revert the fix (remove the full-story block below
+   * the print) and this fails: nothing in the tree carries the story's back
+   * half un-clamped.
+   */
+  it("shows the full story below the card, unclamped, for proofreading", () => {
+    seedLongStoryDraft(LONG_STORY);
+    const { toJSON } = renderReview();
+
+    const rendered = JSON.stringify(toJSON());
+    expect(rendered).toContain("someone who will love it the way we did");
+
+    const fullStoryNode = flatten(toJSON() as unknown as Node).find(
+      (node) => Array.isArray(node.children) && node.children.some((child) => typeof child === "string" && child === LONG_STORY),
+    );
+    if (fullStoryNode === undefined) throw new Error("no node renders the full, unclamped story");
+    expect(styleOf(fullStoryNode).WebkitLineClamp).toBeUndefined();
+  });
+
+  /**
+   * Issue #373 finding 3 (desktop). The print used to be
+   * `alignSelf: "stretch"` — full prose-measure width (720px), nearly 3x a
+   * real feed card at that container width (a masonry column tops out
+   * around 250px, see `masonry.ts`'s breakpoints). At 1280px that stretched
+   * a portrait cover tall enough to push the title, the story, the age gate
+   * and "Give it" below the fold entirely. Revert the fix (bring back
+   * `alignSelf: "stretch"` with no `maxWidth`) and this fails.
+   *
+   * Anchored on `data-ks-print="drop"` — the attribute `Print.web.tsx`'s
+   * entrance animation selects, and the only one in this tree — rather than
+   * "the first node with a `maxWidth`": `Page`'s prose measure carries one
+   * too, and an unrelated change there would let that satisfy a looser
+   * query without ever looking at the print.
+   */
+  it("caps the review print's width instead of letting it stretch to the full measure", () => {
+    seedDraft();
+    const { toJSON } = renderReview();
+
+    const printNode = flatten(toJSON() as unknown as Node).find((node) => node.props["data-ks-print"] === "drop");
+    if (printNode === undefined) throw new Error("no node in the tree is the review print");
+
+    // react-native-web renders resolved CSS length strings ("340px"), not
+    // the raw numbers passed in — hence `parseFloat` rather than `Number`.
+    expect(parseFloat(styleOf(printNode).maxWidth ?? "")).toBeLessThan(500);
+    expect(styleOf(printNode).alignSelf).not.toBe("stretch");
   });
 });
