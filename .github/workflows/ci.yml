@@ -317,7 +317,12 @@ jobs:
       # `wrangler dev --local` keeps every binding local (D1/R2/KV in a
       # throwaway --persist-to directory, no remote AI), so this needs no
       # Cloudflare credentials — see apps/web/playwright.config.ts.
+      # The local wrangler process restarted twice in run 34294425325 while
+      # the proxy kept serving requests. Allow both recoverable crashes; a
+      # third still fails the job and remains visible in the diagnostics.
       - run: pnpm --filter @keepsake/web e2e
+        env:
+          E2E_MAX_WRANGLER_RESTARTS: "2"
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
