@@ -33,6 +33,7 @@ const WEB_VIEWPORT: Viewport = {
   chipsWrap: "var(--ks-chips-wrap, nowrap)" as unknown as ViewStyle["flexWrap"],
   chipsShrink: "var(--ks-chips-shrink, 0)" as unknown as ViewStyle["flexShrink"],
   chipsFade: { display: "var(--ks-chips-fade, flex)" } as unknown as ViewStyle,
+  tileBasis: "var(--ks-tile-basis, auto)" as unknown as ViewStyle["flexBasis"],
 };
 
 /** Constant on the web — it closes over no state, so it is the same object on

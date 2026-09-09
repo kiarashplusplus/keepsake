@@ -604,8 +604,12 @@ test.describe("ux baseline", () => {
     // product. Opened from the card and dismissed with Escape: confirming it
     // would reject the fixture the Hidden tab is captured against, and the
     // other project runs against the same database.
+    // Captured with a reason picked: the chips carry short moderator-facing
+    // labels since #354, and the giver-facing sentence only appears under
+    // the row once one is chosen — that pairing is the sheet's whole design.
     await page.getByLabel("Reject", { exact: true }).click();
     await expect(page.getByText("Reject this listing", { exact: true })).toBeVisible();
+    await page.getByRole("radiogroup").getByLabel("Not an object", { exact: true }).click();
     await expect(page.getByText(MODERATION_REASONS.not_an_object, { exact: true })).toBeVisible();
     await shot(page, testInfo, "admin-reject-sheet");
     await page.keyboard.press("Escape");

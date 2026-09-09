@@ -29,5 +29,8 @@ export function useViewport(): Viewport {
     chipsWrap: chipsScroll ? "nowrap" : "wrap",
     chipsShrink: chipsScroll ? 0 : 1,
     chipsFade: chipsScroll ? SHOWN : HIDDEN,
+    // Yoga has no `calc()`, so a percentage with room left for the two gaps
+    // between three tiles is the nearest thing to the web's exact third.
+    tileBasis: narrow ? "30%" : "auto",
   };
 }

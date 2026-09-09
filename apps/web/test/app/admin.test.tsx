@@ -293,15 +293,19 @@ describe("/admin queue: keyboard and bulk actions", () => {
     // No reason picked yet: nothing has been sent.
     expect(jest.mocked(rejectListing)).not.toHaveBeenCalled();
 
+    // #354: the chip says the short moderator-facing label, and the sentence
+    // the giver receives is not on the sheet until a reason is picked.
+    expect(JSON.stringify(toJSON())).not.toContain("Photos need to show the keepsake itself.");
+
     await act(async () => {
       fireEvent.press(
-        lastWithLabel(
-          UNSAFE_getAllByProps({ accessibilityLabel: "Photos need to show the keepsake itself." }),
-          "Photos need to show the keepsake itself.",
-        ),
+        lastWithLabel(UNSAFE_getAllByProps({ accessibilityLabel: "Not an object" }), "Not an object"),
       );
       await flush();
     });
+
+    expect(JSON.stringify(toJSON())).toContain("Photos need to show the keepsake itself.");
+
     await act(async () => {
       fireEvent.press(
         lastWithLabel(UNSAFE_getAllByProps({ accessibilityLabel: "Reject" }), "Reject"),
@@ -312,6 +316,54 @@ describe("/admin queue: keyboard and bulk actions", () => {
     expect(jest.mocked(rejectListing)).toHaveBeenCalledWith("e2e-admin", "a", {
       reason: "not_an_object",
     });
+  });
+
+  // #363: an image pass's flags used to print as the whole JSON scorecard —
+  // four wrapped lines of zeros per event at 390px. The line now names only
+  // what was raised, and the JSON is behind the card's "Show raw".
+  it("summarises an event's flags to what was raised, with the raw JSON behind a disclosure", async () => {
+    const flagged = item("f", "Flagged clock");
+    flagged.events = [
+      {
+        kind: "image",
+        model: "@cf/meta/llama-3.2-11b-vision-instruct",
+        verdict: "pass",
+        flags: { variant: "thumb", is_physical_object: true, nsfw: 0, violence: 0.4, weapons: 0, notes: "" },
+        reason: null,
+        attempt: 1,
+        latency_ms: 12,
+        created_at: 0,
+      },
+    ];
+    jest.mocked(getAdminQueue).mockImplementation(async (_token, options) => {
+      if (options.status === "needs_review") return { items: [flagged], next_cursor: null };
+      return { items: [], next_cursor: null };
+    });
+
+    const { toJSON, UNSAFE_getAllByProps } = render(
+      <ToastProvider>
+        <AdminPage />
+      </ToastProvider>,
+    );
+    await act(async () => {
+      await flush();
+    });
+
+    let tree = JSON.stringify(toJSON());
+    expect(tree).toContain("flags: variant thumb · violence 0.4");
+    expect(tree).not.toContain("is_physical_object");
+    expect(tree).not.toContain("raw: {");
+
+    await act(async () => {
+      fireEvent.press(
+        lastWithLabel(UNSAFE_getAllByProps({ accessibilityLabel: "Show raw flags" }), "Show raw flags"),
+      );
+      await flush();
+    });
+
+    tree = JSON.stringify(toJSON());
+    expect(tree).toContain("is_physical_object");
+    expect(tree).toContain("Hide raw");
   });
 
   // #286: none of the four Undo callbacks told the reducer the item came

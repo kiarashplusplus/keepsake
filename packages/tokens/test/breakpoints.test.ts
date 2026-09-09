@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { breakpoint, viewportCssVariables } from "../src/breakpoints";
+import { space } from "../src/spacing";
 import { type } from "../src/typography";
 
 const css = viewportCssVariables();
@@ -17,6 +18,7 @@ const CONSUMED = [
   ["--ks-chips-fade", "flex"],
   ["--ks-chips-shrink", "0"],
   ["--ks-hero-fvs", type.displayLg.fontVariationSettings],
+  ["--ks-tile-basis", `calc((100% - ${2 * space.md}px) / 3)`],
 ] as const;
 
 describe("the viewport stylesheet", () => {
@@ -46,6 +48,10 @@ describe("the viewport stylesheet", () => {
     expect(narrowBlock).toContain("--ks-wide: 1;");
     expect(narrowBlock).toContain("--ks-narrow-only: none;");
     expect(narrowBlock).toContain("--ks-wide-only: flex;");
+    // The admin stats tiles give up their third-of-the-row basis here and
+    // go back to their intrinsic widths (#363) — `auto`, which is the one
+    // value `step()` could never have produced.
+    expect(narrowBlock).toContain("--ks-tile-basis: auto;");
     expect(narrowBlock).not.toContain("--ks-chips-wrap");
 
     const chipsBlock = css.slice(css.indexOf(`@media (min-width: ${breakpoint.categoryChips}px)`));

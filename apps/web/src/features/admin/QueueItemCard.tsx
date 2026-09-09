@@ -23,6 +23,7 @@ import { Button } from "@/ui/Button";
 import { useColors } from "@/ui/theme";
 import { tiltDegForId } from "@/lib/masonry";
 import { relativeTime } from "@/lib/relativeTime";
+import { formatFlagsLine } from "@/features/admin/moderationFlags";
 
 export type QueueActionSet = { approve: boolean; hide: boolean; restore: boolean; reject: boolean };
 
@@ -60,9 +61,17 @@ function PhotoThumb({ photo }: { photo: AdminQueueItem["photos"][number] }): Rea
   );
 }
 
-function EventRow({ event }: { event: AdminQueueItem["events"][number] }): React.ReactElement {
-  const flagsText =
-    event.flags !== null && event.flags !== undefined ? JSON.stringify(event.flags) : null;
+/**
+ * One `moderation_events` row. `flags` is summarised to what was actually
+ * raised (`moderationFlags.ts`, #363) — the whole scorecard used to print as
+ * one `JSON.stringify` string, which at 390px wrapped mid-token into four
+ * lines of zeros per image pass and made the history block the tallest
+ * thing on the card. `showRaw` puts the full JSON back, for every event on
+ * the card at once, from the disclosure under the block.
+ */
+function EventRow({ event, showRaw }: { event: AdminQueueItem["events"][number]; showRaw: boolean }): React.ReactElement {
+  const hasFlags = event.flags !== null && event.flags !== undefined;
+  const flagsLine = hasFlags ? formatFlagsLine(event.flags) : null;
   return (
     <View style={{ gap: 2 }}>
       <Text variant="caption" color="textSecondary">
@@ -75,10 +84,60 @@ function EventRow({ event }: { event: AdminQueueItem["events"][number] }): React
           {`  reason: ${event.reason}`}
         </Text>
       ) : null}
-      {flagsText !== null ? (
+      {flagsLine !== null ? (
         <Text variant="caption" color="textTertiary">
-          {`  flags: ${flagsText}`}
+          {`  flags: ${flagsLine}`}
         </Text>
+      ) : null}
+      {showRaw && hasFlags ? (
+        <Text variant="caption" color="textTertiary">
+          {`  raw: ${JSON.stringify(event.flags)}`}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * The moderation-history block: every event summarised, plus — only when
+ * at least one event carries `flags` — a "Show raw" toggle that reveals the
+ * stored JSON under each of them. One toggle per card rather than per
+ * event: a card has two or three image passes and a moderator wanting the
+ * raw scorecard wants all of them, not a link per line.
+ */
+function ModerationHistory({ events }: { events: AdminQueueItem["events"] }): React.ReactElement {
+  const colors = useColors();
+  const [showRaw, setShowRaw] = React.useState(false);
+  const anyFlags = events.some((event) => event.flags !== null && event.flags !== undefined);
+  return (
+    <View style={{ gap: space.xxs }}>
+      <Eyebrow>Moderation history</Eyebrow>
+      {events.length === 0 ? (
+        <Text variant="caption" color="textTertiary">
+          No events yet.
+        </Text>
+      ) : (
+        events.map((event, index) => <EventRow key={index} event={event} showRaw={showRaw} />)
+      )}
+      {anyFlags ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={showRaw ? "Hide raw flags" : "Show raw flags"}
+          {...({ "aria-expanded": showRaw } as object)}
+          onPress={() => setShowRaw((previous) => !previous)}
+          hitSlop={space.sm}
+          style={({ pressed }: { pressed: boolean }) => ({
+            alignSelf: "flex-start",
+            marginTop: space.xxs,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.ink,
+            opacity: pressed ? 0.75 : 1,
+          })}
+        >
+          <Text variant="caption" color="ink">
+            {showRaw ? "Hide raw" : "Show raw"}
+          </Text>
+        </Pressable>
       ) : null}
     </View>
   );
@@ -254,16 +313,7 @@ export function QueueItemCard({
           )}
         </View>
 
-        <View style={{ gap: space.xxs }}>
-          <Eyebrow>Moderation history</Eyebrow>
-          {item.events.length === 0 ? (
-            <Text variant="caption" color="textTertiary">
-              No events yet.
-            </Text>
-          ) : (
-            item.events.map((event, index) => <EventRow key={index} event={event} />)
-          )}
-        </View>
+        <ModerationHistory events={item.events} />
 
         <View
           style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.md }}

@@ -4,9 +4,20 @@
  * routes through the same confirmation `ReasonSheet` the single-item actions
  * use (`app/admin.tsx`'s `handleSheetConfirm`), stating the exact count, so a
  * destructive bulk action never fires from a single, unconfirmed keystroke.
+ *
+ * It is `position: sticky` (#360). In normal flow it sat once, between the
+ * status tabs and the list, and queue cards are tall — on a phone the
+ * moderation-history block alone was twenty lines — so by the second or
+ * third checkbox "Reject N" was several screens above the card just ticked,
+ * and the fast path was a scroll back to the top per batch. Sticky keeps
+ * "N selected / Reject N / Clear selection" pinned under the header for the
+ * whole pass. It works because `Page` scrolls in a real `ScrollView` and
+ * nothing between it and this bar clips overflow; the header itself sits
+ * outside that scroller (`app/_layout.tsx`), so `top` is measured from just
+ * beneath it.
  */
 import * as React from "react";
-import { View } from "react-native";
+import { View, type ViewStyle } from "react-native";
 import { space } from "@keepsake/tokens/spacing";
 import { radii } from "@keepsake/tokens/radii";
 import { Text } from "@/ui/Text";
@@ -47,7 +58,14 @@ export function BulkActionBar({ count, actions, onApprove, onHide, onReject, onC
         borderWidth: 2,
         borderColor: colors.ink,
         borderRadius: radii.md,
+        // Opaque on purpose: cards scroll underneath this while it is
+        // pinned, and `accentSoft` is a solid wash in both themes.
         backgroundColor: colors.accentSoft,
+        // `sticky` is not in react-native's `position` union, but
+        // react-native-web passes it straight through to the DOM — the same
+        // cast `Print.web.tsx`'s `boxShadow` and `viewport.web.ts` use for
+        // CSS react-native's types don't model.
+        ...({ position: "sticky", top: space.sm, zIndex: 1 } as ViewStyle),
       }}
     >
       <Text variant="label" color="ink">
