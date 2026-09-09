@@ -322,7 +322,17 @@ jobs:
         if: failure()
         with:
           name: playwright-report
-          path: apps/web/playwright-report
+          # `e2e-diagnostics/` alongside the HTML report: it holds
+          # `e2e/support/serve.mjs`'s post-mortem for a `wrangler dev` that
+          # died mid-run. That report is the only record of *why* it died —
+          # wrangler's own console message is empty by construction and its
+          # debug log goes lossy under load (see that file's header) — and on
+          # the two runs it was built to explain it went to stderr and was
+          # never findable in the job log. Uploading it makes the next
+          # occurrence diagnosable instead of guesswork.
+          path: |
+            apps/web/playwright-report
+            apps/web/e2e-diagnostics
           retention-days: 7
 
   # The one job that always runs. Everything above is gated on `changes`, and

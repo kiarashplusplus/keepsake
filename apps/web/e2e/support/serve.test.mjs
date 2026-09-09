@@ -22,7 +22,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import http from "node:http";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,6 +66,9 @@ function runServe(env = {}, { child = FAKE_CHILD, upstreamPort = 0, onListening 
     env: {
       ...childEnv,
       E2E_SERVER_CHILD_COMMAND: JSON.stringify([process.execPath, childScript]),
+      // Keep the crash report out of the repo's real `e2e-diagnostics/`:
+      // these tests crash the child on purpose, dozens of times.
+      E2E_SERVER_REPORT_DIR: dir,
       ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -96,8 +99,15 @@ function runServe(env = {}, { child = FAKE_CHILD, upstreamPort = 0, onListening 
     proc.on("error", reject);
     proc.on("close", (code) => {
       clearTimeout(timer);
+      // Read before the cleanup below removes the directory holding it.
+      let report = "";
+      try {
+        report = readFileSync(path.join(dir, "e2e-server-crash.log"), "utf8");
+      } catch {
+        report = "";
+      }
       rmSync(dir, { recursive: true, force: true });
-      resolve({ code, output });
+      resolve({ code, output, report });
     });
   });
 }
@@ -134,6 +144,37 @@ test("a crashed child's stderr is reprinted, and still passed through live", asy
     `expected live + retained copy in:\n${output}`,
   );
   assert.match(output, /last \d+ line\(s\) of its output/);
+  assert.notEqual(code, 0);
+});
+
+test("the post-mortem is also written to a file, so CI can upload it", async () => {
+  // The console copy alone has proven unfindable: on both runs this was built
+  // to explain, the job log ended in a cascade of ECONNREFUSED with no
+  // retrievable `[e2e:server]` line, so the only record of why wrangler died
+  // was lost. `.github/workflows/ci.yml` uploads this file on failure.
+  const { report } = await runServe({ E2E_MAX_WRANGLER_RESTARTS: "0" });
+  assert.match(report, /wrangler dev exited unexpectedly/);
+  assert.match(report, new RegExp(CRASH_MARKER));
+  // The give-up itself, which is what actually ends the run, lands there too.
+  assert.match(report, /FATAL: wrangler dev died/);
+});
+
+test("a report-file it cannot write never takes the supervisor down with it", async () => {
+  // The write happens on the crash path, where losing the ability to report
+  // must not also cost the restart that keeps the suite alive.
+  //
+  // A regular file standing where a directory must go, rather than an
+  // unwritable system path: `mkdir -p` over it fails with ENOTDIR on every
+  // platform and as every user, including root in a container.
+  const blocker = path.join(mkdtempSync(path.join(tmpdir(), "keepsake-blocked-")), "not-a-dir");
+  writeFileSync(blocker, "");
+  const { output, code } = await runServe({
+    E2E_MAX_WRANGLER_RESTARTS: "0",
+    E2E_SERVER_REPORT_DIR: path.join(blocker, "reports"),
+  });
+  assert.match(output, /could not write the crash report/);
+  // Still the ordinary give-up, not a crash of its own.
+  assert.match(output, /FATAL: wrangler dev died/);
   assert.notEqual(code, 0);
 });
 
