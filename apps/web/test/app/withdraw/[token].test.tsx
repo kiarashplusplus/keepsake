@@ -6,10 +6,21 @@ import { ApiError } from "@/api/client";
 import WithdrawToken from "../../../app/withdraw/[token]";
 
 // Same shape as test/app/recover/[token].test.tsx — the page this one
-// mirrors (see app/withdraw/[token].tsx's file header).
-jest.mock("expo-router", () => ({
-  useLocalSearchParams: () => ({ token: "withdraw-token-abc" }),
-}));
+// mirrors (see app/withdraw/[token].tsx's file header). The `Link` mock is
+// the one test/app/item/[id].test.tsx settled on in #367: `asChild` merges
+// `href` onto the child, which is how a `Button` inside a `Link` becomes a
+// real `<a href>` (see `ButtonProps.href`) — without it nothing here could
+// tell a link-shaped button from one that navigates nowhere.
+jest.mock("expo-router", () => {
+  const ReactActual = jest.requireActual("react");
+  return {
+    useLocalSearchParams: () => ({ token: "withdraw-token-abc" }),
+    Link: ({ children, asChild, href }: { children: React.ReactNode; asChild?: boolean; href?: string }) =>
+      asChild && ReactActual.isValidElement(children)
+        ? ReactActual.cloneElement(children as React.ReactElement, { href })
+        : ReactActual.createElement(ReactActual.Fragment, null, children),
+  };
+});
 
 jest.mock("@/api/withdraw", () => ({ withdrawWithToken: jest.fn() }));
 
@@ -57,7 +68,7 @@ describe("withdraw/[token]", () => {
         new ApiError("unauthorized", "This link is invalid or has already been used.", 401),
       );
 
-    const { toJSON } = render(
+    const { toJSON, UNSAFE_getByProps } = render(
       <ToastProvider>
         <WithdrawToken />
       </ToastProvider>,
@@ -73,6 +84,55 @@ describe("withdraw/[token]", () => {
     // claiming to know that's actually what happened (expired/typo'd/unknown
     // are indistinguishable from here, same as /recover/:token).
     expect(tree).toContain("already gone from our records");
+
+    // #357: the card used to be the whole page, with nothing on it to press.
+    // A real link, not a `<div role="button">` — a crawler can follow it and
+    // a screen reader announces it as a link (see `ButtonProps.href`).
+    const onward = UNSAFE_getByProps({ accessibilityLabel: "Back to the feed" });
+    expect(onward.props.href).toBe("/");
+    expect(onward.props.accessibilityRole).toBe("link");
+  });
+
+  it("a network failure lands in the same card, with the same link", async () => {
+    // Not an `ApiError` — what `fetch` throws when the request never reached
+    // the Worker. The page collapses every failure into one branch, so this
+    // has to land there too rather than stay on "Taking care of that…".
+    jest.mocked(withdrawWithToken).mockRejectedValue(new TypeError("Failed to fetch"));
+
+    const { toJSON, UNSAFE_getByProps } = render(
+      <ToastProvider>
+        <WithdrawToken />
+      </ToastProvider>,
+    );
+
+    await act(async () => {
+      await flush();
+    });
+
+    expect(JSON.stringify(toJSON())).toContain("That link didn't work");
+    const onward = UNSAFE_getByProps({ accessibilityLabel: "Back to the feed" });
+    expect(onward.props.href).toBe("/");
+    expect(onward.props.accessibilityRole).toBe("link");
+  });
+
+  it("offers no link away while it is still working, and none on success", async () => {
+    jest
+      .mocked(withdrawWithToken)
+      .mockResolvedValue({ id: "req-1", listing_id: "listing-1", withdrawn_at: Date.now() });
+
+    const { queryByLabelText } = render(
+      <ToastProvider>
+        <WithdrawToken />
+      </ToastProvider>,
+    );
+
+    // #357 added the link to the error branch only; the success card was
+    // not touched, and it should stay the quiet "you're done" it was.
+    expect(queryByLabelText("Back to the feed")).toBeNull();
+    await act(async () => {
+      await flush();
+    });
+    expect(queryByLabelText("Back to the feed")).toBeNull();
   });
 
   it("only posts once even if the effect re-runs (React StrictMode-safe)", async () => {

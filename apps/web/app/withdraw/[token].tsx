@@ -14,11 +14,17 @@
 // info in an email that landed before this page ever ran. Withdrawing only
 // removes Keepsake's own stored copy; it can't recall a message a giver
 // already opened.
+//
+// The error branch carries a way onward (#357): this page is reached from an
+// inbox, so there is no history to go back to and the card is the whole
+// page. A real `<a href>` (`Link asChild` around a `Button`, see
+// `ButtonProps.href`), same as `+not-found.tsx` and `/confirm/:token`.
 import * as React from "react";
-import { useLocalSearchParams } from "expo-router";
+import { Link, useLocalSearchParams } from "expo-router";
 import { sectionRhythm } from "@keepsake/tokens/spacing";
 import { Page } from "@/ui/Page";
 import { EmptyState } from "@/ui/EmptyState";
+import { Button } from "@/ui/Button";
 import { Stamp } from "@/ui/Stamp";
 import { useToast } from "@/ui/Toast";
 import { withdrawWithToken } from "@/api/withdraw";
@@ -74,6 +80,11 @@ export default function WithdrawToken(): React.ReactElement {
           eyebrow="Withdraw"
           title="That link didn't work"
           line="This link is invalid or has already been used. If you already withdrew your request, there's nothing left to do — your note, email, and phone are already gone from our records."
+          action={
+            <Link href="/" asChild>
+              <Button label="Back to the feed" />
+            </Link>
+          }
         />
       </Page>
     );
