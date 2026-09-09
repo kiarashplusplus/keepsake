@@ -1,9 +1,10 @@
 /**
- * `GET /sitemap.xml` — the four static pages plus every `approved` listing.
+ * `GET /sitemap.xml` — the public static pages plus every `approved` listing.
  * Mounted at the Worker root and listed in `wrangler.toml`'s
  * `run_worker_first` (like `/item/*`): without that, the static-assets
- * system's `single-page-application` fallback would serve the SPA shell at
- * this path (200, wrong content-type) before this handler ever ran.
+ * system would answer this path itself — with `dist/404.html` under the
+ * `404-page` not-found handling `wrangler.toml` now sets, and with the SPA
+ * shell at 200 before that — and this handler would never run.
  *
  * `given` listings are intentionally omitted — they're still individually
  * reachable (`GET /api/listings/:id`, `/item/:id`) but no longer something
@@ -22,7 +23,35 @@ import { isProduction } from "../env.js";
 
 export const sitemapRoutes = new Hono<{ Bindings: Env }>();
 
-const STATIC_PATHS = ["/", "/about", "/privacy", "/terms"];
+/**
+ * The pages that are worth a crawler's time and are not listings.
+ *
+ * `/welcome` and `/give` joined the four on 2026-09-09
+ * (`docs/runbooks/seo-audit.md`). Both were already public, indexable and
+ * `200` on production, and both were unreachable from anywhere a crawler
+ * could get to them: the sitemap did not list them, and nothing in the
+ * exported HTML of `/`, `/about`, `/privacy` or `/terms` links to either —
+ * every one of those is an in-app navigation the client performs, so the
+ * only `href`s in the crawlable markup are `/`, `/about`, `/mine`,
+ * `/privacy` and `/terms`. `/welcome` is the page that explains what this
+ * product is and `/give` is what all three static pages' "Give something"
+ * call to action points at, so they were the two most valuable orphans on
+ * the site.
+ *
+ * No trailing slash on `/give`, which is exported as
+ * `dist/give/index.html`: `wrangler.toml`'s `html_handling =
+ * "drop-trailing-slash"` makes `/give` the URL that answers and `/give/` the
+ * one that redirects, matching what `apps/site/public/*.html` already link
+ * to and what `apps/web/scripts/seo-html.mjs` writes as its canonical. A
+ * sitemap URL that redirects is a URL Google reports as an error.
+ *
+ * The give flow's interior steps (`/give/story`, `/give/details`,
+ * `/give/review`, `/give/email`) are deliberately absent and carry
+ * `<meta name="robots" content="noindex, follow">` from the same export
+ * script — they are form steps, and a searcher who lands on step three with
+ * no state behind it gets a dead end.
+ */
+const STATIC_PATHS = ["/", "/welcome", "/give", "/about", "/privacy", "/terms"];
 
 function escapeXml(input: string): string {
   return input.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -49,7 +78,7 @@ sitemapRoutes.get("/", async (c) => {
   const { results } = await c.env.DB.prepare("SELECT id, updated_at FROM listings WHERE status = 'approved' ORDER BY published_at DESC")
     .all<{ id: string; updated_at: number }>();
 
-  // The four static pages carry NO `<lastmod>`, and that is the accurate
+  // The static pages carry NO `<lastmod>`, and that is the accurate
   // answer rather than a missing one. They used to get `new Date()` — the
   // moment the sitemap was generated — so `/about`, `/privacy` and `/terms`
   // claimed to have changed on every single fetch, ten minutes apart forever,

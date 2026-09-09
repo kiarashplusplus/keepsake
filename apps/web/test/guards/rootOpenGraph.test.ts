@@ -64,6 +64,13 @@ describe("the root shell's Open Graph tags", () => {
     // `/item/:id` gets a real canonical and og:url from the Worker's
     // rewriter (asserted in `apps/api/test/item.test.ts`), and `apps/site`'s
     // static pages carry their own.
+    //
+    // The rest of the routes get theirs from `scripts/seo-html.mjs` at
+    // export time (2026-09-09), which is the one place a per-route value can
+    // be written truthfully: the exported *files* are per-route even though
+    // this component is not. That does not weaken this assertion, it is the
+    // reason for it — the tag has a correct home now, and this is not it.
+    // `test/guards/seoHtml.test.ts` covers that side.
     expect(SHELL_CODE).not.toContain('rel="canonical"');
     expect(metaContent(SHELL_CODE, "property", "og:url")).toBeNull();
   });

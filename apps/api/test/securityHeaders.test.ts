@@ -48,9 +48,23 @@ describe("security headers", () => {
     expectSecurityHeaders(res);
   });
 
-  it("are present on the SPA-shell HTML response served through ASSETS", async () => {
-    const res = await SELF.fetch("http://x/some/spa/route");
+  it("are present on the shell HTML response served through ASSETS", async () => {
+    // `/` rather than a made-up path: the assets binding answers a miss with
+    // `dist/404.html` at 404 now (`not_found_handling = "404-page"`), so an
+    // arbitrary path proves the 404 page carries these headers, not the
+    // shell. Both are worth asserting, so both are here.
+    const res = await SELF.fetch("http://x/");
     expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expectSecurityHeaders(res);
+  });
+
+  it("are present on the 404 page too", async () => {
+    // The one HTML response a stranger following a stale link is most likely
+    // to get, and the easiest to forget: it is served by the assets system,
+    // not by a handler anyone wrote.
+    const res = await SELF.fetch("http://x/no-such-page");
+    expect(res.status).toBe(404);
     expect(res.headers.get("content-type")).toContain("text/html");
     expectSecurityHeaders(res);
   });

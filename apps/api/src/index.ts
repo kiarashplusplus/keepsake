@@ -397,19 +397,96 @@ app.all("/api/*", (c) => c.json({ ok: false as const, error: { code: "not_found"
 //
 // Issue #272: `#262` turned on route splitting (`asyncRoutes`), so a route's
 // JS now arrives as its own content-hashed chunk under this prefix instead
-// of in the one entry bundle, and a deploy replaces those hashes. Every
-// `[env.*].assets` block sets `not_found_handling = "single-page-application"`,
-// which is right for an app route on a hard refresh (`/item/:id` has to come
-// back as the shell) but wrong here: a tab left open across a deploy that
-// navigates to a route it hasn't already loaded requests a chunk that no
-// longer exists, and the assets binding answers that miss the same way it
-// answers every miss — `200 text/html`, the SPA shell — instead of 404. The
-// browser gets HTML where a JS module was expected and the dynamic import
-// rejects with "Unexpected token '<'", which tells nobody what happened.
+// of in the one entry bundle, and a deploy replaces those hashes. A tab left
+// open across a deploy that navigates to a route it hasn't already loaded
+// requests a chunk that no longer exists, and the browser must not be handed
+// HTML where a JS module was expected — the dynamic import rejects with
+// "Unexpected token '<'", which tells nobody what happened. Under the
+// `single-page-application` not-found handling this was written for, that
+// HTML was the shell at 200; under `404-page` (see below) it is the 404 page
+// at 404, still `text/html`. Both are wrong here, and both are answered the
+// same way: a plain, uncached 404 the client's chunk-load recovery
+// (`apps/web/src/features/chunkRecovery/useChunkRecoveryGuard.ts`) can tell
+// apart from an ordinary network failure.
 const CHUNK_PATH_PREFIX = "/_expo/static/";
 
+/**
+ * The exported HTML shell for each app route whose path contains a
+ * parameter. Matched in order; every pattern is anchored at both ends, so
+ * the order is for reading rather than for precedence.
+ *
+ * `wrangler.toml`'s `[assets]` blocks answer a miss with `404-page` rather
+ * than `single-page-application` (that file's comment has the measurement
+ * that prompted it: every unexported path on production answered `200` with
+ * the homepage's bytes). A miss is now genuinely a miss — which is right for
+ * `/no-such-page` and wrong for `/mine/<a real id>`, whose path Expo Router
+ * exported as the literal filename `dist/mine/[id].html` and which the
+ * assets system therefore cannot match.
+ *
+ * So these routes are served their own shell explicitly. That is not merely
+ * restoring the old behaviour: the SPA fallback handed back `index.html` —
+ * the *feed's* markup, header, search field, category chips and all — so a
+ * hard refresh of `/mine/abc` painted the feed for the moment before
+ * hydration replaced it. `routes/item.ts` already fixed exactly this for
+ * `/item/:id` when the exported bodies stopped being empty
+ * (`docs/runbooks/seo-audit.md`, second pass); this is the same fix for the
+ * five routes that were left.
+ *
+ * `/item/:id` is absent because `routes/item.ts` owns it and reads
+ * `dist/item/[id].html` itself, with the listing's OG tags and inline
+ * payload spliced in. `/bulk/:batchKey`'s three steps are enumerated rather
+ * than globbed so that `/bulk/<key>/nonsense` still 404s.
+ *
+ * Reaching this code at all on production requires each prefix in
+ * `[env.production.assets] run_worker_first`; every one of them is already
+ * there for the `X-Robots-Tag` middleware, and `test/robotsConfig.test.ts`
+ * is what holds that.
+ */
+const DYNAMIC_ROUTE_SHELLS: readonly (readonly [RegExp, string])[] = [
+  [/^\/mine\/[^/]+$/, "/mine/[id].html"],
+  [/^\/recover\/[^/]+$/, "/recover/[token].html"],
+  [/^\/withdraw\/[^/]+$/, "/withdraw/[token].html"],
+  [/^\/confirm\/[^/]+$/, "/confirm/[token].html"],
+  [/^\/bulk\/[^/]+$/, "/bulk/[batchKey]/index.html"],
+  [/^\/bulk\/[^/]+\/photos$/, "/bulk/[batchKey]/photos.html"],
+  [/^\/bulk\/[^/]+\/review$/, "/bulk/[batchKey]/review.html"],
+  [/^\/bulk\/[^/]+\/submit$/, "/bulk/[batchKey]/submit.html"],
+];
+
+/**
+ * The shell path for `path`, or `null` when nothing dynamic serves it.
+ *
+ * The square brackets are Expo Router's own filenames and are percent-encoded
+ * for the same reason `routes/item.ts` encodes them: they are not legal in a
+ * URL path unencoded, and the assets binding decodes them before matching.
+ *
+ * `/mine` and `/mine/email` (and `/recover`, `/bulk`, `/bulk/new`) are real
+ * exported files, so they never reach here — the assets fetch matched them.
+ */
+function dynamicShellPath(path: string): string | null {
+  for (const [pattern, shell] of DYNAMIC_ROUTE_SHELLS) {
+    if (pattern.test(path)) {
+      return shell.replace(/\[([^\]]+)\]/g, (_, name: string) => encodeURIComponent(`[${name}]`));
+    }
+  }
+  return null;
+}
+
 app.all("*", async (c) => {
-  const assetResponse = await c.env.ASSETS.fetch(c.req.raw);
+  let assetResponse = await c.env.ASSETS.fetch(c.req.raw);
+
+  // A dynamic app route (`/mine/:id`, `/bulk/:batchKey/review`, …) has no
+  // file at its own path — Expo Router exported it under the literal
+  // `[param]` filename — so under `404-page` handling the fetch above misses.
+  // Fetch the route's own shell instead of letting that 404 out. See
+  // `DYNAMIC_ROUTE_SHELLS`.
+  if (assetResponse.status === 404) {
+    const shell = dynamicShellPath(c.req.path);
+    if (shell !== null) {
+      assetResponse = await c.env.ASSETS.fetch(new Request(new URL(shell, c.req.url), { headers: c.req.raw.headers }));
+    }
+  }
+
   const contentType = assetResponse.headers.get("content-type") ?? "";
   if (!contentType.includes("text/html")) {
     return assetResponse;
@@ -419,7 +496,8 @@ app.all("*", async (c) => {
   // route-split JS chunks, source maps and fonts, all content-hashed
   // filenames from a single build. So a `text/html` response under this
   // prefix is never the file the request actually asked for; it can only be
-  // the SPA-shell fallback the assets binding substitutes for a miss.
+  // the page the assets binding substitutes for a miss (`dist/404.html`
+  // today, the SPA shell before `404-page` handling).
   // Answering that truthfully (a real 404, uncached) is what lets the
   // client's chunk-load recovery
   // (`apps/web/src/features/chunkRecovery/useChunkRecoveryGuard.ts`) tell

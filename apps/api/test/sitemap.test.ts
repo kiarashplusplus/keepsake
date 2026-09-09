@@ -34,10 +34,38 @@ describe("GET /sitemap.xml", () => {
     expect(body).toContain("<loc>http://localhost:8787/privacy</loc>");
     expect(body).toContain("<loc>http://localhost:8787/terms</loc>");
     expect(body).toContain(`<loc>http://localhost:8787/item/${listingId}</loc>`);
+
+    // Added 2026-09-09. Both were live, indexable and `200` on production,
+    // and both were orphans: not in this file, and not linked from the
+    // exported HTML of any page a crawler can reach (the header and footer
+    // links are in-app navigations, so the only `href`s in the markup are
+    // `/`, `/about`, `/mine`, `/privacy`, `/terms`).
+    expect(body).toContain("<loc>http://localhost:8787/welcome</loc>");
+    expect(body).toContain("<loc>http://localhost:8787/give</loc>");
+  });
+
+  it("lists /give without a trailing slash, the URL that answers rather than the one that redirects", async () => {
+    // `dist/give/index.html` is canonical at `/give` under `wrangler.toml`'s
+    // `html_handling = "drop-trailing-slash"` and `/give/` 308s to it. A
+    // sitemap entry that redirects is one Search Console reports as an
+    // error, and `apps/site/public/*.html` and
+    // `apps/web/scripts/seo-html.mjs`'s canonical both already say `/give`.
+    const body = await (await SELF.fetch("http://x/sitemap.xml")).text();
+    expect(body).not.toContain("<loc>http://localhost:8787/give/</loc>");
+  });
+
+  it("keeps the give flow's interior steps out", async () => {
+    // They carry `noindex, follow` from the export
+    // (`apps/web/scripts/seo-html.mjs`); a sitemap that also advertised them
+    // would be telling a crawler two opposite things about the same URL.
+    const body = await (await SELF.fetch("http://x/sitemap.xml")).text();
+    for (const step of ["/give/story", "/give/details", "/give/review", "/give/email"]) {
+      expect(body).not.toContain(`<loc>http://localhost:8787${step}</loc>`);
+    }
   });
 
   it("dates the listings from their own rows and leaves the static pages undated", async () => {
-    // The static four used to be stamped with `new Date()` — the moment the
+    // The static pages used to be stamped with `new Date()` — the moment the
     // sitemap was built — so every fetch, ten minutes apart, told a crawler
     // /about, /privacy and /terms had just changed. A `lastmod` that is
     // always "now" is not a date, it is noise, and Google's guidance is that
@@ -52,7 +80,7 @@ describe("GET /sitemap.xml", () => {
 
     const body = await (await SELF.fetch("http://x/sitemap.xml")).text();
 
-    for (const path of ["/", "/about", "/privacy", "/terms"]) {
+    for (const path of ["/", "/welcome", "/give", "/about", "/privacy", "/terms"]) {
       expect(body).toContain(`<url><loc>http://localhost:8787${path}</loc></url>`);
     }
     expect(body).toContain(
