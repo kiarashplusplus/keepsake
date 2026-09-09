@@ -90,7 +90,12 @@ test("one export lays out as a desktop and as a phone, with no JavaScript to cho
   // Wide: the full hero, the secondary nav, and the location controls open.
   await expect(desktop.page.getByText(/Some things are too full of memory/)).toBeVisible();
   await expect(desktop.page.getByRole("link", { name: "Browse" })).toBeVisible();
-  await expect(desktop.page.getByRole("link", { name: "About" })).toBeVisible();
+  // A count rather than `toBeVisible()`, because the footer carries an
+  // `About` link on every route at every width (`AppFooter.tsx`), and a role
+  // query only sees elements the accessibility tree does. Two here is the
+  // header's and the footer's; one, on the phone below, is the footer's alone
+  // — which is the header's switch, observed from the outside.
+  await expect(desktop.page.getByRole("link", { name: "About" })).toHaveCount(2);
   await expect(desktop.page.getByRole("button", { name: "Use my location" })).toBeVisible();
   // ...and neither the phone's short label nor its collapsed summary row.
   await expect(desktop.page.getByRole("button", { name: "Give", exact: true })).toBeHidden();
@@ -108,6 +113,7 @@ test("one export lays out as a desktop and as a phone, with no JavaScript to cho
   await expect(phone.page.getByRole("button", { name: /^Near · / })).toBeVisible();
   await expect(phone.page.getByText(/Some things are too full of memory/)).toBeHidden();
   await expect(phone.page.getByRole("link", { name: "Browse" })).toBeHidden();
+  await expect(phone.page.getByRole("link", { name: "About" })).toHaveCount(1);
   await expect(phone.page.getByRole("button", { name: "Use my location" })).toBeHidden();
 
   await phone.context.close();
