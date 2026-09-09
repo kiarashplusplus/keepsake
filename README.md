@@ -83,6 +83,15 @@ Full detail — including why this looks like a corrupt seed rather than a missi
   (shadows, keyboard/`position: fixed`), most relevant the day a native target is added.
 - [`docs/product-decisions.md`](./docs/product-decisions.md) — the product decisions this
   build rests on, each with what would change the answer. Read before reopening one.
+- [`docs/market-research.md`](./docs/market-research.md) — the competitive landscape (free-gifting
+  platforms, general marketplaces with a free section, and the "objects with a story" adjacents),
+  what is Keepsake's alone, and where it is exposed. Dated; re-check before citing a number.
+- [`docs/seeding-and-distribution.md`](./docs/seeding-and-distribution.md) — how to get real
+  listings into Houston (named partners, ranked tactics) and which channels can legitimately carry
+  them outward (Facebook, Nextdoor, Craigslist, Trash Nothing, feeds). Dated 2026-09-09.
+- [`docs/research/`](./docs/research/README.md) — the dated research passes behind those two:
+  Houston demand side, a measured supply sample, legal edges of seeding, estate workflows, an
+  outreach kit, events and press, a share-and-feed build spec, and a Toronto pass.
 - [`docs/runbooks/`](./docs/runbooks/) — deploy, restore, migrations, admin, incident, geodata,
   the UK block and its re-entry checklist, the issue workflow, the post-deploy production
   verification, and [seeding a demo catalogue](./docs/runbooks/seed-catalogue.md) (what can and
