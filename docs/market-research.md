@@ -6,6 +6,9 @@ is exposed. Written from the repository at HEAD plus public sources fetched on 2
 external number is attributed; where a page could not be reached or two sources disagree, that is
 said in place rather than smoothed over.
 
+See also [`seeding-and-distribution.md`](./seeding-and-distribution.md) for the Houston seed-partner
+list and the channel-by-channel distribution findings that followed this pass.
+
 Companion to [`product-decisions.md`](./product-decisions.md): that file records why Keepsake is
 shaped the way it is, this one records what it is shaped *against*. Before reopening a decision
 because "competitor X does it differently," read both.
