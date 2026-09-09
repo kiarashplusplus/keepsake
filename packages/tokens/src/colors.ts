@@ -65,7 +65,16 @@ export const colorsLight = {
   danger: "#A8351F",
   dangerText: "#7A2515",
   warning: "#5E4610",
-  focus: "#7A2515",
+  // Issue #373 finding 6: this used to be `#7A2515`, byte-identical to
+  // `dangerText` — a focused field and an invalid one drew the exact same
+  // maroon rule, so a visitor typing a valid answer saw the colour that
+  // elsewhere means "wrong". A brass/gold in the same family as `foil`
+  // (the aged-label ornaments) reads as an active highlight without
+  // borrowing the stamp's red, which stays reserved for danger/error — a
+  // touch darker than `foil` itself so it clears >=4.5:1 (not just the
+  // >=3:1 a focus ring strictly needs) on both `surface` and `print`, both
+  // asserted in `contrast.test.ts`.
+  focus: "#7A5E33",
 } as const;
 
 export const colorsDark = {
@@ -109,7 +118,10 @@ export const colorsDark = {
   danger: "#A8351F",
   dangerText: "#7A2515",
   warning: "#5E4610",
-  focus: "#7A2515",
+  // Kept byte-identical to `colorsLight.focus` — see that token's comment.
+  // `focus` is not in `TABLE_TOKENS`, so `contrast.test.ts`'s "never invert"
+  // check requires this.
+  focus: "#7A5E33",
 } as const;
 
 export type ColorTokens = { readonly [K in keyof typeof colorsLight]: string };

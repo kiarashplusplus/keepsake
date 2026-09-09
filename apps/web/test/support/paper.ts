@@ -69,3 +69,34 @@ export function paperUnder(node: Node, ancestors: Node[]): string {
   }
   throw new Error(`${describeNode(node)} is printed on the table, not on paper`);
 }
+
+function parseHex(hex: string): [number, number, number] {
+  const m = /^#([0-9A-Fa-f]{6})$/.exec(hex);
+  if (m === null || m[1] === undefined) throw new Error(`not a #RRGGBB colour: ${hex}`);
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+
+/**
+ * Alpha-composite `fg` (opaque `#RRGGBB`) at CSS `opacity` over `bg` (opaque
+ * `#RRGGBB`), returning the resulting opaque `#RRGGBB`.
+ *
+ * Why this exists (issue #373, PR #378 review): a first cut of `Button`'s
+ * inert state asserted `contrastRatio(onAccent, pencil)` — the two *tokens*
+ * — while the component itself still applied the old `disabled` opacity
+ * (0.65) on top of the new fill. CSS `opacity` blends the WHOLE element
+ * (fill and label together, since the label is drawn opaque on the opaque
+ * fill first) against whatever is behind it, so the pixels a visitor
+ * actually sees are `mix(token, backdrop, opacity)`, not the token itself.
+ * A test that reads the two source tokens back off the tree and calls
+ * `contrastRatio` directly can pass while the rendered button is still a
+ * washed-out, barely-legible block — exactly finding 6's complaint, one
+ * opacity value away from "fixed". Composite before asserting.
+ */
+export function compositeOver(fg: string, opacity: number, bg: string): string {
+  const [fr, fgv, fb] = parseHex(fg);
+  const [br, bgv, bb] = parseHex(bg);
+  const mix = (f: number, b: number): number => Math.round(opacity * f + (1 - opacity) * b);
+  const toHex = (v: number): string => v.toString(16).padStart(2, "0");
+  return `#${toHex(mix(fr, br))}${toHex(mix(fgv, bgv))}${toHex(mix(fb, bb))}`.toUpperCase();
+}

@@ -148,7 +148,8 @@ constant there, matching "stamp red stays."
 | `onAccent` | `#FFFDF8` (=`print`) | no | label on the stamp/primary-button fill | on `accent` = 5.9:1 ✓ |
 | `tape` | `rgba(205,184,140,.42)` | no | masking-tape corners | decorative |
 | `foil` / `foilText` | `#8A6D3F` / `#5C4726` | no | aged small labels (e.g. step numerals ahead) | `foilText` on `print` = 8.7:1 ✓ |
-| `focus` / `dangerText` | `#7A2515` | no | focus ring, error text | on `print` = 9.8:1 ✓ |
+| `dangerText` | `#7A2515` | no | error text/rule | on `print` = 9.8:1 ✓ |
+| `focus` | `#7A5E33` | no | focus ring (a darker `foil` brass, since #373: was byte-identical to `dangerText`, so a focused field and an invalid one drew the same rule) | on `print` = 5.9:1 ✓ |
 
 **Type.** Two faces, nothing else visible: **Fraunces** (variable, self-hosted, unchanged from v2)
 for headlines/wordmark/story, pushed to a high `opsz` for display and low for prose; **Courier
@@ -166,9 +167,15 @@ breaks. Inter is gone entirely (not even a fallback) — the one sanctioned exce
 (secondary), mono uppercase label, a small fixed rotation hashed from the label text so it's stable
 across renders. Secondary was an *unfilled* 2px ink outline until issue #134 — the `print` fill
 inside it measured 1.18:1 against the `surface` card it sits on, so it read as an empty field
-rather than a control. The ink fill is 14.25:1 both for its label and against that card. `Chip` is an ink-outlined mono label, no pill. `Input`/`TextArea` are lined index
+rather than a control. The ink fill is 14.25:1 both for its label and against that card. A
+genuinely inert button (disabled, not `loading`) fills with `pencil` instead of a faded accent —
+until #373 both states shared one washed-out tint of the accent at 0.5 opacity, so "nothing to
+submit yet" and "mid-submit" looked the same; `loading` keeps the full-strength fill and its
+spinner, and the inert fill drops the pressed-stamp shadow (flat, since it hasn't been stamped).
+`Chip` is an ink-outlined mono label, no pill. `Input`/`TextArea` are lined index
 cards: `surface` fill, a 2px ink *baseline* instead of a boxed border (the baseline thickens and
-turns stamp-red on focus). `Sheet` is an index card (square corners, shadow, no hairline) that
+turns `focus` brass/gold on focus, taken over by the red `danger` when there is an error — the two
+used to share one maroon value, see the palette table above). `Sheet` is an index card (square corners, shadow, no hairline) that
 slides up from the bottom under the sheet breakpoint. `Stamp` (`src/ui/Stamp.tsx`, replacing
 `Seal`) draws the red rubber-stamp mark with a doubled, semi-transparent outline to fake uneven
 ink, and is the ornament behind every empty/idle/review state. `Print` (`src/ui/Print.tsx`,

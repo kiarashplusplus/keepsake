@@ -14,8 +14,9 @@ export type InputProps = Omit<TextInputProps, "style"> & {
 /** A single-line field styled as a lined index card: kraft-tinted paper,
  * mono type (this is the one place the product allows a typewritten field
  * instead of a stamp/label), and a 2px ink baseline instead of a boxed
- * border — the baseline thickens and turns stamp-red when focused (the
- * baseline IS the focus ring), and the error colour takes it over.
+ * border — the baseline thickens and turns brass/gold (`colors.focus`) when
+ * focused (the baseline IS the focus ring), and the red error colour takes
+ * it over when there is one (see `FieldFrame`'s `useFieldControlLook`).
  *
  * The label, helper/error line and counter live in `FieldFrame`, shared with
  * `DateField` since issue #133; the look of the control itself lives in
