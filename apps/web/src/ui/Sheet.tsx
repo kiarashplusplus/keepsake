@@ -21,6 +21,18 @@ export type SheetProps = {
   onClose: () => void;
   title?: string;
   children: React.ReactNode;
+  /**
+   * Rendered below the scrolling body, outside the `ScrollView`, so it stays
+   * on screen at every scroll position instead of scrolling away with the
+   * rest of the content. Opt-in and additive (issue #373 finding 1): a sheet
+   * that doesn't pass this renders exactly as it did before — the same
+   * everything-scrolls-together panel — so `ReportSheet`, `ReasonSheet` and
+   * `HandoffSheet` are unaffected. Reach for it when a sheet's one action
+   * sits behind enough copy that it can land below the fold on a phone; the
+   * request sheet is the first case (a 7-line safety paragraph pushed SEND
+   * off a 390×844 viewport in both its empty and filled states).
+   */
+  footer?: React.ReactNode;
 };
 
 /**
@@ -35,6 +47,7 @@ export function Sheet({
   onClose,
   title,
   children,
+  footer,
 }: SheetProps): React.ReactElement | null {
   const colors = useColors();
   const { width } = useWindowDimensions();
@@ -209,12 +222,28 @@ export function Sheet({
               works: react-native-web forwards this to a plain `<div>`
               descendant of `panelNode`, so `querySelectorAll` still finds it. */}
         <ScrollView
+          testID="sheet-scroll-body"
           style={{ flexShrink: 1 }}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator
         >
           {children}
         </ScrollView>
+        {footer !== undefined ? (
+          // A sibling of the `ScrollView`, not a child of it: `flexShrink: 1`
+          // above already lets the scrolling body give up space, so this
+          // keeps its own size and pins to the bottom of the panel — visible
+          // at whatever scroll position the body is in, including 0.
+          <View
+            style={{
+              borderTopWidth: 1,
+              borderTopColor: colors.rule,
+              paddingTop: space.md,
+            }}
+          >
+            {footer}
+          </View>
+        ) : null}
       </View>
     </View>,
     portalTarget,

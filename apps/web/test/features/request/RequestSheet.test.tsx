@@ -10,12 +10,16 @@ jest.mock("@/api/requests", () => ({ createRequest: jest.fn() }));
 
 // See test/app/item/[id].test.tsx's header comment on why `Sheet` is mocked
 // down to "render children" — RN `Modal`'s portal isn't supported by
-// react-test-renderer.
+// react-test-renderer. `footer` (issue #373 finding 1) renders right after
+// `children` for the same reason: this mock only needs to prove the pinned
+// Send button and its errors exist and hold the right content, not where
+// `Sheet` positions them on screen — that placement is `test/ui/Sheet.test.tsx`'s
+// job.
 jest.mock("@/ui/Sheet", () => {
   const ReactActual = jest.requireActual("react");
   return {
-    Sheet: ({ visible, children }: { visible: boolean; children: React.ReactNode }) =>
-      visible ? ReactActual.createElement(ReactActual.Fragment, null, children) : null,
+    Sheet: ({ visible, children, footer }: { visible: boolean; children: React.ReactNode; footer?: React.ReactNode }) =>
+      visible ? ReactActual.createElement(ReactActual.Fragment, null, children, footer) : null,
   };
 });
 

@@ -135,8 +135,50 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
     }
   }
 
+  // Issue #373 finding 1: at 390px the safety paragraph below the date-of-
+  // birth field pushed SEND under the fold — cut in half empty, off-screen
+  // entirely once the note held a few lines. The paragraph is deliberate
+  // copy (see `SafetyNote`'s own doc comment) and isn't the thing to cut, so
+  // it stays in the scrolling body and only the action row moves: `Sheet`'s
+  // `footer` pins SEND (and the errors a submit attempt produces, which a
+  // sender needs to see without hunting for them) below the scroll, visible
+  // at whatever the note's length has scrolled the rest of the form to.
+  const formFooter =
+    phase === "sent" ? undefined : (
+      <View style={{ gap: space.sm }}>
+        {conflict ? (
+          <Text variant="body" color="dangerText">
+            {"You've already asked for this one."}
+          </Text>
+        ) : null}
+        {gone ? (
+          <Text variant="body" color="dangerText">
+            {"This keepsake was just given to someone else."}
+          </Text>
+        ) : null}
+        {submitError !== null ? (
+          <Text variant="body" color="dangerText">
+            {submitError}
+          </Text>
+        ) : null}
+        <View style={{ flexDirection: "row" }}>
+          <Button
+            label="Send"
+            loading={phase === "submitting"}
+            disabled={phase === "submitting" || !turnstileReady || !ageGateValid}
+            onPress={() => void handleSubmit()}
+          />
+        </View>
+      </View>
+    );
+
   return (
-    <Sheet visible={visible} onClose={handleClose} title={phase === "sent" ? "Check your email" : "I'd love this"}>
+    <Sheet
+      visible={visible}
+      onClose={handleClose}
+      title={phase === "sent" ? "Check your email" : "I'd love this"}
+      footer={formFooter}
+    >
       {phase === "sent" ? (
         <View style={{ gap: space.lg, alignItems: "flex-start" }}>
           {/* Issue #188: this used to say "Sent." — and it wasn't true any
@@ -215,31 +257,6 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
           </SafetyNote>
 
           <Turnstile ref={turnstileRef} onStatus={setTurnstileStatus} />
-
-          {conflict ? (
-            <Text variant="body" color="dangerText">
-              {"You've already asked for this one."}
-            </Text>
-          ) : null}
-          {gone ? (
-            <Text variant="body" color="dangerText">
-              {"This keepsake was just given to someone else."}
-            </Text>
-          ) : null}
-          {submitError !== null ? (
-            <Text variant="body" color="dangerText">
-              {submitError}
-            </Text>
-          ) : null}
-
-          <View style={{ flexDirection: "row" }}>
-            <Button
-              label="Send"
-              loading={phase === "submitting"}
-              disabled={phase === "submitting" || !turnstileReady || !ageGateValid}
-              onPress={() => void handleSubmit()}
-            />
-          </View>
         </View>
       )}
     </Sheet>
