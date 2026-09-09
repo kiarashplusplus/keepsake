@@ -358,9 +358,21 @@ honest cost of "newest first" is that a listing which fails *permanently* sits a
 queue while newer failures keep arriving — which is exactly what the age is for. An age that
 climbs past a day with a small count is a bug report about one listing, not a retry candidate.
 
-Note `logs` clamps its own window to 3 days whatever you ask for, because that is Workers Logs
-retention on the Free plan, and it reports the window it actually used rather than labelling three
-days of data as thirty.
+Note `logs` no longer comes from Workers Logs at all (issue #159, step 1): it reads `error_events`,
+the table the `keepsake-tail` Tail Worker writes the Worker's own error and warning lines into,
+redacted, capped at 60 a minute and swept at 30 days. So the window you ask for is the window you
+get — the old 3-day clamp was Workers Logs' Free-plan retention and is gone with it.
+
+Two states worth knowing how to read on that panel:
+
+- **`unconfigured`** means *no tail delivery has ever been recorded in this environment* — not "no
+  errors". Until `keepsake-tail` is deployed for that tier and named in its `[[tail_consumers]]`
+  block in `apps/api/wrangler.toml`, nothing writes the table, and an empty feed would be a claim
+  the endpoint cannot support. The reason string names both things to check.
+- **A line reading `error-event volume cap: N line(s) dropped in this minute`** is the per-minute
+  ceiling doing its job, and N is what it refused. One of those in a window means something was
+  emitting more than 60 error lines a minute; the feed under it is a sample of that, not the whole
+  of it.
 
 ### The bulk-upload panel (plan Stage 5)
 

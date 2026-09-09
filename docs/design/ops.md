@@ -131,20 +131,57 @@ purely to prove an event actually lands against a real deployment — a unit tes
 outright), and one fewer subprocessor that ever sees error data — it stays inside Cloudflare, the
 platform already hosting the app.
 
-**What's lost, honestly:** the Free plan's Workers Logs retains events for **3 days**, versus
-Sentry's much longer history. There is **no push notification** — nobody's phone buzzes
-when an error lands. (Not quite "no alerting": the daily digest emailed to `ADMIN_DIGEST_TO` at
-00:07 UTC carries a `needs_attention` list covering stale crons and budget exhaustion, and
-`cron/dailyDigest.ts` calls itself an alerting channel. It is a once-a-day pull, not a page.)
-This is the same "no notification that would wake him" gap launch-audit finding 4
-originally described, just without a DSN to blame anymore. There is **no issue grouping or release
-tracking** — every event is a flat log line, not a deduplicated, trending issue. A **Tail Worker or
-Logpush** could push events somewhere alerting *is* possible; that is a real follow-up, not
-something built here — see `docs/runbooks/incident.md`.
+**What's lost, honestly:** there is **no push notification** — nobody's phone buzzes when an error
+lands. (Not quite "no alerting": the daily digest emailed to `ADMIN_DIGEST_TO` at 00:07 UTC carries
+a `needs_attention` list covering stale crons and budget exhaustion, and `cron/dailyDigest.ts`
+calls itself an alerting channel. It is a once-a-day pull, not a page.) This is the same "no
+notification that would wake him" gap launch-audit finding 4 originally described, just without a
+DSN to blame anymore. There is **no issue grouping or release tracking** — every event is a flat
+log line, not a deduplicated, trending issue.
 
 Cloudflare Web Analytics is unrelated to any of this and unaffected: cookieless and storage-free,
 so no consent banner is needed for it; the privacy page says so explicitly rather than leaving it
 implied.
+
+**The 3-day retention is no longer the whole story** (#159, step 1, 2026-09-09). Workers Logs on
+the Free plan still keeps events for 3 days — that is unchanged and still true of every log line
+this Worker writes. What changed is that the lines worth keeping no longer *only* live there:
+
+## The Tail Worker (`keepsake-tail`)
+
+`apps/api/src/tail/` is a second Worker, deployed from `apps/api/wrangler.tail.toml` and named in
+every `[[tail_consumers]]` block of `apps/api/wrangler.toml`. Cloudflare hands it a trace item for
+every invocation of the API Worker; it keeps the error- and warning-level lines, every
+`captureException`/`captureMessage` record and every uncaught exception, and writes them to the
+`error_events` table in the same D1 the app already uses. Everything else — the request logs, the
+`console.log`s — is dropped and never stored.
+
+Three things about it are load-bearing rather than incidental:
+
+- **Everything persisted goes through `redact.ts` again.** Not because `capture.ts` forgot, but
+  because a bare `console.error` never went near it in the first place (the paragraph above says
+  so), and a row that lives for 30 days is a much worse place to leave a requester's address than a
+  line that expires in 72 hours. `apps/api/test/tailErrorEvents.test.ts` asserts it from the
+  outside: it feeds a delivery carrying an address, a phone number, a bearer token, a `?token=`
+  parameter and a `/recover/<token>` path, and fails if *any column of any stored row* contains any
+  of them.
+- **A per-minute ceiling** (60 lines, `MAX_ERROR_EVENTS_PER_MINUTE`), enforced as a predicate on
+  the insert itself so two concurrent deliveries cannot both walk through it. What it refuses is
+  written into the same feed as a single `cap_notice` row per minute carrying the running count —
+  a cap that silently dropped rows would make one stray error and a runaway loop render
+  identically.
+- **A nightly retention sweep**, `errorEventSweep` in `cron/registry.ts`, keeping 30 days: the
+  widest window `GET /api/admin/observatory` can be asked for, so the panel's label always has the
+  rows to back it.
+
+The Observatory's log panel reads that table rather than Cloudflare's Workers Observability API,
+which is what makes a Saturday incident diagnosable on Monday. It reports `unconfigured` — not an
+empty feed — until a tail delivery has actually been recorded in that environment, so "the tail
+consumer is not attached here" cannot render as "nothing has gone wrong".
+
+**Still not built: the push channel.** Persisting is step 1 of #159; step 2 (a webhook or email
+that actually notifies, with a threshold rather than one message per event) is still an open
+decision, and the email half is gated on #6. See `docs/product-decisions.md` §3.
 
 ## Health checks
 

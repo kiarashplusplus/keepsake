@@ -182,25 +182,34 @@ and `dailyDigest` — and both `/api/admin/health` and the digest read them thro
 
 Unlike the Sentry setup this replaced (issue #14), none of that depends on a secret being
 provisioned — Workers Logs is enabled by `[observability]` in `wrangler.toml`, not a DSN, so it's
-live on every deploy with nothing left to set up. What it does **not** give you: more than 3 days of
-retention on the Free plan, or issue grouping across repeated occurrences of the same error.
+live on every deploy with nothing left to set up. What it does **not** give you: issue grouping
+across repeated occurrences of the same error, or more than 3 days of retention — though the second
+of those no longer applies to the lines you are most likely to want, see the Tail Worker below.
 
-Two things now read it back, so "check the dashboard or `wrangler tail`" is no longer the only
-option (#150):
+Three things now read it back, so "check the dashboard or `wrangler tail`" is no longer the only
+option (#150, #159):
 
-- **`GET /api/admin/observatory`** queries the Workers Observability API and returns the error and
-  warning lines, with counts over the window as well as the capped feed — so one stray error and
-  four thousand identical ones are distinguishable, which the feed alone cannot do. It clamps its
-  own window to the 3-day retention above and reports the window it actually used, rather than
-  labelling three days of data as thirty.
+- **The Tail Worker** (`keepsake-tail`, `apps/api/src/tail/`, issue #159 step 1) consumes the API
+  Worker's event stream and writes the error- and warning-level lines to the `error_events` table
+  in D1 — redacted through `packages/observability/src/redact.ts` on the way in, capped at 60 a
+  minute so a bad loop cannot become its own incident, and swept at 30 days by the
+  `errorEventSweep` cron. **This is what makes a Saturday incident diagnosable on Monday.** Workers
+  Logs itself still forgets after 3 days.
+- **`GET /api/admin/observatory`** returns those rows: the error and warning lines with counts over
+  the window as well as the capped feed, so one stray error and four thousand identical ones are
+  distinguishable, which the feed alone cannot do. It reports the window it actually covered. If it
+  says `unconfigured`, that is not "no errors" — it means no tail delivery has ever been recorded
+  in that environment, so check that `keepsake-tail` is deployed there and named in that tier's
+  `[[tail_consumers]]` block.
 - **The daily digest** (00:07 UTC) mails a summary whether or not anything is wrong. That is the
   closest thing to push notification here, and it is deliberately unconditional: a digest that
   only sent on bad news would be silent in the case where the thing that notices is the thing that
   broke, so **the absence of the email is itself the alarm**.
 
-Neither is a Tail Worker or Logpush — there is still no streaming consumer, so nothing buzzes a
-phone within seconds of an error. The gap this closes is "nobody would ever look", not "nobody
-finds out immediately".
+None of this buzzes a phone within seconds of an error: the streaming consumer now exists and
+*persists*, but the push channel on the end of it (a webhook, or email once #6 closes) is step 2 of
+#159 and is still an open decision. The gap this closes is "nobody would ever look" and "the logs
+were gone by the time anyone looked", not "nobody finds out immediately".
 
 ## Reports / abuse
 

@@ -342,6 +342,29 @@ describe("Tail Worker: the per-minute volume ceiling", () => {
     expect(rows?.n).toBe(MAX_ERROR_EVENTS_PER_MINUTE);
   });
 
+  it("counts the rows written earlier in the same batch, not just the ones already there", async () => {
+    // The claim the ceiling rests on, and the one that would be silently
+    // false if D1 evaluated each statement's `WHERE` against a snapshot
+    // taken before the batch: with 58 rows already in the minute and 5 more
+    // arriving in one delivery, every one of those 5 would see "58 < 60" and
+    // all 5 would land — an overshoot that only shows up at exactly this
+    // boundary, never in a bulk burst against an empty table.
+    const now = minuteStart();
+    const already = MAX_ERROR_EVENTS_PER_MINUTE - 2;
+    for (let i = 0; i < already; i++) {
+      await insertErrorEvent({ observedAt: now, receivedAt: now, message: `earlier ${i}` });
+    }
+
+    const result = await persistTailEvents(env, [burst(5, now)], now);
+    expect(result.persisted).toBe(2);
+    expect(result.dropped).toBe(3);
+
+    const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM error_events WHERE kind <> 'cap_notice'").first<{
+      n: number;
+    }>();
+    expect(rows?.n).toBe(MAX_ERROR_EVENTS_PER_MINUTE);
+  });
+
   it("holds across deliveries inside the same minute, and accumulates the notice", async () => {
     const now = minuteStart();
     await persistTailEvents(env, [burst(MAX_ERROR_EVENTS_PER_MINUTE, now)], now);

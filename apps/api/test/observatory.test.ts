@@ -8,19 +8,26 @@
  * assertions below care much more about which of those three a response
  * claims than about whether a count is 3 or 4.
  *
- * `edge`/`logs` are exercised by stubbing `fetch`, because the alternative
- * is either a real Cloudflare API token in CI or no coverage of the failure
- * paths at all — and the failure paths are the whole point. The success path
- * is shaped from a response body captured from the live API on 2026-09-07,
- * so the parsing under test is parsing of something Cloudflare really sent,
- * not of something invented to match the parser.
+ * `edge` is exercised by stubbing `fetch`, because the alternative is either
+ * a real Cloudflare API token in CI or no coverage of the failure paths at
+ * all — and the failure paths are the whole point. The success path is shaped
+ * from a response body captured from the live API on 2026-09-07, so the
+ * parsing under test is parsing of something Cloudflare really sent, not of
+ * something invented to match the parser.
+ *
+ * `logs` no longer reaches Cloudflare at all (issue #159): it reads
+ * `error_events`, written by the Tail Worker and covered in depth by
+ * `test/tailErrorEvents.test.ts`. What stays here is what this file is for —
+ * the endpoint's own composition and failure isolation — plus the assertion
+ * that the observability API is not called any more, which the stub below
+ * enforces by rejecting every URL that is not the GraphQL one.
  */
 import { env, SELF } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OBSERVATORY_WINDOWS, type Observatory } from "@keepsake/contracts/observatory";
 import { MAX_EDGE_WINDOW_DAYS } from "../src/observatory/cloudflare.js";
 import { CRON_JOB_NAMES, cronHeartbeatKey } from "../src/cron/registry.js";
-import { insertApprovedListing, insertOwner, readOk, setTestEnvVar } from "./helpers.js";
+import { insertApprovedListing, insertErrorEvent, insertOwner, readOk, seedTailDelivery, setTestEnvVar } from "./helpers.js";
 
 const ADMIN_TOKEN = "test-admin-token-observatory";
 
@@ -58,96 +65,32 @@ function edgeResponse(): Response {
 }
 
 /**
- * The real row shape, transcribed from a production Workers Logs event and
- * from Cloudflare's own schema for this endpoint: `$metadata` is a *sibling*
- * of `source`, not a key inside it, and `source` is the untouched object
- * `capture.ts` wrote. This mock used to nest `$metadata` under `source`,
- * which is why the parser could read it from the wrong level for as long as
- * it did — the test proved the parser agreed with itself, not with
- * Cloudflare.
+ * Stubs `fetch` for the one call the Observatory still makes. Anything else
+ * rejects, which is itself an assertion: since #159 the Workers Observability
+ * telemetry API must not be called at all, and a stub that quietly answered
+ * it would hide a leftover call site.
  */
-function logsResponse(body?: TelemetryRequest): Response {
-  // A quiet window with seven errors and no warnings. Answering per level
-  // matters now that four calls are made rather than three — a stub that
-  // gave every call the same body would report the same rows twice and
-  // count seven warnings it never returns, tripping the mismatch guard on a
-  // fixture that is supposed to be healthy.
-  const level = body?.parameters.filters.find((f) => f.key === "$metadata.level")?.value ?? "error";
-
-  if (body?.view === "calculations") {
-    return Response.json({
-      success: true,
-      errors: [],
-      result: { calculations: [{ aggregates: [{ value: level === "error" ? 7 : 0 }] }] },
-    });
-  }
-
-  return Response.json({
-    success: true,
-    errors: [],
-    result: {
-      events: {
-        events:
-          level === "error"
-            ? [
-                {
-                  dataset: "cloudflare-workers",
-                  timestamp: 1_757_000_000_000,
-                  source: {
-                    event: "capture",
-                    level: "error",
-                    message: "moderation failed",
-                    service: "keepsake-api",
-                    environment: "production",
-                  },
-                  $metadata: {
-                    level: "error",
-                    message: "moderation failed",
-                    service: "keepsake-production",
-                    requestId: "req-1",
-                  },
-                },
-              ]
-            : [],
-      },
-    },
-  });
-}
-
-/** Routes a stubbed `fetch` by URL, so one test can make the GraphQL call
- * succeed and the observability call fail — the mixed state a single
- * on/off stub cannot express, and the one that proves the two panels really
- * are independent. */
-/** The parsed telemetry request body, so a handler can answer the `error`
- * feed differently from the `warning` one — the four calls now differ only
- * in `view` and a filter value, and a stub that cannot see them can only
- * give all four the same answer. */
-type TelemetryRequest = {
-  view: "events" | "calculations";
-  parameters: { filters: { key: string; value: string }[] };
-};
-
-function stubCloudflare(handlers: {
-  graphql?: () => Response;
-  telemetry?: (body: TelemetryRequest) => Response;
-}): void {
-  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+function stubCloudflare(handlers: { graphql?: () => Response }): void {
+  vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url.includes("/graphql")) {
       if (!handlers.graphql) return Promise.reject(new Error("unexpected graphql call"));
       return Promise.resolve(handlers.graphql());
-    }
-    if (url.includes("/observability/telemetry/query")) {
-      if (!handlers.telemetry) return Promise.reject(new Error("unexpected telemetry call"));
-      return Promise.resolve(handlers.telemetry(JSON.parse(String(init?.body)) as TelemetryRequest));
     }
     return Promise.reject(new Error(`unstubbed fetch: ${url}`));
   });
 }
 
 describe("GET /api/admin/observatory", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+    // Storage is not rolled back between the tests in this file, and the log
+    // panel's assertions are counts over one small table — so a row left by
+    // the previous case is a wrong answer, not a flake. `tail_deliveries`
+    // goes too: a stale one would make the "no Tail Worker has ever
+    // delivered here" case pass for the wrong reason.
+    await env.DB.prepare("DELETE FROM error_events").run();
+    await env.DB.prepare("DELETE FROM tail_deliveries").run();
   });
 
   afterEach(() => {
@@ -169,6 +112,10 @@ describe("GET /api/admin/observatory", () => {
     expect(observatory.app).toBeDefined();
     expect(observatory.report).toBeDefined();
     expect(observatory.edge.state).toBe("unconfigured");
+    // `logs` is `unconfigured` here for a different reason than `edge`, and
+    // the distinction is the whole design (#159): it needs no credential at
+    // all, but no Tail Worker has ever delivered into this test database, so
+    // reporting an empty feed would be claiming something it cannot know.
     expect(observatory.logs.state).toBe("unconfigured");
   });
 
@@ -189,7 +136,7 @@ describe("GET /api/admin/observatory", () => {
     expect(observatory.edge.reason).toContain("CF_ACCOUNT_ID");
   });
 
-  describe("with telemetry configured", () => {
+  describe("with edge telemetry configured", () => {
     beforeEach(() => {
       setTestEnvVar("CF_OBSERVATORY_TOKEN", "fake-token");
       setTestEnvVar("CF_ACCOUNT_ID", "fake-account");
@@ -197,7 +144,7 @@ describe("GET /api/admin/observatory", () => {
     });
 
     it("parses a real-shaped GraphQL response, taking quantiles from the ungrouped selection", async () => {
-      stubCloudflare({ graphql: edgeResponse, telemetry: logsResponse });
+      stubCloudflare({ graphql: edgeResponse });
       const observatory = await getObservatory();
 
       if (observatory.edge.state !== "ok") throw new Error(`expected ok, got ${observatory.edge.state}`);
@@ -218,7 +165,7 @@ describe("GET /api/admin/observatory", () => {
       // invocations, and a chart fed only the days that exist draws a
       // continuous line across the one day the Worker served nothing —
       // which is the day worth seeing.
-      stubCloudflare({ graphql: edgeResponse, telemetry: logsResponse });
+      stubCloudflare({ graphql: edgeResponse });
       const observatory = await getObservatory("?window_days=7");
 
       if (observatory.edge.state !== "ok") throw new Error("expected ok");
@@ -243,7 +190,7 @@ describe("GET /api/admin/observatory", () => {
       // The whole reason both are collected: "requests went up and listings
       // created did not" is only readable if the two line up. They did not
       // before — 7 app bars against 2 edge bars on a quiet Worker.
-      stubCloudflare({ graphql: edgeResponse, telemetry: logsResponse });
+      stubCloudflare({ graphql: edgeResponse });
       const observatory = await getObservatory("?window_days=7");
 
       if (observatory.edge.state !== "ok") throw new Error("expected ok");
@@ -254,10 +201,7 @@ describe("GET /api/admin/observatory", () => {
       // The failure mode this exists to prevent: Cloudflare returns HTTP 200
       // with a populated `errors` array when a token is revoked. Treating
       // 200 as success renders a confident, wrong "0 requests".
-      stubCloudflare({
-        graphql: () => Response.json({ data: null, errors: [{ message: "Authentication error" }] }),
-        telemetry: logsResponse,
-      });
+      stubCloudflare({ graphql: () => Response.json({ data: null, errors: [{ message: "Authentication error" }] }) });
       const observatory = await getObservatory();
 
       expect(observatory.edge.state).toBe("error");
@@ -266,7 +210,7 @@ describe("GET /api/admin/observatory", () => {
     });
 
     it("never puts the credential in the error string", async () => {
-      stubCloudflare({ graphql: () => new Response("nope", { status: 403 }), telemetry: logsResponse });
+      stubCloudflare({ graphql: () => new Response("nope", { status: 403 }) });
       const observatory = await getObservatory();
 
       if (observatory.edge.state !== "error") throw new Error("expected error");
@@ -276,37 +220,55 @@ describe("GET /api/admin/observatory", () => {
     });
 
     it("fails the two panels independently", async () => {
-      stubCloudflare({ graphql: edgeResponse, telemetry: () => new Response("boom", { status: 500 }) });
+      // The edge panel breaking must not take the log panel with it. They no
+      // longer even share a transport — `logs` is a D1 read since #159 — so
+      // this is now about the endpoint composing two independent
+      // `ObservatorySource`s rather than about two calls to one API.
+      stubCloudflare({ graphql: () => new Response("boom", { status: 500 }) });
+      await seedTailDelivery();
       const observatory = await getObservatory();
 
-      expect(observatory.edge.state).toBe("ok");
-      expect(observatory.logs.state).toBe("error");
+      expect(observatory.edge.state).toBe("error");
+      expect(observatory.logs.state).toBe("ok");
     });
 
     it("keeps counts separate from the capped event feed", async () => {
-      stubCloudflare({ graphql: edgeResponse, telemetry: logsResponse });
+      stubCloudflare({ graphql: edgeResponse });
+      const now = Date.now();
+      await seedTailDelivery(now);
+      for (let i = 0; i < 55; i++) {
+        await insertErrorEvent({ observedAt: now - i * 1000, message: `failure ${i}` });
+      }
       const observatory = await getObservatory();
 
       if (observatory.logs.state !== "ok") throw new Error("expected ok");
-      // One event returned, seven counted: the cap must not be mistaken for
-      // the magnitude.
-      expect(observatory.logs.data.events).toHaveLength(1);
-      expect(observatory.logs.data.counts.error).toBe(7);
+      // Fifty returned, fifty-five counted: the cap must not be mistaken for
+      // the magnitude. One stray error and four thousand identical ones look
+      // the same in the feed and different in the counts.
+      expect(observatory.logs.data.events).toHaveLength(50);
+      expect(observatory.logs.data.counts.error).toBe(55);
     });
 
-    it("reads each event's fields from `$metadata` beside `source`, not inside it", async () => {
-      stubCloudflare({ graphql: edgeResponse, telemetry: logsResponse });
+    it("carries a stored line's own fields through to the panel", async () => {
+      stubCloudflare({ graphql: edgeResponse });
+      const now = Date.now();
+      await seedTailDelivery(now);
+      await insertErrorEvent({
+        observedAt: now,
+        message: "moderation failed",
+        scriptName: "keepsake-production",
+        requestId: "req-1",
+      });
       const observatory = await getObservatory();
 
       if (observatory.logs.state !== "ok") throw new Error("expected ok");
-      // Every one of these came back as a fallback — `"(no message)"`, a
-      // guessed level, `null` — while `$metadata` was read one level too
-      // deep, so a feed of real errors rendered as anonymous rows.
       expect(observatory.logs.data.events[0]).toEqual({
-        ts: 1_757_000_000_000,
+        ts: now,
         level: "error",
         message: "moderation failed",
         service: "keepsake-production",
+        // The id the person who hit the error can quote back — `index.ts`
+        // returns it as `X-Request-Id` and the Tail Worker keeps it.
         request_id: "req-1",
       });
     });
@@ -315,79 +277,31 @@ describe("GET /api/admin/observatory", () => {
       // `admin/health` routes its "needs a human" signals through
       // console.warn on purpose. Counting those while showing none of them
       // made the one number on the panel nothing could act on.
-      stubCloudflare({
-        graphql: edgeResponse,
-        telemetry: (body) =>
-          body.parameters.filters.some((f) => f.value === "warning") && body.view === "events"
-            ? Response.json({
-                success: true,
-                errors: [],
-                result: {
-                  events: {
-                    events: [
-                      {
-                        dataset: "cloudflare-workers",
-                        timestamp: 1_757_000_500_000,
-                        source: { level: "warning", message: "cron heartbeat stale" },
-                        $metadata: { level: "warning", message: "cron heartbeat stale", requestId: "req-2" },
-                      },
-                    ],
-                  },
-                },
-              })
-            : logsResponse(body),
-      });
+      stubCloudflare({ graphql: edgeResponse });
+      const now = Date.now();
+      await seedTailDelivery(now);
+      await insertErrorEvent({ observedAt: now - 1000, message: "moderation failed" });
+      await insertErrorEvent({ observedAt: now, level: "warning", message: "cron heartbeat stale" });
       const observatory = await getObservatory();
 
       if (observatory.logs.state !== "ok") throw new Error("expected ok");
-      // Both levels in one feed, newest first — a window of 50 warnings must
-      // not bury the single error, so the cap comes after the merge sorts.
+      // Both levels in one feed, newest first.
       expect(observatory.logs.data.events.map((e) => e.level)).toEqual(["warning", "error"]);
       expect(observatory.logs.data.events[0]?.message).toBe("cron heartbeat stale");
+      expect(observatory.logs.data.counts).toEqual({ error: 1, warning: 1 });
     });
 
-    it("refuses to render an empty feed under a nonzero error count", async () => {
-      // Exactly what production returned during the walkthrough that found
-      // this: the count query sees the error, the events query comes back
-      // without rows. Two answers to one question — the panel must say so
-      // rather than show "no errors" over a count of one.
-      stubCloudflare({
-        graphql: edgeResponse,
-        telemetry: () =>
-          Response.json({
-            success: true,
-            errors: [],
-            result: { run: {}, statistics: {}, calculations: [{ aggregates: [{ value: 1 }] }] },
-          }),
-      });
-      const observatory = await getObservatory();
-
-      if (observatory.logs.state !== "error") throw new Error("expected error");
-      expect(observatory.logs.error).toContain("events feed returned none");
-      // The keys that did come back are the diagnosis — `calculations` back
-      // from a `view: "events"` query means the view was not honored.
-      expect(observatory.logs.error).toContain("calculations");
-    });
-
-    it("treats a 200 carrying `errors` as a failure even with no `success` field", async () => {
-      stubCloudflare({
-        graphql: edgeResponse,
-        telemetry: () => Response.json({ errors: [{ message: "invalid filter key" }], result: {} }),
-      });
-      const observatory = await getObservatory();
-
-      if (observatory.logs.state !== "error") throw new Error("expected error");
-      expect(observatory.logs.error).toContain("invalid filter key");
-    });
-
-    it("clamps the log window to Workers Logs retention and says so", async () => {
-      stubCloudflare({ graphql: edgeResponse, telemetry: logsResponse });
+    it("reports the window it was asked for, now that D1 backs it", async () => {
+      stubCloudflare({ graphql: edgeResponse });
+      await seedTailDelivery();
       const observatory = await getObservatory("?window_days=30");
 
       expect(observatory.window_days).toBe(30);
       if (observatory.logs.state !== "ok") throw new Error("expected ok");
-      // Labelling 3 days of data as 30 is the quiet lie this prevents.
-      expect(observatory.logs.data.window_days).toBe(3);
+      // This used to be 3 — Workers Logs' Free-plan retention — and the
+      // clamp was the honest thing to do while that was the source. It is
+      // not the source any more, and 30 days of rows really are there.
+      expect(observatory.logs.data.window_days).toBe(30);
     });
 
     it("a Cloudflare outage never takes down the D1 half", async () => {
@@ -395,14 +309,15 @@ describe("GET /api/admin/observatory", () => {
         graphql: () => {
           throw new Error("network down");
         },
-        telemetry: () => {
-          throw new Error("network down");
-        },
       });
+      await seedTailDelivery();
       const observatory = await getObservatory();
 
       expect(observatory.edge.state).toBe("error");
-      expect(observatory.logs.state).toBe("error");
+      // The log panel is not affected at all any more: it never leaves this
+      // Worker. That is the point of #159, and it is why the D1-derived
+      // floor now covers the panel an incident is read from.
+      expect(observatory.logs.state).toBe("ok");
       expect(observatory.app.funnel).toBeDefined();
       expect(observatory.report.needs_attention).toBeInstanceOf(Array);
     });
@@ -448,8 +363,15 @@ describe("GET /api/admin/observatory", () => {
 });
 
 describe("the daily digest", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+    // Storage is not rolled back between the tests in this file, and the log
+    // panel's assertions are counts over one small table — so a row left by
+    // the previous case is a wrong answer, not a flake. `tail_deliveries`
+    // goes too: a stale one would make the "no Tail Worker has ever
+    // delivered here" case pass for the wrong reason.
+    await env.DB.prepare("DELETE FROM error_events").run();
+    await env.DB.prepare("DELETE FROM tail_deliveries").run();
   });
 
   it("reports the completed UTC day, never the one in progress", async () => {

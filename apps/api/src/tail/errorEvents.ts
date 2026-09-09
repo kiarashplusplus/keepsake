@@ -48,8 +48,12 @@
  * same shape `src/bulk/usage.ts` and `routes/bulk.ts` use for the estate
  * ceilings, and for the same reason: a counter read in one statement and
  * spent in another is a ceiling two concurrent writers can both walk through.
- * D1 runs `batch()` as one transaction, so each row's `WHERE` sees the rows
- * this same batch already inserted.
+ * D1 runs `batch()` as one transaction, and each row's `WHERE` sees the rows
+ * this same batch already inserted — **measured, not assumed**: with 58 rows
+ * already in the minute and a five-line delivery, exactly two land
+ * (`test/tailErrorEvents.test.ts`, "counts the rows written earlier in the
+ * same batch"). If D1 evaluated the predicate against a pre-batch snapshot,
+ * all five would, and the overshoot would only ever appear at that boundary.
  *
  * What the ceiling refuses is recorded rather than swallowed: one
  * `cap_notice` row per minute carries the running count of dropped lines, so
@@ -289,7 +293,8 @@ export function extractErrorEvents(items: TraceItem[]): RawErrorEvent[] {
         continue;
       }
 
-      const level = normaliseLevel(log.level) ?? "error";
+      const level = normaliseLevel(log.level);
+      if (level === null) continue;
 
       const [first, ...rest] = args;
       out.push({

@@ -28,6 +28,11 @@ Seven, in the order a bad day would find them. Everything in the register below 
 settled as far as anyone knows — these are the ones where the ground has actually moved since the
 call was made.
 
+**§3 is answered** as of 2026-09-08 and is kept in place, numbered, rather than removed: the
+numbering is what the register below links to, and renumbering five sections to reclaim one slot
+would be a worse trade than a section that says plainly what it decided. Its second half is still
+open, and that half is what it now tracks.
+
 ### 1. The sole-proprietor decision is not finished, and is only conservative if it is
 
 **Decided** 2026-09-07 (#108): stay a sole proprietorship, buy general-liability cover instead of
@@ -66,22 +71,52 @@ treat the history rewrite as required rather than optional. Also worth reopening
 `/api/admin/*` ever grows scopes: a read-only Observatory token would make this trade much cheaper
 than it is today.
 
-### 3. Nothing wakes anyone up, and the site is now real
+### 3. Nothing wakes anyone up — decided: yes, 2026-09-08. Half of it is built
 
 **Decided** 2026-09-06 (#14): Workers Logs instead of Sentry — no third-party account to
 provision, one fewer subprocessor. **Cost, accepted at the time:** 3-day retention on the Free
 plan, no issue grouping, no release tracking, and **no alerting or push notification of any kind**.
 
-What has changed since is that the site went live, and that three things now read the logs back
-rather than nobody: `uptime.yml` every 15 minutes, the report-pressure workflow hourly (#89), and
-the daily digest at 00:07 UTC. That is genuinely better than "nobody would ever look." It is still
-"we will know within the hour," and GitHub's scheduler is best-effort.
+This sat as an unwritten default that every session re-raised until #159 put the question properly:
+is "we will know within the hour, via a GitHub issue and a once-daily email" good enough for a live
+site with one operator? **The answer is yes, build the follow-up** — Kiarash, 2026-09-08, on the
+back of Tail Workers being available on this account. The scope was then split in two, because only
+one half needed no further decision.
 
-**Re-evaluate if** an incident's diagnosis needs history older than three days, or a Saturday
-outage runs long enough that the hour matters. The named follow-up is a Tail Worker or Logpush
-pushing events somewhere alerting *is* possible. **#159** now tracks it — as a decision, not a
-task: "no, and here is why" is a perfectly good close, and is better than an unwritten default
-that every session re-raises.
+**Step 1 — persist. Built, 2026-09-09 (#159).** A Tail Worker (`keepsake-tail`,
+`apps/api/src/tail/`) consumes the API Worker's event stream, keeps the error and warning lines and
+every `captureException` record, runs all of it through the existing redactor
+(`packages/observability/src/redact.ts` — not a second one), and writes it to `error_events` in the
+same D1 the app already uses. A per-minute ceiling keeps a Worker stuck in a bad loop from becoming
+its own incident, and records what it refused rather than swallowing it; a nightly sweep
+(`errorEventSweep`) keeps 30 days. The Observatory's "recent error lines" panel reads that table
+instead of Workers Logs, so it survives the 3-day window — which is the loss #159 named as the
+sharpest one, "a Saturday incident diagnosed on Monday has no logs left".
+
+**Cost, stated plainly.** The error text now lives for 30 days instead of 3, in a database that is
+also the product's, which makes redaction load-bearing rather than tidy — the guard is
+`apps/api/test/tailErrorEvents.test.ts`, which asserts no column of any stored row contains what it
+fed in. There is a second Worker and a second wrangler config to keep in step (`tailConfig.test.ts`
+is what keeps them agreeing), and one more thing that can rot: if the tail consumer stops
+delivering, the panel says `unconfigured` rather than showing a calm, empty feed — deliberately,
+because "I did not look" and "I looked and saw nothing" must not render the same.
+
+**Step 2 — push. Still open, and still a decision.** Persisting does not make anyone's phone buzz,
+which is the actual complaint in #159's title. The destination is a product choice: email is
+cheapest and reuses a working path, but **#6 is open** — delivery to any address other than
+Kiarash's has never been observed arriving — and alerting built on an unproven delivery path is
+alerting that cannot be trusted, which is the failure this whole thread is about. A webhook to
+something with a phone app avoids that dependency. Either wants a threshold ("N errors in M
+minutes", or any `critical`) rather than one message per event, because a channel that cries wolf
+gets muted and is then worse than nothing.
+
+**What has not changed, and should not be lost:** `uptime.yml` every 15 minutes,
+`report-pressure.yml` hourly, and a daily digest whose *absence* is itself the alarm. Step 1 adds a
+layer under those; it replaces none of them.
+
+**Re-evaluate step 2 when** #6 closes with a recorded second-address delivery (which makes email a
+real option), or when an incident's first notification arrives from a person rather than from one
+of the three schedules above.
 
 ### 4. Production ships only when a human dispatches it — so production runs behind `main`
 
@@ -247,7 +282,7 @@ with a named trigger that could plausibly fire. **due** — see the section abov
 |---|---|---|---|---|
 | **Production deploys are manual only** | #13 | production routinely runs behind `main` | see [§4](#4-production-ships-only-when-a-human-dispatches-it--so-production-runs-behind-main) | [deploy.md](./runbooks/deploy.md) — **due** |
 | **Preview deploys from `main` only**; per-PR previews declined | #73 (reversed same day) | no per-branch clickthrough link; verification moved to local `e2e` | see [§5](#5-per-pr-previews-were-decided-then-reversed--and-left-a-live-credential-behind) | [deploy.md](./runbooks/deploy.md#the-per-pr-preview-token-73--provisioned-then-not-used) — **due** |
-| **Workers Logs, not Sentry** | #14 | 3-day retention, no grouping, no alerting | see [§3](#3-nothing-wakes-anyone-up-and-the-site-is-now-real) | [ops.md](./design/ops.md#observability) — **due** |
+| **Workers Logs, not Sentry** — with the errors now persisted to D1 by a Tail Worker | #14; #159 step 1, 2026-09-09 | no issue grouping or release tracking; still nothing that buzzes a phone | see [§3](#3-nothing-wakes-anyone-up--decided-yes-2026-09-08-half-of-it-is-built). The 3-day retention cost is retired for error lines specifically: `error_events` keeps 30 days | [ops.md](./design/ops.md#observability) — *settled* for step 1, **due** for step 2 (the push channel, gated on #6) |
 | **No scheduled D1 export.** Time Travel (30 days) plus a by-hand export before anything risky | #17 | a mistake older than 30 days has no recovery at all | an export destination outside this Cloudflare account existing. An unattended weekly job writing into the same account would not survive the failure it is for, and would be one more thing that rots unnoticed | [restore.md](./runbooks/restore.md) — *settled* |
 | **R2 backup lives in the same account** it insures against | #17 | an account-level failure takes both buckets | see [§7](#7-photo-bytes-are-backed-up-into-the-same-account-and-production-may-not-be-backed-up-at-all) | [restore.md](./runbooks/restore.md#r2-photo-backup) — **due** |
 | **Preview is open to the internet** — `noindex` keeps it out of search, nothing keeps anyone out | undecided, #105 | anyone with the URL has the whole product, on a tier whose email is allowlisted and whose database nobody watches | this is the decision itself: #105 asks whether Cloudflare Access should gate it, and has never been answered. The launch audit raised it and the fix that shipped was the search-engine half only | #105, [launch-audit.md](./runbooks/launch-audit.md) — **due** |

@@ -24,6 +24,7 @@ import { moderationRetry } from "../src/cron/moderationRetry.js";
 import { orphanSweep } from "../src/cron/orphanSweep.js";
 import { searchIndexRetry } from "../src/cron/searchIndexRetry.js";
 import { bulkRunner } from "../src/cron/bulkRunner.js";
+import { errorEventSweep } from "../src/cron/errorEventSweep.js";
 import { CRON_JOBS, cronHeartbeatKey } from "../src/cron/registry.js";
 import { ulid } from "../src/lib/ids.js";
 import { insertOwner } from "./helpers.js";
@@ -145,6 +146,7 @@ describe("runCron", () => {
       searchIndexRetry,
       dailyDigest,
       bulkRunner,
+      errorEventSweep,
     };
     expect(Object.keys(jobs).sort()).toEqual(CRON_JOBS.map((job) => job.name).sort());
   });

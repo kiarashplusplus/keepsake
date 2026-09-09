@@ -2624,6 +2624,13 @@ const BACKUP_EXCLUDED_TABLES = new Map([
   ],
   ["_cf_KV", "Cloudflare-internal"],
   ["d1_migrations", "wrangler's own ledger; migrations own the schema, the export owns the rows"],
+  [
+    "error_events",
+    "the Tail Worker's redacted error feed (#159): diagnostic telemetry with a 30-day sweep of its own, " +
+      "restoring it restores nothing a giver or requester has, and it is the one table whose row count is " +
+      "driven by failure rather than by use",
+  ],
+  ["tail_deliveries", "one row saying when the Tail Worker last delivered (#159); rewritten within a minute of any traffic"],
 ]);
 
 /**

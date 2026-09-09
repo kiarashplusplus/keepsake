@@ -105,6 +105,23 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: pnpm --filter @keepsake/api exec wrangler d1 migrations apply keepsake-db-${{ env.DEPLOY_ENV }} --env ${{ env.DEPLOY_ENV }} --remote
 
+      # Issue #159, and the order matters: the API Worker names this script in
+      # its `[[tail_consumers]]`, and a Worker cannot name a tail consumer
+      # that does not exist yet — so the very first deploy after that block
+      # landed would fail if these two steps were the other way round.
+      # Re-deployed every time rather than only when it changes: it shares
+      # `apps/api/src` with the API Worker (`src/tail/` imports `lib/ids.ts`
+      # and `@keepsake/observability/redact`), so "it did not change" is not a
+      # thing this workflow can cheaply know, and a tail consumer running
+      # last week's redactor is exactly the drift this feature must not have.
+      # No `--var COMMIT_SHA`: it has no such var, and nothing about it is
+      # version-checked from outside — it writes rows, it serves nothing.
+      - name: Deploy Tail Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm --filter @keepsake/api exec wrangler deploy -c wrangler.tail.toml --env ${{ env.DEPLOY_ENV }}
+
       - name: Deploy Worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

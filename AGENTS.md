@@ -45,8 +45,13 @@ The product is the story. Anything that makes a listing feel like a classified a
   Observatory — answers "is anything stuck" in one call: the give→get funnel, how long the
   moderation queue has been waiting (an *age*, not just a depth), the per-day series, edge traffic
   and error counts from Cloudflare, the Worker's own recent error lines, and today's digest. Its
-  D1-derived half needs no credential and works locally; the two Cloudflare panels need
-  `CF_OBSERVATORY_TOKEN` and say so plainly when it is missing. A daily digest of the same numbers
+  D1-derived half needs no credential and works locally; the **edge** panel needs
+  `CF_OBSERVATORY_TOKEN` and says so plainly when it is missing. The error-lines panel used to need
+  it too and no longer does (#159, step 1): a Tail Worker (`apps/api/src/tail/`) writes the
+  Worker's error and warning lines — redacted, capped per minute, swept at 30 days — into
+  `error_events` in D1, so they outlive Workers Logs' 3-day retention and the panel reads them from
+  there. That panel reporting `unconfigured` means no tail delivery has ever been recorded in that
+  environment, **not** that nothing has gone wrong. A daily digest of the same numbers
   mails at 00:07 UTC, every day including quiet ones. `docs/runbooks/admin.md` has the detail.
 - **The UK is geo-blocked on purpose** (`docs/runbooks/uk-block.md`). Not a bug.
 - Work is tracked as GitHub issues across five milestones. Conventions in

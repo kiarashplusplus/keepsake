@@ -25,12 +25,15 @@ declare global {
       // is the credential.
       CF_CACHE_PURGE_TOKEN?: string;
       // Read-only Cloudflare API token for the Observatory
-      // (`GET /api/admin/observatory`): exactly `Account Analytics Read` +
-      // `Workers Observability Read`, scoped to the Leapkg account. Its
+      // (`GET /api/admin/observatory`): `Account Analytics Read` +
+      // `Workers Observability Read`, scoped to the Leapkg account. The
+      // second half is unused since #159 step 1 — the error-lines panel now
+      // reads D1, not the observability API — and is left on the existing
+      // token rather than re-minted, since narrowing a read-only token is not
+      // worth a rotation; a token minted fresh only needs the first. Its
       // partners `CF_ACCOUNT_ID`/`CF_SCRIPT_NAME` are ordinary `[vars]` —
-      // neither is a credential — and with any of the three unset the
-      // Cloudflare panels report themselves `unconfigured` rather than
-      // rendering zero. Deliberately not `CF_CACHE_PURGE_TOKEN` and
+      // neither is a credential — and with any of the three unset the edge
+      // panel reports itself `unconfigured` rather than rendering zero. Deliberately not `CF_CACHE_PURGE_TOKEN` and
       // deliberately not the deploy token: this one can read request counts
       // and log lines and can change nothing.
       CF_OBSERVATORY_TOKEN?: string;

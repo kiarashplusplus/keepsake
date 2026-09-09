@@ -5,6 +5,11 @@ import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-worker
 import { productionRunWorkerFirst } from "./test/wranglerConfig";
 
 const wranglerTomlText = readFileSync(new URL("./wrangler.toml", import.meta.url), "utf8");
+// Issue #159: the Tail Worker's own config. Passed in for the same reason
+// the API Worker's is — `test/tailConfig.test.ts` has to compare the two
+// files' *text* (three environment blocks each), and a runtime check can only
+// ever see the one environment this fixture booted with.
+const tailWranglerTomlText = readFileSync(new URL("./wrangler.tail.toml", import.meta.url), "utf8");
 
 // Issue #195: this list used to be restated here by hand, and had already
 // drifted — `/admin` was added to `[env.production.assets]` (issue #84) and
@@ -90,6 +95,7 @@ export default defineConfig({
         // The config guard test asserts on the real file; the workers runtime
         // has no fs, so it is read here (Node) and passed through.
         WRANGLER_TOML_TEXT: wranglerTomlText,
+        TAIL_WRANGLER_TOML_TEXT: tailWranglerTomlText,
         // The path list this fixture actually booted with, so a test can
         // compare it against the deployed one (issue #195).
         TEST_RUN_WORKER_FIRST: JSON.stringify(fixtureRunWorkerFirst),
