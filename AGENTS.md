@@ -183,8 +183,7 @@ This project has shipped twelve separate checks that could not fail:
 | `[verify-public-env] 4 value(s) present in the bundle` | It built its expectation set by filtering `process.env`, so a variable `deploy.yml` forgot to pass was absent from the expectations too and could never be reported missing. It could only verify what had already been passed correctly — structurally blind to the shape of the bot-check incident two rows above. Three Google Ads ids shipped as `""` in every deployed bundle, and a legal document asserted the tag was live (#175). |
 | Five commits merged to `main` and deployed to preview, nothing job-level ever ran | Not a job going red — a workflow that failed to *start*. `058d4e6` deleted `ci.yml`'s `e2e` job but left `ci-complete`'s `needs` list still naming it, and a `needs` entry naming a job that does not exist is invalid before GitHub runs a single job: the run's conclusion was `failure`, but it carried **zero jobs**, so `ci-complete` — the one job meant to catch exactly this family of thing — never executed, because a run with no jobs runs no guard. `deploy.yml` has no `needs:` on CI at all, so all five shipped to preview anyway. The tell was easy to miss: GitHub labels a startup-failed run by the workflow *path* (`.github/workflows/ci.yml`) rather than its `name:` (`CI`), which only shows up if you already know to look for it. Fixed by a new preflight check, `workflow-validity`, that parses every `.github/workflows/*.yml` for the classes of invalidity GitHub rejects at start — a `needs` entry naming a nonexistent job foremost among them — so the broken file cannot merge in the first place (#270). |
 
-So: when you add a guard, **break the code and watch the guard fail**, then restore. Say in the
-issue comment which one you broke. This applies to observability too, and is why
+This applies to observability too, and is why
 `GET /api/admin/observatory`'s Cloudflare panels return `ok` / `error` / `unconfigured` rather than
 a nullable payload: a dashboard that cannot tell "I did not look" from "I looked and saw nothing"
 is another check that cannot fail, and an empty chart is the most convincing wrong answer there
@@ -358,7 +357,7 @@ literally: full unit suites run "3x for stability", the whole e2e suite in both 
 *and* after merging `main`, a failing file re-run until it passed. None of that produced evidence
 the pull request's own CI run did not already produce, and most of it was measuring the container
 rather than the change. **The rule now: run the narrowest check that can fail on your change, run
-it once, break the guard once, push, and read the checks.** The full matrix is CI's job.
+it once, push, and read the checks.** The full matrix is CI's job.
 
 ### What CI runs, and what it costs
 
@@ -423,8 +422,6 @@ Rules that hold across every row:
 - **Export only when you are about to run a browser spec**, and only if `dist/` is stale for what
   you are testing: a web change, yes; an api-only change with a spec from the page-serving list,
   the existing `dist/` is fine unless `versionSkew` is your spec.
-- **The guard rule is unchanged** — break the code and watch the guard fail, then restore — and it
-  costs one targeted run, never a suite.
 - **After `git merge origin/main`, push.** Do not re-verify locally; the pull request run is the
   verification of the merged tree, and that is the only tree that ships.
 - **Lint and typecheck** are cheap and CI runs them; run them locally when the diff is large enough
@@ -433,12 +430,11 @@ Rules that hold across every row:
 ### What "done" means
 
 1. The targeted check ran once and passed, or its failure is explained in the closing comment.
-2. The guard was broken once and seen to fail.
-3. The pull request's run is green **including `ci-complete`**, and you looked at it rather than
+2. The pull request's run is green **including `ci-complete`**, and you looked at it rather than
    assumed it. A run that failed to *start* shows in the Actions tab under the workflow path
    (`.github/workflows/ci.yml`) rather than its name (#270); a `cancelled` run is neither red nor
    green (#103). Both look like nothing happened.
-4. The closing comment says what you ran, links the CI run for what you did not, and says what
+3. The closing comment says what you ran, links the CI run for what you did not, and says what
    nobody ran.
 
 If the change moves a screen, also refresh the UX baseline (`pnpm --filter @keepsake/web e2e:ux`)
