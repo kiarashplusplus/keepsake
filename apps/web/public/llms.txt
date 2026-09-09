@@ -2,8 +2,8 @@
 
 > Keepsake is a free marketplace for giving away sentimental objects — photos, books, jewelry, and
 > other things worth a second life — rather than throwing them out. Givers post a photo and a
-> story; people who want the item ask for it, and the giver chooses. No accounts, no payments, no
-> shipping fees to the platform.
+> story; people who want the item ask for it, and the giver chooses. No passwords, no payments
+> and no shipping fees to the platform — an email address is all either side is asked for.
 
 ## Key pages
 

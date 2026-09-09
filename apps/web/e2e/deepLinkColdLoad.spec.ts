@@ -26,7 +26,7 @@ import { createApprovedListing, mintOwnerToken, uniqueTitle } from "./support/ap
 test.describe("cold hard-load of every exported route", () => {
   test("/welcome renders the explainer", async ({ page }) => {
     await page.goto("/welcome");
-    await expect(page.getByText("No accounts. No money.")).toBeVisible();
+    await expect(page.getByText("No passwords. No money.")).toBeVisible();
   });
 
   test("/give renders step one (photos)", async ({ page }) => {
