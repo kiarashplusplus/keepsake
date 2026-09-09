@@ -99,6 +99,47 @@ export interface CreateListingOptions {
    * generated gradient, which asserts the same pipeline without reading a
    * megabyte off disk per listing. */
   photo?: DemoPhoto;
+  /** More photographs of the same keepsake, uploaded and attached after
+   * `photo` in the order given. The UX baseline uses it for the one listing
+   * that has to carry a real carousel: with a single photo `PhotoCarousel`
+   * draws no dots and has nothing to page, so the control every visitor
+   * meets on a listing with more than one photograph had never been in a
+   * frame. Everything else here stays single-photo. */
+  extraPhotos?: DemoPhoto[];
+}
+
+/** One `PUT /api/photos`, returning the stored photo's id. */
+async function uploadDemoPhoto(
+  request: APIRequestContext,
+  headers: Record<string, string>,
+  photo: DemoPhoto | undefined,
+): Promise<string> {
+  // A real JPEG when the caller supplied one (`imageSniff.ts` allows jpeg,
+  // png and webp, so both paths sniff clean), otherwise the generated PNG.
+  // The dimensions and blurhash have to describe whichever image is actually
+  // sent: the API stores them rather than decoding, `clampCardAspectRatio()`
+  // lays the card out from the ratio, and the blurhash is what shows while
+  // the photo decodes.
+  const response = await request.put("/api/photos", {
+    headers,
+    multipart: photo
+      ? {
+          full: { name: `${photo.key}.jpg`, mimeType: "image/jpeg", buffer: readDemoPhoto(photo) },
+          thumb: { name: `${photo.key}.thumb.jpg`, mimeType: "image/jpeg", buffer: readDemoThumb(photo) },
+          width: String(photo.width),
+          height: String(photo.height),
+          blurhash: photo.blurhash,
+        }
+      : {
+          full: { name: "full.png", mimeType: "image/png", buffer: makePng(400, 500, 1) },
+          thumb: { name: "thumb.png", mimeType: "image/png", buffer: makePng(160, 200, 2) },
+          width: "400",
+          height: "500",
+          blurhash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj",
+        },
+  });
+  const uploaded = await readData<{ id: string }>(response);
+  return uploaded.id;
 }
 
 /**
@@ -119,31 +160,10 @@ export async function createApprovedListing(
     options.story ??
     "A small thing that sat on my grandmother's shelf for thirty years, and I would like it to sit on someone else's now.";
 
-  // A real JPEG when the caller supplied one (`imageSniff.ts` allows jpeg,
-  // png and webp, so both paths sniff clean), otherwise the generated PNG.
-  // The dimensions and blurhash have to describe whichever image is actually
-  // sent: the API stores them rather than decoding, `clampCardAspectRatio()`
-  // lays the card out from the ratio, and the blurhash is what shows while
-  // the photo decodes.
-  const uploadResponse = await request.put("/api/photos", {
-    headers,
-    multipart: options.photo
-      ? {
-          full: { name: `${options.photo.key}.jpg`, mimeType: "image/jpeg", buffer: readDemoPhoto(options.photo) },
-          thumb: { name: `${options.photo.key}.thumb.jpg`, mimeType: "image/jpeg", buffer: readDemoThumb(options.photo) },
-          width: String(options.photo.width),
-          height: String(options.photo.height),
-          blurhash: options.photo.blurhash,
-        }
-      : {
-          full: { name: "full.png", mimeType: "image/png", buffer: makePng(400, 500, 1) },
-          thumb: { name: "thumb.png", mimeType: "image/png", buffer: makePng(160, 200, 2) },
-          width: "400",
-          height: "500",
-          blurhash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj",
-        },
-  });
-  const photo = await readData<{ id: string }>(uploadResponse);
+  const photoIds = [await uploadDemoPhoto(request, headers, options.photo)];
+  for (const extra of options.extraPhotos ?? []) {
+    photoIds.push(await uploadDemoPhoto(request, headers, extra));
+  }
 
   const createResponse = await request.post("/api/listings", {
     headers,
@@ -153,7 +173,7 @@ export async function createApprovedListing(
       category: options.category ?? "home_kitchen",
       country: "US",
       postal_code: options.postalCode ?? "02144",
-      photo_ids: [photo.id],
+      photo_ids: photoIds,
       date_of_birth: "1990-01-01",
       email: options.email ?? "giver@keepsake.ing",
       ...(options.aspects !== undefined ? { aspects: options.aspects } : {}),

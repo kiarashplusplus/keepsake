@@ -48,13 +48,14 @@ set (one look at the palette is evidence; two are bytes):
 
 | Prefix | Screens |
 | --- | --- |
-| `welcome`, `consent-banner` | The two things a stranger sees before the feed |
-| `feed*` | The table, a category chip, a search with no answer, the location controls in force, and a radius with nothing inside it |
-| `item*` | An item page, the request sheet empty / filled / sent, the report sheet, one keepsake that has already been given, and the not-found page a link to a keepsake that is no longer public lands on |
-| `give-1`…`give-6` | Every step of the give wizard, including the autofilled title and the live stamp |
+| `welcome`, `consent-banner`, `consent-choices` | The two things a stranger sees before the feed, and the per-category privacy panel behind "Choose what to allow" |
+| `feed*` | The table, a category chip, a search that finds one keepsake and a search with no answer, the location controls in force, and a radius with nothing inside it |
+| `item*` | An item page (with a real carousel and the vision model's annotation under the story), the request sheet empty / filled / sent, the report sheet, one keepsake that has already been given, and the not-found page a link to a keepsake that is no longer public lands on |
+| `give-1`…`give-6` | Every step of the give wizard, including the autofilled title, the wizard refusing a story that is too short, and the live stamp |
 | `mine*` | The giver's own listings, one nobody has asked for (with its category picker and its delete confirmation), one already given, one a moderator rejected and one reports took down, a request they can choose, the choose sheet, the chosen state, the email screen |
 | `bulk*` | The estate workspace: an empty batch list, a started batch, photos, review, submit |
 | `recover*`, `confirm-bad-link`, `withdraw-bad-link`, `not-found` | The screens on the end of a link |
+| `about`, `privacy`, `terms` | The three pages linked from every footer — plain HTML on their own stylesheet, not the app |
 | `admin*` | The token gate, the stats strip and its report-pressure section, the queue and its tabs, the Hidden tab (including the card three reports took down, with their rows on it), the Rejected tab, a selection and its bulk toolbar, the reject sheet, and both halves of the Observatory |
 
 Six of those states exist only because the fixture goes out of its way to
@@ -98,6 +99,17 @@ than by rendering a screen the product cannot produce:
   that really does carry a phone number so `contact_in_story` is the honest
   reason. It is also the only thing the queue's Rejected tab has ever had in
   it.
+- **A keepsake with more than one photograph, and an annotation.**
+  `PhotoCarousel` draws no dots for a single photo, so the control a visitor
+  meets on most real listings had never been in a frame; and every keepsake
+  here was seeded with no aspects, so `AspectList` (#135) — the mono
+  annotation the vision model leaves under the story — rendered nothing on
+  every item frame ever taken. `letters` now carries three photographs and
+  three aspects. The three photographs are deliberately the same file: this
+  fixture holds one photograph per keepsake, a second view of that shoebox
+  does not exist, and borrowing another object's photograph would put a
+  kettle inside a listing about postcards. What the frame is evidence about
+  is the carousel's chrome, not three views of anything.
 - **A link to a keepsake that is no longer public.** `GET /api/listings/:id`
   answers only for `approved` and `given`, so the reported listing above is a
   404 to a stranger holding a share link that worked last week — which
@@ -109,6 +121,14 @@ Sheets that would change the fixture are opened and then dismissed: the
 category picker, the delete confirmation, the admin reject sheet. Both
 projects run against one database, so a capture that confirmed any of them
 would leave the other project photographing a different product.
+
+`about`, `privacy` and `terms` need no fixture at all and are the only
+frames here that are not the Expo app: they are `apps/site/public/*.html`,
+plain markup on their own `site.css`, copied into the export by
+`scripts/copy-site.mjs` and served through the Worker's `[assets]` binding.
+Every screen in the product links to them from its footer, and no test in
+this repository renders them — so they are the one place the design can
+drift away from the product's type and palette with nothing noticing.
 
 What still has no frame, and why: the queue's **Needs review** and
 **Pending** tabs are photographed empty, because `MOCK_AI=1` decides every

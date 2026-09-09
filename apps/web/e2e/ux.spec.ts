@@ -142,6 +142,17 @@ test.describe("ux baseline", () => {
     await banner.goto("/");
     await expect(banner.getByText("Your choice, before anything loads.")).toBeVisible();
     await shot(banner, testInfo, "consent-banner");
+
+    // The half of that banner a careful visitor actually reads. The frame
+    // above is the two-button prompt; behind "Choose what to allow" is the
+    // per-category panel with its own Save choices, and nothing had ever
+    // photographed it — so the one screen in the product that asks a
+    // stranger to make an informed choice was reviewed only in its collapsed
+    // form. Same panel the footer's "Privacy choices" reopens on every
+    // screen (`public/consent.js`); this is the first-visit way in.
+    await banner.getByRole("button", { name: "Choose what to allow" }).click();
+    await expect(banner.getByRole("button", { name: "Save choices" })).toBeVisible();
+    await shot(banner, testInfo, "consent-choices");
     await undecided.close();
 
     // --- The feed itself ----------------------------------------------------
@@ -164,6 +175,18 @@ test.describe("ux baseline", () => {
     await expect(brooch).toBeVisible();
     await brooch.scrollIntoViewIfNeeded();
     await shot(page, testInfo, "feed-category");
+
+    // A search that finds something — the state between an untouched table
+    // and the "Nothing matches" frame below, and the only one of the three
+    // that had no frame. It is also the only screen where the table holds a
+    // single card, which is the layout question a masonry grid raises.
+    await page.goto("/");
+    await page.getByLabel("Search").fill("quilt");
+    const quilt = page.getByLabel(DEMO_LISTINGS[5]!.title, { exact: true });
+    await expect(quilt).toBeVisible();
+    await expect(page.getByLabel(DEMO_LISTINGS[0]!.title, { exact: true })).toHaveCount(0);
+    await quilt.scrollIntoViewIfNeeded();
+    await shot(page, testInfo, "feed-search");
 
     await page.goto("/");
     await page.getByLabel("Search").fill("zzzznothingmatchesthis");
@@ -225,6 +248,18 @@ test.describe("ux baseline", () => {
     await page.goto(`/item/${catalog.ids.letters}`);
     await expect(page.getByText(DEMO_LISTINGS[2]!.title, { exact: true })).toBeVisible();
     await shot(page, testInfo, "item");
+
+    // What the vision model read off the photograph (#135), which has been
+    // stored on every listing since #36 and rendered under the story since
+    // #135 — and never photographed, because every keepsake this fixture
+    // seeded had none. `letters` now carries three aspects (and three
+    // photographs, so the carousel above has dots at all), and this is the
+    // quiet mono annotation they are drawn as: a museum card's typed label,
+    // deliberately not a spec table.
+    const aspects = page.getByTestId("aspect-list");
+    await expect(aspects).toBeVisible();
+    await aspects.scrollIntoViewIfNeeded();
+    await shot(page, testInfo, "item-details");
 
     await page.getByLabel("I'd love this").click();
     await expect(page.getByLabel("Note")).toBeVisible();
@@ -319,6 +354,20 @@ test.describe("ux baseline", () => {
 
     await expect(page.getByText("Tell its story.")).toBeVisible();
     await shot(page, testInfo, "give-2-story-empty");
+
+    // The wizard saying no. Every give frame in this baseline is of the
+    // happy path, so the field error — the thing a giver who writes two
+    // words actually meets — had never been photographed at either width,
+    // on the one step where the error sits under a 220px box with a
+    // character counter already competing for the same corner. Typed and
+    // then continued, because `story.tsx` only shows the message once the
+    // field has been touched (its `touched` guard).
+    await page.getByLabel("Story").fill("It was my mother's.");
+    await onScreen(page, "Continue").click();
+    await expect(page.getByText(/At least \d+ characters/)).toBeVisible();
+    await expect(page.getByText("Tell its story.")).toBeVisible();
+    await shot(page, testInfo, "give-2-story-short");
+
     await page.getByLabel("Story").fill(GIVEN_HERE.story);
     await shot(page, testInfo, "give-2-story-filled");
     await onScreen(page, "Continue").click();
@@ -614,6 +663,28 @@ test.describe("ux baseline", () => {
     await page.goto("/no-such-page");
     await expect(page.getByText(/That keepsake isn.t here/)).toBeVisible();
     await shot(page, testInfo, "not-found");
+  });
+
+  test("the three pages under every footer", async ({ page }, testInfo) => {
+    // `About`, `Privacy` and `Terms` are linked from `AppFooter` on every
+    // screen in the product and from each other, and not one of them had a
+    // frame. They are also the only pages here that are not the Expo app:
+    // `apps/site/public/*.html`, plain markup on their own `site.css`,
+    // copied into the export by `scripts/copy-site.mjs` and served by the
+    // Worker's `[assets]` binding. So they are the one place the design can
+    // drift away from the product's own type and palette without any app
+    // test noticing — which is exactly what a baseline is for.
+    await page.goto("/about");
+    await expect(page.getByRole("heading", { name: /Give a keepsake/ })).toBeVisible();
+    await shot(page, testInfo, "about");
+
+    await page.goto("/privacy");
+    await expect(page.getByRole("heading", { name: "Privacy", exact: true })).toBeVisible();
+    await shot(page, testInfo, "privacy");
+
+    await page.goto("/terms");
+    await expect(page.getByRole("heading", { name: "Terms", exact: true })).toBeVisible();
+    await shot(page, testInfo, "terms");
   });
 
   test("the admin queue, both sides of its gate", async ({ page, request }, testInfo) => {

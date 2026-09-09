@@ -51,6 +51,14 @@ export interface DemoListing {
   story: string;
   category: string;
   postalCode: string;
+  /** More photographs, for the one keepsake that carries a real carousel.
+   * See `letters` below for why they are copies of the same file. */
+  extraPhotos?: DemoPhoto[];
+  /** What the vision model read off the cover photo (#36/#135). Set on one
+   * listing only: most listings genuinely have none, and the item page's
+   * `AspectList` renders nothing for those — so a fixture where every
+   * keepsake had aspects would photograph the uncommon case as the norm. */
+  aspects?: { name: string; value: string }[];
 }
 
 /**
@@ -85,6 +93,27 @@ export const DEMO_LISTINGS: DemoListing[] = [
   {
     key: "letters",
     photo: DEMO_PHOTOS.letters,
+    // The one keepsake with more than one photograph, so `PhotoCarousel`'s
+    // dots and its paging exist on the page `item*` is captured against —
+    // with a single photo the carousel draws no dots at all, and the control
+    // a visitor meets on most real listings had never been in a frame.
+    //
+    // Three copies of the same file, said plainly rather than dressed up:
+    // `e2e/fixtures/photos` holds one photograph per keepsake, and a second
+    // view of this shoebox does not exist. Using another object's photograph
+    // would put a kettle inside a listing about postcards, which is worse
+    // than a repeat — this frame is evidence about the carousel's chrome
+    // (are the dots visible, does the print still read as an object), not
+    // about three views of anything.
+    extraPhotos: [DEMO_PHOTOS.letters, DEMO_PHOTOS.letters],
+    // And the annotation the vision model leaves (#135), which nothing in
+    // the baseline had ever shown: stored on every listing since #36,
+    // rendered on the item page, photographed for the first time here.
+    aspects: [
+      { name: "material", value: "card and paper" },
+      { name: "era", value: "1970s" },
+      { name: "condition", value: "handled, soft corners, all legible" },
+    ],
     title: "A shoebox of postcards from the 1970s",
     story:
       "Two hundred or so, most of them to the same address in Worcester, most of them from people telling my aunt the weather was better where they were. The handwriting alone is worth an afternoon. I kept four and would like the rest to go to someone who reads them.",
@@ -366,6 +395,8 @@ export async function ensureDemoCatalog(request: APIRequestContext): Promise<Dem
         category: listing.category,
         postalCode: listing.postalCode,
         photo: listing.photo,
+        ...(listing.extraPhotos ? { extraPhotos: listing.extraPhotos } : {}),
+        ...(listing.aspects ? { aspects: listing.aspects } : {}),
         ownerToken: DEMO_OWNER_TOKEN,
       });
       mintedToPinned[created.id] = PINNED_LISTING_IDS[listing.key] as string;
