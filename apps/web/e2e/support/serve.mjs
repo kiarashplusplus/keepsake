@@ -37,6 +37,13 @@
  *    restart waits for the new process instead of getting
  *    `ECONNREFUSED`. `--persist-to` state is on disk, so D1/R2/KV survive.
  *
+ *    Since #381 the exit this guards against should be rare: that empty
+ *    `✘ [ERROR]` is wrangler treating a transient ProxyWorker condition as
+ *    fatal, and `patches/wrangler@4.129.0.patch` makes it non-fatal, the way
+ *    wrangler already treats its two siblings. Everything below still stands —
+ *    the patch is a workaround for an open upstream bug that could not be
+ *    reproduced off CI, so this stays the thing that notices if it fails.
+ *
  *    What is *not* known is which connection breaks. #104 recorded three
  *    fatal exits in one 2.5-minute suite run and inferred a second, unrelated
  *    fault, because grepping all three wrangler debug logs for the problem-1
