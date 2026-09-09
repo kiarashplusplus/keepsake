@@ -258,12 +258,20 @@ function rawFromCapture(line: CaptureShape, item: TraceItem, timestamp: number):
  * them. Pure: no D1, no clock, no redaction — so a test can assert the filter
  * on its own, and so the redaction step below is the single choke point it
  * claims to be.
+ *
+ * `receivedAt` is the caller's clock, used only where the runtime gave us no
+ * timestamp of its own — a trace item with no `eventTimestamp`, or a log line
+ * with no `timestamp` on an item that also lacked one. It is a required
+ * parameter rather than an internal `Date.now()` so that "no clock" above is
+ * true as written: the same input always produces the same output, which is
+ * what lets the ordering and window assertions in
+ * `test/tailErrorEvents.test.ts` pin exact timestamps instead of ranges.
  */
-export function extractErrorEvents(items: TraceItem[]): RawErrorEvent[] {
+export function extractErrorEvents(items: TraceItem[], receivedAt: number): RawErrorEvent[] {
   const out: RawErrorEvent[] = [];
 
   for (const item of items) {
-    const fallbackTs = item.eventTimestamp ?? Date.now();
+    const fallbackTs = item.eventTimestamp ?? receivedAt;
 
     // Uncaught exceptions first: the platform records these itself, and they
     // are the ones no `captureException` call site ever saw.
@@ -392,6 +400,16 @@ function insertStatement(db: D1Database, event: StoredErrorEvent, now: number, m
  * Deliberately not itself subject to the ceiling: it is bounded to a single
  * row per minute by its own primary key, and a cap notice that could be
  * capped is a cap notice nobody sees on exactly the minute it matters.
+ *
+ * `observed_at` is the delivery clock, and is moved forward on every upsert —
+ * *not* `minuteStart`, which is what identifies the row. The two are only a
+ * minute apart, but the panel's feed is `ORDER BY observed_at DESC LIMIT 50`
+ * and a capped minute is by definition one with at least sixty rows newer
+ * than its own start: stamping the notice at `minuteStart` sorts it below
+ * every line it is reporting on and pushes it off the end of the very feed it
+ * exists to appear in. Being excluded from the ceiling is not enough on its
+ * own; it also has to be readable. `test/tailErrorEvents.test.ts` ("the cap
+ * notice survives the feed's own row cap") is what holds this.
  */
 async function recordCapNotice(db: D1Database, dropped: number, now: number, minuteStart: number): Promise<void> {
   await db
@@ -400,13 +418,14 @@ async function recordCapNotice(db: D1Database, dropped: number, now: number, min
          (id, observed_at, received_at, level, kind, message, dropped)
        VALUES (?, ?, ?, 'warning', '${CAP_NOTICE_KIND}', ?, ?)
        ON CONFLICT(id) DO UPDATE SET
+         observed_at = excluded.observed_at,
          received_at = excluded.received_at,
          dropped = error_events.dropped + excluded.dropped,
          message = ? || (error_events.dropped + excluded.dropped) || ?`,
     )
     .bind(
       `cap-${minuteStart}`,
-      minuteStart,
+      now,
       now,
       capNoticeMessage(dropped),
       dropped,
@@ -455,7 +474,7 @@ export async function persistTailEvents(
 ): Promise<TailPersistResult> {
   await recordDelivery(env.DB, now);
 
-  const candidates = extractErrorEvents(items);
+  const candidates = extractErrorEvents(items, now);
   if (candidates.length === 0) return { considered: 0, persisted: 0, dropped: 0 };
 
   const minuteStart = Math.floor(now / MINUTE_MS) * MINUTE_MS;

@@ -194,9 +194,34 @@ describe("Tail Worker: what reaches the table", () => {
   });
 
   it("is pure about the filter: nothing is written by extractErrorEvents itself", async () => {
-    const events = extractErrorEvents([traceItem({ logs: [{ level: "error", message: ["boom"] }] })]);
+    const events = extractErrorEvents([traceItem({ logs: [{ level: "error", message: ["boom"] }] })], 1_757_000_000_000);
     expect(events).toHaveLength(1);
     expect(await allRows()).toHaveLength(0);
+  });
+
+  it("takes its fallback timestamp from the caller, not from the clock", async () => {
+    // The reason `receivedAt` is a parameter: an item the runtime handed us
+    // with no `eventTimestamp` (and log lines with no `timestamp` of their
+    // own) still has to produce the same row twice for the same input. A
+    // `Date.now()` inside the extractor would make this assertion an
+    // approximate one, and every ordering assertion downstream approximate
+    // with it.
+    const receivedAt = 1_757_000_000_000;
+    // `traceItem` stamps both halves, so they are stripped back off here:
+    // this is the shape the fallback exists for, and the only shape in which
+    // it is observable at all.
+    const stamped = traceItem({ logs: [{ level: "error", message: ["boom"] }] });
+    const bare = {
+      ...stamped,
+      eventTimestamp: null,
+      logs: (stamped.logs ?? []).map((log) => ({ ...log, timestamp: undefined })),
+    } as unknown as TraceItem;
+
+    const first = extractErrorEvents([bare], receivedAt);
+    const second = extractErrorEvents([bare], receivedAt);
+
+    expect(first[0]?.observedAt).toBe(receivedAt);
+    expect(second).toEqual(first);
   });
 });
 
@@ -387,6 +412,42 @@ describe("Tail Worker: the per-minute volume ceiling", () => {
     // per delivery, which would itself be the flood.
     expect(notices?.n).toBe(1);
     expect(notices?.total).toBe(5);
+  });
+
+  it("keeps the cap notice inside the feed's own row cap", async () => {
+    // The notice being exempt from the *write* ceiling is only half of
+    // making it visible. `observatory/errorEvents.ts` reads the feed as
+    // `ORDER BY observed_at DESC LIMIT 50`, and a capped minute holds at
+    // least sixty rows — so a notice stamped at `minuteStart`, older than
+    // every line it is reporting on, sorts 61st and never reaches the panel.
+    // Stamping it at `now` instead is what this asserts; reverting that bind
+    // to `minuteStart` drops the notice out of `events` below while leaving
+    // every other test in this file green.
+    const now = minuteStart();
+    const over = 4;
+
+    // Spread across the minute rather than all on its first millisecond,
+    // which is what a real burst looks like and what makes the ordering
+    // decidable instead of a tie.
+    const lines = Array.from({ length: MAX_ERROR_EVENTS_PER_MINUTE + over }, (_, i) => ({
+      level: "error" as const,
+      message: [`loop iteration ${i}`],
+      timestamp: now + i,
+    }));
+    const result = await persistTailEvents(env, [traceItem({ at: now, logs: lines })], now + 1_000);
+    expect(result.dropped).toBe(over);
+
+    const panel = await fetchPersistedLogs(env as unknown as Env, 1, now + 2_000);
+    expect(panel.state).toBe("ok");
+    if (panel.state !== "ok") return;
+
+    expect(panel.data.events).toHaveLength(50);
+    const messages = panel.data.events.map((event) => event.message);
+    expect(messages, "the cap notice must be readable in the feed, not just present in the table").toContain(
+      capNoticeMessage(over),
+    );
+    // Newest-first, and the notice is the newest thing in the minute.
+    expect(messages[0]).toBe(capNoticeMessage(over));
   });
 
   it("refills on the next minute", async () => {
