@@ -21,6 +21,8 @@ export const AnalyticsEvents = {
   RecoverRequested: "recover_requested",
   Recovered: "recovered",
   RequestWithdrawn: "request_withdrawn",
+  Unsubscribed: "unsubscribed",
+  Resubscribed: "resubscribed",
   // One event for both share surfaces, fired inside `shareListing` rather
   // than at each call site — a third caller cannot forget it, and the
   // `surface`/`result` props keep "the giver shared their own keepsake right

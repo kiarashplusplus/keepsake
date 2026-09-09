@@ -125,6 +125,7 @@ describe("X-Robots-Tag", () => {
     ["/recover/some-token"],
     ["/withdraw/some-token"],
     ["/confirm/some-token"],
+    ["/unsubscribe/some-token"],
   ])("marks %s noindex on production", async (path) => {
     setTestEnvVar("ENVIRONMENT", "production");
 

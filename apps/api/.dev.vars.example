@@ -45,6 +45,19 @@ CF_CACHE_PURGE_TOKEN=
 # "not configured" rather than an empty chart.
 CF_OBSERVATORY_TOKEN=
 
+# Keys the per-recipient unsubscribe token (src/email/unsubscribe.ts):
+# HMAC-SHA256(this, lowercased address), never a bare hash of the address —
+# see that file's doc comment for why a token that's mailed out, unlike
+# email_events.to_hash, needs to be keyed rather than just hashed.
+#
+# Left blank here on purpose, same posture as TURNSTILE_SECRET: unset means
+# every unsubscribe/resubscribe URL falls back to the mailto: address the
+# footer already names (sendMail.ts's withUnsubscribeLink), not a broken
+# link and not a blocked send — the mechanism degrades to what #310's first
+# pass shipped, it doesn't stop working. Set this before any deploy whose
+# one-click unsubscribe should actually be one-click.
+UNSUBSCRIBE_SECRET=
+
 # Address the daily digest is mailed to (apps/api/src/cron/dailyDigest.ts).
 # A secret rather than a wrangler.toml var only because it is a real
 # person's address and that file is committed. Unset means the digest is

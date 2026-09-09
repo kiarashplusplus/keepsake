@@ -42,6 +42,11 @@ declare global {
       // `wrangler.toml` is committed. Unset means the digest is built and
       // logged but not sent — a supported state, not an error.
       ADMIN_DIGEST_TO?: string;
+      // Keys the per-recipient unsubscribe token (`src/email/unsubscribe.ts`).
+      // Unset means every unsubscribe link falls back to the `mailto:`
+      // address the CASL footer already names — a working, less convenient
+      // mechanism, not a type error and not a broken link.
+      UNSUBSCRIBE_SECRET?: string;
     }
   }
 }

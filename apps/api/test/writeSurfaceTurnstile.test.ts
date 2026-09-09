@@ -58,6 +58,17 @@ const ALLOWLIST: Exemption[] = [
     reason:
       "\"No Turnstile, unchanged: possession of the mailed token is the proof\" (routes/recover.ts's own comment on this route). POST /api/recover — the step that actually sends mail — does carry turnstile().",
   },
+  {
+    method: "POST",
+    path: "/api/unsubscribe/:token",
+    reason:
+      "The token is a keyed HMAC of the recipient's address (routes/unsubscribe.ts, src/email/unsubscribe.ts) — unforgeable without UNSUBSCRIBE_SECRET, the same bearer-credential shape as requests/confirm and requests/withdraw above. It also has to work as RFC 8058's List-Unsubscribe-Post one-click target, which a mail client POSTs to directly with no human at a Turnstile widget to solve one.",
+  },
+  {
+    method: "POST",
+    path: "/api/resubscribe/:token",
+    reason: "Same credential shape as POST /api/unsubscribe/:token immediately above — the token itself is the proof of control.",
+  },
 
   // -------------------------------------------------------------------
   // Owner-authenticated actions on a resource the caller already controls.

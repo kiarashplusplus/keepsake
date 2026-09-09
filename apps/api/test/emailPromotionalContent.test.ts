@@ -21,7 +21,13 @@
  *    discount language, referral incentives, cross-promotion, and
  *    unsubscribe-implying copy (a transactional email that starts talking
  *    about "email preferences" is itself a symptom of drifting into
- *    marketing).
+ *    marketing) — with one carve-out. Issue #310: CASL s.6(2) requires an
+ *    unsubscribe instruction in *every* message, transactional or not, so
+ *    `shared.ts`'s `CASL_FOOTER_LINES` deliberately says "unsubscribe." That
+ *    is compliance, not drift, so this test strips exactly those two lines
+ *    (and only those, by exact string match) out of the haystack before
+ *    scanning — an unsubscribe/preferences mention *anywhere else* in a
+ *    template still fails this check.
  *
  * Honesty about the phrase check: it is pattern matching, not comprehension.
  * A determined rephrase that avoids every listed pattern and doesn't add a
@@ -39,7 +45,7 @@ import { requestReceived } from "../src/email/templates/requestReceived.js";
 import { verifyEmail } from "../src/email/templates/verifyEmail.js";
 import { confirmRequest } from "../src/email/templates/confirmRequest.js";
 import { adminTest } from "../src/email/templates/adminTest.js";
-import type { EmailTemplate } from "../src/email/templates/shared.js";
+import { CASL_FOOTER_LINES, type EmailTemplate } from "../src/email/templates/shared.js";
 
 // Distinctive per-field sentinels so a leaked hardcoded link can never be
 // mistaken for one of these by coincidence.
@@ -197,7 +203,14 @@ describe("transactional email templates never gain promotional content (#33)", (
       });
 
       it("contains no promotional-language markers", () => {
-        const haystack = `${template.subject}\n${stripTags(template.html)}\n${template.text}`;
+        // Strip exactly the CASL-mandated identification/unsubscribe lines
+        // (#310) before scanning — see the file header. Anything else that
+        // matches, including a *different* unsubscribe-shaped sentence
+        // elsewhere in the template, still fails below.
+        let haystack = `${template.subject}\n${stripTags(template.html)}\n${template.text}`;
+        for (const line of CASL_FOOTER_LINES) {
+          haystack = haystack.split(line).join(" ");
+        }
         const hits = PROMOTIONAL_PATTERNS.map(({ label, pattern }) => {
           const match = haystack.match(pattern);
           return match ? `${label} (matched "${match[0]}")` : null;

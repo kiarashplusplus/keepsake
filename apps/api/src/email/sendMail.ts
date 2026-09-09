@@ -41,6 +41,8 @@ import type { Env } from "../env.js";
 import { emailProviderName } from "../env.js";
 import { sha256Hex } from "../lib/digest.js";
 import { ulid } from "../lib/ids.js";
+import { isUnsubscribed, unsubscribeApiUrl, unsubscribeWebUrl } from "./unsubscribe.js";
+import { UNSUBSCRIBE_LINK_PLACEHOLDER } from "./templates/shared.js";
 
 /**
  * Recipient guard — the reason Keepsake cannot spray bounces at its own
@@ -123,6 +125,49 @@ export type EmailKind =
   | "recover"
   | "admin_test"
   | "admin_digest";
+
+/**
+ * The product question issue #310 raised and this fix does not get to duck:
+ * unsubscribing from a CEM cannot mean dropping a message that *is* the
+ * transaction the recipient is mid-way through. Every kind in this set is
+ * sent either (a) in direct, same-cycle response to something the recipient
+ * themselves just did — typed their address to verify it (`verify_email`),
+ * submitted a request and needs to confirm it (`confirm_request`) or was
+ * told it landed (`request_received`), asked to recover their dashboard
+ * (`recover`) — or (b) is the delivery of the outcome of a transaction they
+ * already started by requesting something (`chosen`, "you were chosen");
+ * or (c) is addressed to the site operator, not a subscriber at all
+ * (`admin_test`, `admin_digest`). Suppressing any of these defeats the
+ * transaction it belongs to (or, for the admin pair, has no subscriber to
+ * honor a preference for in the first place) — exactly the failure mode the
+ * issue calls out by name for `chosen` and `confirmRequest`.
+ *
+ * `new_request` is deliberately **not** in this set. Unlike the six above,
+ * its recipient (a listing's owner) did not just take the action this
+ * message reports — a stranger did, by asking for something the owner
+ * posted — so it is closer to "someone messaged you" than to a receipt for
+ * the recipient's own click. The owner's dashboard (`/mine/:id`, already
+ * linked from this exact email) shows every open request regardless of
+ * whether this notification ever arrives, so suppressing it costs
+ * visibility into *when* a new one showed up, not the request itself. It is
+ * the one kind this fix can suppress and demonstrate suppressing —
+ * `test/emailUnsubscribe.test.ts` — and the unsubscribe page states this
+ * exact consequence before anyone confirms (`apps/web/app/unsubscribe/[token].tsx`).
+ *
+ * A kind added later defaults to **suppressible** by leaving it out of this
+ * set, not the other way around — the safer default when nobody has
+ * reasoned about a new template yet is that an unsubscribed recipient stops
+ * getting it, not that it silently joins the exempt list.
+ */
+export const TRANSACTIONAL_EMAIL_KINDS: ReadonlySet<EmailKind> = new Set([
+  "verify_email",
+  "confirm_request",
+  "request_received",
+  "chosen",
+  "recover",
+  "admin_test",
+  "admin_digest",
+]);
 
 export interface MailMessage {
   kind: EmailKind;
@@ -272,7 +317,7 @@ async function recordEmailEvent(
   return id;
 }
 
-async function sendViaCloudflare(env: Env, message: MailMessage): Promise<SendMailResult> {
+async function sendViaCloudflare(env: Env, message: MailMessage, headers: Record<string, string>): Promise<SendMailResult> {
   try {
     await env.EMAIL.send({
       from: env.EMAIL_FROM,
@@ -281,6 +326,7 @@ async function sendViaCloudflare(env: Env, message: MailMessage): Promise<SendMa
       html: message.html,
       text: message.text,
       ...(message.replyTo !== undefined ? { replyTo: message.replyTo } : {}),
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
     });
     return { sent: true };
   } catch (err) {
@@ -295,7 +341,7 @@ async function sendViaCloudflare(env: Env, message: MailMessage): Promise<SendMa
   }
 }
 
-async function sendViaResend(env: Env, message: MailMessage): Promise<SendMailResult> {
+async function sendViaResend(env: Env, message: MailMessage, headers: Record<string, string>): Promise<SendMailResult> {
   try {
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -310,6 +356,12 @@ async function sendViaResend(env: Env, message: MailMessage): Promise<SendMailRe
         html: message.html,
         text: message.text,
         ...(message.replyTo !== undefined ? { reply_to: message.replyTo } : {}),
+        // Resend's `POST /emails` accepts a `headers` map of raw header
+        // name/value pairs, passed through to the outgoing message verbatim
+        // — the same shape the `cf` path's `EmailMessageBuilder.headers`
+        // takes, so `List-Unsubscribe`/`List-Unsubscribe-Post` work
+        // identically on either provider.
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
       }),
     });
     if (!response.ok) {
@@ -330,6 +382,83 @@ async function sendViaResend(env: Env, message: MailMessage): Promise<SendMailRe
     console.error("sendMail: resend request threw", { error: detail });
     return { sent: false, reason: "send_failed", detail };
   }
+}
+
+/**
+ * Fills in `UNSUBSCRIBE_LINK_PLACEHOLDER` in a rendered message's `html` and
+ * `text`, and returns the RFC 8058 headers a compliant mail client (or
+ * `POST /api/admin/test-email`'s own inspection) can act on. Runs *after*
+ * every template has already been rendered, which is exactly why the
+ * placeholder exists at all — see `templates/shared.ts`'s doc comment on it.
+ *
+ * The HTML substitution wraps the URL in a real `<a href>` — the placeholder
+ * in the raw template is deliberately plain text (no markup), so
+ * `emailPromotionalContent.test.ts`'s link-structure check, which runs
+ * against *unsubstituted* template output, never sees a link there to
+ * evaluate in the first place. The text substitution is the bare URL, which
+ * is all a plain-text part can offer.
+ *
+ * `unsubscribeWebUrl` — the human-facing page, which states the consequence
+ * and asks for a click — is what goes in the footer body a person reads.
+ * `unsubscribeApiUrl` — a POST-only route with no page at all — is what goes
+ * in `List-Unsubscribe`, because RFC 8058 is answered by a mail client's own
+ * "Unsubscribe" affordance, not by rendering Keepsake's page inside it.
+ *
+ * When `UNSUBSCRIBE_SECRET` isn't configured (`unsubscribe.ts`'s documented
+ * fail-open), both URLs come back `null` and this falls back to the
+ * `mailto:` address the footer's other CASL line already names — a working,
+ * if less convenient, mechanism rather than a dead placeholder shipped
+ * verbatim into a real inbox.
+ */
+async function withUnsubscribeLink(
+  env: Env,
+  message: MailMessage,
+): Promise<{ html: string; text: string; headers: Record<string, string> }> {
+  const mailtoFallback = "mailto:hello@keepsake.ing?subject=Unsubscribe";
+  const [webUrl, apiUrl] = await Promise.all([unsubscribeWebUrl(env, message.to), unsubscribeApiUrl(env, message.to)]);
+  const bodyHref = webUrl ?? mailtoFallback;
+
+  const html = message.html
+    .split(UNSUBSCRIBE_LINK_PLACEHOLDER)
+    .join(`<a href="${escapeHtmlAttr(bodyHref)}">${escapeHtmlAttr(bodyHref)}</a>`);
+  const text = message.text.split(UNSUBSCRIBE_LINK_PLACEHOLDER).join(bodyHref);
+
+  // The body link goes on every message — it is the s.6(2)(c) mechanism, and
+  // it works: it suppresses the class of messages that can be suppressed,
+  // which is what the footer now says it does.
+  //
+  // The *headers* do not. `List-Unsubscribe-Post` is a promise to the mail
+  // client, not to the reader: it tells Gmail and Yahoo to show their own
+  // Unsubscribe button and to treat one press of it as the end of this kind
+  // of mail. On a kind `TRANSACTIONAL_EMAIL_KINDS` exempts that promise is
+  // one we do not keep — the next `chosen` or `confirm_request` arrives
+  // anyway — and a recipient who presses Unsubscribe and keeps hearing from
+  // us reaches for the spam button instead, which costs the deliverability
+  // of every transactional message the product depends on. So an exempt
+  // kind carries `mailto:` alone: a real mechanism, no one-click claim.
+  const oneClick = apiUrl !== null && !TRANSACTIONAL_EMAIL_KINDS.has(message.kind);
+
+  const headers: Record<string, string> = {
+    // Order matters to some clients that only honor the first entry: the
+    // real one-click URL first, `mailto:` as the fallback every client
+    // already understands.
+    "List-Unsubscribe": [oneClick ? `<${apiUrl}>` : null, `<${mailtoFallback}>`].filter((v): v is string => v !== null).join(", "),
+  };
+  // Only promise one-click POST semantics when there is a real POST target
+  // to promise them against, and only on a kind that press would actually
+  // stop.
+  if (oneClick) headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+
+  return { html, text, headers };
+}
+
+/** `href="..."` attribute value escaping — narrower than the templates'
+ * `escapeHtml` (`&`/`<`/`>`/`"` only matters inside an attribute value; the
+ * URL itself is not markup) but reusing `escapeHtml` here would be correct
+ * too. Kept separate only so this file doesn't reach into `templates/` for
+ * something this small. */
+function escapeHtmlAttr(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 export async function sendMail(env: Env, message: MailMessage): Promise<SendMailResult> {
@@ -357,12 +486,34 @@ export async function sendMail(env: Env, message: MailMessage): Promise<SendMail
     return { sent: false, reason: guard.reason, eventId };
   }
 
+  // Suppression, issue #310 part two. Checked after the reputation/reserved-
+  // domain guard above (a suppressed address is still a real address; the
+  // two gates answer different questions) and before a template's kind
+  // decides anything else. `TRANSACTIONAL_EMAIL_KINDS` is the product
+  // decision this fix does not duck — see that constant's doc comment for
+  // which kinds are exempt and why.
+  if (!TRANSACTIONAL_EMAIL_KINDS.has(message.kind) && (await isUnsubscribed(env, message.to))) {
+    console.log("[email:suppressed]", { subject: message.subject, domain: toDomain, kind: message.kind });
+    const eventId = await recordEmailEvent(env, {
+      kind: message.kind,
+      toHash,
+      toDomain,
+      provider: "blocked",
+      ok: false,
+      error: "blocked_unsubscribed",
+    });
+    return { sent: false, reason: "blocked_unsubscribed", eventId };
+  }
+
+  const { html, text, headers } = await withUnsubscribeLink(env, message);
+  const outgoing: MailMessage = { ...message, html, text };
+
   if (provider === "cf" && env.EMAIL) {
     providerLabel = "cf";
-    result = await sendViaCloudflare(env, message);
+    result = await sendViaCloudflare(env, outgoing, headers);
   } else if (provider === "resend" && env.RESEND_API_KEY) {
     providerLabel = "resend";
-    result = await sendViaResend(env, message);
+    result = await sendViaResend(env, outgoing, headers);
   } else {
     providerLabel = "none";
     const reason = provider === "cf" ? "email_binding_missing" : provider === "resend" ? "resend_key_missing" : "provider_unset";

@@ -63,6 +63,104 @@ export function plainLinkLine(link: string): string {
   return `<p style="font-size:13px;color:${colorsLight.textSecondary};word-break:break-all;">Or paste this link into your browser: ${escapeHtml(link)}</p>`;
 }
 
+/**
+ * CASL s.6(2) sender identification + unsubscribe instruction, appended to
+ * every template's footer regardless of whether that template's message is
+ * transactional. Issue #310 raised the question this answers: s.6(6) exempts
+ * a transactional CEM from s.6(1)(a)'s *consent* requirement only — it never
+ * touches s.6(2), so every message this product sends (all seven-plus
+ * templates below, including the admin-only ones) still needs these two
+ * things. Living here rather than in each template is the point: a template
+ * that builds its own footer independently is a template that can drift out
+ * of compliance the next time someone edits it. See
+ * `docs/design/email.md`'s "CASL: sender identification and unsubscribe"
+ * for what remains open.
+ *
+ * **Identification (s.6(2)(a)).** Keepsake is not a company —
+ * `apps/site/public/terms.html` says so plainly ("Keepsake isn't a company.
+ * It's one person: Kiarash Adl, an individual in Texas doing business as
+ * Keepsake") — so identification names that person, alongside the
+ * `hello@keepsake.ing` contact every template already uses elsewhere.
+ *
+ * **What's deliberately missing: a mailing address.** s.6(2)(b) also asks
+ * for one, valid 60+ days. `apps/site/public/privacy.html`'s "Who runs
+ * this" section documents not publishing one as a considered choice, not an
+ * omission — Kiarash operates from a home address and the reasoning there
+ * (UK GDPR Art. 13 has no UK user to attach to since the UK is geo-blocked;
+ * PIPEDA and the relevant US state laws ask for an accountable person and a
+ * way to reach them, not a literal street address) is analysis, not a
+ * decision that CASL's own address clause is satisfied. This file does not
+ * invent, guess, or borrow an address to fill that gap. It stays open —
+ * see `docs/design/email.md`.
+ *
+ * **Unsubscribe (s.6(2)(c)/6(3)).** CASL accepts a stated electronic
+ * address the recipient can write to, provided requests are given effect
+ * within 10 business days at no cost, and separately permits a one-click
+ * mechanism. Both are offered: the address below, and a real per-recipient
+ * link `sendMail` substitutes at send time.
+ *
+ * **These lines must be true of every message that can carry them**, and
+ * that is why they name what stops rather than saying "messages like this".
+ * s.6(2)(c) lets a mechanism cover "a specified class" of messages, and the
+ * class this one covers is the suppressible kinds — in practice
+ * `new_request`. `sendMail`'s `TRANSACTIONAL_EMAIL_KINDS` sends the other
+ * seven regardless of suppression, because silently dropping `chosen` or
+ * `confirm_request` would defeat the transaction the recipient themselves
+ * started. A footer promising to stop "messages like this" on one of those
+ * seven would be false on the face of it, and — with
+ * `List-Unsubscribe-Post` attached — would invite a recipient to press
+ * their client's Unsubscribe button and then keep hearing from us, which is
+ * how a sender earns spam complaints. So the wording enumerates instead,
+ * and `withUnsubscribeLink` withholds the one-click *headers* from the
+ * exempt kinds while still carrying the mechanism itself.
+ */
+export const CASL_IDENTIFICATION_LINE = "Sent by Kiarash Adl, an individual doing business as Keepsake.";
+export const CASL_UNSUBSCRIBE_LINE =
+  "To stop optional notifications — someone asking for something you posted — email hello@keepsake.ing and say so; requests are honored within 10 business days.";
+
+/**
+ * Substituted by `sendMail` (`../sendMail.ts`) for a real, per-recipient
+ * unsubscribe URL right before a message goes out — never resolved here,
+ * because these template functions are pure and have neither `env` nor a
+ * secret to derive a token from. A raw template call (both test suites that
+ * render templates directly — `emailCaslFooter.test.ts`,
+ * `emailPromotionalContent.test.ts` — do exactly this) sees the literal
+ * placeholder string, which is the point: it proves the hook exists without
+ * requiring every template function to take `env`/`to` just to build a
+ * footer line neither the subject nor the body otherwise needs.
+ *
+ * Kept distinct from a real URL's shape on purpose (`{{...}}`, not
+ * `https://…`) so `emailPromotionalContent.test.ts`'s link-structure check
+ * — which fails a template that leaks a hardcoded marketing URL — can allow
+ * exactly this one token everywhere without also having to allow a stand-in
+ * `https://` fixture link that would look, to that check, indistinguishable
+ * from a real leaked link.
+ */
+export const UNSUBSCRIBE_LINK_PLACEHOLDER = "{{unsubscribe-url}}";
+
+/** The one-click line CASL accepts as an alternative to (not a replacement
+ * for) the stated-address line above — see `docs/design/email.md`'s "CASL:
+ * sender identification and unsubscribe" for why both stay. */
+export const CASL_UNSUBSCRIBE_LINK_LINE = `Or use this link: ${UNSUBSCRIBE_LINK_PLACEHOLDER}`;
+
+/**
+ * The sentence that keeps the two lines above honest on the seven kinds
+ * `TRANSACTIONAL_EMAIL_KINDS` exempts. Without it a `chosen` or
+ * `confirm_request` footer would offer an unsubscribe beside a message that
+ * arrives whether or not anyone uses it. Naming the exempt kinds costs one
+ * line on the six templates where it is merely reassuring, and is the
+ * difference between an accurate footer and a false one on the rest.
+ */
+export const CASL_TRANSACTIONAL_LINE =
+  "Messages you asked for — verifying your email, confirming a request, being chosen, recovering access — are part of what you started, and still arrive.";
+
+export const CASL_FOOTER_LINES = [
+  CASL_IDENTIFICATION_LINE,
+  CASL_UNSUBSCRIBE_LINE,
+  CASL_UNSUBSCRIBE_LINK_LINE,
+  CASL_TRANSACTIONAL_LINE,
+];
+
 export function renderShell(params: { bodyHtml: string; footerReason: string }): string {
   return `<!doctype html>
 <html>
@@ -83,7 +181,8 @@ export function renderShell(params: { bodyHtml: string; footerReason: string }):
             </tr>
             <tr>
               <td style="padding-top:28px;margin-top:20px;border-top:1px solid ${colorsLight.border};font-family:${SANS};font-size:12px;line-height:18px;color:${colorsLight.textSecondary};">
-                Keepsake · keepsake.ing · ${escapeHtml(params.footerReason)}
+                Keepsake · keepsake.ing · ${escapeHtml(params.footerReason)}<br /><br />
+                ${CASL_FOOTER_LINES.map((line) => escapeHtml(line)).join("<br />")}
               </td>
             </tr>
           </table>
@@ -94,6 +193,12 @@ export function renderShell(params: { bodyHtml: string; footerReason: string }):
 </html>`;
 }
 
+/**
+ * Plain-text mirror of `renderShell`'s footer cell. Several templates build
+ * their `text:` part by hand rather than stripping the HTML, so the CASL
+ * lines have to be added here too — a footer that only existed in HTML
+ * would be half a fix (#310).
+ */
 export function footerLine(reason: string): string {
-  return `Keepsake · keepsake.ing · ${reason}`;
+  return [`Keepsake · keepsake.ing · ${reason}`, "", ...CASL_FOOTER_LINES].join("\n");
 }

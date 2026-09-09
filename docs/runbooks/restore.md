@@ -143,7 +143,8 @@ pnpm exec wrangler d1 export keepsake-db-production --env production --remote --
   --table moderation_events --table recovery_tokens --table email_events \
   --table listing_aspects \
   --table upload_batches --table upload_batch_items --table upload_batch_photos \
-  --table bulk_owner_usage --table bulk_operations
+  --table bulk_owner_usage --table bulk_operations \
+  --table email_suppressions
 ```
 
 **This list is enforced, not trusted** (issue #164). `node tools/preflight/preflight.mjs --only
@@ -207,6 +208,12 @@ the same pull request.
   that one run — it exports fine, it is simply not what the documented backup is for. (Do not write
   the flag for it into this file: `backup-tables` reads every `--table` name on this page as part
   of the documented export, so an example would quietly re-enrol it.)
+- `email_suppressions` (issue #310, `20260909223754_email_suppressions.sql`) is not excluded, and
+  deliberately so — it is the opposite of `error_events`/`tail_deliveries` above: losing it on
+  restore does not merely lose bookkeeping, it silently *re-enables* mail to someone who
+  unsubscribed, because `sendMail()` (`src/email/sendMail.ts`) treats "no row" as "never
+  unsubscribed." A restore that dropped this table would undo people's own opt-outs without
+  telling them, which is a worse outcome than the table's own small size would suggest.
 - **Every other table the migrations create belongs in the list.** If you add one, add it here in
   the same pull request — `backup-tables` will fail CI until you do, and it names the table.
   If a new table genuinely should not be exported, add it to `BACKUP_EXCLUDED_TABLES` in

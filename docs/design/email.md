@@ -181,6 +181,162 @@ on that claim is checked **before** `sendMail`, so a lost race answers 409 and s
 Rendered with `@keepsake/tokens` (colors/typography) so transactional email doesn't visually
 diverge from the app — warm, Fraunces-titled, not a generic transactional-email look.
 
+## CASL: sender identification and unsubscribe
+
+Issue #310 asked a narrower question — is a request-confirmation email a "commercial electronic
+message" under CASL, given the S.6(6) transactional exemption — and it resolved to a broader
+answer: it doesn't matter. S.6(6) exempts a transactional CEM from S.6(1)(a)'s *consent*
+requirement only. It never touches S.6(2), which independently requires (a) identification of the
+sender and (b) a mailing address valid 60+ days, plus (S.6(2)(c)/6(3)) an unsubscribe mechanism —
+and every template in `src/email/templates/` is a CEM even when it's transactional. So the fix
+applies to all of them, not to whichever one prompted the question.
+
+Both requirements now live in `templates/shared.ts`'s shared footer (`renderShell` for HTML,
+`footerLine()` for the several templates — `chosen`, `newRequest`, `recover`, `confirmRequest`,
+`requestReceived`, `verifyEmail`, `adminTest`, `dailyDigest` — that build `text:` by hand rather
+than stripping the HTML shell), rather than in each template individually, so a new template
+inherits both automatically instead of restating them:
+
+- **Identification**: "Sent by Kiarash Adl, an individual doing business as Keepsake." Keepsake
+  isn't a company — `apps/site/public/terms.html` says so plainly — so identification names the
+  person, not just the trade name, alongside the `hello@keepsake.ing` contact every template
+  already carries elsewhere.
+- **Unsubscribe**: "To stop optional notifications — someone asking for something you posted —
+  email hello@keepsake.ing and say so; requests are honored within 10 business days." CASL accepts
+  a stated electronic address the recipient can write to; it does not require a one-click
+  mechanism. See below for the real link now offered next to it.
+- **What still arrives**: "Messages you asked for — verifying your email, confirming a request,
+  being chosen, recovering access — are part of what you started, and still arrive."
+
+  This third line is what keeps the second one true. The footer goes out on all eight kinds, and
+  `TRANSACTIONAL_EMAIL_KINDS` sends seven of them regardless of suppression. An earlier draft said
+  "unsubscribe from messages like this", which is false the moment it rides on a `chosen` or a
+  `confirm_request` — the reader is told they can stop a message that will arrive either way.
+  s.6(2)(c) lets a mechanism cover "a specified class" of messages, so naming the class is both
+  accurate and sufficient; claiming to cover everything and then not doing so is neither.
+
+**What was open, and what closed it.** The first pass left two things unclosed rather than papered
+over. One is still open:
+
+1. **The mailing address (S.6(2)(b)) — still open.** `apps/site/public/privacy.html`'s "Who runs
+   this" section documents not publishing one as a considered choice — Kiarash operates from a
+   home address, and the analysis there is that UK GDPR Art. 13 (the one regime that would require
+   it) has no UK user to attach to since the UK is geo-blocked, while PIPEDA and the relevant US
+   state laws ask only for an accountable person and a way to reach them. That reasoning was never
+   checked against CASL specifically, and CASL's own address clause is not obviously satisfied by
+   it. This repo still does not invent, guess, or borrow an address to fill the gap — that is a
+   decision for Kiarash, with counsel, not something to default into from template code.
+2. **A real unsubscribe mechanism — closed, below.** What existed after the first pass was an
+   electronic address to write to, which CASL accepts, but honoring it was an operational duty the
+   code could not discharge by itself: nothing read that inbox, matched a request to a recipient,
+   or suppressed future sends. The rest of this section is that mechanism.
+
+### The mechanism (issue #310, part two)
+
+**Token shape.** `src/email/unsubscribe.ts`'s `unsubscribeToken(env, address)` is an HMAC-SHA256 of
+the lowercased address, keyed by the `UNSUBSCRIBE_SECRET` Worker secret, base64url-encoded the same
+way every other bearer token in this Worker is. Deterministic on purpose: it needs minting nowhere
+and storing nowhere until someone actually acts on it — `sendMail` derives it from the address it
+already has, and the unsubscribe page needs nothing more than the token already sitting in the URL
+it was handed. Not a bare `sha256Hex(address)`, and not the address itself (base64'd or otherwise):
+either would put a bare or trivially-recoverable address in a URL that transits every relay and
+scanner between here and the recipient's inbox — the HMAC key is what makes recovering the address
+require the secret, not a dictionary of common addresses.
+
+**Storage.** `email_suppressions` (migration `20260909223754_email_suppressions.sql`) is keyed by
+`token_hash` — the SHA-256 of the token above, the same "hash what you persist" rule
+`recovery_tokens.token_hash` and `requests.withdraw_token_hash` already follow. No row exists until
+someone unsubscribes or resubscribes; a never-acted-on token is a lookup miss, not a pre-seeded
+"subscribed" row for every address that has ever received mail.
+
+**The footer link.** `templates/shared.ts`'s `CASL_UNSUBSCRIBE_LINK_LINE` adds a one-click line
+next to the unchanged stated-address line, built around `UNSUBSCRIBE_LINK_PLACEHOLDER` — a literal
+`{{unsubscribe-url}}` token, not a URL, because these template functions are pure and have no `env`
+or recipient to derive a real link from. `sendMail()` (`src/email/sendMail.ts`) substitutes it for
+a real per-recipient URL right before a message is actually sent: `unsubscribeWebUrl` (a page,
+`/unsubscribe/:token`) in the body text, `unsubscribeApiUrl` (a POST-only API route,
+`/api/unsubscribe/:token`) in the `List-Unsubscribe` header alongside RFC 8058's
+`List-Unsubscribe-Post: List-Unsubscribe=One-Click` — both providers' send paths (`cf`'s
+`EmailMessageBuilder.headers` and Resend's `headers` field) support arbitrary headers, so both get
+this identically.
+
+**The headers are gated by kind; the body link is not.** The link in the body rides on every
+message — it is the s.6(2)(c) mechanism, and it suppresses exactly the class the footer says it
+does. `List-Unsubscribe-Post` is a different promise, made to the mail client rather than the
+reader: it asks Gmail and Yahoo to show their own Unsubscribe button and to treat one press as the
+end of this kind of mail. On a kind `TRANSACTIONAL_EMAIL_KINDS` exempts, that promise is not kept —
+the next `chosen` arrives anyway — and a recipient who presses Unsubscribe and keeps hearing from
+us reaches for the spam button instead, which costs the deliverability of every transactional
+message the product depends on. So an exempt kind carries `mailto:` alone in `List-Unsubscribe` and
+no `List-Unsubscribe-Post` at all: a real mechanism, no one-click claim. When `UNSUBSCRIBE_SECRET` is unset, both URLs come back `null` and the
+substitution falls back to the same `mailto:hello@keepsake.ing` address the unchanged CASL line
+already names — a working, less convenient mechanism, never a dead placeholder shipped into a real
+inbox.
+
+**Why the page never mutates on GET, and the API route does on POST.** Mail clients, link
+scanners, and corporate security proxies fetch URLs out of messages before a human ever sees them —
+the same reasoning `requestConfirm.ts` already gives for POST-only confirmation. `GET
+/api/unsubscribe/:token` is read-only status; only `POST` (from the page's own button, after it has
+shown the consequence, or from a compliant mail client's one-click affordance per RFC 8058) changes
+anything. Unlike `/confirm/:token` and `/withdraw/:token`, the web page does not act on mount at
+all — it loads status via `GET`, states what will and will not stop arriving, and only calls `POST`
+on an explicit click. That is stricter than the existing pattern for those two pages, deliberately:
+this task's own brief requires the consequence to be stated *before* confirmation, not merely
+relying on "a scanner probably won't run the page's JS."
+
+**The way back.** `POST /api/resubscribe/:token` reverses `unsubscribed` on the same token, and the
+same page offers it once status comes back `true`. Someone who unsubscribed and later wonders why
+they never heard about their keepsake has a way to turn it back on without writing to
+`hello@keepsake.ing`.
+
+### What "unsubscribed" means here — the product question, answered
+
+This product's outbound mail is almost entirely transactional, and the task that built this
+mechanism named the trap directly: suppressing `chosen` ("you were chosen") or `confirmRequest`
+("confirm your request") would defeat the very transaction the recipient started. `EmailKind`'s
+`TRANSACTIONAL_EMAIL_KINDS` (`src/email/sendMail.ts`) is the decision, spelled out in full there
+and summarized here:
+
+- **Exempt from suppression — six recipient-facing kinds, plus two admin-only ones.**
+  `verify_email`, `confirm_request`, and `request_received` are sent in direct, same-cycle response
+  to something the recipient themselves just did (typed their address, submitted a request, was
+  told it landed). `recover` is the same shape for account recovery. `chosen` is the delivery of the
+  outcome of a transaction the recipient already started by requesting something — exactly the
+  example the brief names. `admin_test` and `admin_digest` are addressed to the site operator, not
+  a subscriber, so there is no preference to honor in the first place. None of these seven kinds
+  can be suppressed by any unsubscribe link, ever, regardless of the token's state.
+- **Suppressible — `new_request` alone.** Its recipient (a listing's owner) did not just take the
+  action this message reports — a stranger did, by asking for something the owner posted — so it
+  reads closer to "someone messaged you" than to a receipt for the recipient's own click. The
+  owner's dashboard (`/mine/:id`, already linked from this exact email) shows every open request
+  regardless of whether this notification ever arrives, so suppressing it costs *visibility into
+  when* a new one showed up, not the request itself, and not the giver's ability to act on it. This
+  is the one kind an unsubscribed address stops receiving, and it is what
+  `test/emailUnsubscribe.test.ts` demonstrates end to end.
+- **The default for a kind nobody has reasoned about yet is suppressible**, not exempt —
+  `TRANSACTIONAL_EMAIL_KINDS` is an explicit allowlist, so a future template lands outside it unless
+  someone consciously adds it. The safer default when nobody has thought it through is that an
+  unsubscribed recipient stops getting the new thing, not that it silently joins the untouchable
+  set.
+- **The unsubscribe page states this before anyone confirms**, not after
+  (`apps/web/app/unsubscribe/[token].tsx`): the confirm screen names exactly what stops (new-request
+  notifications) and exactly what does not (confirmation, being chosen, recovery, verification), in
+  the same sentence, before the button that acts on it.
+
+`test/emailCaslFooter.test.ts` enumerates every template (structurally, via `import.meta.glob`,
+same technique as `test/emailSubjects.test.ts`) and asserts both the stated-address line and the
+one-click hook appear in *both* the HTML and the text part of each one — the text half exists
+because several templates build `text:` by hand, so a footer that only reached `renderShell` would
+leave text-preferring clients with neither. `test/emailPromotionalContent.test.ts` (#33) strips
+exactly the (unchanged) `CASL_FOOTER_LINES` set before its promotional-language scan, since that
+test's whole point is catching "unsubscribe"-shaped language drifting into a transactional email —
+and here it's mandated, not drift; the set gained the one-click line but the exemption did not
+widen beyond it. `test/emailUnsubscribe.test.ts` is the new mechanism's own suite: a suppressed
+address gets no mail for `new_request` but still gets `chosen`; the footer's placeholder becomes a
+real, distinct-per-recipient URL with working `List-Unsubscribe`/`List-Unsubscribe-Post` headers by
+send time; a bare `GET` on the unsubscribe route never mutates anything; and unsubscribe/resubscribe
+round-trip through the real HTTP routes into `sendMail`'s own suppression check.
+
 ## Subject headers
 
 Template bodies are escaped throughout via `escapeHtml`; subject lines are not, because there is

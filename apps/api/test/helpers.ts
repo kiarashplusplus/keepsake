@@ -369,6 +369,7 @@ export interface CapturedEmail {
   html: string;
   text: string;
   replyTo?: string;
+  headers?: Record<string, string>;
 }
 
 interface FakeSendEmailMessage {
@@ -378,6 +379,7 @@ interface FakeSendEmailMessage {
   html?: string;
   text?: string;
   replyTo?: string;
+  headers?: Record<string, string>;
 }
 
 /** Replaces `env.EMAIL` with a fake `.send()` that records every message
@@ -395,6 +397,7 @@ export function installFakeEmail(): CapturedEmail[] {
         html: message.html ?? "",
         text: message.text ?? "",
         ...(message.replyTo !== undefined ? { replyTo: message.replyTo } : {}),
+        ...(message.headers !== undefined ? { headers: message.headers } : {}),
       });
       return { messageId: "fake-message-id" };
     },

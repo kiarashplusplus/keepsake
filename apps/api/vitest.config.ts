@@ -109,6 +109,11 @@ export default defineConfig({
         // Likewise for the not-found rule the fixture booted with.
         TEST_NOT_FOUND_HANDLING: fixtureNotFoundHandling,
         EMAIL_ALLOWLIST: "",
+        // Fixed, non-secret value so every test exercises the real
+        // unsubscribe-token path by default (a real HMAC, a real link) —
+        // `test/emailUnsubscribe.test.ts` overrides it with `setTestEnvVar`
+        // only where a test specifically needs the unset/fail-open branch.
+        UNSUBSCRIBE_SECRET: "test-unsubscribe-secret-do-not-use-in-any-real-environment",
             TEST_MIGRATIONS: migrations,
             // Pinned the same way Bayan's `worker/vitest.config.ts` pins its
             // budget vars: so a retune of the real ceilings in wrangler.toml
