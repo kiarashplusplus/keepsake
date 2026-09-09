@@ -1,6 +1,6 @@
 # Dating-angle research passes — raw subagent reports, 2026-09-09
 
-Sixteen parallel web research passes, one per question, each run by a Sonnet subagent with web
+Twenty-six parallel web research passes, one per question, each run by a Sonnet subagent with web
 search and fetch only (no repository access) and returned as a single report. **These are the
 reports verbatim** — a short italic header naming the brief has been added to each, HTML entities
 have been unescaped, and nothing else has been changed. No synthesis is in this folder; the
@@ -44,6 +44,25 @@ Your Loot!" spring move-out collection.
 | 14 | [`14-houston-campuses.md`](./14-houston-campuses.md) | Rice, UH, TSU, UST, HCU, HCC one by one |
 | 15 | [`15-adversary-college-framing.md`](./15-adversary-college-framing.md) | The adversary, college version: minors, marks, SCOPE Act, handoffs |
 | 16 | [`16-toronto-campuses.md`](./16-toronto-campuses.md) | U of T, TMU, York, OCAD one by one; Canadian precedents and rules |
+
+## The bottlenecks
+
+After the first sixteen passes, ten further passes were briefed on the places where the evidence
+was thin or a decision hinged on an unknown. Each file's header names the bottleneck it was sent
+to resolve.
+
+| # | File | Bottleneck |
+|---|---|---|
+| 17 | [`17-age-gate-scope-act.md`](./17-age-gate-scope-act.md) | No minimum age anywhere on the site; what the SCOPE Act and an age affirmation actually do for a no-account service |
+| 18 | [`18-insurance-facilitated-meetups.md`](./18-insurance-facilitated-meetups.md) | Whether general-liability cover for a small marketplace responds to a handoff between strangers going wrong (#142 unbound) |
+| 19 | [`19-houston-safe-exchange-zones.md`](./19-houston-safe-exchange-zones.md) | No inventory of safe-exchange locations in the Houston metro or Toronto |
+| 20 | [`20-story-and-provenance-value.md`](./20-story-and-provenance-value.md) | The core assumption that a story makes an object more wanted, and what a breakup or divorce provenance does to it |
+| 21 | [`21-local-scoping-without-accounts.md`](./21-local-scoping-without-accounts.md) | No precedent for scoping a campus by postcode without a login; the actual Rice–UH geography |
+| 22 | [`22-rice-uh-moveout-calendar.md`](./22-rice-uh-moveout-calendar.md) | The spring 2027 dates, checkout rules and donation windows that bound a move-out ritual |
+| 23 | [`23-university-marks-and-tabling.md`](./23-university-marks-and-tabling.md) | Rice and UH marks, poster, tabling and solicitation policy verbatim; the nominative-fair-use line for "near Rice" |
+| 24 | [`24-moderation-load-one-person.md`](./24-moderation-load-one-person.md) | What load a two-week campus burst puts on a one-person review queue |
+| 25 | [`25-houston-wedding-object-channels.md`](./25-houston-wedding-object-channels.md) | The strongest angle (wedding objects) had nothing Houston-local |
+| 26 | [`26-student-email-deliverability.md`](./26-student-email-deliverability.md) | Whether confirm-then-forward email from a new domain reaches Rice and UH inboxes (#6 open) |
 
 ## Reading them
 
