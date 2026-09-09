@@ -107,7 +107,33 @@ export function plainLinkLine(link: string): string {
 export const CASL_IDENTIFICATION_LINE = "Sent by Kiarash Adl, an individual doing business as Keepsake.";
 export const CASL_UNSUBSCRIBE_LINE =
   "To unsubscribe from messages like this, email hello@keepsake.ing and say so — requests are honored within 10 business days.";
-export const CASL_FOOTER_LINES = [CASL_IDENTIFICATION_LINE, CASL_UNSUBSCRIBE_LINE];
+
+/**
+ * Substituted by `sendMail` (`../sendMail.ts`) for a real, per-recipient
+ * unsubscribe URL right before a message goes out — never resolved here,
+ * because these template functions are pure and have neither `env` nor a
+ * secret to derive a token from. A raw template call (both test suites that
+ * render templates directly — `emailCaslFooter.test.ts`,
+ * `emailPromotionalContent.test.ts` — do exactly this) sees the literal
+ * placeholder string, which is the point: it proves the hook exists without
+ * requiring every template function to take `env`/`to` just to build a
+ * footer line neither the subject nor the body otherwise needs.
+ *
+ * Kept distinct from a real URL's shape on purpose (`{{...}}`, not
+ * `https://…`) so `emailPromotionalContent.test.ts`'s link-structure check
+ * — which fails a template that leaks a hardcoded marketing URL — can allow
+ * exactly this one token everywhere without also having to allow a stand-in
+ * `https://` fixture link that would look, to that check, indistinguishable
+ * from a real leaked link.
+ */
+export const UNSUBSCRIBE_LINK_PLACEHOLDER = "{{unsubscribe-url}}";
+
+/** The one-click line CASL accepts as an alternative to (not a replacement
+ * for) the stated-address line above — see `docs/design/email.md`'s "CASL:
+ * sender identification and unsubscribe" for why both stay. */
+export const CASL_UNSUBSCRIBE_LINK_LINE = `Or use this one-click link: ${UNSUBSCRIBE_LINK_PLACEHOLDER}`;
+
+export const CASL_FOOTER_LINES = [CASL_IDENTIFICATION_LINE, CASL_UNSUBSCRIBE_LINE, CASL_UNSUBSCRIBE_LINK_LINE];
 
 export function renderShell(params: { bodyHtml: string; footerReason: string }): string {
   return `<!doctype html>

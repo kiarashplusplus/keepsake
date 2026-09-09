@@ -17,7 +17,8 @@
     "./feed": "./src/feed.ts",
     "./geo": "./src/geo.ts",
     "./shelves": "./src/shelves.ts",
-    "./story": "./src/story.ts"
+    "./story": "./src/story.ts",
+    "./email": "./src/email.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

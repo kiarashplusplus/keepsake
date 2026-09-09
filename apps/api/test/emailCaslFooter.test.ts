@@ -34,6 +34,7 @@ import { describe, expect, it } from "vitest";
 import {
   CASL_IDENTIFICATION_LINE,
   CASL_UNSUBSCRIBE_LINE,
+  UNSUBSCRIBE_LINK_PLACEHOLDER,
   type EmailTemplate,
 } from "../src/email/templates/shared.js";
 import { RECOVER_TTL_MS } from "../src/routes/recover.js";
@@ -168,6 +169,20 @@ describe("issue #310: every template's footer carries CASL identification + unsu
     expect(CASL_UNSUBSCRIBE_LINE).toContain("hello@keepsake.ing");
     expect(CASL_UNSUBSCRIBE_LINE).toMatch(/10 business days/);
   });
+
+  it.each(Object.keys(FIXTURES))(
+    "%s carries the one-click unsubscribe hook in both HTML and text (issue #310 part two)",
+    (key) => {
+      // The literal placeholder, not a real URL — these template functions
+      // are pure and render before `sendMail` (`../src/email/sendMail.ts`)
+      // substitutes a per-recipient link. This proves every template keeps
+      // the hook, which is what makes the substitution automatic for a
+      // template added later rather than one more thing to remember.
+      const { html, text } = (FIXTURES[key] as () => EmailTemplate)();
+      expect(html, `${key}: missing the unsubscribe link hook in HTML`).toContain(UNSUBSCRIBE_LINK_PLACEHOLDER);
+      expect(text, `${key}: missing the unsubscribe link hook in text`).toContain(UNSUBSCRIBE_LINK_PLACEHOLDER);
+    },
+  );
 
   it("the identification line names the actual legal person, not just the product name", () => {
     // s.6(2)(a): identification of the person who sent the message. Keepsake

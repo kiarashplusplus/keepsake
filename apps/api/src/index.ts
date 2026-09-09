@@ -28,6 +28,7 @@ import { recoverRoutes } from "./routes/recover.js";
 import { adminRoutes } from "./routes/admin.js";
 import { requestWithdrawRoutes } from "./routes/requestWithdraw.js";
 import { requestConfirmRoutes } from "./routes/requestConfirm.js";
+import { unsubscribeRoutes, resubscribeRoutes } from "./routes/unsubscribe.js";
 
 type Variables = {
   requestId: string;
@@ -40,7 +41,7 @@ type Variables = {
  * list read by both `isNoindexPath` and, indirectly, `test/robots.test.ts`,
  * so a route added to one place cannot silently disagree with the other.
  */
-const NOINDEX_PATH_PREFIXES = ["/admin", "/bulk", "/mine", "/recover", "/withdraw", "/confirm"];
+const NOINDEX_PATH_PREFIXES = ["/admin", "/bulk", "/mine", "/recover", "/withdraw", "/confirm", "/unsubscribe"];
 
 /** True for `prefix` itself and every path nested under it (`/admin`,
  * `/admin/anything`), never for a merely similarly-named sibling
@@ -379,6 +380,8 @@ app.route("/api/feed", feedRoutes);
 app.route("/api/recover", recoverRoutes);
 app.route("/api/requests", requestWithdrawRoutes);
 app.route("/api/requests", requestConfirmRoutes);
+app.route("/api/unsubscribe", unsubscribeRoutes);
+app.route("/api/resubscribe", resubscribeRoutes);
 app.route("/api/admin", adminRoutes);
 app.route("/i", imageRoutes);
 // Mounted at the Worker root, per the plan's route table — not under /api/*,
@@ -459,6 +462,7 @@ const DYNAMIC_ROUTE_SHELLS: readonly (readonly [RegExp, string])[] = [
   [/^\/recover\/[^/]+$/, "/recover/[token].html"],
   [/^\/withdraw\/[^/]+$/, "/withdraw/[token].html"],
   [/^\/confirm\/[^/]+$/, "/confirm/[token].html"],
+  [/^\/unsubscribe\/[^/]+$/, "/unsubscribe/[token].html"],
   [/^\/bulk\/[^/]+$/, "/bulk/[batchKey]/index.html"],
   [/^\/bulk\/[^/]+\/photos$/, "/bulk/[batchKey]/photos.html"],
   [/^\/bulk\/[^/]+\/review$/, "/bulk/[batchKey]/review.html"],

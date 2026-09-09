@@ -1,4 +1,5 @@
 import { todayISO } from "./day.js";
+import { toBase64Url } from "./tokens.js";
 
 /** Full-length SHA-256 hex digest, used where truncation isn't wanted (owner
  * token hashing, idempotency scoping) — as opposed to
@@ -68,4 +69,30 @@ export async function dailyIpDigest(clientIP: string): Promise<string> {
  */
 export async function dailyEmailDigest(address: string): Promise<string> {
   return sha256Hex(`${todayISO()}:${address.trim().toLowerCase()}`);
+}
+
+/**
+ * HMAC-SHA256 of `message` keyed by `secret`, base64url-encoded (same
+ * alphabet `randomTokenRaw` uses — see `toBase64Url`). Built for
+ * `src/email/unsubscribe.ts`'s per-recipient token, and the reason it exists
+ * rather than reusing `sha256Hex` there: that token *is* the URL, mailed to
+ * the recipient and read by every relay and scanner between here and their
+ * inbox, unlike `email_events.to_hash`, which never leaves the database. A
+ * bare `sha256Hex(address)` would be a dictionary lookup away from being
+ * reversed — the same weakness #87's `dailyIpDigest` comment describes for a
+ * bare hash of an IP — because a common email address is exactly the kind of
+ * input a rainbow table is built for. Keying the digest on a server-side
+ * secret closes that: recovering the address behind a token requires the
+ * secret, not just a list of guesses.
+ */
+export async function hmacSha256(secret: string, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return toBase64Url(new Uint8Array(mac));
 }

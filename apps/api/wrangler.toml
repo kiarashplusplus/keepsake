@@ -905,7 +905,7 @@ directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "404-page"
 html_handling = "drop-trailing-slash"
-run_worker_first = ["/api/*", "/i/*", "/item/*", "/og/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt", "/admin", "/bulk", "/bulk/*", "/mine", "/mine/*", "/recover", "/recover/*", "/withdraw/*", "/confirm/*"]
+run_worker_first = ["/api/*", "/i/*", "/item/*", "/og/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt", "/admin", "/bulk", "/bulk/*", "/mine", "/mine/*", "/recover", "/recover/*", "/withdraw/*", "/confirm/*", "/unsubscribe/*"]
 
 [env.production.ai]
 binding = "AI"
