@@ -121,5 +121,12 @@ describe("/admin: Observatory section is not fetched until selected", () => {
     });
 
     expect(getObservatory).toHaveBeenCalledTimes(1);
+
+    // The window selector keeps the name `e2e/a11y.spec.ts` finds it by, and
+    // now sits under its own "Window" eyebrow rather than taking the status
+    // filter's slot as a look-alike chip row (#361).
+    const text = JSON.stringify(toJSON());
+    expect(text).toContain('"Observatory window"');
+    expect(text.indexOf("Window")).toBeLessThan(text.indexOf("1 day"));
   });
 });

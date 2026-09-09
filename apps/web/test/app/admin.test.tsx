@@ -14,6 +14,10 @@ import {
   restoreListing,
 } from "@/api/admin";
 import AdminPage from "../../app/admin";
+import { ThemeProvider } from "@/ui/theme";
+import { contrastRatio } from "@keepsake/tokens/contrast";
+import { colorsLight } from "@keepsake/tokens/colors";
+import { AA, hexOf, paperUnder, styleOf, walk, type Node } from "../support/paper";
 
 /**
  * The queue's keyboard path (`app/admin.tsx`'s `onKeyDown`) is real
@@ -162,17 +166,23 @@ function lastWithLabel(matches: ReactTestInstance[], label: string): ReactTestIn
   return match;
 }
 
+/** A verified session with two rows waiting: the token on file, stats and
+ * health answering, and `needs_review` holding two listings. */
+function mockAdminApi(): void {
+  window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, "e2e-admin");
+  jest.mocked(getAdminStats).mockResolvedValue(STATS);
+  jest.mocked(getAdminHealth).mockResolvedValue(HEALTH);
+  jest.mocked(getAdminQueue).mockImplementation(async (_token, options) => {
+    if (options.status === "needs_review") {
+      return { items: [item("a", "Rusty key"), item("b", "Broken locket")], next_cursor: null };
+    }
+    return { items: [], next_cursor: null };
+  });
+}
+
 describe("/admin queue: keyboard and bulk actions", () => {
   beforeEach(() => {
-    window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, "e2e-admin");
-    jest.mocked(getAdminStats).mockResolvedValue(STATS);
-    jest.mocked(getAdminHealth).mockResolvedValue(HEALTH);
-    jest.mocked(getAdminQueue).mockImplementation(async (_token, options) => {
-      if (options.status === "needs_review") {
-        return { items: [item("a", "Rusty key"), item("b", "Broken locket")], next_cursor: null };
-      }
-      return { items: [], next_cursor: null };
-    });
+    mockAdminApi();
     jest.mocked(approveListing).mockResolvedValue({} as never);
     jest.mocked(hideListing).mockResolvedValue({} as never);
     jest.mocked(rejectListing).mockResolvedValue({} as never);
@@ -411,5 +421,108 @@ describe("/admin queue: keyboard and bulk actions", () => {
     expect(jest.mocked(hideListing)).toHaveBeenCalledWith("e2e-admin", "h");
     // Reinsert dispatched on the undo's own success — back without a reload.
     expect(JSON.stringify(toJSON())).toContain("Chipped mug");
+  });
+});
+
+/**
+ * #358 and #361 — the header area, the part of `/admin` drawn above the
+ * queue. These do not assert "a heading is rendered"; they render the screen
+ * under both themes and read back what each word is printed on, which is
+ * the only form that could have failed before the fix: "Admin" and Forget
+ * were constant ink in a bare `View` on the table, and in the first dark
+ * frame of this route the heading measured near 1:1. Same method as
+ * `test/app/mine/index.test.tsx` (#216), through `test/support/paper.ts`.
+ */
+describe("/admin header: paper and hierarchy (#358, #361)", () => {
+  beforeEach(() => {
+    mockAdminApi();
+  });
+
+  afterEach(() => {
+    window.sessionStorage.clear();
+    jest.clearAllMocks();
+  });
+
+  async function renderAdmin(mode: "light" | "dark"): Promise<Node | Node[]> {
+    const { toJSON } = render(
+      <ThemeProvider mode={mode}>
+        <ToastProvider>
+          <AdminPage />
+        </ToastProvider>
+      </ThemeProvider>,
+    );
+    await act(async () => {
+      await flush();
+    });
+    return toJSON() as unknown as Node | Node[];
+  }
+
+  /** Does this host node carry exactly this word as its own text? Case-
+   * insensitive because `Button` may shout its label. */
+  function hasWord(node: Node, word: string): boolean {
+    return (node.children ?? []).some((c) => typeof c === "string" && c.toLowerCase() === word.toLowerCase());
+  }
+
+  it.each(["light", "dark"] as const)("prints the Admin heading and Forget on paper, legibly, in %s mode", async (mode) => {
+    const nodes = walk(await renderAdmin(mode));
+
+    const heading = nodes.find(({ node }) => hasWord(node, "Admin"));
+    const forget = nodes.find(({ node }) => hasWord(node, "Forget"));
+    if (heading === undefined || forget === undefined) throw new Error("no Admin heading or Forget label in the tree");
+
+    for (const { node, ancestors } of [heading, forget]) {
+      const ground = paperUnder(node, ancestors);
+      // The constant chrome tint, so the ratio below is the same number under
+      // either lamp — the whole point of putting the words on paper.
+      expect(ground).toBe(colorsLight.surface.toUpperCase());
+      expect(contrastRatio(hexOf(styleOf(node).color), ground)).toBeGreaterThanOrEqual(AA);
+    }
+  });
+
+  it("draws the section switch as underlined tabs above the stats strip, and the status filter as chips under a Queue eyebrow", async () => {
+    const tree = await renderAdmin("light");
+    const nodes = walk(tree);
+
+    const tablist = (name: string): Node => {
+      const hit = nodes.find(({ node }) => node.props.role === "tablist" && node.props["aria-label"] === name);
+      if (hit === undefined) throw new Error(`no tablist named "${name}"`);
+      return hit.node;
+    };
+    const tabsOf = (list: Node): Node[] => walk(list).map(({ node }) => node).filter((node) => node.props.role === "tab");
+
+    // Both rows keep the roles and names `e2e/a11y.spec.ts`, `admin.spec.ts`
+    // and `ux.spec.ts` find them by.
+    const sectionTabs = tabsOf(tablist("Admin sections"));
+    const statusTabs = tabsOf(tablist("Queue status"));
+    expect(sectionTabs.map((t) => t.props["aria-label"])).toEqual(["Queue", "Observatory"]);
+    expect(statusTabs.map((t) => t.props["aria-label"])).toEqual(["Needs review", "Hidden", "Pending", "Rejected"]);
+
+    // The selected section tab wears the header's underline — a 2px stamp-red
+    // rule and no fill; the selected status chip wears the tape-red wash and
+    // an ink edge, never that rule. That is the difference a sighted
+    // moderator gets, where before only the two `aria-label`s differed.
+    const section = sectionTabs.find((t) => t.props["aria-selected"] === true);
+    const status = statusTabs.find((t) => t.props["aria-selected"] === true);
+    if (section === undefined || status === undefined) throw new Error("no selected tab in one of the rows");
+    expect(section.props["aria-label"]).toBe("Queue");
+    expect(status.props["aria-label"]).toBe("Needs review");
+
+    expect(styleOf(section).borderBottomWidth).toBe("2px");
+    expect(hexOf(styleOf(section).borderBottomColor)).toBe(colorsLight.accent.toUpperCase());
+    expect(styleOf(section).backgroundColor).toBeUndefined();
+
+    expect(hexOf(styleOf(status).backgroundColor)).toBe(colorsLight.accentSoft.toUpperCase());
+    expect(hexOf(styleOf(status).borderBottomColor ?? styleOf(status).borderColor)).toBe(colorsLight.ink.toUpperCase());
+
+    // And the two rows are no longer neighbours: the stats strip's "Today"
+    // sits between the section switch and the queue's own filter, which now
+    // has its own eyebrow — on paper, like every other word up here.
+    const text = JSON.stringify(tree);
+    expect(text.indexOf("Admin sections")).toBeLessThan(text.indexOf("Today"));
+    expect(text.indexOf("Today")).toBeLessThan(text.indexOf("Queue status"));
+
+    const eyebrow = nodes.find(({ node }) => node.props.role === "heading" && hasWord(node, "Queue"));
+    if (eyebrow === undefined) throw new Error('no "Queue" eyebrow over the status filter');
+    expect(paperUnder(eyebrow.node, eyebrow.ancestors)).toBe(colorsLight.surface.toUpperCase());
   });
 });

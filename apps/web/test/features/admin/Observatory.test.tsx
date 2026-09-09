@@ -5,6 +5,9 @@ import { ThemeProvider } from "@/ui/theme";
 import { ApiError } from "@/api/client";
 import { getObservatory } from "@/api/observatory";
 import { Observatory, formatDurationMs } from "@/features/admin/Observatory";
+import { contrastRatio } from "@keepsake/tokens/contrast";
+import { colorsLight } from "@keepsake/tokens/colors";
+import { AA, hexOf, paperUnder, styleOf, walk, type Node } from "../../support/paper";
 
 // Same shape as `test/app/admin.test.tsx`'s mock of `@/api/admin`: the
 // panel's own module is swapped for a jest mock so each test controls
@@ -82,9 +85,12 @@ async function flush(): Promise<void> {
   }
 }
 
-async function renderObservatory(onSessionExpired: () => void = jest.fn()): Promise<ReturnType<typeof render>> {
+async function renderObservatory(
+  onSessionExpired: () => void = jest.fn(),
+  mode: "light" | "dark" = "light",
+): Promise<ReturnType<typeof render>> {
   const result = render(
-    <ThemeProvider mode="light">
+    <ThemeProvider mode={mode}>
       <Observatory token="e2e-admin" onSessionExpired={onSessionExpired} />
     </ThemeProvider>,
   );
@@ -477,5 +483,47 @@ describe("Observatory: fetch failure", () => {
     jest.mocked(getObservatory).mockRejectedValue(new ApiError("unavailable", "Couldn't reach Keepsake.", 0));
     const { toJSON } = await renderObservatory();
     expect(JSON.stringify(toJSON())).toContain("Couldn't reach Keepsake.");
+  });
+});
+
+/**
+ * #358: every section of this panel was a bare `View` on the table — the
+ * eyebrows (`NEEDS ATTENTION`, `MODERATION`, …) and every caption between
+ * the badges, all constant ink, all invisible under the dark lamp. This
+ * renders under both themes and reads back what each heading is printed on
+ * (the method of `test/app/mine/index.test.tsx`, #216, via
+ * `test/support/paper.ts`), and pins the reading order the file header
+ * promises while it is at it.
+ */
+describe("Observatory: every section is printed on paper (#358)", () => {
+  it.each(["light", "dark"] as const)("prints each heading on the constant surface card, legibly, in %s mode", async (mode) => {
+    jest.mocked(getObservatory).mockResolvedValue(
+      observatory({
+        report: {
+          ...EMPTY_REPORT,
+          needs_attention: [{ severity: "warning", code: "budget_trend", detail: "AI text budget trending toward exhaustion this week." }],
+        },
+      }),
+    );
+    const { toJSON } = await renderObservatory(jest.fn(), mode);
+    const headings = walk(toJSON() as unknown as Node | Node[]).filter(({ node }) => node.props.role === "heading");
+
+    expect(headings.map(({ node }) => (node.children ?? []).join(""))).toEqual([
+      "Window",
+      "Needs attention · 1",
+      "Moderation",
+      "Search index",
+      "Give → get funnel · last 7 days",
+      "Daily activity",
+      "Bulk upload",
+      "Edge traffic",
+      "Worker logs",
+    ]);
+
+    for (const { node, ancestors } of headings) {
+      const ground = paperUnder(node, ancestors);
+      expect(ground).toBe(colorsLight.surface.toUpperCase());
+      expect(contrastRatio(hexOf(styleOf(node).color), ground)).toBeGreaterThanOrEqual(AA);
+    }
   });
 });
