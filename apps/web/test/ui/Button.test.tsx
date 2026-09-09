@@ -4,17 +4,39 @@ import { contrastRatio } from "@keepsake/tokens/contrast";
 import { colorsLight } from "@keepsake/tokens/colors";
 import { ThemeProvider } from "@/ui/theme";
 import { Button } from "@/ui/Button";
-import { hexOf, styleOf, walk } from "../support/paper";
+import { AA, compositeOver, hexOf, styleOf, walk, type Node } from "../support/paper";
 
 /** The Pressable's own container style. `UNSAFE_getByProps` elsewhere in
  * this file matches the composite element's authored `accessibilityRole`
  * prop before RNW's host translation; `toJSON()`'s tree is host output,
  * where that prop has already become the DOM `role` attribute. */
-function pressableBackground(tree: unknown): string {
+function pressableNode(tree: unknown): Node {
   const nodes = walk(tree as never);
   const found = nodes.find(({ node }) => node.props.role === "button" || node.props.role === "link");
   if (found === undefined) throw new Error("no Pressable found in tree");
-  return hexOf(styleOf(found.node).backgroundColor);
+  return found.node;
+}
+
+function pressableBackground(tree: unknown): string {
+  return hexOf(styleOf(pressableNode(tree)).backgroundColor);
+}
+
+/** The label's own rendered text colour — the first descendant of the
+ * Pressable that authors a `color`, which is the `Text` this component
+ * renders its label with (there is exactly one, arrow glyph aside, and the
+ * arrow shares the same colour). */
+function labelColor(tree: unknown): string {
+  const button = pressableNode(tree);
+  const found = walk(button.children as never).find(({ node }) => typeof styleOf(node).color === "string");
+  if (found === undefined) throw new Error("no coloured label found under the Pressable");
+  return hexOf(styleOf(found.node).color);
+}
+
+/** CSS `opacity` as authored on the Pressable, defaulting to 1 the way an
+ * absent style property does when the browser actually paints it. */
+function pressableOpacity(tree: unknown): number {
+  const raw = styleOf(pressableNode(tree)).opacity;
+  return raw === undefined ? 1 : Number(raw);
 }
 
 describe("Button", () => {
@@ -86,13 +108,40 @@ describe("Button", () => {
     expect(pressableBackground(toJSON())).toBe(colorsLight.accent.toUpperCase());
   });
 
-  it("the inert fill still reads on the card it sits on (AA-ish, not decorative-only contrast)", () => {
-    // `pencil` is already asserted against `print`/`surface` at >=4.5:1 in
-    // `packages/tokens/test/contrast.test.ts`'s "objects on the table read
-    // on both papers" block (it is a `TEXT_ON_GROUND_TOKENS` member); this
-    // just confirms the label colour Button actually paints (`onAccent`)
-    // reads against that same fill once it's the button's own background,
-    // not merely against paper.
-    expect(contrastRatio(colorsLight.onAccent, colorsLight.pencil)).toBeGreaterThanOrEqual(3);
+  /**
+   * PR #378 review, on the first cut of this fix: it asserted
+   * `contrastRatio(onAccent, pencil)` — the two source *tokens* — while
+   * `Button` still applied the old `disabled` opacity (0.65) on top of the
+   * new `pencil` fill. CSS `opacity` blends the whole element against
+   * whatever card is behind it, so the actual rendered label-on-fill
+   * contrast was 2.17:1 (measured against a `surface` card) — finding 6's
+   * washed-out, barely-legible block, now grey instead of pink — and a test
+   * comparing the two tokens directly could not see that, because it never
+   * asked what opacity the component was actually painting with.
+   *
+   * This composites the fill and the label the same way a browser would —
+   * `compositeOver(token, renderedOpacity, card)` — off the values actually
+   * read back from the rendered tree, not assumed, so a regression that
+   * reintroduces a faded inert state (whatever opacity it picks) fails this
+   * exact test rather than a differently-shaped one that never asks.
+   */
+  it("the inert button's fill and label are legible as ACTUALLY RENDERED — composited opacity, not just the source tokens", () => {
+    const { toJSON } = render(
+      <ThemeProvider mode="light">
+        <Button label="Continue" disabled />
+      </ThemeProvider>,
+    );
+    const tree = toJSON();
+    const opacity = pressableOpacity(tree);
+
+    // The card a primary CTA sits on in the product (a `Card`/`StepShell`
+    // cut from `surface`) — see `Button.tsx`'s own secondary-variant
+    // comment, which reads contrast against this same ground.
+    const card = colorsLight.surface;
+    const renderedFill = compositeOver(pressableBackground(tree), opacity, card);
+    const renderedLabel = compositeOver(labelColor(tree), opacity, card);
+
+    expect(contrastRatio(renderedLabel, renderedFill)).toBeGreaterThanOrEqual(AA);
+    expect(contrastRatio(renderedFill, card)).toBeGreaterThanOrEqual(3);
   });
 });

@@ -106,6 +106,16 @@ export function Button({ label, onPress, href, variant = "primary", loading = fa
   // instead of desaturating the accent, so "not ready" reads as pencil
   // rather than a faded version of the one stamp-red action. `loading`
   // keeps the full-strength fill and its spinner — busy still looks busy.
+  //
+  // Opacity is deliberately NOT reduced for `isInert`: the hue swap is what
+  // carries "not available" here, at full strength. A first cut of this fix
+  // kept the old `disabled` opacity (0.65) on top of the new `pencil` fill,
+  // which composites both the fill and its `onAccent`/`onAccent2` label
+  // toward whatever card is underneath — on `surface` that measured 2.17:1
+  // for the label on its own (faded) fill, the same low-contrast-block
+  // complaint finding 6 was filed about, just grey instead of pink. `pencil`
+  // at full opacity keeps `onAccent`/`onAccent2` at 6.55:1/6.18:1 against
+  // it — see `test/ui/Button.test.tsx`'s composited assertion.
   const isInert = isDisabled && !loading;
   // A disabled Pressable ignores `onPress`, but a browser does not ignore an
   // anchor's `href` — so a disabled link would still navigate, as a full
@@ -116,7 +126,9 @@ export function Button({ label, onPress, href, variant = "primary", loading = fa
 
   const containerFor = (pressed: boolean, hovered: boolean): ViewStyle => {
     const lifted = hovered && !isDisabled;
-    const opacity = isInert ? 0.65 : pressed ? 0.85 : 1;
+    // `isInert` carries "not available" through the `pencil` hue alone —
+    // see the comment on `isInert` above for why this is 1, not a fade.
+    const opacity = isInert ? 1 : pressed ? 0.85 : 1;
     const pressScale = pressed && !isDisabled ? 0.97 : 1;
     switch (variant) {
       case "primary":
