@@ -60,9 +60,12 @@
  *    Wrangler's own two channels are therefore both dead ends — the console
  *    message is empty by construction, the debug log is lossy under load — so
  *    the crash report below also carries *this proxy's* view of the same
- *    moment: every upstream socket failure, every client hang-up, and the
- *    requests still in flight when wrangler died. That is the only record of
- *    the crash that is not written by the process that just died.
+ *    moment: every upstream socket failure, every client hang-up, the requests
+ *    still in flight when wrangler died, and — because that last list is
+ *    almost always empty by the time anyone can read it, which is what made
+ *    #381's four samples unreadable — the last requests to *settle* and how
+ *    each of them ended. That is the only record of the crash that is not
+ *    written by the process that just died.
  *
  * 3. **A request in flight the instant wrangler dies must not just fail.**
  *    A crash landing between two requests surfaces as `ECONNRESET`/
@@ -114,15 +117,27 @@ const MAX_RETAINED_LINE_CHARS = 2_000;
 /**
  * How many unexpected exits to absorb before failing the run outright.
  *
- * One is deliberate rather than arbitrary: #104 saw runs with one restart and
- * runs with three, so tolerating a single blip keeps the suite usable while
- * still refusing to let a three-crash run look like a clean one. Set
- * `E2E_MAX_WRANGLER_RESTARTS` to raise it, or to a negative value / the word
- * `unlimited` for the old restart-forever behaviour when you are deliberately
- * working through a flaky local environment.
+ * Was one, on #104's evidence of runs with one restart and runs with three.
+ * #381 priced that choice: four CI runs in sixteen minutes, every one of them
+ * dying exactly twice — the first absorbed invisibly, the second tripping this
+ * limit into `giveUp`, which frees the public port and hands every remaining
+ * test an `ECONNREFUSED`. All four passed on a plain re-run with no code
+ * change, so a budget of one was not catching a broken build; it was failing
+ * roughly half of all runs over a fault the wrapper had already recovered
+ * from. Three absorbs the observed rate (with Playwright's `retries: 2`
+ * covering the tests each death costs) and still refuses a run whose server
+ * is genuinely unable to stay up.
+ *
+ * Raising it does not make a death quiet: every restart still prints the full
+ * post-mortem, writes it to `e2e-diagnostics/`, and leaves a `::warning::`
+ * annotation on the run.
+ *
+ * Set `E2E_MAX_WRANGLER_RESTARTS` to change it, or to a negative value / the
+ * word `unlimited` for restart-forever when you are deliberately working
+ * through a flaky local environment.
  */
 const RESTART_LIMIT_ENV = "E2E_MAX_WRANGLER_RESTARTS";
-const DEFAULT_RESTART_LIMIT = 1;
+const DEFAULT_RESTART_LIMIT = 3;
 
 function readRestartLimit() {
   // Statically named rather than `process.env[RESTART_LIMIT_ENV]`: eslint's
@@ -186,6 +201,44 @@ function noteProxyEvent(kind, detail) {
 const inFlight = new Map();
 let nextRequestId = 1;
 
+/**
+ * The requests that *just* finished, which is where the answer actually lives.
+ *
+ * `inFlight` alone was silently useless, and #381 is the bill for it: four
+ * crash reports from four CI runs, and seven of the eight said "0 request(s)
+ * in flight to wrangler when it died". Not because nothing was in flight —
+ * because wrangler dying resets every socket it holds, each reset fires
+ * `upstreamReq`'s error handler, and each of those settles its entry. Those
+ * resets land *before* Node delivers the child's `exit`, which is itself
+ * reported a further 100ms later (see `child.on("exit")`). So `inFlight` is
+ * reliably empty by the time anyone reads it, and the one field the
+ * post-mortem exists to fill is the one field it cannot fill. `serve.test.mjs`
+ * missed it because its fake upstream is a *separate* black-hole server that
+ * outlives the child, so nothing settles and the map still has an entry —
+ * a shape real wrangler, which is both the child and the upstream, never has.
+ *
+ * Hence this: the last `RECENT_REQUESTS` upstream requests to settle, each
+ * with how it ended. A crash report now shows the resets themselves, and the
+ * ordinary traffic in the seconds before them, which is what distinguishes
+ * "a request broke and took wrangler with it" from "wrangler went away on its
+ * own while the proxy was idle" — the two hypotheses #381 could not separate.
+ */
+const RECENT_REQUESTS = 25;
+const recentRequests = [];
+/** When an upstream request last started or finished; `reportCrash` prints the
+ * gap so a death during a quiet patch is legible as one. */
+let lastUpstreamActivityAt = Date.now();
+
+function noteSettled(entry, outcome) {
+  const endedAt = Date.now();
+  lastUpstreamActivityAt = endedAt;
+  recentRequests.push(
+    `${new Date(endedAt).toISOString()} ${entry.method} ${entry.url} ` +
+      `${outcome} after ${endedAt - entry.startedAt}ms`,
+  );
+  if (recentRequests.length > RECENT_REQUESTS) recentRequests.shift();
+}
+
 /** Last `RETAINED_LINES` lines of the child's output, as `"out"`/`"err"` tags. */
 const retained = [];
 /** The debug log wrangler announces with `🪵  Logs were written to "…"`. */
@@ -226,7 +279,7 @@ function tee(source, sink, streamName) {
   return flush;
 }
 
-function reportCrash(code, signal) {
+function reportCrash(code, signal, inFlightAtExit) {
   const lines = [
     `[e2e:server] ---- wrangler dev exited unexpectedly (code=${code} signal=${signal}) ----`,
     `[e2e:server] last ${retained.length} line(s) of its output; "out|"/"err|" marks the stream:`,
@@ -243,13 +296,23 @@ function reportCrash(code, signal) {
   );
 
   const now = Date.now();
-  const stillOpen = [...inFlight.values()].map(
+  const stillOpen = inFlightAtExit.map(
     ({ method, url, startedAt }) => `${method} ${url} (${now - startedAt}ms ago)`,
   );
   lines.push(
     `[e2e:server] ${stillOpen.length} request(s) in flight to wrangler when it died:`,
     ...(stillOpen.length > 0
       ? stillOpen.map((entry) => `[e2e:server]   ${entry}`)
+      : [
+          "[e2e:server]   (none — wrangler's own death resets its sockets, which " +
+            "settles them a moment before this fires; the history below is where to look)",
+        ]),
+  );
+  lines.push(
+    `[e2e:server] last upstream activity ${now - lastUpstreamActivityAt}ms before this report.`,
+    `[e2e:server] last ${recentRequests.length} upstream request(s) to settle, oldest first:`,
+    ...(recentRequests.length > 0
+      ? recentRequests.map((entry) => `[e2e:server]   ${entry}`)
       : ["[e2e:server]   (none)"]),
   );
 
@@ -349,13 +412,22 @@ function startWrangler() {
     child = null;
     if (stopping) return;
     restarts += 1;
+    // Taken here rather than inside the timeout below: whatever is left in
+    // `inFlight` at the moment of exit is already a weaker record than it looks
+    // (see `recentRequests`), and waiting 100ms to read it guarantees it is
+    // empty. Snapshot first, ask questions later.
+    const inFlightAtExit = [...inFlight.values()];
+    // The pool is full of sockets to a process that no longer exists, and
+    // `waitForUpstream` will clear replays the instant the *port* answers.
+    // Drop them now so those replays reach the new process instead.
+    upstreamAgent.destroy();
     // `exit` can fire while the last bytes of a crash message are still in the
     // pipe, and those are precisely the lines this exists to keep. Give the
     // reader a beat to drain before reporting; a restart takes seconds anyway.
     setTimeout(() => {
       flushOut();
       flushErr();
-      reportCrash(code, signal);
+      reportCrash(code, signal, inFlightAtExit);
       if (restarts > RESTART_LIMIT) {
         giveUp();
         return;
@@ -393,6 +465,22 @@ async function waitForUpstream() {
     await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS));
   }
 }
+
+/**
+ * This proxy's own connection pool to wrangler, owned rather than left to
+ * `http.globalAgent`, for one reason: it has to be emptied when the child dies.
+ *
+ * Node's global agent has kept connections alive by default since v19, and
+ * `waitForUpstream` clears a request to be replayed as soon as *the port*
+ * accepts a TCP connection — which the freshly restarted wrangler does while
+ * the pool still holds sockets to the corpse of the old one. A replay then
+ * goes out on a dead socket and fails again. #381's run 34391081815 shows the
+ * whole shape: eleven asset requests reset at 18:55:42, waited out the
+ * restart, and eleven of the same URLs reset again eight seconds later, most
+ * of them `reused=true`. Destroying the pool on exit (below) spends those
+ * retries on the process that is actually alive.
+ */
+const upstreamAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
 
 /** How many times a request may be replayed against a freshly-restarted
  * wrangler before this gives up and answers 502. Bounded so a genuinely
@@ -440,12 +528,17 @@ const proxy = http.createServer((req, res) => {
       }
 
       const requestId = nextRequestId++;
-      inFlight.set(requestId, {
-        method: req.method,
-        url: req.url,
-        startedAt: Date.now(),
-      });
-      const settle = () => inFlight.delete(requestId);
+      const startedAt = Date.now();
+      lastUpstreamActivityAt = startedAt;
+      inFlight.set(requestId, { method: req.method, url: req.url, startedAt });
+      /** Idempotent: `end` and `error` can both fire on the same response, and
+       * the first one to arrive is the one that describes what happened. */
+      const settle = (outcome) => {
+        const entry = inFlight.get(requestId);
+        if (!entry) return;
+        inFlight.delete(requestId);
+        noteSettled(entry, outcome);
+      };
 
       const upstreamReq = http.request(
         {
@@ -454,14 +547,15 @@ const proxy = http.createServer((req, res) => {
           method: req.method,
           path: req.url,
           headers: req.headers,
+          agent: upstreamAgent,
         },
         (upstreamRes) => {
           if (res.writableEnded || res.destroyed) {
             // The browser has already hung up. Drain rather than destroy: the
             // whole point of this proxy is that wrangler never sees the abort.
             noteProxyEvent("client-gone-before-response", `${req.method} ${req.url}`);
-            upstreamRes.on("end", settle);
-            upstreamRes.on("error", settle);
+            upstreamRes.on("end", () => settle("drained (client had gone)"));
+            upstreamRes.on("error", () => settle("upstream error while draining"));
             upstreamRes.resume();
             return;
           }
@@ -478,7 +572,7 @@ const proxy = http.createServer((req, res) => {
             res.write(chunk);
           });
           upstreamRes.on("end", () => {
-            settle();
+            settle(`ok ${upstreamRes.statusCode ?? "?"}`);
             if (!res.destroyed) res.end();
           });
           // Response headers are already committed to the browser at this
@@ -486,7 +580,7 @@ const proxy = http.createServer((req, res) => {
           // have rather than let an unhandled stream error take the proxy
           // down with it.
           upstreamRes.on("error", (error) => {
-            settle();
+            settle(`response reset (${error.code ?? "?"})`);
             noteProxyEvent(
               "upstream-response-error",
               `${req.method} ${req.url} ${error.code ?? ""} ${error.message}`,
@@ -497,7 +591,7 @@ const proxy = http.createServer((req, res) => {
       );
 
       upstreamReq.on("error", (error) => {
-        settle();
+        settle(`request failed (${error.code ?? "?"} reused=${upstreamReq.reusedSocket === true})`);
         // The load-bearing record. This proxy losing its own socket to
         // wrangler mid-request is indistinguishable, from wrangler's side,
         // from the browser hang-up in problem 1 — and just as fatal. If a
