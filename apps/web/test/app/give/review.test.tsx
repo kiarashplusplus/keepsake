@@ -338,4 +338,78 @@ describe("give/review", () => {
     expect(Number(styleOf(photoBox).aspectRatio)).toBeCloseTo(expected, 6);
     expect(styleOf(photoBox).width).toBe("100%");
   });
+
+  /**
+   * Issue #373 finding 3 (mobile). The review card used to show
+   * `storyExcerpt(draft.story)` clamped to `numberOfLines={2}` — the same cut
+   * the feed card makes for a teaser. On the one screen whose whole job is
+   * proofreading the words about to be published, that meant a story past
+   * two short lines was cut off mid-sentence with no way to see, or fix,
+   * what came after — the baseline caught "...Sunday of my childhood and
+   * ha…". Revert the fix (bring back `storyExcerpt`/`numberOfLines={2}`) and
+   * this fails: the rendered tree stops containing the story's back half.
+   */
+  it("shows the full story on the review card, not a truncated excerpt", () => {
+    const longStory =
+      "It sat on my mother's table every Sunday of my childhood and has traveled with our family through four house moves since. " +
+      "I finally have to let it go because there is no room for it in my new apartment, but I want it to go to someone who will love it the way we did.";
+    window.sessionStorage.setItem(
+      GIVE_DRAFT_STORAGE_KEY,
+      serializeGiveDraft({
+        ...GIVE_DRAFT_INITIAL,
+        title: baseListing.title,
+        story: longStory,
+        category: baseListing.category,
+        country: baseListing.country,
+        postalCode: "02144",
+        photos: [
+          {
+            clientId: "p1",
+            id: "01PHOTOAAAAAAAAAAAAAAAAAA",
+            objectUrl: null,
+            width: 800,
+            height: 600,
+            blurhash: "LKO2?U%2Tw=w]~RBVZRi};RPxuwH",
+            status: "done",
+            error: null,
+            errorCode: null,
+            canRetry: false,
+          },
+        ],
+      }),
+    );
+
+    const { toJSON } = renderReview();
+    const rendered = JSON.stringify(toJSON());
+
+    expect(rendered).toContain("someone who will love it the way we did");
+
+    const storyNode = flatten(toJSON() as unknown as Node).find(
+      (node) => Array.isArray(node.children) && node.children.some((child) => typeof child === "string" && child.includes(longStory)),
+    );
+    if (storyNode === undefined) throw new Error("no node renders the full story text");
+    expect(storyNode.props.numberOfLines).toBeUndefined();
+  });
+
+  /**
+   * Issue #373 finding 3 (desktop). The print used to be
+   * `alignSelf: "stretch"` — full prose-measure width (720px), nearly 3x a
+   * real feed card at that container width (a masonry column tops out
+   * around 250px, see `masonry.ts`'s breakpoints). At 1280px that stretched
+   * a portrait cover tall enough to push the title, the story, the age gate
+   * and "Give it" below the fold entirely. Revert the fix (bring back
+   * `alignSelf: "stretch"` with no `maxWidth`) and this fails.
+   */
+  it("caps the review print's width instead of letting it stretch to the full measure", () => {
+    seedDraft();
+    const { toJSON } = renderReview();
+
+    const printNode = flatten(toJSON() as unknown as Node).find((node) => styleOf(node).maxWidth !== undefined);
+    if (printNode === undefined) throw new Error("no node in the review print carries a maxWidth");
+
+    // react-native-web renders resolved CSS length strings ("340px"), not
+    // the raw numbers passed in — hence `parseFloat` rather than `Number`.
+    expect(parseFloat(styleOf(printNode).maxWidth ?? "")).toBeLessThan(500);
+    expect(styleOf(printNode).alignSelf).not.toBe("stretch");
+  });
 });

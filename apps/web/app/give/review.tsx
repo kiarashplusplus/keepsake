@@ -31,7 +31,6 @@ import { getMyListing } from "@/api/me";
 import { ApiError } from "@/api/client";
 import { useDraftPhotoSource } from "@/features/give/photoSource";
 import { clampCardAspectRatio } from "@/lib/masonry";
-import { storyExcerpt } from "@/lib/storyExcerpt";
 import { shareListing } from "@/lib/share";
 import { useToast } from "@/ui/Toast";
 import { track } from "@/lib/analytics";
@@ -350,8 +349,8 @@ export default function GiveReview(): React.ReactElement {
             the result. Everything below mirrors
             `src/features/feed/ListingCard.tsx`: the same 10px print padding,
             the photo filling the width at its own clamped aspect ratio, then
-            the story excerpt, the title and one caption line, in that order
-            and at the same type variants.
+            the story, the title and one caption line, in that order and at
+            the same type variants.
 
             Why not just render `ListingCard` here? It takes a
             `PublicListing` — an id, a resolved `place_name`/`admin1`, a
@@ -361,8 +360,21 @@ export default function GiveReview(): React.ReactElement {
             itself in a `Link` to `/item/[id]`, which for a draft is a link
             to a page that does not exist. Mirroring its geometry against a
             `GiveDraft` is the honest version; the two are meant to be read
-            side by side, so change them together. */}
-        <Print tiltDeg={-1.5} style={{ alignSelf: "stretch", padding: 10 }}>
+            side by side, so change them together.
+
+            Issue #373 finding 3: "mirroring `ListingCard`'s geometry" used
+            to mean copying its *width* too — `alignSelf: "stretch"` let the
+            print fill the full prose measure (720px), nearly 3x a real feed
+            card (a masonry column tops out around 250px at that width, see
+            `masonry.ts`). At 1280px that stretched a portrait photo tall
+            enough to push the title, the story, the age gate and "Give it"
+            entirely below the fold — this step's only job is letting the
+            giver look, and there was nothing to look at but a photograph.
+            Capping the width instead of the aspect ratio keeps the print
+            itself faithful (same padding, same clamped aspect, same
+            layered content) while sizing it like the card it is a preview
+            of, on every viewport. */}
+        <Print tiltDeg={-1.5} style={{ alignSelf: "center", width: "100%", maxWidth: 340, padding: 10 }}>
           {/* Source ladder in `features/give/photoSource.ts`, shared with
               the photos step's tiles: this session's object URL, else the
               owner-authed thumb route, else the blurhash alone. */}
@@ -389,13 +401,18 @@ export default function GiveReview(): React.ReactElement {
             />
           </View>
           <View style={{ paddingTop: space.md, paddingHorizontal: space.xs, gap: space.xxs }}>
-            {/* `storyExcerpt` rather than the `slice(0, 140)` that used to
-                be inlined here: the card and this preview have to cut the
-                story at the same place, or the preview is a preview of
-                something else. That function's own header comment has
-                pointed at this file since it was extracted. */}
-            <Text variant="storyExcerpt" color="textSecondary" numberOfLines={2} hangingPunctuation>
-              “{storyExcerpt(draft.story)}”
+            {/* Issue #373 finding 3: this used to be `storyExcerpt(draft.story)`
+                clamped to 2 lines — the same cut the feed card makes, on the
+                one screen whose entire point is proofreading the words about
+                to be published. A giver whose story ran past two short lines
+                could never see, let alone fix, what came after "…" here; the
+                mobile baseline caught one mid-sentence. The feed's excerpt
+                rule stays exactly as it is (`ListingCard` is untouched) —
+                this is the one place in the app that intentionally shows the
+                *whole* story rather than a preview of it, same as the item
+                page's `storyBlock` does with `listing.story`. */}
+            <Text variant="storyExcerpt" color="textSecondary" hangingPunctuation>
+              “{draft.story.trim()}”
             </Text>
             <Text variant="title" numberOfLines={1}>
               {draft.title || "Untitled"}
