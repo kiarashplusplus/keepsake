@@ -1,6 +1,6 @@
 # Pass 18 — Bottleneck: what insurance a tiny peer-to-peer gifting platform actually gets, and what it excludes
 
-*Web research pass, 2026-09-09. Sonnet subagent, WebSearch + WebFetch only; no repository access. Bottleneck named in the brief: two earlier passes (05, 15) could not answer whether a general-liability policy for a small marketplace excludes "facilitating in-person meetings between strangers"; cover under #142 is not yet bound. Not legal or insurance advice. Report reproduced verbatim below.*
+*Web research pass, 2026-09-09. Sonnet subagent, WebSearch + WebFetch only; no repository access. Bottleneck named in the brief: two earlier passes (05, 15) could not answer whether a general-liability policy for a small marketplace excludes "facilitating in-person meetings between strangers"; cover under #142 is not yet bound. Not legal or insurance advice. Report reproduced verbatim below. **Premise note (added after the pass ran):** the brief said "no accounts"; the accurate model is a persistent, email-verified giver identity without a profile, and an email-only requester — see the folder README's premise correction and passes 27–28.*
 
 ---
 

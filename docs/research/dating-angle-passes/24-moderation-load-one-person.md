@@ -1,6 +1,6 @@
 # Pass 24 — Bottleneck: what moderation load a small community marketplace generates, and how one person survives a burst
 
-*Web research pass, 2026-09-09. Sonnet subagent, WebSearch + WebFetch only; no repository access. Bottleneck named in the brief: one operator, model pre-screening with a human hold queue, and a proposed two-week campus ritual that could produce a burst; passes 13 and 15 noted a solo operator has no moderation staff if a wave arrives. Report reproduced verbatim below.*
+*Web research pass, 2026-09-09. Sonnet subagent, WebSearch + WebFetch only; no repository access. Bottleneck named in the brief: one operator, model pre-screening with a human hold queue, and a proposed two-week campus ritual that could produce a burst; passes 13 and 15 noted a solo operator has no moderation staff if a wave arrives. Report reproduced verbatim below. **Premise note (added after the pass ran):** the brief said "no accounts"; the accurate model is a persistent, email-verified giver identity without a profile, and an email-only requester — see the folder README's premise correction and passes 27–28.*
 
 ---
 

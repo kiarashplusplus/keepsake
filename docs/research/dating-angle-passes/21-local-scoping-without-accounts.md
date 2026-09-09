@@ -1,6 +1,6 @@
 # Pass 21 — Bottleneck: how products establish "local" or "campus" without accounts, what abuse follows, and the geography around Rice and UH
 
-*Web research pass, 2026-09-09. Sonnet subagent, WebSearch + WebFetch only; no repository access. Bottleneck named in the brief: pass 13 found no precedent for scoping a campus product by geography without a login and called it untested territory. Report reproduced verbatim below.*
+*Web research pass, 2026-09-09. Sonnet subagent, WebSearch + WebFetch only; no repository access. Bottleneck named in the brief: pass 13 found no precedent for scoping a campus product by geography without a login and called it untested territory. Report reproduced verbatim below. **Premise note (added after the pass ran):** the brief said "no accounts"; the accurate model is a persistent, email-verified giver identity without a profile, and an email-only requester — see the folder README's premise correction and passes 27–28.*
 
 ---
 

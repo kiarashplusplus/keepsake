@@ -45,6 +45,33 @@ Your Loot!" spring move-out collection.
 | 15 | [`15-adversary-college-framing.md`](./15-adversary-college-framing.md) | The adversary, college version: minors, marks, SCOPE Act, handoffs |
 | 16 | [`16-toronto-campuses.md`](./16-toronto-campuses.md) | U of T, TMU, York, OCAD one by one; Canadian precedents and rules |
 
+## Premise correction: "no accounts"
+
+Every brief in this folder described Keepsake as having "no accounts." That is the repository's
+architecture label ([`../../design/identity.md`](../../design/identity.md)), and on 2026-09-09 the
+repository itself decided it is an architecture note, not copy; the public pages now say "no
+password." The accurate model, which the subagents were not given:
+
+- **Browsing** mints nothing; a reader is anonymous.
+- **A giver** is a device-bound secret bearer token, minted on the first give and stored in the
+  browser; the server keeps only its hash, in an `owners` row that also holds a **mandatory email,
+  verified by a clicked link** (mandatory since 2026-09-08). Givers have a dashboard, a
+  recover-by-email flow, and can be banned by the operator. There is no username, password,
+  profile, or user-to-user messaging.
+- **A requester** has no persistent identity: a note and an email, the email confirmed by link
+  before the note reaches the giver, at most three confirmations per address per day, one request
+  per email per listing. Requesters cannot be banned, only their content removed.
+
+Passes whose reasoning leaned on the wrong premise, and how: **17** (its SCOPE Act analysis rests
+on "no accounts and no profiles"; the profile prong may still hold, the account half does not);
+**21** (it treats scoping as "no login" when a giver has a persistent identity and a requester an
+email, both usable for rate limits and bans); **13** and **15** (their "no reliable age gate"
+and "zero accounts" lines); **18** (the application answer "no screening" should read "a verified
+email for every giver and every requester, no identity check"); **24** (its "new-account trust
+level" pattern does apply, to the owner row). Passes 27 and 28 re-run the two most affected
+questions with the accurate model. The affected files are left verbatim, with a one-line note in
+their headers.
+
 ## The bottlenecks
 
 After the first sixteen passes, ten further passes were briefed on the places where the evidence

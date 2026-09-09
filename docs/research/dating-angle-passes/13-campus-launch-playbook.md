@@ -1,6 +1,6 @@
 # Pass 13 — The campus-by-campus launch playbook, as actually executed by products a solo founder could imitate
 
-*Web research pass, 2026-09-09. Sonnet subagent, WebSearch + WebFetch only; no repository access. Brief: "How did campus-scoped social/marketplace products get their first campus, and what parts transfer to a web-only, no-account gifting site?" Report reproduced verbatim below.*
+*Web research pass, 2026-09-09. Sonnet subagent, WebSearch + WebFetch only; no repository access. Brief: "How did campus-scoped social/marketplace products get their first campus, and what parts transfer to a web-only, no-account gifting site?" Report reproduced verbatim below. **Premise note (added after the pass ran):** the brief said "no accounts"; the accurate model is a persistent, email-verified giver identity without a profile, and an email-only requester — see the folder README's premise correction and passes 27–28.*
 
 ---
 

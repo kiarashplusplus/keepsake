@@ -1,6 +1,6 @@
 # Pass 17 — Bottleneck: what a no-account gifting site must do about age, in Texas and generally
 
-*Web research pass, 2026-09-09. Sonnet subagent, WebSearch + WebFetch only; no repository access. Bottleneck named in the brief: neither the terms nor the site state a minimum age; pass 15 flagged the SCOPE Act's "known minor" standard, Texas Penal Code §33.021, and 17-year-old first-years in any college pilot. Not legal advice. Report reproduced verbatim below.*
+*Web research pass, 2026-09-09. Sonnet subagent, WebSearch + WebFetch only; no repository access. Bottleneck named in the brief: neither the terms nor the site state a minimum age; pass 15 flagged the SCOPE Act's "known minor" standard, Texas Penal Code §33.021, and 17-year-old first-years in any college pilot. Not legal advice. Report reproduced verbatim below. **Premise note (added after the pass ran):** the brief said "no accounts"; the accurate model is a persistent, email-verified giver identity without a profile, and an email-only requester — see the folder README's premise correction and passes 27–28.*
 
 ---
 
