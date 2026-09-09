@@ -28,7 +28,7 @@ function scrollEvent(offsetX: number, viewportWidth: number, contentWidth: numbe
   };
 }
 
-describe("CategoryChips overflow affordance (issue #219)", () => {
+describe("CategoryChips overflow affordance (issue #219, strengthened for #373 finding 4)", () => {
   it("fades the trailing edge while the row still scrolls, and hides the fade at the end", () => {
     setViewportWidth(PHONE_WIDTH);
     const { UNSAFE_getByType, UNSAFE_queryByProps } = render(<CategoryChips value={null} onChange={jest.fn()} />);
@@ -43,6 +43,26 @@ describe("CategoryChips overflow affordance (issue #219)", () => {
     expect(fade?.props.pointerEvents).toBe("none");
     expect(fade?.props.accessibilityElementsHidden).toBe(true);
     expect(fade?.props.importantForAccessibility).toBe("no-hide-descendants");
+
+    // #373 finding 4: the baseline frames (`ux-mobile/feed.jpg` and friends)
+    // show this exact fade rendered by #349's two-stop, 32px version, and it
+    // still reads as a hard cut — a plain 0%→100% ramp stays under ~20%
+    // opacity for most of its width. The fix is a wider band with a
+    // front-loaded middle stop, so a pixel well short of the trailing edge is
+    // already visibly dissolving rather than still reading as full-strength
+    // text. Asserting the gradient string (not just its presence) is what
+    // makes this test fail again if someone reverts to the two-stop version
+    // while leaving the `testID` and pointer/a11y props untouched.
+    const fadeStyle = StyleSheet.flatten(fade?.props.style);
+    expect(fadeStyle.width).toBe(48); // space.xxxl, up from space.xxl's 32
+    expect(fadeStyle.backgroundImage).toContain("60%");
+    expect(fadeStyle.backgroundImage).toMatch(/^linear-gradient\(to right, .+00 0%, .+ 60%, .+ 100%\)$/);
+
+    // The chevron is the "arrow" half of the fix: a glyph that says "more"
+    // in words a fade alone cannot, sitting inside the same decorative,
+    // pointer-transparent, AT-hidden node as the fade so it carries the same
+    // guarantees rather than needing its own.
+    expect(fade?.props.children).toBeTruthy();
 
     const scroller = UNSAFE_getByType(ScrollView);
     fireEvent.scroll(scroller, scrollEvent(0, 350, 900));

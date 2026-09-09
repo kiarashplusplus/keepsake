@@ -5,16 +5,24 @@ import { space } from "@keepsake/tokens/spacing";
 import { useColors } from "@/ui/theme";
 import { useViewport } from "@/ui/viewport";
 import { Chip } from "@/ui/Chip";
+import { Text } from "@/ui/Text";
 
 export type CategoryChipsProps = {
   value: Category | null;
   onChange: (category: Category | null) => void;
 };
 
-/** How much of the trailing chip the fade covers. Wide enough to read as a
- * deliberate soft edge rather than a rendering artefact, narrow enough that
- * the cut-off chip is still legible underneath it. */
-const FADE_WIDTH = space.xxl;
+/**
+ * How much of the trailing chip the fade covers. Issue #373 finding 4: the
+ * original `space.xxl` (32px) fade was mathematically present but
+ * perceptually invisible — a plain 0%→100% linear ramp over 32px of an
+ * 11px label stays under ~20% opacity for most of its width, which reads as
+ * ordinary anti-aliasing, not an affordance, at both screenshot and phone
+ * scale. Widened to `space.xxxl` (48px) and paired with the front-loaded
+ * gradient stops below and an explicit chevron so the row reads as
+ * "scrolls" even to someone skimming, not just to someone who measures it.
+ */
+const FADE_WIDTH = space.xxxl;
 
 /** A scroll position within this many px of the end counts as the end —
  * fractional layout on the web means `offset + viewport` almost never lands
@@ -94,6 +102,16 @@ export function CategoryChips({ value, onChange }: CategoryChipsProps): React.Re
   // visible grey bruise across the middle of the gradient in every browser.
   // Nothing new enters the palette either way.
   //
+  // Three stops, not two: a plain 0%→100% linear ramp spends its first half
+  // barely above 0% opacity (measured — a pixel 40% of the way across a
+  // two-stop version of this gradient blends to within a few percent of its
+  // unfaded colour), which is indistinguishable from ordinary text
+  // antialiasing at phone scale. `60%` opacity by the midpoint front-loads
+  // the visible dissolve into the first half of the band, so the affordance
+  // reads at a glance instead of only surviving a pixel-level measurement
+  // (issue #373 finding 4 — the two-stop version shipped in #349 was already
+  // present in every baseline frame and still read as a hard cut).
+  //
   // `linear-gradient` is a CSS value with no React Native style equivalent,
   // so it goes through the same `as ViewStyle` escape hatch the codebase
   // already uses for `boxShadow` (`Button.tsx`, `Surface.tsx`) and
@@ -108,7 +126,9 @@ export function CategoryChips({ value, onChange }: CategoryChipsProps): React.Re
     bottom: 0,
     right: 0,
     width: FADE_WIDTH,
-    ...({ backgroundImage: `linear-gradient(to right, ${colors.surface}00, ${colors.surface})` } as ViewStyle),
+    alignItems: "center",
+    justifyContent: "center",
+    ...({ backgroundImage: `linear-gradient(to right, ${colors.surface}00 0%, ${colors.surface}99 60%, ${colors.surface} 100%)` } as ViewStyle),
     ...vp.chipsFade,
   };
 
@@ -149,7 +169,25 @@ export function CategoryChips({ value, onChange }: CategoryChipsProps): React.Re
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
           style={fade}
-        />
+        >
+          {/* The chevron is the "arrow" half of issue #373 finding 4's fix,
+           * alongside the fade above: a gradient alone still reads as a
+           * rendering artefact to someone skimming rather than measuring
+           * pixel values, so this spells out "more" in the same glyph
+           * `app/index.tsx`'s "Have something to give away? →" already uses
+           * for the same idea elsewhere on this screen. `textSecondary` (the
+           * pencil-grey token) rather than `ink` keeps it a hint, not a
+           * fourteenth chip. */}
+          <Text
+            variant="label"
+            color="textSecondary"
+            style={{ fontSize: 14 }}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            {"›"}
+          </Text>
+        </View>
       ) : null}
     </View>
   );
