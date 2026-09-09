@@ -63,10 +63,16 @@ export function CategorySection({
         <Eyebrow>Category</Eyebrow>
       </View>
       <Text variant="title">{CATEGORY_LABELS[category]}</Text>
+      {/* The invitation and the control go together (issue #356): a given
+          listing used to keep "Change it if it's wrong" after losing the
+          button that would have let them. Without the button, the sentence
+          only says where the word came from. */}
       <Text variant="body" color="textSecondary">
-        {categoryChosenAt === null
-          ? "We guessed this from your photo. Change it if it's wrong."
-          : "You chose this, so we'll leave it alone."}
+        {categoryChosenAt !== null
+          ? "You chose this, so we'll leave it alone."
+          : editable
+            ? "We guessed this from your photo. Change it if it's wrong."
+            : "We guessed this from your photo."}
       </Text>
       {editable ? (
         <View style={{ flexDirection: "row" }}>

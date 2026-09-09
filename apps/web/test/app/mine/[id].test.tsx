@@ -442,6 +442,19 @@ describe("mine/[id] category correction (#155)", () => {
     const tree = JSON.stringify(instance.toJSON());
     expect(tree).toContain("Home & kitchen");
     expect(tree).toContain("We guessed this from your photo.");
+    expect(tree).toContain("Change it if it's wrong.");
+    expect(instance.UNSAFE_queryByProps({ accessibilityLabel: "Change category" })).not.toBeNull();
+  });
+
+  // Issue #356: the hint was gated on "was it guessed?" and the button on
+  // "is it editable?", so a given listing kept the invitation after losing
+  // the control that honoured it.
+  it("drops the invitation, but keeps the provenance, once the keepsake has been given", async () => {
+    const instance = await renderDetail({ ...detailWithOpenRequest(), status: "given" });
+    const tree = JSON.stringify(instance.toJSON());
+    expect(tree).toContain("We guessed this from your photo.");
+    expect(tree).not.toContain("Change it if it's wrong.");
+    expect(instance.UNSAFE_queryByProps({ accessibilityLabel: "Change category" })).toBeNull();
   });
 
   it("says the category is the giver's once they have chosen one", async () => {
@@ -478,5 +491,53 @@ describe("mine/[id] category correction (#155)", () => {
     // The section still says what the category is; only the control is gone.
     expect(JSON.stringify(instance.toJSON())).toContain("Home & kitchen");
     expect(instance.UNSAFE_queryByProps({ accessibilityLabel: "Change category" })).toBeNull();
+  });
+});
+
+// Issue #355: `RequestList` had one empty-state line for every status, so a
+// given listing told its giver to share a link to something already handed
+// over. The screen now passes the status down and the line follows it. The
+// exhaustive per-status check lives in test/features/mine/RequestList.test.tsx;
+// these prove the screen wires the status through at all.
+describe("mine/[id] empty requests by status (#355)", () => {
+  beforeEach(() => {
+    jest.mocked(getMyListing).mockReset();
+  });
+
+  async function renderEmpty(status: OwnerListingDetail["status"]): Promise<string> {
+    jest.mocked(getMyListing).mockResolvedValue({ ...detailWithOpenRequest(), status, request_count: 0, requests: [] });
+    const instance = render(
+      <ToastProvider>
+        <MineDetail />
+      </ToastProvider>,
+    );
+    await act(async () => {
+      await flush();
+    });
+    return JSON.stringify(instance.toJSON());
+  }
+
+  it("still asks a live listing's giver to share the link", async () => {
+    const shown = await renderEmpty("approved");
+    expect(shown).toContain("No one has asked yet. Share the link.");
+  });
+
+  it("says nobody asked before it found a home, and does not say share, once given", async () => {
+    const shown = await renderEmpty("given");
+    expect(shown).toContain("Nobody asked through Keepsake before this found its home.");
+    expect(shown).not.toContain("Share the link");
+  });
+
+  it("does not ask a withdrawn listing's giver to share either", async () => {
+    const shown = await renderEmpty("withdrawn");
+    expect(shown).toContain("No one asked.");
+    expect(shown).not.toContain("Share the link");
+    expect(shown).not.toContain("found its home");
+  });
+
+  it("keeps 'yet', without the ask, while moderation has not yet made it live", async () => {
+    const shown = await renderEmpty("pending");
+    expect(shown).toContain("No one has asked yet.");
+    expect(shown).not.toContain("Share the link");
   });
 });
