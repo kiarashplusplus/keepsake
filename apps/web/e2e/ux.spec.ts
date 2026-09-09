@@ -559,10 +559,15 @@ test.describe("ux baseline", () => {
     // one whose copy has to carry the weight.
     await page.goto("/confirm/not-a-real-token");
     await expect(page.getByText("That link didn't work")).toBeVisible();
+    // #357: the card used to be the whole page, with nothing on it to press.
+    // Assert the way onward is there, and is a real link, so the frame below
+    // is a frame of the page with it and not of the dead end it replaced.
+    await expect(page.getByLabel("Back to the feed")).toHaveAttribute("href", "/");
     await shot(page, testInfo, "confirm-bad-link");
 
     await page.goto("/withdraw/not-a-real-token");
     await expect(page.getByText("That link didn't work")).toBeVisible();
+    await expect(page.getByLabel("Back to the feed")).toHaveAttribute("href", "/");
     await shot(page, testInfo, "withdraw-bad-link");
 
     await page.goto("/no-such-page");

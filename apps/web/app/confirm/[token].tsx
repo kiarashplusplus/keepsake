@@ -13,11 +13,19 @@
 // The copy distinguishes an expired link from an invalid one because both are
 // reachable only by someone reading mail at the address the link was sent to,
 // and "this lapsed, ask again" is actionable where "invalid" is not.
+//
+// Every branch that is not the confirmed one carries a way onward (#357).
+// These pages are reached from an inbox, so the reader has no history to go
+// back to and the card is the whole page: without a link it says "nothing
+// else to do" and then offers nothing to do. The link is a real `<a href>`
+// (`Link asChild` around a `Button` — see `ButtonProps.href`), same as
+// `+not-found.tsx`.
 import * as React from "react";
-import { useLocalSearchParams } from "expo-router";
+import { Link, useLocalSearchParams } from "expo-router";
 import { sectionRhythm } from "@keepsake/tokens/spacing";
 import { Page } from "@/ui/Page";
 import { EmptyState } from "@/ui/EmptyState";
+import { Button } from "@/ui/Button";
 import { Stamp } from "@/ui/Stamp";
 import { useToast } from "@/ui/Toast";
 import { ApiError } from "@/api/client";
@@ -71,6 +79,11 @@ export default function ConfirmToken(): React.ReactElement {
           eyebrow="Confirm"
           title="This link has expired"
           line="Confirmation links last a few days, and this one has passed. Nothing was sent to the giver, and we've let go of what you wrote. If you still want the keepsake, ask again and we'll send a fresh link."
+          action={
+            <Link href="/" asChild>
+              <Button label="Back to the feed" />
+            </Link>
+          }
         />
       </Page>
     );
@@ -83,7 +96,12 @@ export default function ConfirmToken(): React.ReactElement {
         <EmptyState
           eyebrow="Confirm"
           title="That link didn't work"
-          line="This link is invalid, or it has already been used. If you confirmed once already, you're done — there's nothing else to do."
+          line="This link is invalid, or it has already been used. If you confirmed once already, you're done — there's nothing else to do. If you meant to ask for it, open the keepsake and try again."
+          action={
+            <Link href="/" asChild>
+              <Button label="Back to the feed" />
+            </Link>
+          }
         />
       </Page>
     );
@@ -97,6 +115,11 @@ export default function ConfirmToken(): React.ReactElement {
           eyebrow="Confirm"
           title="This one's already spoken for"
           line="You confirmed it was you — but this keepsake was given to someone else while the email was on its way, so there's nobody left to pass your note to. Nothing was sent."
+          action={
+            <Link href="/" asChild>
+              <Button label="Back to the feed" />
+            </Link>
+          }
         />
       </Page>
     );
