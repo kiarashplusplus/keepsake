@@ -82,8 +82,11 @@
  */
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
+import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const [publicPortRaw, upstreamPortRaw, separator, ...wranglerArgs] = process.argv.slice(2);
 if (separator !== "--") {
@@ -260,13 +263,60 @@ function reportCrash(code, signal) {
       ...proxyEvents.map((entry) => `[e2e:server]   ${entry}`),
     );
   }
-  console.error(lines.join("\n"));
+  const report = lines.join("\n");
+  console.error(report);
+  alsoWriteToReportFile(`${new Date().toISOString()} ${report}`);
 }
 
 /** GitHub renders `::error::` as an annotation on the run itself, so a suite
  * that survived on retries still carries a visible mark. */
 function annotate(level, message) {
   if (process.env.GITHUB_ACTIONS) console.error(`::${level}::${message}`);
+}
+
+/**
+ * The post-mortem also goes to a file, because on CI the console copy has
+ * proven impossible to find. Playwright pipes this process's output through
+ * its own reporter interleaved with 170 tests' worth of logs, and the two
+ * runs this was built to explain (`main` on 9db94a9, and #340) both ended
+ * with a full cascade of `ECONNREFUSED` and *no* retrievable `[e2e:server]`
+ * line anywhere in the job log — the one record of why wrangler died was
+ * written and then lost.
+ *
+ * Its own directory rather than `playwright-report/`: that folder belongs to
+ * the HTML reporter, which rewrites it wholesale when it emits the report at
+ * the end of a run, and a file appended mid-run is not guaranteed to survive
+ * that. `.github/workflows/ci.yml` uploads this directory alongside the HTML
+ * report on failure. `E2E_SERVER_REPORT_DIR` overrides it so
+ * `serve.test.mjs` can point at a temp dir instead of the real one.
+ *
+ * Appends rather than truncates: a run may crash more than once (that is the
+ * whole reason `RESTART_LIMIT` exists), and the earlier crash is usually the
+ * informative one.
+ */
+const REPORT_DIR =
+  process.env.E2E_SERVER_REPORT_DIR ??
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "e2e-diagnostics");
+const REPORT_FILE = path.join(REPORT_DIR, "e2e-server-crash.log");
+let reportFileBroken = false;
+
+/**
+ * Never throws and never takes the supervisor down with it: this runs on the
+ * crash path, where losing the ability to *report* must not also cost the
+ * restart that keeps the suite alive.
+ */
+function alsoWriteToReportFile(text) {
+  if (reportFileBroken) return;
+  try {
+    fs.mkdirSync(REPORT_DIR, { recursive: true });
+    fs.appendFileSync(REPORT_FILE, `${text}\n`);
+  } catch (error) {
+    reportFileBroken = true;
+    console.error(
+      `[e2e:server] could not write the crash report to ${REPORT_FILE} (${error.message}); ` +
+        "the copy above is the only one.",
+    );
+  }
 }
 
 function giveUp() {
@@ -276,6 +326,7 @@ function giveUp() {
     `override with ${RESTART_LIMIT_ENV}). Which connection broke is in the captured ` +
     `output above, not in wrangler's own — see issue #104 and this file's header.`;
   console.error(`[e2e:server] FATAL: ${message}`);
+  alsoWriteToReportFile(`[e2e:server] FATAL: ${message}`);
   annotate("error", `e2e: ${message}`);
   child?.kill("SIGTERM");
   proxy.close();

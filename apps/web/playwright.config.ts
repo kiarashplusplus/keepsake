@@ -152,6 +152,24 @@ export default defineConfig({
   // SQLite file; a handful of parallel workers keeps the suite quick without
   // making that the bottleneck.
   workers: process.env.CI ? 2 : 4,
+  /**
+   * A cap on how much a *harness* failure can pretend to be a code failure.
+   *
+   * When `e2e/support/serve.mjs` gives up on restarting `wrangler dev` it
+   * exits, which frees the public port, and every test still to run then fails
+   * with `ECONNREFUSED`. Twice in one evening that turned one infrastructure
+   * fault into 34 and 58 red tests spread across a dozen unrelated specs
+   * (`welcome`, `theme`, `staticRender`, `versionSkew` …) — a wall of failures
+   * whose common cause is invisible unless you read the errors themselves and
+   * notice they are all the same refused connection. It reads exactly like a
+   * broad regression, and it was twice diagnosed as one.
+   *
+   * Stopping at ten keeps a genuine regression perfectly legible — ten failing
+   * tests is far more than enough signal to work from — while cutting the
+   * cascade off long before it can bury its own cause. CI only: locally the
+   * full list is usually what you want, and there is no artifact to read.
+   */
+  maxFailures: process.env.CI ? 10 : undefined,
   reporter: process.env.CI
     ? [["html", { open: "never" }], ["github"], ["list"]]
     : [["html", { open: "never" }], ["list"]],
