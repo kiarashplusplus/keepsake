@@ -335,8 +335,12 @@ describe("GET /api/admin/observatory", () => {
       const eventQueries = bodies.filter((b) => b.view === "events");
       expect(eventQueries).toHaveLength(2); // one per level
       for (const query of eventQueries) {
-        expect(query.parameters.limit).toBe(50);
-        expect(query.parameters.orderBy).toEqual({ value: "timestamp", order: "desc" });
+        // A *second* cap inside `parameters`, on top of the top-level
+        // `limit`, made the feed return 2 rows against a count of 5 and drop
+        // the event fired seconds before. A short feed reads as the truth in
+        // a way an empty one never does, so neither of these goes back.
+        expect(query.parameters.limit).toBeUndefined();
+        expect(query.parameters.orderBy).toBeUndefined();
       }
 
       // The one that actually mattered. Every query here sends two filters,

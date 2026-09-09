@@ -420,14 +420,24 @@ async function telemetryQuery(
           // and `values` endpoints), and neither `eq` nor `includes` makes
           // any difference.
           filterCombination: "and",
-          // Not the fix — both were tried as candidates and neither changed
-          // anything — but kept because they are right on their own terms: a
-          // feed that renders most-recent-first should say so rather than
-          // inherit a default, and the row cap belongs on the same object as
-          // the filters it applies to.
-          ...(view === "events"
-            ? { limit: LOG_EVENT_LIMIT, orderBy: { value: "timestamp", order: "desc" as const } }
-            : {}),
+          // **No `parameters.limit` and no `parameters.orderBy` here, on
+          // purpose.** Both were added as candidate fixes for the empty feed,
+          // neither was the fix (`filterCombination` was), and both were then
+          // kept on the reasoning that they were "right on their own terms".
+          // That reasoning was wrong twice over.
+          //
+          // A probe sending neither returned 3 rows against a count of 3 — a
+          // complete answer. This module, sending both, returned 2 rows
+          // against a count of 5 and never once included the event fired
+          // seconds earlier. `parameters.limit` is a second, separate cap
+          // from the top-level `limit` (which already defaults to 50), and a
+          // feed that quietly drops rows is worse than the empty one this
+          // started as: an empty feed is obviously broken, a short one reads
+          // as the truth.
+          //
+          // Ordering is done in `fetchLogTelemetry` after the two levels are
+          // merged, which is where it has to happen anyway — neither level's
+          // server-side order can order the union.
           // Both filters matter. Without `scriptName` this reads every
           // Worker on the account — the probe that established this endpoint
           // scanned 700k rows across unrelated projects — and without
