@@ -148,7 +148,9 @@ function LocationDisclosure({
       {/* Expanded, this is on screen at every width. Collapsed, it is the
           wide layout's always-open controls and the phone's hidden ones —
           which is one `display` keyword, not two component trees. */}
-      <View style={expanded ? undefined : vp.wideOnly}>{children}</View>
+      <View testID="feed-location-controls" style={expanded ? undefined : vp.wideOnly}>
+        {children}
+      </View>
     </View>
   );
 }
@@ -335,7 +337,7 @@ export default function Feed(): React.ReactElement {
         >
           Give a keepsake a second life.
         </Text>
-        <View style={[{ gap: vp.step(space.md, space.lg) }, vp.wideOnly]}>
+        <View testID="feed-hero-deck" style={[{ gap: vp.step(space.md, space.lg) }, vp.wideOnly]}>
           <Text variant="bodyLg" color="textSecondary">
             Some things are too full of memory to sell and too good to throw away. Post the story, and let someone nearby who’ll love it come and
             get it.
