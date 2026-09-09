@@ -49,12 +49,38 @@ set (one look at the palette is evidence; two are bytes):
 | Prefix | Screens |
 | --- | --- |
 | `welcome`, `consent-banner` | The two things a stranger sees before the feed |
-| `feed*` | The table, a category chip, and a search with no answer |
-| `item*` | An item page, the request sheet empty / filled / sent, the report sheet |
+| `feed*` | The table, a category chip, a search with no answer, the location controls in force, and a radius with nothing inside it |
+| `item*` | An item page, the request sheet empty / filled / sent, the report sheet, and one keepsake that has already been given |
 | `give-1`…`give-6` | Every step of the give wizard, including the autofilled title and the live stamp |
-| `mine*` | The giver's own listings, a request they can choose, the choose sheet, the chosen state, the email screen |
-| `recover*`, `withdraw-bad-link`, `not-found` | The screens on the end of a link |
-| `admin*` | The token gate, the queue, the Hidden tab |
+| `mine*` | The giver's own listings, one nobody has asked for (with its category picker and its delete confirmation), one already given, a request they can choose, the choose sheet, the chosen state, the email screen |
+| `bulk*` | The estate workspace: an empty batch list, a started batch, photos, review, submit |
+| `recover*`, `confirm-bad-link`, `withdraw-bad-link`, `not-found` | The screens on the end of a link |
+| `admin*` | The token gate, the stats strip, the queue and its tabs, the Hidden tab, a selection and its bulk toolbar, the reject sheet, and both halves of the Observatory |
+
+Three of those states exist only because the fixture goes out of its way to
+reach them, and each is still reached through the product's own routes rather
+than by rendering a screen the product cannot produce:
+
+- **A radius with nothing in it.** Every keepsake this suite seeds is in
+  eastern Massachusetts, so no radius a visitor can pick around any of them
+  ever came back empty, and the feed's third empty state
+  (`src/features/feed/emptyState.ts`'s `radius`) was unreachable and
+  unphotographed. `e2e/support/global-setup.mjs` seeds a fourth real postcode
+  3,000 miles away (99501, Anchorage) that nothing is ever listed in, and the
+  frame is taken at `/?country=US&postal=99501&radius_mi=10`.
+- **A keepsake already given.** `demoCatalog.ts`'s `DEMO_GIVEN_LISTING` is
+  created like every other one and then marked given through
+  `POST /api/listings/:id/given` — the same call the dashboard's button
+  makes. The feed is `status = 'approved'` only, so it never reaches the
+  table and no existing frame changes because it exists.
+- **An empty estate batch list.** A freshly minted owner token is a device
+  the server has never seen, which `app/bulk/index.tsx` renders as an empty
+  list rather than an error — the ordinary first visit to `/bulk`.
+
+Sheets that would change the fixture are opened and then dismissed: the
+category picker, the delete confirmation, the admin reject sheet. Both
+projects run against one database, so a capture that confirmed any of them
+would leave the other project photographing a different product.
 
 This supersedes `apps/web/scripts/screenshots-v{2,3,4}.mjs` for new work — those
 drive Chrome over CDP from a hardcoded macOS path and write to an untracked
@@ -87,11 +113,24 @@ the current counts, and `git status` after a re-capture shows exactly which
 files moved.
 
 Fixed here means the three causes below no longer move a frame. It does not
-mean two captures are guaranteed byte-identical on every machine: Chromium's
-own text rasterisation differs by build, and a capture run on a Chromium other
-than the one this suite is pinned to can still move every frame on font
-metrics alone — that is an environment mismatch, not a bug in the fixture, and
-the fix is capturing from the pinned build, not chasing pixels here.
+mean two captures are guaranteed byte-identical on every machine: text
+rasterisation belongs to the host, and a capture taken somewhere other than
+where the committed set was taken moves every frame on font metrics alone —
+an environment mismatch, not a bug in the fixture, and not something to chase
+pixels over here.
+
+**It is the host, not the Chromium build.** This paragraph used to say the
+build, and so does `AGENTS.md`; measured on the container this set was last
+refreshed from, that is wrong. The pinned headless shell (1243, Chromium 153)
+and the older build that ships in the image (1194, Chromium 141, symlinked
+under the pinned name the way `AGENTS.md` describes) produce **byte-identical**
+frames — 0.00% of pixels differ. Both differ from the set committed before
+them on 2–4% of pixels, on every frame, with no layout change anywhere: same
+line breaks, same wrap points, same element positions, only the antialiasing
+of the glyphs. So installing the pinned build is not what makes a refresh
+comparable; capturing from the same machine as last time is, and no rule here
+can guarantee that. Refresh the whole set in one run, and read the diff as a
+design diff only where the design actually moved.
 
 **Fixed — the mount spring.** On web, `Print.web.tsx` drops each card onto the
 table with a CSS animation (`Stamp.web.tsx` and `Skeleton.web.tsx` are the same

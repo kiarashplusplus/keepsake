@@ -24,7 +24,7 @@
  * spec would not think to look.
  */
 import type { APIRequestContext } from "@playwright/test";
-import { createApprovedListing, hideListingAsAdmin, ownerHeaders, sendRequest } from "./api";
+import { createApprovedListing, hideListingAsAdmin, markListingGiven, ownerHeaders, sendRequest } from "./api";
 import { confirmDemoRequests, pinListingIds } from "./demoDb";
 import { DEMO_PHOTOS, type DemoPhoto } from "./demoPhotos";
 
@@ -129,6 +129,39 @@ export const DEMO_HIDDEN_LISTING: DemoListing = {
   postalCode: "02144",
 };
 
+/**
+ * The keepsake that has already found a home — the item page's `Given` stamp
+ * and the giver's own view of a closed listing.
+ *
+ * Kept out of `DEMO_LISTINGS` for the same reason the hidden one is: the
+ * feed is `status = 'approved'` only (`apps/api/src/routes/feed.ts`), so a
+ * given keepsake is never on the table, and folding it into the six would
+ * mean every feed frame quietly showed five. `GET /api/listings/:id` still
+ * answers for it, which is exactly the screen a stranger reaches from an old
+ * link or a shared card after the giver has chosen someone.
+ *
+ * Marked given through `POST /api/listings/:id/given` — the same button the
+ * dashboard has — rather than by writing the status into D1, so the
+ * `given_at` timestamp, the closed requests and the owner row are all the
+ * ones the real product would have produced.
+ */
+export const DEMO_GIVEN_LISTING: DemoListing = {
+  key: "given",
+  // Reuses the records photograph, the same way the hidden listing reuses
+  // the give walkthrough's: a crate of shellac and a rack of sleeves are
+  // near enough the same object to read right, and adding an eighth
+  // photograph to `e2e/fixtures/photos` would cost 200 KB of repository for
+  // one frame. The two do share `/mine`, where this is the only pair of
+  // matching thumbnails — a household clearing out a record collection in
+  // two goes, which is not a strange thing for this product to show.
+  photo: DEMO_PHOTOS.records,
+  title: "A crate of 78s",
+  story:
+    "Shellac, mostly dance bands, all of them my grandfather's and all of them too brittle to post. Somebody with a wind-up gramophone came for them last month, which is a better ending than I expected when I started clearing the house.",
+  category: "music_instruments",
+  postalCode: "02139",
+};
+
 /** The two strangers whose notes sit under `/mine/:id`. Fixed addresses:
  * the giver's screen shows them masked until Choose, and a random address
  * would change the width of the masked line from one capture to the next. */
@@ -180,6 +213,7 @@ export const PINNED_LISTING_IDS: Record<string, string> = {
   records: "SEEDCARD050000000000000000",
   quilt: "SEEDCARD060000000000000000",
   hidden: "SEEDCARD070000000000000000",
+  given: "SEEDCARD080000000000000000",
 };
 
 export interface DemoCatalog {
@@ -190,6 +224,8 @@ export interface DemoCatalog {
   /** The listing this project may choose a requester on, by project name. */
   requestedIdFor: (projectName: string) => string;
   hiddenId: string;
+  /** The keepsake that has already been given away (`DEMO_GIVEN_LISTING`). */
+  givenId: string;
 }
 
 interface OwnerListing {
@@ -214,7 +250,7 @@ async function existingCatalog(request: APIRequestContext): Promise<Map<string, 
  * either way.
  */
 export async function ensureDemoCatalog(request: APIRequestContext): Promise<DemoCatalog> {
-  const all = [...DEMO_LISTINGS, DEMO_HIDDEN_LISTING];
+  const all = [...DEMO_LISTINGS, DEMO_HIDDEN_LISTING, DEMO_GIVEN_LISTING];
   const existing = await existingCatalog(request);
   const complete = existing !== null && all.every((listing) => existing.has(listing.title));
 
@@ -259,6 +295,7 @@ export async function ensureDemoCatalog(request: APIRequestContext): Promise<Dem
     confirmDemoRequests(requestIdToListingId);
 
     await hideListingAsAdmin(request, ids.hidden as string, "ux baseline fixture");
+    await markListingGiven(request, ids.given as string, DEMO_OWNER_TOKEN);
   }
 
   return {
@@ -273,5 +310,6 @@ export async function ensureDemoCatalog(request: APIRequestContext): Promise<Dem
       return ids[key] as string;
     },
     hiddenId: ids.hidden as string,
+    givenId: ids.given as string,
   };
 }

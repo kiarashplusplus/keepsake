@@ -52,11 +52,23 @@ const ENV_FILE = path.join(STATE_DIR, "e2e.env");
 
 /** Real GeoNames centroids, matching `apps/api/test/helpers.ts`'s
  * `seedStandardPostalCodes()` — 02139 is ~1.7 mi from 02144 and 01608 ~37 mi,
- * which is what makes a 25-mile radius mean something. */
+ * which is what makes a 25-mile radius mean something.
+ *
+ * 99501 is the odd one out and is here for the UX baseline. Every keepsake
+ * this suite seeds is in eastern Massachusetts, so no radius a visitor can
+ * pick around any of the three above ever comes back empty — and the feed's
+ * third empty state (`radius`, `src/features/feed/emptyState.ts`: "nothing
+ * within 25 mi of …", offering to widen) was therefore unreachable and
+ * unphotographed. A postcode 3,000 miles away makes it reachable through
+ * the product's own URL params, with no fixture that only the capture can
+ * see. It is a real centroid like the rest, and nothing is ever seeded
+ * there, so no other spec's results move.
+ */
 const POSTAL_CODES = [
   ["US", "02144", "Somerville", "MA", 42.3958, -71.0967],
   ["US", "02139", "Cambridge", "MA", 42.3736, -71.1097],
   ["US", "01608", "Worcester", "MA", 42.2626, -71.8023],
+  ["US", "99501", "Anchorage", "AK", 61.2181, -149.9003],
 ];
 
 function sqlString(value) {
@@ -189,7 +201,7 @@ function main() {
     "utf8",
   );
 
-  console.log("[e2e:setup] seeding postal codes 02144 / 02139 / 01608");
+  console.log(`[e2e:setup] seeding postal codes ${POSTAL_CODES.map(([, code]) => code).join(" / ")}`);
   wrangler(["d1", "execute", "keepsake-db", "--local", "--persist-to", STATE_DIR, "--file", seedFile]);
 
   console.log("[e2e:setup] ready");
