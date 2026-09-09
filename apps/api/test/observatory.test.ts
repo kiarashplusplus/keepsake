@@ -126,6 +126,7 @@ type TelemetryRequest = {
   view: "events" | "calculations";
   parameters: {
     filters: { key: string; value: string }[];
+    filterCombination?: string;
     limit?: number;
     orderBy?: { value: string; order: string };
   };
@@ -336,6 +337,17 @@ describe("GET /api/admin/observatory", () => {
       for (const query of eventQueries) {
         expect(query.parameters.limit).toBe(50);
         expect(query.parameters.orderBy).toEqual({ value: "timestamp", order: "desc" });
+      }
+
+      // The one that actually mattered. Every query here sends two filters,
+      // and the events view answers two filters with zero rows — no error,
+      // no warning — unless the combination is stated. Measured against the
+      // live API: [scriptName] alone 50 rows, [level] alone 48, both
+      // together 0, both together with "and" 3. Deleting this line would
+      // empty the error feed again and break nothing else.
+      for (const query of bodies) {
+        expect(query.parameters.filterCombination).toBe("and");
+        expect(query.parameters.filters.length).toBeGreaterThan(1);
       }
       // The aggregate must not carry a row cap — it counts the window, not a
       // page of it.

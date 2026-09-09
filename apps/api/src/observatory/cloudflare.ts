@@ -385,29 +385,38 @@ async function telemetryQuery(
         view,
         parameters: {
           datasets: ["cloudflare-workers"],
-          // `limit` and `orderBy` are set *inside* `parameters` as well as at
-          // the top level, and this is the current best explanation for a
-          // feed that counted two errors and returned zero rows.
+          // **`filterCombination` is required whenever `filters` has more
+          // than one entry, and omitting it costs you every row without an
+          // error.** This is the whole reason the error feed was empty in
+          // production for as long as it existed, and it took four wrong
+          // guesses to find, so the evidence is written down rather than
+          // summarised:
           //
-          // Cloudflare's schema declares both: a top-level `limit` with
-          // `default: 50`, and a `parameters.limit` with `minimum: 0` and no
-          // default at all. Production showed `view: "events"` being honored
-          // — the response carried a `run, events, statistics` result, so the
-          // events envelope was built — with nothing in it, while the
-          // identical filter counted the rows fine through
-          // `view: "calculations"`. A row limit the aggregate ignores and the
-          // feed obeys is the one thing that fits every observation, and an
-          // unset `parameters.limit` reaching the query as 0 would produce
-          // exactly this.
+          //   events, [scriptName]                        -> 50 rows
+          //   events, [level]                             -> 48 rows
+          //   events, [scriptName, level]                 ->  0 rows
+          //   events, [scriptName, level] + "and"         ->  3 rows
+          //   calculations, [scriptName, level]           ->  3   (no combination needed)
           //
-          // Both are defensible on their own merits regardless of whether
-          // they turn out to be the fix: a feed that renders "most recent
-          // first" should say so rather than inherit whatever the default
-          // ordering happens to be, and the cap should be stated on the same
-          // object the filters are. If this does not fix it, the diagnostic
-          // in `fetchLogTelemetry` now reports `result.events.count`, which
-          // separates "the query matched nothing" from "the query matched
-          // and returned nothing".
+          // Each filter is fine alone. Two together silently match nothing
+          // until the combination is stated. The `calculations` view does
+          // not need it — which is exactly what made this so hard to see,
+          // because the counts beside the feed were right the whole time and
+          // the two halves of the panel disagreed with no error anywhere.
+          //
+          // Everything ruled out along the way, so nobody re-runs it: the
+          // response shape is right (`result.events.events`), `view:
+          // "events"` was honored, the query ran synchronously to
+          // `status: "COMPLETED"`, `$metadata.level` is a `string` whose
+          // values really do include `"error"` (checked against the `keys`
+          // and `values` endpoints), and neither `eq` nor `includes` makes
+          // any difference.
+          filterCombination: "and",
+          // Not the fix — both were tried as candidates and neither changed
+          // anything — but kept because they are right on their own terms: a
+          // feed that renders most-recent-first should say so rather than
+          // inherit a default, and the row cap belongs on the same object as
+          // the filters it applies to.
           ...(view === "events"
             ? { limit: LOG_EVENT_LIMIT, orderBy: { value: "timestamp", order: "desc" as const } }
             : {}),
