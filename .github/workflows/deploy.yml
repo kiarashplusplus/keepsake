@@ -36,7 +36,7 @@ on:
         description: Which tier to deploy
         type: choice
         options: [preview, production]
-        default: preview
+        default: production
         required: true
 
 concurrency:
