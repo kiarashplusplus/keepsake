@@ -117,6 +117,60 @@ describe("admin routes", () => {
     });
   });
 
+  describe("GET /api/admin/listings/:id", () => {
+    it("returns one listing, enriched exactly as the queue would have shown it", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      const ownerId = await insertOwner();
+      await env.DB.prepare("UPDATE owners SET email = ?, email_verified_at = ? WHERE id = ?")
+        .bind("giver@keepsake.ing", Date.now(), ownerId)
+        .run();
+      const listingId = await insertApprovedListing({ ownerId, title: "Looked up by id" });
+      await setListingStatus(listingId, "needs_review");
+      await insertModerationEvent(listingId, { kind: "decision", verdict: "needs_review", reason: "held_for_review" });
+      await insertReport(listingId, "personal_info");
+
+      const [byId, fromQueue] = await Promise.all([
+        SELF.fetch(`http://x/api/admin/listings/${listingId}`, { headers: adminHeaders() }),
+        SELF.fetch("http://x/api/admin/queue?status=needs_review", { headers: adminHeaders() }),
+      ]);
+      expect(byId.status).toBe(200);
+
+      const item = await readOk<AdminQueueItem>(byId);
+      const page = await readOk<FeedPage<AdminQueueItem>>(fromQueue);
+      // The same object, not a second thinner shape that would drift from
+      // the one the queue card already knows how to render.
+      expect(item).toEqual(page.items.find((queued) => queued.id === listingId));
+      expect(item.owner.email_masked).toBe("g•••@keepsake.ing");
+      expect(item.events[0]?.reason).toBe("held_for_review");
+      expect(item.reports[0]?.reason).toBe("personal_info");
+    });
+
+    it("finds a listing that is on no queue tab at all", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      const ownerId = await insertOwner();
+      const listingId = await insertApprovedListing({ ownerId });
+      // `given` is the status the queue cannot show — and the one an id
+      // forwarded by a giver most often turns out to have.
+      await setListingStatus(listingId, "given");
+
+      const res = await SELF.fetch(`http://x/api/admin/listings/${listingId}`, { headers: adminHeaders() });
+      expect(res.status).toBe(200);
+      expect((await readOk<AdminQueueItem>(res)).status).toBe("given");
+    });
+
+    it("404s on an unknown id", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      const res = await SELF.fetch("http://x/api/admin/listings/does-not-exist", { headers: adminHeaders() });
+      expect(res.status).toBe(404);
+    });
+
+    it("requires the admin token", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      const res = await SELF.fetch("http://x/api/admin/listings/anything");
+      expect(res.status).toBe(401);
+    });
+  });
+
   describe("POST /api/admin/listings/:id/approve", () => {
     it("moves needs_review -> approved, sets published_at, and logs an admin/approved event", async () => {
       setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
@@ -475,11 +529,29 @@ describe("admin routes", () => {
     it("warns (ok: false) when postal_codes is empty", async () => {
       setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
       const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
+      // Same convention as public `/health`: a red verdict is a 503, so a
+      // monitor pointed here can read the status code instead of the body.
+      expect(res.status).toBe(503);
       const health = await readOk<AdminHealth>(res);
       expect(health.ok).toBe(false);
       expect(health.postal_codes_count).toBe(0);
       expect(health.cron_last_run.orphanSweep).toBeNull();
       expect(health.cron_last_run.moderationRetry).toBeNull();
+    });
+
+    // The trap in the 503 above, pinned: `/admin`'s token gate probes this
+    // very endpoint to check a typed token, and `apps/web/src/api/client.ts`
+    // decides success from the *envelope's* `ok`, not the HTTP status. If a
+    // red verdict ever came back as `{ok: false, error: …}`, a correct token
+    // would be rejected with "Couldn't reach Keepsake" at exactly the moment
+    // something needed an admin's attention.
+    it("still answers a red verdict in a success envelope, so the token gate lets the admin in", async () => {
+      setTestEnvVar("ADMIN_TOKEN", ADMIN_TOKEN);
+      const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
+      expect(res.status).toBe(503);
+      const envelope = (await res.json()) as { ok: boolean; data?: AdminHealth };
+      expect(envelope.ok).toBe(true);
+      expect(envelope.data?.ok).toBe(false);
     });
 
     it("reports the postal_codes count and cron last-run timestamps once both crons are fresh", async () => {
@@ -551,7 +623,9 @@ describe("admin routes", () => {
       await env.KV.put("cron:last:orphanSweep", String(Date.now()));
 
       const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
-      expect(res.status).toBe(200);
+      // A stale cron is a red verdict, and a red verdict is a 503 — this
+      // asserted 200 back when the status code said nothing at all.
+      expect(res.status).toBe(503);
       const health = await readOk<AdminHealth>(res);
       expect(health.ok).toBe(false);
       expect(health.cron_last_run.moderationRetry).toBe(staleTimestamp);

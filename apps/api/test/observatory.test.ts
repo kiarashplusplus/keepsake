@@ -66,33 +66,50 @@ function edgeResponse(): Response {
  * it did — the test proved the parser agreed with itself, not with
  * Cloudflare.
  */
-function logsResponse(): Response {
+function logsResponse(body?: TelemetryRequest): Response {
+  // A quiet window with seven errors and no warnings. Answering per level
+  // matters now that four calls are made rather than three — a stub that
+  // gave every call the same body would report the same rows twice and
+  // count seven warnings it never returns, tripping the mismatch guard on a
+  // fixture that is supposed to be healthy.
+  const level = body?.parameters.filters.find((f) => f.key === "$metadata.level")?.value ?? "error";
+
+  if (body?.view === "calculations") {
+    return Response.json({
+      success: true,
+      errors: [],
+      result: { calculations: [{ aggregates: [{ value: level === "error" ? 7 : 0 }] }] },
+    });
+  }
+
   return Response.json({
     success: true,
     errors: [],
     result: {
       events: {
-        events: [
-          {
-            dataset: "cloudflare-workers",
-            timestamp: 1_757_000_000_000,
-            source: {
-              event: "capture",
-              level: "error",
-              message: "moderation failed",
-              service: "keepsake-api",
-              environment: "production",
-            },
-            $metadata: {
-              level: "error",
-              message: "moderation failed",
-              service: "keepsake-production",
-              requestId: "req-1",
-            },
-          },
-        ],
+        events:
+          level === "error"
+            ? [
+                {
+                  dataset: "cloudflare-workers",
+                  timestamp: 1_757_000_000_000,
+                  source: {
+                    event: "capture",
+                    level: "error",
+                    message: "moderation failed",
+                    service: "keepsake-api",
+                    environment: "production",
+                  },
+                  $metadata: {
+                    level: "error",
+                    message: "moderation failed",
+                    service: "keepsake-production",
+                    requestId: "req-1",
+                  },
+                },
+              ]
+            : [],
       },
-      calculations: [{ aggregates: [{ value: 7 }] }],
     },
   });
 }
@@ -101,8 +118,20 @@ function logsResponse(): Response {
  * succeed and the observability call fail — the mixed state a single
  * on/off stub cannot express, and the one that proves the two panels really
  * are independent. */
-function stubCloudflare(handlers: { graphql?: () => Response; telemetry?: () => Response }): void {
-  vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
+/** The parsed telemetry request body, so a handler can answer the `error`
+ * feed differently from the `warning` one — the four calls now differ only
+ * in `view` and a filter value, and a stub that cannot see them can only
+ * give all four the same answer. */
+type TelemetryRequest = {
+  view: "events" | "calculations";
+  parameters: { filters: { key: string; value: string }[] };
+};
+
+function stubCloudflare(handlers: {
+  graphql?: () => Response;
+  telemetry?: (body: TelemetryRequest) => Response;
+}): void {
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url.includes("/graphql")) {
       if (!handlers.graphql) return Promise.reject(new Error("unexpected graphql call"));
@@ -110,7 +139,7 @@ function stubCloudflare(handlers: { graphql?: () => Response; telemetry?: () => 
     }
     if (url.includes("/observability/telemetry/query")) {
       if (!handlers.telemetry) return Promise.reject(new Error("unexpected telemetry call"));
-      return Promise.resolve(handlers.telemetry());
+      return Promise.resolve(handlers.telemetry(JSON.parse(String(init?.body)) as TelemetryRequest));
     }
     return Promise.reject(new Error(`unstubbed fetch: ${url}`));
   });
@@ -280,6 +309,41 @@ describe("GET /api/admin/observatory", () => {
         service: "keepsake-production",
         request_id: "req-1",
       });
+    });
+
+    it("shows warnings, not just a count of them", async () => {
+      // `admin/health` routes its "needs a human" signals through
+      // console.warn on purpose. Counting those while showing none of them
+      // made the one number on the panel nothing could act on.
+      stubCloudflare({
+        graphql: edgeResponse,
+        telemetry: (body) =>
+          body.parameters.filters.some((f) => f.value === "warning") && body.view === "events"
+            ? Response.json({
+                success: true,
+                errors: [],
+                result: {
+                  events: {
+                    events: [
+                      {
+                        dataset: "cloudflare-workers",
+                        timestamp: 1_757_000_500_000,
+                        source: { level: "warning", message: "cron heartbeat stale" },
+                        $metadata: { level: "warning", message: "cron heartbeat stale", requestId: "req-2" },
+                      },
+                    ],
+                  },
+                },
+              })
+            : logsResponse(body),
+      });
+      const observatory = await getObservatory();
+
+      if (observatory.logs.state !== "ok") throw new Error("expected ok");
+      // Both levels in one feed, newest first — a window of 50 warnings must
+      // not bury the single error, so the cap comes after the merge sorts.
+      expect(observatory.logs.data.events.map((e) => e.level)).toEqual(["warning", "error"]);
+      expect(observatory.logs.data.events[0]?.message).toBe("cron heartbeat stale");
     });
 
     it("refuses to render an empty feed under a nonzero error count", async () => {

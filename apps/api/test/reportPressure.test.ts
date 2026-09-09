@@ -39,8 +39,13 @@ async function report(listingId: string): Promise<Response> {
 
 async function getHealth(): Promise<AdminHealth> {
   const res = await SELF.fetch("http://x/api/admin/health", { headers: adminHeaders() });
-  expect(res.status).toBe(200);
-  return readOk<AdminHealth>(res);
+  const health = await readOk<AdminHealth>(res);
+  // This file drives the verdict both ways, so it cannot assert one fixed
+  // status: `/api/admin/health` answers a red verdict with 503, matching
+  // public `/health`. Tying the two together here means the status code is
+  // checked on every call in the file rather than trusted once.
+  expect(res.status).toBe(health.ok ? 200 : 503);
+  return health;
 }
 
 async function listingStatus(id: string): Promise<string | undefined> {

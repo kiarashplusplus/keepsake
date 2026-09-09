@@ -421,13 +421,28 @@ export async function fetchLogTelemetry(
   const timeframe = { from: now - windowDays * DAY_MS, to: now };
 
   try {
-    // Three calls: the error feed itself, and a count for each level. The
-    // counts exist because the feed is capped at `LOG_EVENT_LIMIT` — without
-    // them, one stray error and four thousand identical ones render
-    // identically, which is exactly the distinction an on-call reader needs
-    // and the cap destroys.
-    const [errorEvents, errorCount, warningCount] = await Promise.all([
+    // A feed and a count for each of the two levels. The counts exist
+    // because the feeds are capped at `LOG_EVENT_LIMIT` — without them, one
+    // stray error and four thousand identical ones render identically, which
+    // is exactly the distinction an on-call reader needs and the cap
+    // destroys.
+    //
+    // Warnings used to be counted and never shown, which made the one number
+    // on the panel that nothing could act on: `admin/health` deliberately
+    // routes its "needs a human" signals — a stale cron, a listing
+    // auto-hidden by reports and awaiting review — through `console.warn` so
+    // that one Workers Logs filter catches all of them, and this panel could
+    // report that two such things had happened while giving no way to learn
+    // what either was.
+    //
+    // Two `eq` queries rather than one query filtered to both levels: the
+    // events view is already returning fewer rows than the count view says
+    // exist (see the mismatch guard below), and widening a filter whose
+    // behaviour is not yet understood would confuse a second variable with
+    // the first. Same filter shape, twice, is the boring option on purpose.
+    const [errorEvents, warningEvents, errorCount, warningCount] = await Promise.all([
       telemetryQuery(config, timeframe, "error", "events"),
+      telemetryQuery(config, timeframe, "warning", "events"),
       telemetryQuery(config, timeframe, "error", "calculations"),
       telemetryQuery(config, timeframe, "warning", "calculations"),
     ]);
@@ -436,7 +451,7 @@ export async function fetchLogTelemetry(
     // rejected query can also come back as a 200 carrying a populated
     // `errors` array and no `success` field at all, and the old check —
     // `success === false` alone — read that as a success with nothing in it.
-    const failed = [errorEvents, errorCount, warningCount].find(
+    const failed = [errorEvents, warningEvents, errorCount, warningCount].find(
       (r) => r.success === false || (r.errors?.length ?? 0) > 0,
     );
     if (failed) {
@@ -446,7 +461,8 @@ export async function fetchLogTelemetry(
       };
     }
 
-    const events: ObservatoryLogEvent[] = (errorEvents.result?.events?.events ?? []).map((event) => {
+    const readEvents = (response: TelemetryQueryResponse, level: "error" | "warning"): ObservatoryLogEvent[] =>
+      (response.result?.events?.events ?? []).map((event) => {
       const source = event.source ?? {};
       // `$metadata` first (Cloudflare's own annotations, always present on a
       // real row), then the Worker's own log object. `capture.ts` writes
@@ -456,7 +472,7 @@ export async function fetchLogTelemetry(
       const metadata = event.$metadata ?? {};
       return {
         ts: event.timestamp ?? source.timestamp ?? 0,
-        level: metadata.level ?? source.level ?? "error",
+        level: metadata.level ?? source.level ?? level,
         message: metadata.message ?? source.message ?? "(no message)",
         service: metadata.service ?? source.service ?? null,
         // This Worker's own `requestId` first, Cloudflare's second — they
@@ -471,7 +487,9 @@ export async function fetchLogTelemetry(
         request_id: source.tags?.requestId ?? metadata.requestId ?? null,
       };
     });
-    events.sort((a, b) => b.ts - a.ts);
+
+    const errorFeed = readEvents(errorEvents, "error");
+    const warningFeed = readEvents(warningEvents, "warning");
 
     const readCount = (response: TelemetryQueryResponse): number =>
       response.result?.calculations?.[0]?.aggregates?.[0]?.value ?? 0;
@@ -498,13 +516,30 @@ export async function fetchLogTelemetry(
     // values. `run, statistics, calculations` back from a `view: "events"`
     // query means the view was not honored; `events` present but empty means
     // the rows are elsewhere in it.
-    if (counts.error > 0 && events.length === 0) {
-      const shape = Object.keys(errorEvents.result ?? {}).join(", ") || "(no result object)";
+    // Checked per level, and *before* the merge is capped below: a level
+    // whose rows were all pushed out of a shared cap is not the same failure
+    // as a level that returned none, and only the uncapped arrays can tell
+    // them apart.
+    const mismatch = (
+      [
+        ["error", counts.error, errorFeed, errorEvents],
+        ["warning", counts.warning, warningFeed, warningEvents],
+      ] as const
+    ).find(([, count, feed]) => count > 0 && feed.length === 0);
+
+    if (mismatch) {
+      const [level, count, , response] = mismatch;
+      const shape = Object.keys(response.result ?? {}).join(", ") || "(no result object)";
       return {
         state: "error",
-        error: `Cloudflare observability: ${counts.error} error log(s) counted in this window but the events feed returned none — response carried [${shape}]`,
+        error: `Cloudflare observability: ${count} ${level} log(s) counted in this window but the events feed returned none — response carried [${shape}]`,
       };
     }
+
+    // Most recent first across both levels, then capped once. A window with
+    // 50 warnings and one error must not bury the error, so the cap is
+    // applied after the merge sorts by time rather than per level.
+    const events = [...errorFeed, ...warningFeed].sort((a, b) => b.ts - a.ts).slice(0, LOG_EVENT_LIMIT);
 
     return {
       state: "ok",

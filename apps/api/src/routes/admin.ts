@@ -265,6 +265,27 @@ adminRoutes.get("/queue", validateQuery(AdminQueueQuery), async (c) => {
     .bind(...params)
     .all<ListingRow>();
 
+  const items = await enrichListingRows(c.env, rows);
+
+  const last = rows[rows.length - 1];
+  const next_cursor = rows.length === query.limit && last ? encodeKeysetCursor(last.updated_at, last.id) : null;
+  const page: FeedPage<AdminQueueItem> = { items, next_cursor };
+  return ok(c, page);
+});
+
+/**
+ * Listing rows → full `AdminQueueItem`s: photos, aspects, owner summary,
+ * the `moderation_events` trail and the reports, for a whole page at once.
+ *
+ * Extracted from the queue handler so `GET /api/admin/listings/:id` returns
+ * *the same object* the queue does rather than a second, thinner shape that
+ * would drift from it — the queue card component already renders this, and
+ * the one-listing lookup exists precisely so an admin can see everything the
+ * queue would have shown had they been able to find it there.
+ */
+async function enrichListingRows(env: Env, rows: ListingRow[]): Promise<AdminQueueItem[]> {
+  if (rows.length === 0) return [];
+
   // One query per child table for the whole page, not one per row. The
   // owner lookup is de-duplicated first: a queue page is often several
   // listings from the same repeat poster, and the old loop asked for that
@@ -272,14 +293,14 @@ adminRoutes.get("/queue", validateQuery(AdminQueueQuery), async (c) => {
   const listingIds = rows.map((row) => row.id);
   const ownerIds = [...new Set(rows.map((row) => row.owner_id))];
   const [photosByListing, aspectsByListing, ownersById, eventsByListing, reportsByListing] = await Promise.all([
-    fetchPhotoRowsForListings(c.env, listingIds),
-    fetchAspectRowsForListings(c.env, listingIds),
-    fetchOwnerSummaries(c.env, ownerIds),
-    fetchModerationEventsForListings(c.env, listingIds),
-    fetchReportsForListings(c.env, listingIds),
+    fetchPhotoRowsForListings(env, listingIds),
+    fetchAspectRowsForListings(env, listingIds),
+    fetchOwnerSummaries(env, ownerIds),
+    fetchModerationEventsForListings(env, listingIds),
+    fetchReportsForListings(env, listingIds),
   ]);
 
-  const items: AdminQueueItem[] = rows.map((row) => {
+  return rows.map((row) => {
     const ownerListing = serializeOwnerListing(row, photosByListing.get(row.id) ?? [], aspectsByListing.get(row.id) ?? []);
     const ownerRow = ownersById.get(row.owner_id);
 
@@ -309,11 +330,34 @@ adminRoutes.get("/queue", validateQuery(AdminQueueQuery), async (c) => {
       })),
     };
   });
+}
 
-  const last = rows[rows.length - 1];
-  const next_cursor = rows.length === query.limit && last ? encodeKeysetCursor(last.updated_at, last.id) : null;
-  const page: FeedPage<AdminQueueItem> = { items, next_cursor };
-  return ok(c, page);
+// ---------------------------------------------------------------------------
+// GET /api/admin/listings/:id
+// ---------------------------------------------------------------------------
+/**
+ * One listing by id, enriched exactly as `GET /api/admin/queue` enriches a
+ * page of them.
+ *
+ * The queue is the only way this router could read a listing, and the queue
+ * is filtered by status — so an admin holding an id and not a status (from a
+ * report, an `/item/:id` URL a giver forwarded, a `moderation_events` row)
+ * had to guess which tab it was on and page through until it appeared, or
+ * fall back to a manual D1 query. Every *action* on a listing has always
+ * been addressable by id alone; only reading one wasn't.
+ *
+ * Deliberately not status-filtered: the ids that arrive this way are most
+ * often for listings that are `given`, `withdrawn` or `rejected` and
+ * therefore on no queue tab at all.
+ */
+adminRoutes.get("/listings/:id", async (c) => {
+  const id = requireParam(c, "id");
+  const row = await fetchListingRow(c.env, id);
+  if (!row) return fail(c, "not_found", "Listing not found.", 404);
+
+  const [item] = await enrichListingRows(c.env, [row]);
+  if (!item) return fail(c, "not_found", "Listing not found.", 404);
+  return ok(c, item);
 });
 
 // ---------------------------------------------------------------------------
@@ -895,7 +939,20 @@ adminRoutes.get("/health", async (c) => {
     cron_last_run: cronLastRun,
     report_pressure: reportPressure,
   };
-  return ok(c, health);
+  // `503` when the verdict is red, matching what public `/health` already
+  // does — the same verdict answered with two different conventions meant a
+  // monitor pointed here had to parse the body to learn what a status code
+  // was right there to tell it.
+  //
+  // This does **not** lock an admin out of `/admin` when something needs
+  // attention, which is the trap it looks like. The two `ok`s are different
+  // claims: the envelope's `ok` says the request itself succeeded, the
+  // payload's says the site is healthy. `apps/web/src/api/client.ts`
+  // branches on the envelope, so a `503` carrying `{ok: true, data: {ok:
+  // false, …}}` still resolves — `AdminTokenGate` accepts the token and the
+  // strip renders the red verdict, which is exactly the moment an admin most
+  // needs to get in.
+  return ok(c, health, health.ok ? 200 : 503);
 });
 
 // ---------------------------------------------------------------------------
