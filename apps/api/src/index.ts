@@ -271,13 +271,25 @@ app.get("/health", async (c) => {
   // check is that `/health` reports the right commit, and that check ran
   // across exactly this gap while the site served nothing usable.
   //
-  // The probe is a real fetch of the SPA shell through the binding. With
-  // `not_found_handling = "single-page-application"` a live deploy answers
-  // any path with `index.html`, so a non-`ok` status means the assets system
-  // has no shell to serve at all — which is the failure worth catching. The
-  // URL's origin is irrelevant to the binding (it routes on path) but must
-  // be well-formed, so it is written literally rather than derived from the
-  // incoming request, whose path is `/health`.
+  // The probe is a real fetch of the SPA shell through the binding, and it
+  // names `/index.html` — a file that must exist in any usable export —
+  // rather than relying on a fallback. It used to lean on one: under
+  // `not_found_handling = "single-page-application"` any path at all came
+  // back as `index.html`, so the probe could not tell a served shell from a
+  // substituted one. Under `404-page` (2026-09-09) a non-`ok` status means
+  // there is genuinely no shell, which is the failure worth catching and is
+  // what this was always meant to say.
+  //
+  // Verified against real workerd rather than assumed, because
+  // `html_handling = "drop-trailing-slash"` redirects an incoming
+  // `/index.html` request to `/`: a `wrangler dev` `/health` reports
+  // `assets: "ok"`, so the binding resolves the file by path and the
+  // trailing-slash rules do not apply to a direct binding fetch. Miniflare's
+  // assets emulation would not have shown a difference either way.
+  //
+  // The URL's origin is irrelevant to the binding (it routes on path) but
+  // must be well-formed, so it is written literally rather than derived from
+  // the incoming request, whose path is `/health`.
   let assets: "ok" | "error";
   try {
     const shell = await c.env.ASSETS.fetch(new Request("https://assets.invalid/index.html"));

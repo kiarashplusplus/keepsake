@@ -274,6 +274,30 @@ hydration. It is the same defect the second pass fixed for `/item/:id`, for the 
 were left. `apps/api/test/notFound.test.ts` asserts both halves against the served bytes;
 `e2e/deepLinkColdLoad.spec.ts` cold-loads every one of them in a real browser.
 
+### What the soft 404 had been hiding
+
+Turning the fallback off made one existing test fail, and it was not the test's fault.
+
+`routes/ogCard.ts`'s `serveDefault` streams `/og-default.png` through the `ASSETS` binding when a
+listing has no photo, and guards it with `if (!asset.ok) return fail(...)`. The api suite's fixture
+tree has no `og-default.png` — so under `single-page-application` that fetch came back as
+`index.html` at **200**, `asset.ok` was true, and the route streamed the SPA shell's HTML out under
+`Content-Type: image/png`. The test asserted the status and the fallback header, both of which were
+right, and never looked at the bytes. On a real deploy the same path would hand every unfurler the
+homepage's HTML labelled as a PNG the moment that asset went missing — silently, since nothing
+errors.
+
+A 1×1 PNG now stands in for it (`apps/api/test/fixtures/public/og-default.png`, and that directory
+gained a README explaining why), and the fallback exercises the code it was written for. Nothing in
+`src/` changed for this: the guard was already correct, it just had nothing to guard against.
+
+`/health`'s ASSETS probe was the other thing leaning on the fallback — it fetched `/index.html`
+knowing any path would answer. It still fetches `/index.html`, but now that is a real file check
+rather than a tautology. That it survives `drop-trailing-slash` (which redirects an *incoming*
+`/index.html` to `/`) was verified against real workerd via `wrangler dev`, not assumed: a direct
+binding fetch resolves by path and the trailing-slash rules do not apply to it. Miniflare's
+emulation would not have distinguished the two.
+
 ## Where the per-route metadata lives now, and why not in the shell
 
 `app/+html.tsx` still declares no canonical and no `og:url`, and
