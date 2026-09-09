@@ -3097,6 +3097,113 @@ function checkVerifyEmailToken(ctx) {
   return { status: "pass", details: [`${seen.length} recovery_tokens mint site(s):`, ...seen] };
 }
 
+// ── tail-consumers ─────────────────────────────────────────────────────────
+//
+// Issue #159, step 1 (#343) made the Observatory's error panel read
+// `error_events` in D1, written by a tail consumer. The Worker only sends its
+// event stream to a Worker it names in `[[tail_consumers]]`, and **that block
+// is not inherited into `[env.*]`** — each tier has to restate it.
+//
+// Wrangler only *warns* when a tier omits it. A warning in deploy output is
+// not a check: the deploy is green, the site is up, and the tier's errors go
+// nowhere. The Observatory then reports `unconfigured` — which is honest, and
+// which nobody is watching for on a tier that was working yesterday.
+//
+// This is the same shape as `cron-triggers` and `env-parity`: a fact restated
+// in more than one file, where the copies silently disagreeing is the failure.
+// The specific thing it prevents is adding an `[env.staging]` block, deploying
+// it green, and finding out months later that nothing was ever recorded.
+const WRANGLER_TAIL_PATH = "apps/api/wrangler.tail.toml";
+
+/** Env names in a wrangler config, from any `[env.<name>...]` or
+ * `[[env.<name>...]]` heading. Deliberately not `parseToml` — that skips
+ * `[[array-of-tables]]` headings entirely, which is exactly the syntax
+ * `tail_consumers` uses. */
+function wranglerEnvNames(text) {
+  const names = new Set();
+  for (const line of text.split("\n")) {
+    const match = line.trim().match(/^\[\[?env\.([^.\]]+)/);
+    if (match) names.add(match[1]);
+  }
+  return names;
+}
+
+/** `service = "..."` of each `[[tail_consumers]]` / `[[env.X.tail_consumers]]`
+ * block, keyed by env name (`null` for the top-level block). */
+function tailConsumerServices(text) {
+  const byEnv = new Map();
+  let current;
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const heading = line.match(/^\[\[?(?:env\.([^.\]]+)\.)?([^.\]]+)\]\]?$/);
+    if (heading) {
+      current = heading[2] === "tail_consumers" ? { env: heading[1] ?? null } : undefined;
+      continue;
+    }
+    if (!current) continue;
+    const service = line.match(/^service\s*=\s*"([^"]+)"/);
+    if (service) byEnv.set(current.env, service[1]);
+  }
+  return byEnv;
+}
+
+function checkTailConsumers(ctx) {
+  const apiText = ctx.readText(WRANGLER_PATH);
+  if (apiText === null) return { status: "skip", details: [`${WRANGLER_PATH} not present`] };
+  const tailText = ctx.readText(WRANGLER_TAIL_PATH);
+  if (tailText === null) return { status: "skip", details: [`${WRANGLER_TAIL_PATH} not present`] };
+
+  const tailName = tailText.split("\n").find((l) => /^name\s*=/.test(l.trim()))?.match(/"([^"]+)"/)?.[1];
+  if (!tailName) {
+    return { status: "fail", details: [`${WRANGLER_TAIL_PATH}: no top-level name = "..." — cannot tell what any tier should be naming`] };
+  }
+
+  const apiEnvs = wranglerEnvNames(apiText);
+  const tailEnvs = wranglerEnvNames(tailText);
+  const declared = tailConsumerServices(apiText);
+  const details = [];
+  const seen = [];
+
+  // `wrangler deploy --env X` names the Worker `<name>-X` unless the env block
+  // overrides `name`, so that is what a consumer on that tier has to name.
+  const expectedFor = (env) => (env === null ? tailName : `${tailName}-${env}`);
+
+  for (const env of [null, ...[...apiEnvs].sort()]) {
+    const label = env === null ? "[[tail_consumers]]" : `[[env.${env}.tail_consumers]]`;
+    const service = declared.get(env);
+
+    if (service === undefined) {
+      details.push(
+        `${WRANGLER_PATH}: ${label} is missing — tail_consumers is not inherited into [env.*], so ${env === null ? "the default tier" : `\`--env ${env}\``} ` +
+          `would deploy with its error stream going nowhere and the Observatory's error panel permanently unconfigured. Wrangler only warns about this.`,
+      );
+      continue;
+    }
+
+    const expected = expectedFor(env);
+    if (service !== expected) {
+      details.push(
+        `${WRANGLER_PATH}: ${label} names "${service}" but ${WRANGLER_TAIL_PATH} deploys "${expected}" for that tier — ` +
+          `a consumer naming a script that does not exist is a deploy-time error, and naming the *wrong* tier's script silently crosses two environments' error streams`,
+      );
+      continue;
+    }
+
+    if (env !== null && !tailEnvs.has(env)) {
+      details.push(
+        `${WRANGLER_PATH}: ${label} names "${service}", but ${WRANGLER_TAIL_PATH} has no [env.${env}] block to deploy it from`,
+      );
+      continue;
+    }
+
+    seen.push(`${label} → ${service}`);
+  }
+
+  if (details.length > 0) return { status: "fail", details };
+  return { status: "pass", details: [`${seen.length} tail consumer declaration(s) name the right script:`, ...seen] };
+}
+
 export const CHECKS = {
   fonts: { description: "@font-face url(/fonts/*) vs apps/web/public/fonts/*.ttf", run: checkFonts },
   "icon-glyphs": { description: "Icon.tsx's GLYPHS vs Ionicons-subset.woff2's actual cmap (both directions)", run: checkIconGlyphs },
@@ -3106,6 +3213,7 @@ export const CHECKS = {
   "env-parity": { description: ".env.example vs wrangler.toml [vars] / [env.*.vars]", run: checkEnvParity },
   "var-usage": { description: "wrangler.toml [vars] vs what apps/api/src reads and falls back to", run: checkVarUsage },
   "cron-triggers": { description: "wrangler.toml [triggers] ↔ scheduled() ↔ cron/registry.ts agree (name, schedule, staleAfterMs)", run: checkCronTriggers },
+  "tail-consumers": { description: "every tier restates [[tail_consumers]] and names the script wrangler.tail.toml deploys for it", run: checkTailConsumers },
   models: { description: '"@cf/" model ids confined to apps/api/src/models.ts', run: checkModels },
   "ip-digest": { description: "client-IP hashes rotate daily via lib/digest.ts's dailyIpDigest", run: checkIpDigest },
   "verify-email-token": { description: "every verify_email token records the address it was mailed to", run: checkVerifyEmailToken },

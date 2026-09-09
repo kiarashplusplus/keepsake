@@ -1052,6 +1052,101 @@ test("cron-triggers: skips when wrangler.toml is not present", () => {
   assert.equal(result.status, "skip");
 });
 
+// ── tail-consumers ─────────────────────────────────────────────────────
+//
+// The failure this guards is a *silent* one: wrangler only warns when a tier
+// omits `[[tail_consumers]]`, so the deploy is green and the tier's errors go
+// nowhere. Every case below is therefore a tree that deploys fine.
+
+const TAIL_TOML = `name = "keepsake-tail"
+
+[env.preview]
+
+[env.production]
+`;
+
+function tailApiToml({ preview = `[[env.preview.tail_consumers]]\nservice = "keepsake-tail-preview"`, production = `[[env.production.tail_consumers]]\nservice = "keepsake-tail-production"`, top = `[[tail_consumers]]\nservice = "keepsake-tail"` } = {}) {
+  return `name = "keepsake-api"
+
+${top}
+
+${preview}
+
+[env.preview.vars]
+ENVIRONMENT = "preview"
+
+${production}
+
+[env.production.vars]
+ENVIRONMENT = "production"
+`;
+}
+
+function tailTree(overrides = {}) {
+  return {
+    "apps/api/wrangler.toml": tailApiToml(),
+    "apps/api/wrangler.tail.toml": TAIL_TOML,
+    ...overrides,
+  };
+}
+
+test("tail-consumers: passes when every tier names the script its own env deploys", () => {
+  const result = runOne("tail-consumers", tailTree());
+  assert.equal(result.status, "pass");
+  assert.match(result.details.join("\n"), /env\.production\.tail_consumers\]\] → keepsake-tail-production/);
+});
+
+test("tail-consumers: fails when a tier omits the block it cannot inherit", () => {
+  const result = runOne("tail-consumers", tailTree({ "apps/api/wrangler.toml": tailApiToml({ production: "" }) }));
+  assert.equal(result.status, "fail");
+  // The message has to say *why* a green deploy is not evidence here.
+  assert.match(result.details.join("\n"), /not inherited into \[env\.\*\]/);
+  assert.match(result.details.join("\n"), /error stream going nowhere/);
+});
+
+test("tail-consumers: fails when the top-level block is missing", () => {
+  const result = runOne("tail-consumers", tailTree({ "apps/api/wrangler.toml": tailApiToml({ top: "" }) }));
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /\[\[tail_consumers\]\] is missing/);
+});
+
+test("tail-consumers: fails when a tier names another tier's script", () => {
+  // The nastiest version: both scripts exist, the deploy succeeds, and
+  // preview's errors land in production's table.
+  const result = runOne(
+    "tail-consumers",
+    tailTree({
+      "apps/api/wrangler.toml": tailApiToml({
+        preview: `[[env.preview.tail_consumers]]\nservice = "keepsake-tail-production"`,
+      }),
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /crosses two environments/);
+});
+
+test("tail-consumers: fails when the named tier has no env block in wrangler.tail.toml", () => {
+  const result = runOne("tail-consumers", tailTree({ "apps/api/wrangler.tail.toml": `name = "keepsake-tail"\n\n[env.preview]\n` }));
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /no \[env\.production\] block to deploy it from/);
+});
+
+test("tail-consumers: follows a renamed tail worker rather than hardcoding the name", () => {
+  const result = runOne(
+    "tail-consumers",
+    tailTree({
+      "apps/api/wrangler.tail.toml": `name = "keepsake-errors"\n\n[env.preview]\n\n[env.production]\n`,
+    }),
+  );
+  assert.equal(result.status, "fail");
+  assert.match(result.details.join("\n"), /deploys "keepsake-errors"/);
+});
+
+test("tail-consumers: skips when wrangler.tail.toml is not present", () => {
+  const result = runOne("tail-consumers", { "apps/api/wrangler.toml": tailApiToml() });
+  assert.equal(result.status, "skip");
+});
+
 // ── cron-triggers, the third file (#176) ───────────────────────────────
 //
 // `cron/registry.ts` is where a job's name, schedule and staleness threshold
