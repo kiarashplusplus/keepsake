@@ -42,6 +42,20 @@ const STATUS_LABELS: Record<ListingStatus, { label: string; color: TextColor }> 
 
 const THUMB = 120;
 
+// The one line the Status section exists for, or `null` when the eyebrow above
+// the title has already said everything there is to say (issue #362). Only two
+// statuses have more: a rejection has its moderator's reason, and a listing
+// under a closer look has how long that usually takes.
+function statusDetailFor(listing: OwnerListingDetail): { line: string; color: TextColor } | null {
+  if (listing.status === "rejected" && listing.moderation_reason !== null) {
+    return { line: MODERATION_REASONS[listing.moderation_reason], color: "dangerText" };
+  }
+  if (listing.status === "needs_review") {
+    return { line: "Taking a closer look. Usually within a day.", color: "textSecondary" };
+  }
+  return null;
+}
+
 export default function MineDetail(): React.ReactElement {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -132,6 +146,7 @@ export default function MineDetail(): React.ReactElement {
 
   const canShowFull = listing.status === "approved" || listing.status === "given";
   const status = STATUS_LABELS[listing.status];
+  const statusDetail = statusDetailFor(listing);
   const rule = { borderBottomWidth: 2, borderBottomColor: colors.ink, paddingBottom: space.sm };
 
   return (
@@ -183,27 +198,22 @@ export default function MineDetail(): React.ReactElement {
           </View>
         ) : null}
 
-        <View style={{ gap: space.sm }}>
-          <View style={rule}>
-            <Eyebrow>Status</Eyebrow>
+        {/* Issue #362: the eyebrow above the title already says "Live" — a
+            Status section whose whole content is the word "Live" again is a
+            rule and a heading spent on nothing. It renders only when it has
+            something the eyebrow cannot say: why a listing was rejected, or
+            that a closer look is under way. On every other status the card
+            gets shorter by one rule and the eyebrow carries it alone. */}
+        {statusDetail !== null ? (
+          <View style={{ gap: space.sm }}>
+            <View style={rule}>
+              <Eyebrow>Status</Eyebrow>
+            </View>
+            <Text variant="body" color={statusDetail.color}>
+              {statusDetail.line}
+            </Text>
           </View>
-          <Text variant="title">{status.label}</Text>
-          {listing.status === "rejected" && listing.moderation_reason !== null ? (
-            <Text variant="body" color="dangerText">
-              {MODERATION_REASONS[listing.moderation_reason]}
-            </Text>
-          ) : null}
-          {listing.status === "needs_review" ? (
-            <Text variant="body" color="textSecondary">
-              Taking a closer look. Usually within a day.
-            </Text>
-          ) : null}
-          {error !== null ? (
-            <Text variant="body" color="dangerText">
-              {error}
-            </Text>
-          ) : null}
-        </View>
+        ) : null}
 
         {/* Issue #155: the model decided this, and until now nobody could
             disagree with it. Sits above Requests because it is about the
@@ -230,6 +240,17 @@ export default function MineDetail(): React.ReactElement {
             onChoose={setChooseTarget}
           />
         </View>
+
+        {/* An action error is about the button that was just pressed, not about
+            what moderation decided, so it sits with the buttons — which is
+            where `handleDelete`'s comment has always said it was. It used to
+            render inside the Status section, with Category and Requests
+            between it and the button that produced it. */}
+        {error !== null ? (
+          <Text variant="body" color="dangerText">
+            {error}
+          </Text>
+        ) : null}
 
         {/* One stamp-red primary at most; the rest are ink-outlined, the destructive one bare. */}
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.md }}>

@@ -2,7 +2,8 @@ import * as React from "react";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import { ToastProvider } from "@/ui/Toast";
 import { chooseRequest, getMyListing, type OwnerListingDetail } from "@/api/me";
-import { deleteListing, setListingCategory } from "@/api/listings";
+import { deleteListing, setListingCategory, withdrawListing } from "@/api/listings";
+import { MODERATION_REASONS } from "@keepsake/contracts/listing";
 import { ApiError } from "@/api/client";
 import MineDetail from "../../../app/mine/[id]";
 
@@ -251,6 +252,90 @@ describe("mine/[id] staleness", () => {
     expect(shown).toContain("waiting 4 days");
     expect(shown).not.toContain("Add an email");
     expect(shown).not.toContain("Verify email");
+  });
+});
+
+// Issue #362: the card opened with a coloured eyebrow reading the status, and
+// then spent a rule and a heading on a Status section whose whole content was
+// that same word again. The section now renders only when it has something the
+// eyebrow cannot say.
+describe("mine/[id] status section (#362)", () => {
+  beforeEach(() => {
+    jest.mocked(getMyListing).mockReset();
+  });
+
+  async function renderDetail(detail: OwnerListingDetail): Promise<string> {
+    jest.mocked(getMyListing).mockResolvedValue(detail);
+    const instance = render(
+      <ToastProvider>
+        <MineDetail />
+      </ToastProvider>,
+    );
+    await act(async () => {
+      await flush();
+    });
+    return JSON.stringify(instance.toJSON());
+  }
+
+  it("says Live once, in the eyebrow, and heads no Status section", async () => {
+    const shown = await renderDetail(detailWithOpenRequest());
+
+    expect(shown).toContain("Live");
+    expect(shown.split("Live").length - 1).toBe(1);
+    expect(shown).not.toContain("Status");
+  });
+
+  it("heads no Status section on a given listing either", async () => {
+    const shown = await renderDetail({ ...detailWithOpenRequest(), status: "given" });
+
+    expect(shown.split("Given").length - 1).toBe(1);
+    expect(shown).not.toContain("Status");
+  });
+
+  it("keeps the section for a rejection, and carries the moderator's reason", async () => {
+    const shown = await renderDetail({
+      ...detailWithOpenRequest(),
+      status: "rejected",
+      moderation_reason: "contact_in_story",
+    });
+
+    expect(shown).toContain("Status");
+    expect(shown).toContain(MODERATION_REASONS.contact_in_story);
+    // The eyebrow is the only place the label itself appears.
+    expect(shown.split("Needs attention").length - 1).toBe(1);
+  });
+
+  it("keeps the section for a closer look, and says how long that takes", async () => {
+    const shown = await renderDetail({ ...detailWithOpenRequest(), status: "needs_review" });
+
+    expect(shown).toContain("Status");
+    expect(shown).toContain("Usually within a day.");
+  });
+
+  // The section used to carry the action error too, so hiding it on an
+  // ordinary approved listing could have taken the error with it. It moved to
+  // the buttons instead; the delete guard below is the other half of this.
+  it("still shows an action error on a listing with no Status section", async () => {
+    jest.mocked(getMyListing).mockResolvedValue(detailWithOpenRequest());
+    jest.mocked(withdrawListing).mockRejectedValue(new ApiError("unavailable", "Couldn't reach Keepsake.", 0));
+
+    const instance = render(
+      <ToastProvider>
+        <MineDetail />
+      </ToastProvider>,
+    );
+    await act(async () => {
+      await flush();
+    });
+
+    expect(JSON.stringify(instance.toJSON())).not.toContain("Status");
+
+    await act(async () => {
+      fireEvent.press(instance.UNSAFE_getByProps({ accessibilityLabel: "Withdraw" }));
+      await flush();
+    });
+
+    expect(JSON.stringify(instance.toJSON())).toContain("Couldn't reach Keepsake.");
   });
 });
 
