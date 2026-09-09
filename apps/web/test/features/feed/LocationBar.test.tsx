@@ -2,6 +2,7 @@ import * as React from "react";
 import { TextInput } from "react-native";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import { LocationBar } from "@/features/feed/LocationBar";
+import { Button } from "@/ui/Button";
 import { DEFAULT_LOCATION_PREF, LOCATION_PREF_STORAGE_KEY, type LocationPref } from "@/lib/geo";
 import { locateOnce } from "@/lib/geoLocate";
 
@@ -127,5 +128,22 @@ describe("LocationBar", () => {
     if (restored === undefined) throw new Error("Expected the postcode TextInput to come back");
     expect(restored.props.value).toBe("02144");
     expect(JSON.parse(window.localStorage.getItem(LOCATION_PREF_STORAGE_KEY) as string)).toMatchObject({ mode: "postal", postal: "02144" });
+  });
+
+  // Issue #373 finding 5: the baseline screenshot (`feed-location.jpg`, both
+  // projects) showed "Use my location" as a heavy filled `secondary` button
+  // outweighing the panel's actual apply/close control ("Done", the summary
+  // row `LocationDisclosure` renders as a quiet text link in `app/index.tsx`).
+  // Asserting the rendered `Button`'s `variant` prop — rather than a colour
+  // or style snapshot — pins the fix to the thing that actually carries the
+  // visual weight, and fails again if this regresses back to `secondary`.
+  it("renders 'Use my location' as a quiet link, not the panel's heaviest control", () => {
+    const { UNSAFE_getByProps } = render(<Harness onChange={jest.fn()} />);
+
+    const useMyLocation = UNSAFE_getByProps({ label: "Use my location" });
+
+    expect(useMyLocation.props.variant).toBe("link");
+    expect(useMyLocation.props.variant).not.toBe("secondary");
+    expect(useMyLocation.type).toBe(Button);
   });
 });
