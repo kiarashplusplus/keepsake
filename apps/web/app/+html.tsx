@@ -20,60 +20,50 @@ import { config } from "@/lib/config";
 // `apps/api/src/middleware/securityHeaders.ts` (the two must stay byte-for-
 // byte identical — see either file's header comment), so changing one
 // script's shape is a smaller, safer diff than growing the allowlist with a
-// new one. Order matters: the root-redirect block runs FIRST, before the
-// theme read, so a first-time visitor never runs code that assumes it's
-// looking at the feed.
+// new one. Order matters: the first-visit block runs FIRST, before the theme
+// read, so the attribute it sets is on `<html>` before anything paints.
 //
-// ROOT REDIRECT: `keepsake.ing` should show a short explainer to a
-// first-time visitor and the feed to everyone else — **unless the URL carries
-// a `q`**, added 2026-09-07. `location.replace("/welcome")` drops
-// `location.search`, so a first-time visitor arriving at `keepsake.ing/?q=teacup`
-// landed on the explainer with their search silently discarded. That is also
-// exactly what a client following the `SearchAction` in the root JSON-LD below
-// does, which would have made the structured data describe a search entry
-// point that does not work.
+// FIRST VISIT: `keepsake.ing` should show a short explainer to a first-time
+// visitor and the feed to everyone else — **unless the URL carries a `q`**
+// (2026-09-07: a first-timer arriving at `keepsake.ing/?q=teacup`, which is
+// exactly what a client following the `SearchAction` in the root JSON-LD
+// below does, wants the search they asked for, not a pitch). Specifically
+// `q`, not "any query string": `?fbclid=`, `?gclid=` and `?utm_source=` are
+// exactly how a first-time visitor arrives from an ad or a shared link, and
+// skipping the explainer for them would ALSO set `VISITED_KEY` on the way
+// past — so they would never see it, then or later.
 //
-// Specifically `q`, not "any query string". The broader test looked tidier and
-// was wrong: `?fbclid=`, `?gclid=` and `?utm_source=` are exactly how a
-// first-time visitor arrives from an ad or a shared link, and skipping the
-// explainer for them would ALSO set `VISITED_KEY` on the way past — so they
-// would never see it, then or later. Keepsake runs Google Ads; this is the
-// common case, not the edge case. The other half of that, added 2026-09-08:
-// the redirect carries `location.search` across to `/welcome` instead of
-// dropping it. `location.replace("/welcome")` discarded the whole query
-// string, so every `utm_*`, `gclid` and `fbclid` on the single most-linked
-// URL this product has died at exactly the visitor it describes — a
-// first-timer arriving from an ad or a shared link, which is the only
-// visitor this branch ever runs for. Attribution for the campaign that paid
-// for the click was therefore never observable. `q` is still the one
-// parameter that skips the explainer entirely; everything else now rides
-// along to it. Editing the script below changes its CSP hash —
-// see the note above `PREHYDRATION_SCRIPT`'s enumeration in
-// `apps/web/public/_headers` and `apps/api/src/middleware/securityHeaders.ts`,
-// which must be updated together, byte for byte.
+// **How it shows the explainer changed on 2026-09-09.** Until then this
+// block did `location.replace("/welcome" + location.search)`. That was a
+// redirect, and to a crawler that renders JavaScript it was THE redirect:
+// Google's renderer clears storage between loads, so every render of `/`
+// was a first visit, `location.replace` fired, and PageSpeed Insights
+// reported the homepage as "Clientside Redirect! … Updated URL
+// https://keepsake.ing/welcome" — the single most valuable URL this product
+// has, recorded as a page that redirects to another one. Now the block sets
+// `data-ks-first-visit="1"` on `<html>` instead, and nothing navigates.
+// `app/index.tsx` renders BOTH the explainer and the feed into `/`, and
+// `FIRST_VISIT_CSS` below shows one of them from that attribute — the same
+// construction as the theme (`THEME_CSS`) and the viewport switch
+// (`VIEWPORT_CSS`): decided before the first paint, in CSS, on markup that
+// is identical for every visitor. So `/` stays exactly as cacheable as it
+// was — identical bytes, no `Vary`, nothing server-side — answers `200`
+// with its own content to every crawler and every human, and there is
+// still no flash of the feed for someone who is, by definition, seeing this
+// domain for the first time. `src/lib/firstVisit.ts` is the React side.
+// Campaign parameters now survive trivially: there is no hop for them to
+// die on.
 //
-// The naive fix — branch
-// on visitor state inside the Feed component itself, after mount — was
-// rejected for two reasons: (1) the app's real first paint is whatever the
-// route renders before React attaches, and a `useEffect` that redirects a
-// first-time visitor away would still show it for a frame first — a visible
-// flash of "feed" content for someone who is, by definition, seeing this
-// domain for the first time. (2) Branching
-// server-side instead (a Worker route with `Vary`) needs a cookie, and the
+// Two designs this is NOT, and why. (1) Branching inside the Feed component
+// after mount — a `useEffect` that swaps screens would show the feed for a
+// frame first, the visible flash the attribute exists to avoid. (2) A
+// server-side branch (a Worker route with `Vary`) needs a cookie, and the
 // one strong signal this app has — the `ks_` owner token — deliberately
 // lives in `localStorage` only, never sent to the server on a plain page
-// load (see docs/design/identity.md). A new cookie mirroring it would be a
+// load (see docs/design/identity.md). A cookie mirroring it would be a
 // second copy of identity state that can drift, on the one path (`/`) this
 // repo has explicitly called out as needing to stay cacheable with no
 // `Vary` split.
-//
-// The fix here keeps `/` exactly as cacheable as it is today — identical
-// bytes for every visitor, no `Vary`, nothing server-side — by moving the
-// branch BEFORE hydration instead of into it: this script runs synchronously
-// in `<head>`, before the body is parsed, so `location.replace` fires before
-// the browser ever paints the wrong content. A returning visitor (has `ks_`,
-// or has been here before) is a no-op and sees the feed exactly as before,
-// at zero extra cost.
 //
 // "Returning" = holds a `ks_` token (`OWNER_TOKEN_STORAGE_KEY` in
 // `src/lib/ownerToken.ts`) OR has the `keepsake.visited.v1` flag this script
@@ -83,20 +73,11 @@ import { config } from "@/lib/config";
 // `e2e/support/visited.ts` reads this same key back out of this file rather
 // than re-declaring it, for the reason that file's own comment gives.
 //
-// A correction, 2026-09-09. Point (1) above used to argue from "`expo
-// export`'s per-route HTML ships an EMPTY body (a Suspense placeholder, no
-// prerendered markup — confirmed by reading `dist/index.html` after export,
-// not assumed)". That was true when it was written and is not true now: the
-// root `ThemeProvider` no longer returns `null` while it waits on storage, so
-// every route prerenders for real — `dist/index.html`'s body is ~46KB of
-// markup, and `e2e/staticRender.spec.ts` exists precisely because it is. The
-// conclusion the paragraph reached is unaffected (a post-mount redirect still
-// flashes), so only its reasoning changed.
-//
-// It is worth naming why a stale "confirmed by reading the artifact" is worse
-// than no note at all: believing the body is empty is believing there is
-// nothing in it to get wrong, and the viewport bug the CSS below fixes lived
-// in that body, in production, in markup this comment said did not exist.
+// Editing the script below changes its CSP hash — see the note above
+// `PREHYDRATION_SCRIPT`'s enumeration in `apps/web/public/_headers` and
+// `apps/api/src/middleware/securityHeaders.ts`, which must be updated
+// together, byte for byte. Preflight's `csp-script-hash` check recomputes
+// it and fails until both carry the new value.
 const PREHYDRATION_SCRIPT = `
 (function () {
   try {
@@ -105,14 +86,13 @@ const PREHYDRATION_SCRIPT = `
     var returning = !!window.localStorage.getItem(OWNER_KEY) || !!window.localStorage.getItem(VISITED_KEY);
     var searching = new URLSearchParams(window.location.search).has("q");
     if (window.location.pathname === "/" && !searching && !returning) {
-      window.localStorage.setItem(VISITED_KEY, "1");
-      window.location.replace("/welcome" + window.location.search);
-      return;
+      document.documentElement.dataset.ksFirstVisit = "1";
     }
     if (!returning) window.localStorage.setItem(VISITED_KEY, "1");
   } catch (e) {
-    /* localStorage unavailable (privacy mode, SSR) — fall through to the
-       feed rather than risk a redirect loop we can't persist past. */
+    /* localStorage unavailable (privacy mode, SSR) — a visitor this device
+       cannot remember gets the feed, rather than the explainer on every
+       single load. */
   }
 
   try {
@@ -132,6 +112,23 @@ const PREHYDRATION_SCRIPT = `
 `;
 
 /**
+ * Which of `/`'s two screens is on the page — the explainer or the feed —
+ * decided by the attribute the script above puts on `<html>`, before the
+ * first paint, in CSS. `app/index.tsx` renders both and wraps each in a
+ * `display: var(--ks-…-only)` (`src/lib/firstVisit.ts`); the hidden one
+ * generates no box at all, so it is out of the tab order, out of the
+ * accessibility tree, and contributes nothing to layout. No `<html>`
+ * attribute — every route but `/`, every returning visitor, every crawler
+ * without JavaScript — means the feed.
+ *
+ * A `<style>`, not a script: no CSP hash. Same as `VIEWPORT_CSS`.
+ */
+const FIRST_VISIT_CSS = `
+:root { --ks-first-visit-only: none; --ks-returning-only: flex; }
+html[data-ks-first-visit="1"] { --ks-first-visit-only: flex; --ks-returning-only: none; }
+`;
+
+/**
  * Site-level structured data, emitted on every exported page.
  *
  * Two nodes, linked by `@id` so a consumer knows the site and the
@@ -147,12 +144,15 @@ const PREHYDRATION_SCRIPT = `
  * `wrangler.toml`'s own comment argues against, and for markup that is
  * identical for every visitor. This is a constant; it belongs in the shell.
  *
- * ## Why no `logo`
+ * ## The `logo`
  *
  * Google's Organization logo guidance wants at least 112x112 and
- * `favicon.png` is 64x64. A `logo` Google rejects is worse than no `logo`:
- * it turns a clean parse into a validation warning. Add one when there is a
- * real square mark to point at.
+ * `favicon.png` is 64x64, so for a long time there was no `logo` at all — a
+ * `logo` Google rejects is worse than none, since it turns a clean parse
+ * into a validation warning. `public/icon-512.png` is the same mark at
+ * 512x512, rendered from `apps/site/og/favicon.svg` by
+ * `tools/og/render-icons.mjs`; `test/guards/rootOpenGraph.test.ts` reads the
+ * file's real dimensions rather than trusting the numbers below.
  *
  * ## CSP
  *
@@ -166,8 +166,10 @@ const PREHYDRATION_SCRIPT = `
  * byte-identically to both files — never to only one.
  *
  * `SearchAction` points at `/?q=`, which is the real feed parameter
- * (`src/features/feed/feedUrlParams.ts`). The pre-hydration script above had
- * to stop dropping `location.search` for that to be true; see its comment.
+ * (`src/features/feed/feedUrlParams.ts`). The pre-hydration script above
+ * shows the feed, not the explainer, to a first-time visitor whose URL
+ * carries a `q` — that condition is what makes this entry point true; see
+ * its comment.
  */
 const ROOT_JSON_LD = JSON.stringify([
   {
@@ -195,6 +197,12 @@ const ROOT_JSON_LD = JSON.stringify([
     name: "Keepsake",
     url: "https://keepsake.ing/",
     description: "A free gifting marketplace for objects with a story.",
+    logo: {
+      "@type": "ImageObject",
+      url: "https://keepsake.ing/icon-512.png",
+      width: 512,
+      height: 512,
+    },
   },
 ]);
 
@@ -572,10 +580,18 @@ export default function Root({ children }: { children: React.ReactNode }): React
             the crawlers and old clients that only ask for `/favicon.ico`
             find. What this one now carries is `type` and `sizes`, which the
             injected one has no way to state: without them a browser has to
-            fetch an icon to learn what it is. Do not add a third.
-            `apps/site`'s static pages declare none and fall back to
-            `/favicon.ico`, which is in `dist/` for exactly that reason. */}
+            fetch an icon to learn what it is. Do not add a third `rel="icon"`.
+            `apps/site`'s static pages declare the same two links as below.
+
+            `apple-touch-icon` is a different relation, not a third icon: it
+            is what iOS reads for a home-screen bookmark and what Safari
+            shows in its tab and bookmark UI, and until 2026-09-09 the
+            request for it answered `404` on production (measured). It is
+            180x180 and opaque — iOS masks its own corners, and a
+            transparent corner under that mask paints black — rendered from
+            the same SVG as the favicon by `tools/og/render-icons.mjs`. */}
         <link rel="icon" href="/favicon.png" type="image/png" sizes="64x64" />
+        <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
         <link
           rel="preload"
           href={`/fonts/Fraunces-VF.woff2?v=${FONT_VERSION}`}
@@ -597,6 +613,7 @@ export default function Root({ children }: { children: React.ReactNode }): React
 
         <style dangerouslySetInnerHTML={{ __html: THEME_CSS }} />
         <style dangerouslySetInnerHTML={{ __html: VIEWPORT_CSS }} />
+        <style dangerouslySetInnerHTML={{ __html: FIRST_VISIT_CSS }} />
         <style dangerouslySetInnerHTML={{ __html: ROOT_CSS }} />
         <script dangerouslySetInnerHTML={{ __html: PREHYDRATION_SCRIPT }} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: ROOT_JSON_LD }} />

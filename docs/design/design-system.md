@@ -203,7 +203,10 @@ wordmark/headline/stamp on linen, regenerated to `apps/site/public/og-default.pn
 name-table family is "Courier Prime" with a space — the SVG's `font-family` attributes must match
 that, not the token name `CourierPrime`, or resvg silently falls back to its default font).
 `apps/web/public/favicon.png` regenerated the same way from `apps/site/og/favicon.svg` (a tilted
-print with a red stamp dot).
+print with a red stamp dot). The same SVG is the source of `apps/web/public/icon-512.png` (the
+Organization `logo` in the root JSON-LD — Google wants ≥112px, the favicon is 64) and
+`apps/web/public/apple-touch-icon.png` (180px, square: iOS masks its own corners and paints a
+transparent one black); `node tools/og/render-icons.mjs` regenerates both through resvg.
 
 **Per-listing share card.** `apps/api/src/og/card.ts` draws the same vocabulary per listing — a
 taped square print on the left, the story on a linen index card on the right — and the Worker

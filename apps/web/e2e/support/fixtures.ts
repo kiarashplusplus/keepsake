@@ -18,7 +18,7 @@
  *    comment claimed it did — the banner had never been scanned by axe at all.
  *  - a "has visited before" flag already on file (issue #44), so `/` is the
  *    feed and not the new-visitor explainer. `welcome.spec.ts` builds its
- *    own context precisely so it sees the redirect.
+ *    own context precisely so it sees the explainer.
  */
 /* eslint-disable react-hooks/rules-of-hooks --
  * `eslint-config-expo`'s React rules see Playwright's fixture callback

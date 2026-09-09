@@ -8,7 +8,7 @@
 ## Key pages
 
 - [Browse the feed](https://keepsake.ing/): everything currently available to request.
-- [What Keepsake is](https://keepsake.ing/welcome): the explainer for first-time visitors.
+- [What Keepsake is](https://keepsake.ing/welcome): the explainer — the same card a first visit to the home page shows.
 - [Give something](https://keepsake.ing/give): start listing an object.
 - [About](https://keepsake.ing/about): who built this and why.
 

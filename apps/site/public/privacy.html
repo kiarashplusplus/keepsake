@@ -12,8 +12,65 @@
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Keepsake" />
     <meta property="og:title" content="Privacy — Keepsake" />
+    <meta property="og:locale" content="en_US" />
     <meta property="og:image" content="https://keepsake.ing/og-default.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="A taped photographic print on a kraft table, reading “Give a keepsake a second life.”" />
     <meta property="og:url" content="https://keepsake.ing/privacy" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://keepsake.ing/og-default.png" />
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="64x64" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <!-- Structured data. The WebSite and Organization nodes are the same two
+         `apps/web/app/+html.tsx` emits on every app route (ROOT_JSON_LD) —
+         `test/guards/rootOpenGraph.test.ts` holds the three copies here to
+         that one, so they cannot drift — and this page's own node links to
+         them by `@id` so a consumer reads it as a page OF that site rather
+         than as three unrelated things that share a name. A data block:
+         never executed, so no CSP `script-src` hash (the shell's comment on
+         its own ld+json has the reasoning). -->
+    <script type="application/ld+json">
+  [
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "@id": "https://keepsake.ing/#website",
+      "url": "https://keepsake.ing/",
+      "name": "Keepsake",
+      "description": "Give a keepsake a second life.",
+      "inLanguage": "en",
+      "publisher": { "@id": "https://keepsake.ing/#organization" },
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": { "@type": "EntryPoint", "urlTemplate": "https://keepsake.ing/?q={search_term_string}" },
+        "query-input": "required name=search_term_string"
+      }
+    },
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "@id": "https://keepsake.ing/#organization",
+      "name": "Keepsake",
+      "url": "https://keepsake.ing/",
+      "description": "A free gifting marketplace for objects with a story.",
+      "logo": { "@type": "ImageObject", "url": "https://keepsake.ing/icon-512.png", "width": 512, "height": 512 }
+    },
+    {
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      "@id": "https://keepsake.ing/privacy#webpage",
+      "url": "https://keepsake.ing/privacy",
+      "name": "Privacy — Keepsake",
+      "description": "How Keepsake handles your data: no passwords, a device-bound token, screened listings, and no sale of data.",
+      "inLanguage": "en",
+      "isPartOf": { "@id": "https://keepsake.ing/#website" },
+      "about": { "@id": "https://keepsake.ing/#organization" },
+      "primaryImageOfPage": { "@type": "ImageObject", "url": "https://keepsake.ing/og-default.png", "width": 1200, "height": 630 }
+    }
+  ]
+    </script>
     <link rel="stylesheet" href="/site.css" />
     <!-- Consent. `/consent.js` is the single shared implementation of the
          store, the banner and every third-party loader — the same file the

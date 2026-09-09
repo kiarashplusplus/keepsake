@@ -48,9 +48,9 @@ async function openHarness(
   });
   // Consent state and "has visited before" (issue #44) are independent
   // variables — a fresh consent decision has nothing to do with whether this
-  // device has been redirected to the explainer already. Without this, every
-  // `goto("/")` below would hit `/welcome` instead of the page these
-  // assertions are actually about.
+  // device has seen the explainer already. Without this, every `goto("/")`
+  // below would show the explainer instead of the feed these assertions are
+  // actually about.
   await seedVisited(context);
 
   if (options.gpc === true) {
@@ -284,7 +284,7 @@ test.describe("the consent gate", () => {
     // at phone width (the header already carries one) and the narrow header
     // calls it "Give", so naming only "Give something" made this test fail
     // for a reason that had nothing to do with consent.
-    const cta = page.getByRole("button", { name: /^Give( something)?$/ }).first();
+    const cta = page.getByRole("link", { name: /^Give( something)?$/ }).first();
     await expect(cta).toBeVisible();
     await cta.click({ trial: true, timeout: 5000 });
 

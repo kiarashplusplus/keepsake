@@ -2445,9 +2445,34 @@ export function templateLiteralBody(text, name) {
   return match ? match[1] : null;
 }
 
-/** Inline `<script>` bodies (no `src=`) in an HTML document, in order. */
+/**
+ * Inline `<script>` bodies (no `src=`) in an HTML document, in order —
+ * executable ones only. A `<script type="application/ld+json">` (or any
+ * other non-JavaScript `type`) is a data block: the browser never executes
+ * it, so `script-src` does not apply and it needs no hash. The static pages
+ * carry one each for their structured data, the same way the shell does
+ * (`apps/web/app/+html.tsx`'s comment on its own ld+json has the reasoning).
+ * Hashing those would demand three more `sha256-` sources for scripts that
+ * are never run, and — since their bodies differ per page — would trip the
+ * "the static pages carry different inline scripts" rule for the wrong
+ * reason.
+ */
 export function inlineScriptBodies(html) {
-  return [...html.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  return [...html.matchAll(/<script(?![^>]*\ssrc=)([^>]*)>([\s\S]*?)<\/script>/g)]
+    .filter((m) => isExecutableScriptType(m[1]))
+    .map((m) => m[2]);
+}
+
+/** JavaScript MIME types and the values the HTML spec treats as script:
+ * no `type`, an empty one, `module`, or a JavaScript MIME type. Anything
+ * else (`application/ld+json`, `application/json`, `text/template`…) is a
+ * data block. */
+export function isExecutableScriptType(attributes) {
+  const match = /\stype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attributes);
+  if (!match) return true;
+  const type = (match[1] ?? match[2] ?? match[3] ?? "").trim().toLowerCase();
+  if (type === "" || type === "module") return true;
+  return /^(?:text|application)\/(?:x-)?(?:ecma|java)script(?:\d\.\d)?$/.test(type.split(";")[0].trim());
 }
 
 /** The `'sha256-…'` sources in a CSP, ignoring any that appear in comments.

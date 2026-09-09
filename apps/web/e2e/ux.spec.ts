@@ -96,8 +96,9 @@ test.describe("ux baseline", () => {
     await ensureDemoCatalog(request);
 
     // --- The first-time visitor's explainer ---------------------------------
-    // `app/+html.tsx` redirects `/` to `/welcome` for a device with no owner
-    // token and no visited flag, so this needs a context with neither.
+    // `app/+html.tsx` shows the explainer at `/` to a device with no owner
+    // token and no visited flag (in place — it no longer redirects to
+    // `/welcome`), so this needs a context with neither.
     const firstVisit = await openUnseededContext(browser);
     // Consent is an independent variable from "has visited before": leave it
     // unseeded and the banner covers the bottom third of the explainer, which
@@ -106,7 +107,6 @@ test.describe("ux baseline", () => {
     await seedConsent(firstVisit);
     const welcome = await firstVisit.newPage();
     await welcome.goto("/");
-    await welcome.waitForURL(/\/welcome$/);
     await expect(welcome.getByText(/ready to let go of/)).toBeVisible();
     await shot(welcome, testInfo, "welcome");
     await firstVisit.close();

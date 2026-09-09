@@ -21,7 +21,7 @@
  * variant: `/item/:id` serves the real exported HTML shell (same inline
  * `PREHYDRATION_SCRIPT` and Expo Router hydration script as every other
  * route), so a mismatched policy here would silently break theming (and,
- * since issue #44, the new-visitor redirect) on that one route only — see
+ * since issue #44, the first-visit switch) on that one route only — see
  * that file's comment for what each `script-src` hash is and why
  * `style-src` keeps `'unsafe-inline'`. Kept as a second literal
  * copy rather than a shared import: the two are read by unrelated runtimes
@@ -76,7 +76,7 @@ const CONTENT_SECURITY_POLICY = [
   // guard below cover it.
   "connect-src 'self' https://api.bigdatacloud.net https://nominatim.openstreetmap.org https://cloudflareinsights.com",
   "script-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://static.cloudflareinsights.com " +
-    "'sha256-Xrcu2vG2x+FPB1xtg6DFrNGNiO3x0AQ6vK5XstpOJM8=' " +
+    "'sha256-SuJXlQ1A77znxosi4f5HQtZod2ZNy/zIm6w8hGM6d7U=' " +
     "'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8=' " +
     "'sha256-d6qbtEYff/sB38YyzuzhASbVmmOidU/UFC9mNit47j4='",
   "style-src 'self' 'unsafe-inline'",
