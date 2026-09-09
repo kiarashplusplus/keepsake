@@ -142,7 +142,6 @@ describe("mine/[id] choose flow", () => {
       await flush();
     });
 
-    // The HandoffSheet's note is optional — confirm without typing one.
     jest.mocked(chooseRequest).mockResolvedValue({
       id: "req-1",
       note: "I'd give this a wonderful home on my own kitchen counter.",
@@ -155,14 +154,65 @@ describe("mine/[id] choose flow", () => {
     });
     jest.mocked(getMyListing).mockResolvedValueOnce(detailWithChosenRequest());
 
+    // Confirm starts disabled: an empty handoff note would be sent to the
+    // requester verbatim (issue #373), so a note has to be typed first.
     const confirmButton = instance.UNSAFE_getByProps({ accessibilityLabel: "Confirm" });
+    expect(confirmButton.props.disabled).toBe(true);
+
+    const noteField = instance.UNSAFE_getByProps({ accessibilityLabel: "Handoff note" });
     await act(async () => {
-      fireEvent.press(confirmButton);
+      fireEvent.changeText(noteField, "Free after 6pm on Elm St, ring the bell.");
       await flush();
     });
 
-    expect(jest.mocked(chooseRequest)).toHaveBeenCalledWith("listing-1", { request_id: "req-1", handoff_note: "" });
+    await act(async () => {
+      fireEvent.press(instance.UNSAFE_getByProps({ accessibilityLabel: "Confirm" }));
+      await flush();
+    });
+
+    expect(jest.mocked(chooseRequest)).toHaveBeenCalledWith("listing-1", {
+      request_id: "req-1",
+      handoff_note: "Free after 6pm on Elm St, ring the bell.",
+    });
     expect(JSON.stringify(instance.toJSON())).toContain("person@keepsake.ing");
+  });
+
+  // Issue #373 finding 2: two requests on the same listing, one Choose sheet
+  // — nothing in it said which requester Confirm was about, and Confirm was
+  // enabled with the handoff note (the whole body of the requester's email)
+  // still empty.
+  it("names the request the sheet is about, and starts Confirm disabled", async () => {
+    const detail = detailWithOpenRequest();
+    detail.requests = [
+      { ...detail.requests[0]!, id: "req-1", email_masked: "h•••@keepsake.ing", note: "My mother had one exactly like this." },
+      { ...detail.requests[0]!, id: "req-2", email_masked: "p•••@keepsake.ing", note: "I would give it to my daughter." },
+    ];
+    jest.mocked(getMyListing).mockResolvedValue(detail);
+
+    const instance = render(
+      <ToastProvider>
+        <MineDetail />
+      </ToastProvider>,
+    );
+    await act(async () => {
+      await flush();
+    });
+
+    const chooseButtons = instance.UNSAFE_getAllByProps({ accessibilityLabel: "Choose" });
+    const second = chooseButtons[1];
+    if (second === undefined) throw new Error("expected two Choose buttons");
+    await act(async () => {
+      fireEvent.press(second);
+      await flush();
+    });
+
+    const tree = JSON.stringify(instance.toJSON());
+    // The second request's identity is visible inside the sheet ...
+    expect(tree).toContain("p•••@keepsake.ing");
+    expect(tree).toContain("I would give it to my daughter.");
+
+    const confirmButton = instance.UNSAFE_getByProps({ accessibilityLabel: "Confirm" });
+    expect(confirmButton.props.disabled).toBe(true);
   });
 
   // Issue #6: a rejected notification used to be indistinguishable from a
