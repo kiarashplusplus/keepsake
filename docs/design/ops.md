@@ -174,6 +174,18 @@ Three things about it are load-bearing rather than incidental:
   widest window `GET /api/admin/observatory` can be asked for, so the panel's label always has the
   rows to back it.
 
+**`[[tail_consumers]]` is not inherited into `[env.*]`, and preflight's `tail-consumers` check is
+what keeps that true.** Wrangler registers the block through `notInheritable(...)`, so every tier
+has to restate it — and wrangler only *warns* when one doesn't. A warning in deploy output is not
+a check: the deploy is green, the site is up, and that tier's errors go nowhere while
+`GET /api/admin/observatory` reports `unconfigured` on a panel nobody is watching for a tier that
+worked yesterday. The check asserts three things per tier — the block exists, its `service` names
+the script `wrangler.tail.toml` actually deploys for *that* tier, and that tier has an env block
+there to deploy it from. The second one matters as much as the first: two scripts that both exist
+means naming the wrong one is not a deploy error, it just files preview's errors under production.
+Same shape as `cron-triggers` and `env-parity` — a fact restated in more than one file, where the
+copies silently disagreeing is the failure.
+
 The Observatory's log panel reads that table rather than Cloudflare's Workers Observability API,
 which is what makes a Saturday incident diagnosable on Monday. It reports `unconfigured` — not an
 empty feed — until a tail delivery has actually been recorded in that environment, so "the tail
