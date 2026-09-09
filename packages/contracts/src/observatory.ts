@@ -89,24 +89,30 @@ export type ObservatoryEdge = {
 };
 
 // ---------------------------------------------------------------------------
-// Log telemetry — Workers Observability
+// Log telemetry — the Worker's own error lines, persisted to D1
 // ---------------------------------------------------------------------------
 
 /**
- * One `console.error`/`console.warn` line the Worker emitted, as returned by
- * the Workers Observability telemetry query.
+ * One `console.error`/`console.warn` line the Worker emitted.
  *
  * This is the read side of `@keepsake/observability`'s `capture.ts`: that
- * module writes structured objects to stdout specifically so Workers Logs
- * indexes their fields, and until now nothing in the product ever read them
- * back — they were only visible by opening the Cloudflare dashboard. The
- * fields kept here are the ones `capture.ts` guarantees it writes.
+ * module writes structured objects to stdout specifically so their fields can
+ * be read back rather than string-matched.
  *
- * `message` arrives already redacted, because `capture.ts` redacts *before*
- * logging (`redactDeep`/`redactString`). Nothing on this path re-redacts,
- * and nothing should need to — but note that means a log line written by
- * something other than `capture.ts` (a bare `console.error` elsewhere in the
- * Worker) is surfaced verbatim. Admin-gated for that reason.
+ * **Where these come from changed in issue #159.** They used to be queried
+ * from Cloudflare's Workers Observability API, which retains 3 days on the
+ * Free plan — so the one panel whose job is "what went wrong" went blank
+ * about anything older than a long weekend. A Tail Worker
+ * (`apps/api/src/tail/`) now consumes the API Worker's event stream and
+ * writes the error and warning lines to D1, where a nightly sweep keeps 30
+ * days of them; `apps/api/src/observatory/errorEvents.ts` reads them back
+ * with no Cloudflare credential at all.
+ *
+ * `message` is redacted twice over: `capture.ts` redacts before logging, and
+ * the Tail Worker redacts everything again on the way into D1. That second
+ * pass is not belt and braces — it is the only redaction a bare
+ * `console.error` elsewhere in the Worker ever gets, and this table outlives
+ * a log line tenfold. Still admin-gated.
  */
 export type ObservatoryLogEvent = {
   ts: number;
@@ -117,6 +123,9 @@ export type ObservatoryLogEvent = {
 };
 
 export type ObservatoryLogs = {
+  /** The window actually covered. Since #159 this is the window that was
+   * asked for, up to the 30-day retention of the table behind it — it is no
+   * longer silently clamped to Workers Logs' 3 days. */
   window_days: number;
   /** Counts over the whole window, which is the part that survives the
    * sample limit below — a spike of 4,000 identical errors and a single
@@ -450,10 +459,12 @@ export type ObservatoryApp = {
 /** Windows the client may ask for. A closed set rather than a free integer
  * because every extra day is another day of D1 aggregation and another day
  * of Cloudflare's GraphQL window; three choices cover "what happened today",
- * "what happened this week", and "is this a trend". Note Workers Logs on the
- * Free plan retains 3 days, so `logs` over a 30-day window is still only
- * ever ~3 days of events — reported honestly via `ObservatoryLogs.window_days`
- * rather than silently returning a short window under a long label. */
+ * "what happened this week", and "is this a trend". Note `logs` reports the
+ * window it actually covered via `ObservatoryLogs.window_days`
+ * rather than silently returning a short window under a long label. Since
+ * #159 the log half is backed by D1 with a 30-day retention, so that clamp no
+ * longer binds at any window in this list — but the field is still reported
+ * honestly, and a future retention cut would show up in it. */
 export const OBSERVATORY_WINDOWS = [1, 7, 30] as const;
 export const ObservatoryWindowSchema = z.coerce
   .number()

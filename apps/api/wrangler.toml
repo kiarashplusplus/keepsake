@@ -83,6 +83,40 @@ head_sampling_rate = 1
 [[send_email]]
 name = "EMAIL"
 
+# Issue #159, step 1. Every trace event this Worker produces is handed to
+# `keepsake-tail` (`src/tail/index.ts`, configured by `wrangler.tail.toml`),
+# which filters to error/warning lines and `captureException` records,
+# redacts them through `@keepsake/observability/redact`, and writes them to
+# the same D1 database this Worker reads — so an error survives the 3-day
+# Workers Logs retention the `[observability]` block above buys.
+#
+# **Restated under `[env.preview]` and `[env.production]` below, unlike
+# `[triggers]`, and the difference is verified rather than assumed.**
+# `tail_consumers` is registered through wrangler's `notInheritable(...)`
+# helper (`node_modules/wrangler/wrangler-dist/cli.js`, the same list `vars`
+# and every binding sit in), and wrangler says so itself when you leave it
+# off — `wrangler deploy --dry-run --env preview` against a file with this
+# block at the top level only prints:
+#
+#     - "tail_consumers" exists at the top level, but not on "env.preview".
+#       This is not what you probably want, since "tail_consumers" is not
+#       inherited by environments.
+#
+# A warning, not an error: the deploy would have gone out with the tier's
+# error stream going nowhere and nothing failing. `test/tailConfig.test.ts`
+# is what makes that impossible to ship, asserting a consumer in every block
+# and that each names the tail Worker that environment actually deploys.
+#
+# The service name must match the *deployed script name*, which wrangler
+# derives from `wrangler.tail.toml`'s `name` plus the environment suffix —
+# `keepsake-tail`, `keepsake-tail-preview`, `keepsake-tail-production` — the
+# same way this Worker becomes `keepsake-preview`/`keepsake-production`.
+# Deploy order matters once, at the start: a Worker cannot name a tail
+# consumer that does not exist yet, so `deploy.yml` deploys the tail Worker
+# before this one.
+[[tail_consumers]]
+service = "keepsake-tail"
+
 # `moderationRetry` picks up listings whose moderation call errored or never
 # landed (Worker eviction mid-`waitUntil`, AI timeout) so a transient failure
 # doesn't strand a listing in `pending` forever. `orphanSweep` runs once a day,
@@ -126,7 +160,7 @@ name = "EMAIL"
 # through to `default:`: a `console.warn` and no work, on an invocation the
 # platform records as successful.
 [triggers]
-crons = ["*/5 * * * *", "23 * * * *", "17 3 * * *", "7 0 * * *", "*/3 * * * *"]
+crons = ["*/5 * * * *", "23 * * * *", "17 3 * * *", "7 0 * * *", "*/3 * * * *", "41 3 * * *"]
 
 # --- Share-card fonts (src/og/fonts.ts) ---
 #
@@ -614,6 +648,12 @@ head_sampling_rate = 1
 [[env.preview.send_email]]
 name = "EMAIL"
 
+# Issue #159 — see the top-level `[[tail_consumers]]` block for why this is
+# restated per environment rather than inherited, and why the service name
+# carries the environment suffix.
+[[env.preview.tail_consumers]]
+service = "keepsake-tail-preview"
+
 [env.preview.vars]
 ENVIRONMENT = "preview"
 COMMIT_SHA = "dev"
@@ -845,6 +885,14 @@ head_sampling_rate = 1
 
 [[env.production.send_email]]
 name = "EMAIL"
+
+# Issue #159 — see the top-level `[[tail_consumers]]` block. This is the tier
+# the feature exists for: production's error lines are the ones a Saturday
+# incident needs on Monday, and the only ones that can carry a real person's
+# contact details, which is why nothing reaches the table without going
+# through the redactor first.
+[[env.production.tail_consumers]]
+service = "keepsake-tail-production"
 
 [env.production.vars]
 ENVIRONMENT = "production"

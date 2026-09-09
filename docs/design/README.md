@@ -219,8 +219,10 @@ already describe in the fixed tense.
   `docs/design/ops.md`'s "CI shape".
 - **#155** — a listing's category comes from the model alone and no human can correct it, at any
   layer. A product decision (#35) whose premise has been tested and half-failed.
-- **#159** — decide whether a Tail Worker or Logpush is worth it. Nothing pushes an alert anywhere;
-  "no" is a legitimate close, an unwritten default is not.
+- **#159** — decided *yes*, 2026-09-08, and split. **Step 1 (persist) is built**: a Tail Worker
+  writes the Worker's redacted error lines to D1, so they outlive Workers Logs' 3 days
+  (`docs/design/ops.md#the-tail-worker-keepsake-tail`). **Step 2 (the push channel) is still open**
+  — nothing buzzes a phone yet, and the email option is gated on #6.
 
 *Tracking issues, open by design*: #49 (launch blockers), #50 (legal & compliance), #52
 (production cutover). They stay open until every child does.

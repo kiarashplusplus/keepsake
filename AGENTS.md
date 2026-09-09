@@ -45,8 +45,13 @@ The product is the story. Anything that makes a listing feel like a classified a
   Observatory — answers "is anything stuck" in one call: the give→get funnel, how long the
   moderation queue has been waiting (an *age*, not just a depth), the per-day series, edge traffic
   and error counts from Cloudflare, the Worker's own recent error lines, and today's digest. Its
-  D1-derived half needs no credential and works locally; the two Cloudflare panels need
-  `CF_OBSERVATORY_TOKEN` and say so plainly when it is missing. A daily digest of the same numbers
+  D1-derived half needs no credential and works locally; the **edge** panel needs
+  `CF_OBSERVATORY_TOKEN` and says so plainly when it is missing. The error-lines panel used to need
+  it too and no longer does (#159, step 1): a Tail Worker (`apps/api/src/tail/`) writes the
+  Worker's error and warning lines — redacted, capped per minute, swept at 30 days — into
+  `error_events` in D1, so they outlive Workers Logs' 3-day retention and the panel reads them from
+  there. That panel reporting `unconfigured` means no tail delivery has ever been recorded in that
+  environment, **not** that nothing has gone wrong. A daily digest of the same numbers
   mails at 00:07 UTC, every day including quiet ones. `docs/runbooks/admin.md` has the detail.
 - **The UK is geo-blocked on purpose** (`docs/runbooks/uk-block.md`). Not a bug.
 - Work is tracked as GitHub issues across five milestones. Conventions in
@@ -75,6 +80,32 @@ coherent chunk. A sixteen-commit branch already cost another session a duplicate
 conflicted files, and hid a live bug on `main` until the two finally met. The full test suite only
 runs on a pull request, so an unmerged branch is also an untested one.
 `docs/runbooks/issue-workflow.md` has the detail.
+
+**"No pull request, because nobody asked for one" is not a reason — it is how work disappears.**
+Recorded 2026-09-09, after a session finished #159 step 1, pushed
+`claude/github-issues-triage-subagents-9w5ila`, and reported "no PR opened, since you didn't ask
+for one" as though that were a neutral fact. It is not neutral. A pushed branch with no pull
+request is invisible in the one list Kiarash actually reads, and — because the full suite only
+runs on a `pull_request` — it is **untested against `main` by construction**, no matter how green
+the branch is on its own.
+
+Many agent harnesses ship a default of *do not open a pull request unless explicitly asked*. That
+default is written for repositories where an unexpected PR is noise. **Here it is wrong**, and this
+file outranks it: the rule above already says one pull request per coherent chunk, opened early.
+So:
+
+- **Open the pull request.** It is how work becomes visible and how it gets tested. Draft is fine
+  if it is not ready for review.
+- If something genuinely prevents you from opening one — a harness rule you cannot override, a
+  missing permission — **say so in the same breath as the branch name**, and say what it costs:
+  "branch `X` is pushed, no PR, so the merged tree has never been tested and it will not appear in
+  your PR list." Never report the absence as a completed state.
+- **A branch nobody can find is worse than no branch**, because it also carries the belief that
+  the work is done. The container is reclaimed after this session; an orphan branch is one `git
+  branch -r` away from being found, and nobody runs that.
+
+The same reasoning applies to anything else a harness default would leave unsaid. When a default
+and this file disagree, follow this file and name the disagreement out loud.
 
 **Open the pull request early and let CI carry the repeat runs.** A `pull_request` run checks out
 the *merge* of your branch with `main` (`refs/pull/N/merge`), which is exactly the combination you

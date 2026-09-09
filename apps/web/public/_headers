@@ -29,6 +29,29 @@
 # covered by this file at all — see apps/api/src/middleware/securityHeaders.ts
 # for those, wired in apps/api/src/index.ts.
 #
+# On production this file is the ONLY thing that headers a hashed asset
+# response, and that is worth knowing before deleting a line from it.
+# `[env.production.assets]` in apps/api/wrangler.toml keeps `run_worker_first`
+# as a literal path list rather than `true` (deliberately — so a hashed asset
+# fetch doesn't pay for a Worker hop), and that list names nothing under
+# `/_expo/`. So no `/_expo/static/*` request invokes the Worker at all and
+# securityHeaders.ts never runs for one. The `/*` rule at the bottom of this
+# file still does: the assets system applies EVERY matching rule, so the
+# `/_expo/static/*` Cache-Control rule above adds to that block rather than
+# replacing it.
+#
+# Issue #251 assumed the opposite — that those responses "carry no HSTS
+# header" and only a zone setting could fix it. Measured on 2026-09-09 with
+# `wrangler dev` over a real dist/, production's exact run_worker_first list
+# and a Worker that stamps `x-worker-ran` on anything it answers:
+# `GET /_expo/static/js/web/entry-<hash>.js` returned 200 with no
+# `x-worker-ran` and with `Strict-Transport-Security: max-age=63072000;
+# includeSubDomains; preload` plus `Cache-Control: public, max-age=31536000,
+# immutable` — both rules, no Worker. Same for /fonts/*, for a 404 falling
+# through to the SPA shell, for a 405, and for the assets system's own 307.
+# apps/web/test/guards/securityHeaderParity.test.ts is what keeps the values
+# below identical to securityHeaders.ts's, in both directions.
+#
 # script-src is hash-based, not 'unsafe-inline', for the three inline
 # `<script>` tags that actually ship in the exported HTML (confirmed by
 # running `expo export` twice and diffing the hashes — both matched a

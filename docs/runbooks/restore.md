@@ -193,6 +193,20 @@ the same pull request.
 - `listings_fts*` and `_cf_KV` are excluded because they are derived or internal. FTS is rebuilt
   from `listings`, which is in the export. `d1_migrations` is wrangler's own ledger and is
   excluded for the same reason `--no-schema` is: migrations own the schema.
+- `error_events` and `tail_deliveries` are excluded, and this is the paragraph the `backup-tables`
+  check requires before it will accept that. They are the Tail Worker's persisted error feed
+  (issue #159, `apps/api/src/tail/`) and the single row recording when that Worker last delivered
+  anything. Excluded on two grounds. First, nothing a person has is in them: every row is a
+  redacted line the Worker logged about itself, and a restore that brought them back would restore
+  no keepsake, no listing, no request and no address — unlike every table in the list above, whose
+  absence loses something somebody typed. Second, they are the only tables here whose size is
+  driven by *failure* rather than by use, and they already have a retention policy of their own
+  (`cron/errorEventSweep.ts`, 30 days), so an export that carried them would be one whose size on a
+  bad week has nothing to do with how much of the product there is to save. If you are exporting in
+  order to *diagnose* something rather than to restore it, name that table on the command line for
+  that one run — it exports fine, it is simply not what the documented backup is for. (Do not write
+  the flag for it into this file: `backup-tables` reads every `--table` name on this page as part
+  of the documented export, so an example would quietly re-enrol it.)
 - **Every other table the migrations create belongs in the list.** If you add one, add it here in
   the same pull request — `backup-tables` will fail CI until you do, and it names the table.
   If a new table genuinely should not be exported, add it to `BACKUP_EXCLUDED_TABLES` in
