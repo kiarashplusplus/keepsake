@@ -60,6 +60,15 @@ describe("the viewport stylesheet", () => {
     expect(chipsBlock).toContain("--ks-chips-shrink: 1;");
   });
 
+  // `detailTwoColumn` never reaches `viewportCssVariables()` — it is read
+  // with `useWindowDimensions()` on the two detail pages that use it, not
+  // baked into the pre-hydration CSS the way `narrow`/`categoryChips` are —
+  // so it gets its own direct assertion rather than a place in `CONSUMED`
+  // above, which is scoped to that stylesheet.
+  it("keeps detailTwoColumn at 1024, the value item/[id].tsx and mine/[id].tsx both import", () => {
+    expect(breakpoint.detailTwoColumn).toBe(1024);
+  });
+
   it("takes the hero's two variation settings from the type scale, not from a copy of it", () => {
     // `step()` interpolates lengths and cannot interpolate this one — it is a
     // string. Reading both ends from `type` is what stops the heading's axes
