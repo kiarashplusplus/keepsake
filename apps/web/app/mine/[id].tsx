@@ -1,8 +1,17 @@
 // Dashboard detail: photos, story, what this listing needs from its giver,
 // status/moderation copy, its requests, and the owner actions (Edit, Mark
 // given, Withdraw/Relist, Delete).
+//
+// At desktop widths the photos sit in their own column beside everything
+// else, the same treatment `app/item/[id].tsx` gives the public item page
+// (#222) — issue #373 finding 7 caught this page never having received it:
+// at 1280x800 the 120px thumbnail band sat alone across the full measure
+// with one column of text underneath, while the same keepsake's public page
+// a click away already split print-left/story-right. See
+// `TWO_COLUMN_BREAKPOINT` below for why this page keeps its own copy of that
+// constant rather than importing one.
 import * as React from "react";
-import { View } from "react-native";
+import { useWindowDimensions, View } from "react-native";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
 import { Image as ExpoImage } from "expo-image";
 import { motion } from "@keepsake/tokens/motion";
@@ -42,6 +51,40 @@ const STATUS_LABELS: Record<ListingStatus, { label: string; color: TextColor }> 
 
 const THUMB = 120;
 
+/**
+ * The 120px print at 1280x800 is what finding 7 named — a thumbnail that
+ * size, alone in a full-width band, reads as an afterthought next to the
+ * carousel the same keepsake gets on its public page. Bigger prints, in
+ * their own column, is the same fix `item/[id].tsx` made by dropping the
+ * carousel's 560px cap so the photograph fills its column instead of
+ * whatever width a full-width band happened to leave it.
+ */
+const THUMB_WIDE = 168;
+
+/**
+ * Where this page stops stacking photos over the detail card and puts them
+ * side by side instead. Deliberately the same number as `item/[id].tsx`'s
+ * `TWO_COLUMN_BREAKPOINT` (#222) and for the same reason — that file's own
+ * comment on the constant has the measurements; the two are not the same
+ * import only because that file is owned by a different pull request in
+ * this round of fixes. Move them together if either ever changes.
+ */
+const TWO_COLUMN_BREAKPOINT = 1024;
+
+/**
+ * Photos get the smaller share here, the opposite of `item/[id].tsx`'s
+ * print/story split. There the print is one photograph the whole column
+ * exists to show off; here it can be several thumbnails that only need
+ * enough width to read as a row, while the right column carries the status
+ * eyebrow, the story, moderation detail, the category picker, the full
+ * requests list and every owner action — the page's actual business. Giving
+ * that column the minority share, the way finding 7 was first drafted,
+ * would have crushed the requests list into the same narrow gutter the
+ * finding complained about, just relabelled.
+ */
+const PHOTOS_COLUMN_PARTS = 4;
+const DETAILS_COLUMN_PARTS = 7;
+
 // The one line the Status section exists for, or `null` when the eyebrow above
 // the title has already said everything there is to say (issue #362). Only two
 // statuses have more: a rejection has its moderator's reason, and a listing
@@ -60,6 +103,8 @@ export default function MineDetail(): React.ReactElement {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const colors = useColors();
+  const { width } = useWindowDimensions();
+  const twoColumn = width >= TWO_COLUMN_BREAKPOINT;
   const [listing, setListing] = React.useState<OwnerListingDetail | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -148,128 +193,153 @@ export default function MineDetail(): React.ReactElement {
   const status = STATUS_LABELS[listing.status];
   const statusDetail = statusDetailFor(listing);
   const rule = { borderBottomWidth: 2, borderBottomColor: colors.ink, paddingBottom: space.sm };
+  const thumb = twoColumn ? THUMB_WIDE : THUMB;
 
-  return (
-    <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
-      <RouteHead title={listing.title} />
-      {/* Photos as small prints, each leaning its own deterministic way. */}
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.lg, paddingTop: space.sm }}>
-        {listing.photos.map((photo) => (
-          <Print key={photo.id} tiltDeg={tiltDegForId(photo.id, motion.tiltRangeDeg)} style={{ width: THUMB, height: THUMB, padding: 6 }}>
-            <View
-              style={{
-                width: "100%",
-                height: "100%",
-                overflow: "hidden",
-                backgroundColor: colors.tableEdge,
-              }}
-            >
-              <ExpoImage
-                source={canShowFull ? `/i/${photo.id}/thumb` : null}
-                placeholder={{ blurhash: photo.blurhash }}
-                style={{ width: "100%", height: "100%" }}
-                contentFit="cover"
-                accessibilityLabel=""
-              />
-            </View>
-          </Print>
-        ))}
+  // Photos and the detail card are each built once and *placed* twice, the
+  // same discipline `item/[id].tsx` uses for its print/story split: the
+  // alternative is two copies free to drift, one for each layout.
+  const photosBlock = (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.lg, paddingTop: space.sm }}>
+      {listing.photos.map((photo) => (
+        <Print key={photo.id} tiltDeg={tiltDegForId(photo.id, motion.tiltRangeDeg)} style={{ width: thumb, height: thumb, padding: 6 }}>
+          <View
+            style={{
+              width: "100%",
+              height: "100%",
+              overflow: "hidden",
+              backgroundColor: colors.tableEdge,
+            }}
+          >
+            <ExpoImage
+              source={canShowFull ? `/i/${photo.id}/thumb` : null}
+              placeholder={{ blurhash: photo.blurhash }}
+              style={{ width: "100%", height: "100%" }}
+              contentFit="cover"
+              accessibilityLabel=""
+            />
+          </View>
+        </Print>
+      ))}
+    </View>
+  );
+
+  const detailBlock = (
+    <Card style={{ gap: space.xl }}>
+      <View style={{ gap: space.sm }}>
+        <Eyebrow color={status.color}>{status.label}</Eyebrow>
+        <Text variant="displayLg">{listing.title}</Text>
+        <Text variant="bodyLg" color="inkSoft">
+          {listing.story}
+        </Text>
       </View>
 
-      <Card style={{ gap: space.xl }}>
-        <View style={{ gap: space.sm }}>
-          <Eyebrow color={status.color}>{status.label}</Eyebrow>
-          <Text variant="displayLg">{listing.title}</Text>
-          <Text variant="bodyLg" color="inkSoft">
-            {listing.story}
-          </Text>
-        </View>
-
-        {/* Above Status, because it outranks it: "Live" is what moderation
-            decided, and this is a person left waiting or a listing whose
-            asks have nowhere to go. Both are invisible to the status label
-            and both need the giver today. */}
-        {listing.staleness.reasons.length > 0 ? (
-          <View style={{ gap: space.sm }}>
-            <View style={rule}>
-              <Eyebrow color="dangerText">Needs you</Eyebrow>
-            </View>
-            <StaleNotice staleness={listing.staleness} />
-          </View>
-        ) : null}
-
-        {/* Issue #362: the eyebrow above the title already says "Live" — a
-            Status section whose whole content is the word "Live" again is a
-            rule and a heading spent on nothing. It renders only when it has
-            something the eyebrow cannot say: why a listing was rejected, or
-            that a closer look is under way. On every other status the card
-            gets shorter by one rule and the eyebrow carries it alone. */}
-        {statusDetail !== null ? (
-          <View style={{ gap: space.sm }}>
-            <View style={rule}>
-              <Eyebrow>Status</Eyebrow>
-            </View>
-            <Text variant="body" color={statusDetail.color}>
-              {statusDetail.line}
-            </Text>
-          </View>
-        ) : null}
-
-        {/* Issue #155: the model decided this, and until now nobody could
-            disagree with it. Sits above Requests because it is about the
-            object rather than about who has asked for it. */}
-        <CategorySection
-          category={listing.category}
-          categoryChosenAt={listing.category_chosen_at}
-          editable={listing.status !== "given"}
-          busy={busy}
-          onChange={async (next) => {
-            await runAction(() => setListingCategory(listing.id, next));
-          }}
-          rule={rule}
-        />
-
+      {/* Above Status, because it outranks it: "Live" is what moderation
+          decided, and this is a person left waiting or a listing whose
+          asks have nowhere to go. Both are invisible to the status label
+          and both need the giver today. */}
+      {listing.staleness.reasons.length > 0 ? (
         <View style={{ gap: space.sm }}>
           <View style={rule}>
-            <Eyebrow>Requests</Eyebrow>
+            <Eyebrow color="dangerText">Needs you</Eyebrow>
           </View>
-          <RequestList
-            requests={listing.requests}
-            status={listing.status}
-            canChoose={listing.chosen_request_id === null && listing.status === "approved"}
-            busy={busy || choosing}
-            onChoose={setChooseTarget}
-          />
+          <StaleNotice staleness={listing.staleness} />
         </View>
+      ) : null}
 
-        {/* An action error is about the button that was just pressed, not about
-            what moderation decided, so it sits with the buttons — which is
-            where `handleDelete`'s comment has always said it was. It used to
-            render inside the Status section, with Category and Requests
-            between it and the button that produced it. */}
-        {error !== null ? (
-          <Text variant="body" color="dangerText">
-            {error}
+      {/* Issue #362: the eyebrow above the title already says "Live" — a
+          Status section whose whole content is the word "Live" again is a
+          rule and a heading spent on nothing. It renders only when it has
+          something the eyebrow cannot say: why a listing was rejected, or
+          that a closer look is under way. On every other status the card
+          gets shorter by one rule and the eyebrow carries it alone. */}
+      {statusDetail !== null ? (
+        <View style={{ gap: space.sm }}>
+          <View style={rule}>
+            <Eyebrow>Status</Eyebrow>
+          </View>
+          <Text variant="body" color={statusDetail.color}>
+            {statusDetail.line}
           </Text>
-        ) : null}
-
-        {/* One stamp-red primary at most; the rest are ink-outlined, the destructive one bare. */}
-        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.md }}>
-          {listing.status === "approved" ? (
-            <Button label="Mark given" disabled={busy} onPress={() => runAction(() => markGiven(listing.id))} />
-          ) : null}
-          {listing.status === "withdrawn" ? (
-            <Button label="Relist" disabled={busy} onPress={() => runAction(() => relistListing(listing.id))} />
-          ) : null}
-          <Link href={{ pathname: "/give", params: { edit: listing.id } }} asChild>
-            <Button label="Edit" variant="secondary" disabled={busy} />
-          </Link>
-          {listing.status !== "withdrawn" && listing.status !== "given" ? (
-            <Button label="Withdraw" variant="secondary" disabled={busy} onPress={() => runAction(() => withdrawListing(listing.id))} />
-          ) : null}
-          <Button label="Delete" variant="ghost" disabled={busy} onPress={() => setConfirmDelete(true)} />
         </View>
-      </Card>
+      ) : null}
+
+      {/* Issue #155: the model decided this, and until now nobody could
+          disagree with it. Sits above Requests because it is about the
+          object rather than about who has asked for it. */}
+      <CategorySection
+        category={listing.category}
+        categoryChosenAt={listing.category_chosen_at}
+        editable={listing.status !== "given"}
+        busy={busy}
+        onChange={async (next) => {
+          await runAction(() => setListingCategory(listing.id, next));
+        }}
+        rule={rule}
+      />
+
+      <View style={{ gap: space.sm }}>
+        <View style={rule}>
+          <Eyebrow>Requests</Eyebrow>
+        </View>
+        <RequestList
+          requests={listing.requests}
+          status={listing.status}
+          canChoose={listing.chosen_request_id === null && listing.status === "approved"}
+          busy={busy || choosing}
+          onChoose={setChooseTarget}
+        />
+      </View>
+
+      {/* An action error is about the button that was just pressed, not about
+          what moderation decided, so it sits with the buttons — which is
+          where `handleDelete`'s comment has always said it was. It used to
+          render inside the Status section, with Category and Requests
+          between it and the button that produced it. */}
+      {error !== null ? (
+        <Text variant="body" color="dangerText">
+          {error}
+        </Text>
+      ) : null}
+
+      {/* One stamp-red primary at most; the rest are ink-outlined, the destructive one bare. */}
+      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.md }}>
+        {listing.status === "approved" ? (
+          <Button label="Mark given" disabled={busy} onPress={() => runAction(() => markGiven(listing.id))} />
+        ) : null}
+        {listing.status === "withdrawn" ? (
+          <Button label="Relist" disabled={busy} onPress={() => runAction(() => relistListing(listing.id))} />
+        ) : null}
+        <Link href={{ pathname: "/give", params: { edit: listing.id } }} asChild>
+          <Button label="Edit" variant="secondary" disabled={busy} />
+        </Link>
+        {listing.status !== "withdrawn" && listing.status !== "given" ? (
+          <Button label="Withdraw" variant="secondary" disabled={busy} onPress={() => runAction(() => withdrawListing(listing.id))} />
+        ) : null}
+        <Button label="Delete" variant="ghost" disabled={busy} onPress={() => setConfirmDelete(true)} />
+      </View>
+    </Card>
+  );
+
+  return (
+    <Page variant={twoColumn ? "grid" : "prose"} contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
+      <RouteHead title={listing.title} />
+      {twoColumn ? (
+        // `alignItems: "flex-start"` so the photos column keeps its own
+        // height instead of being stretched to match the (usually much
+        // taller) detail card beside it — the same reason `item/[id].tsx`
+        // sets it on its print/story row.
+        <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.xxl }}>
+          <View style={{ flex: PHOTOS_COLUMN_PARTS }}>{photosBlock}</View>
+          <View style={{ flex: DETAILS_COLUMN_PARTS }}>{detailBlock}</View>
+        </View>
+      ) : (
+        // Stacked: unchanged from before the split — photos, then the card,
+        // as siblings of the page's own children.
+        <>
+          {photosBlock}
+          {detailBlock}
+        </>
+      )}
 
       <Sheet visible={confirmDelete} onClose={() => setConfirmDelete(false)} title="Delete this listing?">
         <Text variant="body" color="textSecondary">

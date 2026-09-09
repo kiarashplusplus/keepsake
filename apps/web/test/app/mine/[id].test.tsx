@@ -591,3 +591,147 @@ describe("mine/[id] empty requests by status (#355)", () => {
     expect(shown).not.toContain("Share the link");
   });
 });
+
+/**
+ * Issue #373 finding 7. `docs/qa/baseline/ux-desktop/mine-detail.jpg` and
+ * `mine-detail-requests.jpg` showed a 120px thumbnail alone in a full-width
+ * band at 1280x800, with everything else stacked in one column underneath —
+ * unlike the same keepsake's public `item.jpg`, which already splits
+ * print-left/story-right (#222). This page now gets the same treatment.
+ *
+ * These assert structure, the same way `test/app/item/[id].test.tsx`'s own
+ * "#222" describe block does: that the page switches to the `grid` measure,
+ * that the photos and the detail card land in one row in that order, that
+ * the print grows past its phone size once it has a column to itself, and
+ * that a thoughtless split hasn't stranded the requests list or the
+ * destructive actions in the narrower column. What it actually looks like at
+ * 1280x800 is `e2e/ux.spec.ts`'s job, not this file's.
+ */
+describe("mine/[id] desktop two-column layout (#373 finding 7)", () => {
+  beforeEach(() => {
+    jest.mocked(getMyListing).mockReset();
+  });
+
+  /**
+   * Drives `useWindowDimensions()`, the same way and for the same reason as
+   * `test/app/item/[id].test.tsx`'s own `setViewport` — jsdom's
+   * `document.documentElement.clientWidth/Height` are a flat 0, so without
+   * this every test here would render the narrow branch silently.
+   */
+  function setViewport(width: number, height: number): void {
+    Object.defineProperty(document.documentElement, "clientWidth", { value: width, configurable: true });
+    Object.defineProperty(document.documentElement, "clientHeight", { value: height, configurable: true });
+    window.dispatchEvent(new Event("resize"));
+  }
+
+  /** The issue's own frames: `ux-mobile` and `ux-desktop`. */
+  const PHONE = [390, 844] as const;
+  const DESKTOP = [1280, 800] as const;
+
+  type Node = { props?: { style?: Record<string, unknown> }; children?: unknown };
+
+  /** Depth-first walk of a `toJSON()` tree (whose root is an array). */
+  function find(node: unknown, predicate: (n: Node) => boolean): Node | null {
+    if (Array.isArray(node)) {
+      for (const entry of node) {
+        const hit = find(entry, predicate);
+        if (hit !== null) return hit;
+      }
+      return null;
+    }
+    if (node === null || typeof node !== "object") return null;
+    const candidate = node as Node;
+    if (predicate(candidate)) return candidate;
+    return find(candidate.children, predicate);
+  }
+
+  function styleOf(node: Node): Record<string, unknown> {
+    return node.props?.style ?? {};
+  }
+
+  /** react-native-web serialises lengths with units, so 168 -> "168px". */
+  function px(value: number): string {
+    return `${value}px`;
+  }
+
+  /** The photos/detail row, which only exists in the two-column layout. */
+  function splitRow(tree: unknown): Node | null {
+    return find(tree, (n) => styleOf(n)["flexDirection"] === "row" && styleOf(n)["alignItems"] === "flex-start");
+  }
+
+  function listingWithPhoto(): OwnerListingDetail {
+    return {
+      ...detailWithOpenRequest(),
+      photos: [
+        {
+          id: "photo-1",
+          width: 800,
+          height: 600,
+          blurhash: "LKO2?U%2Tw=w]~RBVZRi};RPxuwH",
+          url_full: "https://example.com/full.jpg",
+          url_thumb: "https://example.com/thumb.jpg",
+        },
+      ],
+    };
+  }
+
+  async function renderAt(width: number, height: number): Promise<ReturnType<typeof render>> {
+    setViewport(width, height);
+    jest.mocked(getMyListing).mockResolvedValue(listingWithPhoto());
+    const instance = render(
+      <ToastProvider>
+        <MineDetail />
+      </ToastProvider>,
+    );
+    await act(async () => {
+      await flush();
+    });
+    return instance;
+  }
+
+  it("puts photos and the detail card side by side, in that order", async () => {
+    const { toJSON } = await renderAt(...DESKTOP);
+    const tree = toJSON();
+
+    const row = splitRow(tree);
+    expect(row).not.toBeNull();
+    const columns = row?.children;
+    expect(Array.isArray(columns) ? columns : []).toHaveLength(2);
+
+    const [photosColumn] = columns as [unknown, unknown];
+    // The left column is the photos, not a second copy of the card.
+    expect(JSON.stringify(photosColumn)).not.toContain("Requests");
+  });
+
+  // The whole point of finding 7's second half: a careless split could put
+  // the photos in the wider column and everything else — the requests list,
+  // the owner actions — in a narrow gutter. Both stay in the right column.
+  it("keeps the requests list and the owner actions in the wider column, not a narrow gutter", async () => {
+    const { toJSON } = await renderAt(...DESKTOP);
+    const row = splitRow(toJSON());
+    const columns = (row?.children ?? []) as unknown[];
+    const detailColumn = columns[1];
+
+    const detail = JSON.stringify(detailColumn);
+    expect(detail).toContain("Requests");
+    expect(detail).toContain("I'd give this a wonderful home on my own kitchen counter.");
+    expect(detail).toContain("Withdraw");
+    expect(detail).toContain("Delete");
+  });
+
+  it("grows the print past its phone size once it has a column to itself", async () => {
+    const { toJSON } = await renderAt(...DESKTOP);
+    const tree = toJSON();
+    expect(JSON.stringify(tree)).toContain(`"width":"${px(168)}"`);
+    expect(JSON.stringify(tree)).not.toContain(`"width":"${px(120)}"`);
+  });
+
+  it("keeps the single-column stacked layout and the 120px print on a phone", async () => {
+    const { toJSON } = await renderAt(...PHONE);
+    const tree = toJSON();
+
+    expect(splitRow(tree)).toBeNull();
+    expect(JSON.stringify(tree)).toContain(`"width":"${px(120)}"`);
+    expect(JSON.stringify(tree)).not.toContain(`"width":"${px(168)}"`);
+  });
+});
