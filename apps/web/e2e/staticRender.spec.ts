@@ -63,7 +63,7 @@ test("the explainer is readable with no JavaScript", async ({ browser }) => {
 
   await page.goto("/welcome");
 
-  await expect(page.getByText("No accounts. No money.")).toBeVisible();
+  await expect(page.getByText("No passwords. No money.")).toBeVisible();
   await expect(page.getByText(/They photograph it, write what it is/)).toBeVisible();
 
   await context.close();

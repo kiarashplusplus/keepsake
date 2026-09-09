@@ -76,7 +76,7 @@ const EMAIL_SCREEN = path.join(WEB_ROOT, "app/mine/email.tsx");
  */
 const EXPECTED_SECTIONS = [
   "Who runs this",
-  "No accounts, just a device key",
+  "No password, just a device key",
   "Your email",
   "What a requester shares",
   "Photos",
@@ -140,7 +140,7 @@ const LOCKED_PASSAGES: { name: string; phrases: string[] }[] = [
   },
   {
     // #61: the commitment is a *specific* action, because "we'll remove the
-    // account" was both vague and contradicted the page's own "no accounts".
+    // account" was both vague and named a thing this product doesn't have.
     // `POST /admin/owners/:id/ban` is the code behind the second half.
     name: "minor takedown on actual knowledge (#61)",
     phrases: [

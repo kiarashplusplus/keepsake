@@ -24,12 +24,12 @@ export default function Welcome(): React.ReactElement {
     <Page variant="prose" contentContainerStyle={{ paddingVertical: sectionRhythm.normal }}>
       <RouteHead
         title="Welcome"
-        description="Someone nearby has something they're ready to let go of. No accounts, no money — just neighbors giving things a second life."
+        description="Someone nearby has something they're ready to let go of. No passwords, no money — just neighbors giving things a second life."
       />
       <Card style={{ gap: space.lg, alignItems: "flex-start", maxWidth: 640 }}>
         <Stamp state="idle" label="Free" />
 
-        <Eyebrow tick>No accounts. No money.</Eyebrow>
+        <Eyebrow tick>No passwords. No money.</Eyebrow>
 
         <Text variant="displayLg">Someone nearby has something they’re ready to let go of.</Text>
 

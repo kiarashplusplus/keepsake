@@ -147,7 +147,7 @@ test("the new-visitor explainer has no serious or critical accessibility violati
   // fires for the root path, so this context's seeded "visited" flag (every
   // other test in this suite relies on it) doesn't need to be unset here.
   await page.goto("/welcome");
-  await expect(page.getByText("No accounts. No money.")).toBeVisible();
+  await expect(page.getByText("No passwords. No money.")).toBeVisible();
 
   expect(await blockingViolations(page)).toEqual([]);
 });
@@ -315,7 +315,7 @@ test.describe("dark mode", () => {
 
   test("the new-visitor explainer has no serious or critical accessibility violations in dark mode", async ({ page }) => {
     await page.goto("/welcome");
-    await expect(page.getByText("No accounts. No money.")).toBeVisible();
+    await expect(page.getByText("No passwords. No money.")).toBeVisible();
     await expectDark(page);
 
     expect(await blockingViolations(page)).toEqual([]);

@@ -51,7 +51,7 @@ test("a first-time visitor to / is redirected to the explainer, not the feed", a
   await page.goto("/");
 
   await expect(page).toHaveURL(`${BASE_URL}/welcome`);
-  await expect(page.getByText("No accounts. No money.")).toBeVisible();
+  await expect(page.getByText("No passwords. No money.")).toBeVisible();
   // The feed's own markup never painted first — this proves the branch was
   // decided before hydration, not after a flash of the wrong content.
   await expect(page.getByLabel("Search")).toHaveCount(0);
@@ -73,7 +73,7 @@ test("a first-time visitor's campaign parameters survive the redirect", async ({
   await page.goto("/?utm_source=newsletter&utm_medium=email&gclid=abc123");
 
   await expect(page).toHaveURL(`${BASE_URL}/welcome?utm_source=newsletter&utm_medium=email&gclid=abc123`);
-  await expect(page.getByText("No accounts. No money.")).toBeVisible();
+  await expect(page.getByText("No passwords. No money.")).toBeVisible();
 
   await context.close();
 });
@@ -129,7 +129,7 @@ test("the explainer is reachable directly, and links back to the feed and to giv
   const page = await context.newPage();
 
   await page.goto("/welcome");
-  await expect(page.getByText("No accounts. No money.")).toBeVisible();
+  await expect(page.getByText("No passwords. No money.")).toBeVisible();
 
   await page.getByLabel("Have something to give away?").click();
   await expect(page).toHaveURL(`${BASE_URL}/give`);

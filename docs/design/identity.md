@@ -14,6 +14,17 @@ a *verified* address, so every ask on an emailless listing waited on the giver h
 `/mine` on the one device holding their token, and `POST /api/recover` had nothing to mail if that
 device went away. See "Always asked for" and "Staleness" below.
 
+**"No accounts" is an architecture note, not copy** (2026-09-09). It still describes what this
+product refuses to build — there is no username, no password, no profile, and no auth system — so
+it stays the label on the decision in `product-decisions.md` and the first line of this file. But
+`welcome.tsx`, `about.html`, `privacy.html`, `terms.html` and `llms.txt` were each selling it to a
+reader who is then required to hand over an email before their listing will post, which is a
+promise the product stopped keeping the day before. Those five now say "no password" — the half
+that stayed true — and `apps/web/test/guards/noAccountsCopy.test.ts` fails if the shorter phrase
+comes back, with a positive control on the route check so that lifting the email requirement
+retires the guard instead of leaving an unexplained prohibition. Both policy pages record the
+edit in their own "what changed" logs.
+
 ## Owner token
 
 - `src/lib/ownerToken.ts`: `ks_` + base64url(32 random bytes), minted **lazily on the first give
