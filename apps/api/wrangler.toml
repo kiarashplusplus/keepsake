@@ -8,8 +8,7 @@ compatibility_flags = ["nodejs_compat"]
 # is guarded. `run_worker_first` is the list of paths that must never be
 # answered by a cached static asset even when one happens to exist at that
 # path (an old `/health` snapshot, a stale `/version.json`) — everything else
-# falls through to the SPA shell on a 404, which is what makes client-side
-# routing on `/item/:id` work on a hard refresh.
+# is answered by the assets system directly.
 # Issue #84 (launch audit finding 2, round two): a `run_worker_first` list of
 # literal paths only protects the paths someone remembered to add. `/`,
 # `/about`, `/give`, `/mine` and every other pre-rendered SPA page matched a
@@ -23,10 +22,47 @@ compatibility_flags = ["nodejs_compat"]
 # behavior for an actual asset fetch is unchanged — only production (below)
 # keeps the narrower list, since production doesn't need this and an extra
 # Worker hop on every hashed asset request is a real cost on the live site.
+#
+# ── How a miss and a trailing slash are answered ──────────────────────────
+#
+# `not_found_handling` and `html_handling` are restated identically in all
+# three blocks and are the whole of the 2026-09-09 discoverability pass's
+# first finding (`docs/runbooks/seo-audit.md`). They were
+# `single-page-application` and the default `auto-trailing-slash`.
+#
+# **`404-page`.** Measured against the live site: `GET
+# https://keepsake.ing/nonexistent-page-xyz` answered `200` with `/`'s exact
+# bytes (identical `ETag`), and so did every other path nobody had exported —
+# `/sitemap`, `/Welcome`, anything. `single-page-application` answers a miss
+# with `index.html` at 200, which is the definition of a soft 404: an
+# unbounded space of crawlable URLs that all resolve, all duplicate the
+# homepage, and all consume crawl budget that should be going to listings.
+# `404-page` serves `dist/404.html` (written by
+# `apps/web/scripts/seo-html.mjs` from expo-router's own `+not-found` export,
+# so the page a visitor sees is unchanged) with a real 404 status.
+#
+# The one thing that made this safe to change: a hard refresh of a *dynamic*
+# app route (`/mine/:id`, `/recover/:token`, `/bulk/:batchKey/...`) used to
+# depend on the SPA fallback handing back `index.html`. `src/index.ts`'s
+# catch-all now serves each of those routes its OWN exported shell
+# (`dist/mine/[id].html` and friends) when the asset lookup misses — which is
+# both what keeps them working and a fix in its own right, the same one
+# `routes/item.ts` already got: `/mine/abc` used to paint the *feed* for the
+# moment before hydration, because `index.html` is the feed.
+# `apps/web/e2e/deepLinkColdLoad.spec.ts` cold-loads every one of them.
+#
+# **`drop-trailing-slash`.** Under the default, a route exported as
+# `dist/give/index.html` is canonical at `/give/` and `/give` 307s to it,
+# while `dist/welcome.html` is canonical at `/welcome` and `/welcome/` 307s
+# to *that* — two opposite rules on one site. All three static pages link
+# `href="/give"`, so every one of those links cost a redirect hop, and the
+# sitemap and the canonicals had to pick a shape. `drop-trailing-slash` makes
+# it one rule: no page URL on this site ends in a slash except `/`.
 [assets]
 directory = "../web/dist"
 binding = "ASSETS"
-not_found_handling = "single-page-application"
+not_found_handling = "404-page"
+html_handling = "drop-trailing-slash"
 run_worker_first = true
 
 [ai]
@@ -628,7 +664,8 @@ preview_urls = false
 [env.preview.assets]
 directory = "../web/dist"
 binding = "ASSETS"
-not_found_handling = "single-page-application"
+not_found_handling = "404-page"
+html_handling = "drop-trailing-slash"
 run_worker_first = true
 
 [env.preview.ai]
@@ -866,7 +903,8 @@ preview_urls = false
 [env.production.assets]
 directory = "../web/dist"
 binding = "ASSETS"
-not_found_handling = "single-page-application"
+not_found_handling = "404-page"
+html_handling = "drop-trailing-slash"
 run_worker_first = ["/api/*", "/i/*", "/item/*", "/og/*", "/health", "/version.json", "/sitemap.xml", "/robots.txt", "/admin", "/bulk", "/bulk/*", "/mine", "/mine/*", "/recover", "/recover/*", "/withdraw/*", "/confirm/*"]
 
 [env.production.ai]

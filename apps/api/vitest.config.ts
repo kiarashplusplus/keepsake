@@ -35,6 +35,13 @@ const tailWranglerTomlText = readFileSync(new URL("./wrangler.tail.toml", import
 // against real workerd (`wrangler dev --env production`).
 const fixtureRunWorkerFirst = productionRunWorkerFirst(wranglerTomlText);
 
+// Restated by hand rather than derived, unlike `fixtureRunWorkerFirst` above:
+// this one drives `miniflare.assets` on a fixture *directory*, so deriving it
+// would silently point the suite at a rule the fixture tree may not have a
+// `404.html` for. `test/assetsHandlingConfig.test.ts` compares it against
+// wrangler.toml instead, which is the same protection without the coupling.
+const fixtureNotFoundHandling = "404-page";
+
 // `@cloudflare/vitest-pool-workers@0.22` targets Vitest 4, which moved this
 // package from the old `defineWorkersConfig({ test: { poolOptions: { workers
 // } } })` shape (still documented in a lot of examples, including Bayan's
@@ -99,6 +106,8 @@ export default defineConfig({
         // The path list this fixture actually booted with, so a test can
         // compare it against the deployed one (issue #195).
         TEST_RUN_WORKER_FIRST: JSON.stringify(fixtureRunWorkerFirst),
+        // Likewise for the not-found rule the fixture booted with.
+        TEST_NOT_FOUND_HANDLING: fixtureNotFoundHandling,
         EMAIL_ALLOWLIST: "",
             TEST_MIGRATIONS: migrations,
             // Pinned the same way Bayan's `worker/vitest.config.ts` pins its
@@ -173,7 +182,14 @@ export default defineConfig({
           assets: {
             directory: path.join(__dirname, "test/fixtures/public"),
             binding: "ASSETS",
-            notFoundHandling: "single-page-application",
+            // Mirrors `wrangler.toml`'s `[assets] not_found_handling` in every
+            // block. `single-page-application` until 2026-09-09, when the
+            // discoverability pass measured production answering every
+            // unexported path with `200` and the homepage's bytes
+            // (`docs/runbooks/seo-audit.md`); the fixture tree carries a
+            // `404.html` for miniflare to substitute, the same way `dist/`
+            // now does.
+            notFoundHandling: fixtureNotFoundHandling,
             runWorkerFirst: fixtureRunWorkerFirst,
           },
         },

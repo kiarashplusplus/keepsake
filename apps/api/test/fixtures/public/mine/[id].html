@@ -1,0 +1,15 @@
+<!doctype html>
+<!--
+  Test-only stand-in for `apps/web/dist/mine/[id].html`. Expo Router exports a
+  dynamic route under its literal `[param]` filename, so nothing is served at
+  `/mine/<a real id>` and, under `404-page` handling, the assets binding
+  misses there. `src/index.ts`'s catch-all substitutes this file; the marker
+  in the body is how `test/notFound.test.ts` tells it apart from `index.html`,
+  which is what the old SPA fallback would have returned.
+-->
+<html>
+  <head>
+    <title>keepsake test mine/[id] fixture</title>
+  </head>
+  <body>mine detail stub</body>
+</html>

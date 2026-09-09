@@ -75,3 +75,20 @@ export function productionRunWorkerFirst(tomlText: string): string[] {
   }
   return value;
 }
+
+/**
+ * A quoted string value declared by `table` — `not_found_handling`,
+ * `html_handling` — or `undefined` when the table does not declare one.
+ *
+ * Same "throw on a missing table" rule as `readRunWorkerFirst`, for the same
+ * reason: every caller is asking about a table it believes exists.
+ */
+export function readAssetsString(tomlText: string, table: string, key: string): string | undefined {
+  const body = tableBody(tomlText, table);
+  if (body === undefined) throw new Error(`wrangler.toml: no [${table}] table`);
+  const match = new RegExp(`^\\s*${key}\\s*=\\s*"([^"]*)"`, "m").exec(body);
+  return match?.[1];
+}
+
+/** Every `[assets]` table this file deploys, in the order they appear. */
+export const ASSETS_TABLES = ["assets", "env.preview.assets", "env.production.assets"] as const;
