@@ -226,3 +226,45 @@ export async function hideListingAsAdmin(request: APIRequestContext, listingId: 
 export function uniqueTitle(prefix: string): string {
   return `${prefix} ${Math.random().toString(36).slice(2, 8)}`;
 }
+
+/**
+ * `POST /api/listings/:id/reports` as an anonymous stranger — the same call
+ * the item page's report sheet fires.
+ *
+ * A fresh address per report, and that is not incidental: the route refuses a
+ * second report of the same listing from one `ip_digest` within a day (409),
+ * so reporting a listing to `REPORT_AUTOHIDE_THRESHOLD` genuinely takes three
+ * different people, which is what the threshold is for. The UX baseline uses
+ * it for the two report states nothing photographed: a listing the threshold
+ * took down on its own (`demoCatalog.ts`'s `DEMO_REPORTED_LISTING`, whose
+ * admin card is the only one with report rows under its `Reports (n)`
+ * eyebrow) and one report short of it, which is the ink half of the stats
+ * strip's report-pressure section.
+ */
+export async function reportListing(
+  request: APIRequestContext,
+  listingId: string,
+  body: { reason: string; details?: string },
+): Promise<void> {
+  const response = await request.post(`/api/listings/${listingId}/reports`, {
+    headers: { "CF-Connecting-IP": freshClientIp() },
+    data: body,
+  });
+  await readData(response);
+}
+
+/** `POST /api/admin/listings/:id/reject` — the same call the admin queue's
+ * reject sheet fires once a reason is chosen. The reason code is what the
+ * giver is later shown as a sentence (`MODERATION_REASONS`), which is the
+ * screen `mine-detail-rejected` exists for. */
+export async function rejectListingAsAdmin(
+  request: APIRequestContext,
+  listingId: string,
+  reason: string,
+): Promise<void> {
+  const response = await request.post(`/api/admin/listings/${listingId}/reject`, {
+    headers: adminHeaders(),
+    data: { reason },
+  });
+  await readData(response);
+}

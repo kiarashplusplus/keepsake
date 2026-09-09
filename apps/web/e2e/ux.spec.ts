@@ -61,6 +61,10 @@ import {
   DEMO_HIDDEN_LISTING,
   DEMO_LISTINGS,
   DEMO_OWNER_TOKEN,
+  DEMO_REJECTED_LISTING,
+  DEMO_REJECT_REASON,
+  DEMO_REPORTED_LISTING,
+  DEMO_REPORTS,
   DEMO_REQUESTS,
   ensureDemoCatalog,
 } from "./support/demoCatalog";
@@ -268,6 +272,19 @@ test.describe("ux baseline", () => {
     await expect(givenStamp).toBeVisible();
     await givenStamp.scrollIntoViewIfNeeded();
     await shot(page, testInfo, "item-given");
+
+    // And the other end of the same link: a keepsake that is no longer
+    // public. `GET /api/listings/:id` answers only for `approved` and
+    // `given`, so a withdrawn, deleted or — as here — reported-down keepsake
+    // is a 404 to a stranger holding a link that worked last week, and
+    // `item/[id].tsx` draws that as an idle stamp rather than an error. It is
+    // the page every stale share link in a group chat lands on and it had no
+    // frame; taking it against a real hidden listing rather than a made-up id
+    // is what makes it the product's answer and not a router accident.
+    await page.goto(`/item/${catalog.reportedId}`);
+    await expect(page.getByText(/That keepsake isn.t here/)).toBeVisible();
+    await expect(page.getByLabel("Back to the feed")).toBeVisible();
+    await shot(page, testInfo, "item-not-found");
   });
 
   test("the give flow, all five steps and the stamp at the end", async ({
@@ -407,6 +424,30 @@ test.describe("ux baseline", () => {
     await expect(page.getByText("This can't be undone.")).toBeVisible();
     await shot(page, testInfo, "mine-detail-delete");
     await page.getByLabel("Cancel", { exact: true }).click();
+
+    // What a moderator's decision looks like from the giver's side. #362 took
+    // the Status section off every listing whose eyebrow already says
+    // everything — a rejection is one of the two it deliberately kept, since
+    // "Needs attention" alone tells a giver nothing they can act on, and the
+    // sentence under it is `MODERATION_REASONS[reason]`, the giver-facing
+    // copy #354 rewrote. The baseline had frames of the moderator choosing
+    // that reason (`admin-reject-sheet`) and none of anybody being told it.
+    await page.goto(`/mine/${catalog.rejectedId}`);
+    await expect(page.getByText(DEMO_REJECTED_LISTING.title, { exact: true })).toBeVisible();
+    await expect(page.getByText("Needs attention", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText(MODERATION_REASONS[DEMO_REJECT_REASON], { exact: true }),
+    ).toBeVisible();
+    await shot(page, testInfo, "mine-detail-rejected");
+
+    // And the takedown nobody explains: three strangers reported this one and
+    // the threshold hid it with no human involved, so `statusDetailFor()` has
+    // nothing to add and the giver gets the word "Hidden" and no sentence at
+    // all. That is a design question — this is the frame to ask it against.
+    await page.goto(`/mine/${catalog.reportedId}`);
+    await expect(page.getByText(DEMO_REPORTED_LISTING.title, { exact: true })).toBeVisible();
+    await expect(page.getByText("Hidden", { exact: true })).toBeVisible();
+    await shot(page, testInfo, "mine-detail-hidden");
 
     // And the end state: given away, so there is nothing left to choose, no
     // category to correct and no withdrawing it.
@@ -576,7 +617,7 @@ test.describe("ux baseline", () => {
   });
 
   test("the admin queue, both sides of its gate", async ({ page, request }, testInfo) => {
-    await ensureDemoCatalog(request);
+    const catalog = await ensureDemoCatalog(request);
 
     await page.goto("/admin");
     await expect(page.getByText("Enter the admin token")).toBeVisible();
@@ -587,6 +628,22 @@ test.describe("ux baseline", () => {
     const queueTabs = page.getByRole("tablist", { name: "Queue status" });
     await expect(queueTabs).toBeVisible();
     await shot(page, testInfo, "admin-queue");
+
+    // The half of the stats strip that only means anything once something has
+    // been reported (issue #89): "Auto-hidden, unreviewed" red with the
+    // listing the threshold took down and how long ago, "One report away"
+    // holding a live keepsake one report short of the same fate. Every
+    // capture before this one photographed both badges at zero, which is the
+    // one state that cannot show whether the section reads as an alarm.
+    // Framed on the last line of the section — the id of the listing that
+    // came down — rather than on its eyebrow: `scrollIntoViewIfNeeded()`
+    // stops the moment the element it is given is on screen, so aiming at
+    // the heading leaves the badges under it below the fold at both widths.
+    await expect(page.getByText(/^Reports · auto-hides at/)).toBeVisible();
+    const autohidden = page.getByText(new RegExp(`^${catalog.reportedId} · \\d+ reports$`));
+    await expect(autohidden).toBeVisible();
+    await autohidden.scrollIntoViewIfNeeded();
+    await shot(page, testInfo, "admin-stats-pressure");
 
     // The queue the frame above is named after is not in it: at both
     // viewports `StatsStrip` fills the fold, so `admin-queue` is eleven
@@ -601,6 +658,31 @@ test.describe("ux baseline", () => {
     await queueTabs.getByLabel("Hidden", { exact: true }).click();
     await expect(page.getByText(DEMO_HIDDEN_LISTING.title, { exact: true })).toBeVisible();
     await shot(page, testInfo, "admin-hidden");
+
+    // The card the reports are on. Everything hidden in this fixture used to
+    // be hidden by an admin, so every queue frame showed "Reports (0) None."
+    // — the section a moderator reads first, photographed empty. This one was
+    // taken down by `POST /api/listings/:id/reports` alone: three reasons,
+    // two of them with a reporter's words under them and one without, and a
+    // `report_autohide` line in the history below.
+    const reportedCard = page.getByText(DEMO_REPORTED_LISTING.title, { exact: true });
+    await expect(reportedCard).toBeVisible();
+    await expect(page.getByText(`Reports (${DEMO_REPORTS.length})`, { exact: true })).toBeVisible();
+    await reportedCard.scrollIntoViewIfNeeded();
+    await shot(page, testInfo, "admin-hidden-reported");
+
+    // The Rejected tab, which has never been in a frame at all: it was the
+    // one queue status this fixture could not produce, because nothing here
+    // ever rejected anything. `demoCatalog.ts` now rejects one listing
+    // through the same route the sheet below fires.
+    await queueTabs.getByLabel("Rejected", { exact: true }).click();
+    const rejectedCard = page.getByText(DEMO_REJECTED_LISTING.title, { exact: true });
+    await expect(rejectedCard).toBeVisible();
+    await rejectedCard.scrollIntoViewIfNeeded();
+    await shot(page, testInfo, "admin-rejected");
+
+    await queueTabs.getByLabel("Hidden", { exact: true }).click();
+    await expect(page.getByText(DEMO_HIDDEN_LISTING.title, { exact: true })).toBeVisible();
 
     // Selection and the bulk toolbar it raises. Neither had a frame, and the
     // bar is a band of `accentSoft` with an outlined toolbar on it that
@@ -618,7 +700,14 @@ test.describe("ux baseline", () => {
     // Captured with a reason picked: the chips carry short moderator-facing
     // labels since #354, and the giver-facing sentence only appears under
     // the row once one is chosen — that pairing is the sheet's whole design.
-    await page.getByLabel("Reject", { exact: true }).click();
+    //
+    // Scoped to the card it is opened from: since the reported listing joined
+    // this tab there are two Reject buttons on the screen, and a bare
+    // `getByLabel` is a strict-mode violation rather than a choice.
+    await page
+      .getByRole("group", { name: DEMO_HIDDEN_LISTING.title })
+      .getByLabel("Reject", { exact: true })
+      .click();
     await expect(page.getByText("Reject this listing", { exact: true })).toBeVisible();
     await page.getByRole("radiogroup").getByLabel("Not an object", { exact: true }).click();
     await expect(page.getByText(MODERATION_REASONS.not_an_object, { exact: true })).toBeVisible();
