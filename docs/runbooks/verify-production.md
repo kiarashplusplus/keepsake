@@ -216,7 +216,9 @@ workflow run, and read [deploy.md](deploy.md#what-a-deploy-actually-does) — mi
 ## 5. Analytics loads only after consent, and only then
 
 Needs a real browser: `curl` cannot see this, and neither can the test suite. A first-time visitor
-is redirected client-side to `/welcome`, so follow the redirect rather than checking `/` alone.
+sees the explainer at `/` (in place since 2026-09-09 — the URL should NOT change to `/welcome`; if
+it does, production is running the old redirect and `docs/runbooks/seo-audit.md`'s fourth pass has
+not shipped).
 
 1. **Load the apex with a clean profile and do not answer the banner.** There must be **zero**
    requests to `static.cloudflareinsights.com`. Any request here means Cloudflare's edge

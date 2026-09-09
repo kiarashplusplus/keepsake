@@ -1,9 +1,10 @@
 /**
  * The "has been here before" signal from issue #44's root-domain split.
  *
- * `apps/web/app/+html.tsx`'s pre-hydration script redirects a first-time
- * visitor from `/` to `/welcome`; anyone who already holds an owner token or
- * has this flag set goes straight to the feed. The storage key is read OUT
+ * `apps/web/app/+html.tsx`'s pre-hydration script shows a first-time
+ * visitor the explainer at `/` (in place, by marking `<html>` — no longer a
+ * redirect to `/welcome`); anyone who already holds an owner token or has
+ * this flag set goes straight to the feed. The storage key is read OUT
  * OF `+html.tsx` rather than hardcoded a second time here, same reasoning as
  * `support/consent.ts`'s `CONSENT_STORAGE_KEY`: a key that drifts between
  * the app and this fixture would silently start (or stop) redirecting every
@@ -34,7 +35,7 @@ function literal(name: string): string {
 
 export const VISITED_STORAGE_KEY = literal("VISITED_KEY");
 
-/** Plant the flag before the first script runs, so the redirect never fires. */
+/** Plant the flag before the first script runs, so `/` is the feed. */
 export async function seedVisited(context: BrowserContext): Promise<void> {
   await context.addInitScript((key) => {
     window.localStorage.setItem(key as string, "1");

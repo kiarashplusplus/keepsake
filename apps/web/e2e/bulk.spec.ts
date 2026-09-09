@@ -220,10 +220,10 @@ test("a giver prepares an estate batch across photos, review and submit", async 
   //     fully submitted, so no draft section is expected for it — a second,
   //     untouched batch proves the draft section separately) --------------
   await page.goto("/mine");
-  // `<Link asChild><Button .../></Link>` renders `Button`'s own Pressable
-  // (accessibilityRole "button"), not an anchor — the `Link` only supplies
-  // navigation behavior, not the accessible role.
-  await expect(page.getByRole("button", { name: "Give several items" }).first()).toBeVisible();
+  // `<Link asChild><Button .../></Link>` renders `Button`'s Pressable with
+  // the `href` the `Link` hands it, which react-native-web makes an anchor
+  // — a link to the accessibility tree (`ui/Button.tsx`).
+  await expect(page.getByRole("link", { name: "Give several items" }).first()).toBeVisible();
 });
 
 test("My Keepsakes shows a private draft-batches section for an unsubmitted batch", async ({ page, context }) => {

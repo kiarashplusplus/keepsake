@@ -1904,6 +1904,22 @@ test("templateLiteralBody takes the exact bytes between the backticks", () => {
   assert.equal(templateLiteralBody("const Y = `z`;", "X"), null);
 });
 
+test("inlineScriptBodies ignores data blocks, which CSP script-src does not govern", () => {
+  // The static pages carry a `<script type="application/ld+json">` each
+  // (structured data, per page, never executed). Hashing it would be three
+  // hashes for scripts the browser never runs — and a false "the static
+  // pages carry different inline scripts" failure, since each page's JSON
+  // is its own.
+  assert.deepEqual(
+    inlineScriptBodies(
+      '<script type="application/ld+json">{"@type":"WebSite"}</script><script>a()</script>' +
+        "<script type='application/json' id=\"ks-listing\">{}</script><script type=\"module\">m()</script>" +
+        '<script type="text/javascript">b()</script><script type="text/template"><p></p></script>',
+    ),
+    ["a()", "m()", "b()"],
+  );
+});
+
 test("inlineScriptBodies skips <script src=…> and keeps inline bodies in order", () => {
   assert.deepEqual(
     inlineScriptBodies('<script src="/consent.js" defer></script><script>a()</script><script>b()</script>'),
@@ -1925,7 +1941,7 @@ test("csp-script-hash: this repository's real hashes match the scripts they auth
   const result = runChecks(["csp-script-hash"], REPO_ROOT)[0];
   assert.equal(result.status, "pass", result.details.join("\n"));
   const text = result.details.join("\n");
-  assert.match(text, /PREHYDRATION_SCRIPT: sha256-Xrcu2vG2x\+FPB1xtg6DFrNGNiO3x0AQ6vK5XstpOJM8= — apps\/web\/app\/\+html\.tsx \(1374 chars\)/);
+  assert.match(text, /PREHYDRATION_SCRIPT: sha256-SuJXlQ1A77znxosi4f5HQtZod2ZNy\/zIm6w8hGM6d7U= — apps\/web\/app\/\+html\.tsx \(1325 chars\)/);
   assert.match(text, /apps\/site inline script: sha256-d6qbtEYff\/sB38YyzuzhASbVmmOidU\/UFC9mNit47j4=/);
   // The one hash it cannot compute must say so rather than blending in.
   assert.match(text, /NOT against Expo's actual output/);

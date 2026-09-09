@@ -88,7 +88,7 @@ test("a route whose chunk(s) were rotated out recovers instead of leaving the ta
   // comment); either exercises the same navigation, so the first is enough.
   // Whatever chunk(s) this needs that the tab hasn't already loaded is/are
   // exactly the request(s) a deploy can rotate out from under it.
-  await page.getByRole("button", { name: /^Give/ }).first().click();
+  await page.getByRole("link", { name: /^Give/ }).first().click();
   await page.waitForLoadState("networkidle");
 
   await expect(page.getByText("Show us the keepsake.")).toBeVisible({ timeout: 30_000 });

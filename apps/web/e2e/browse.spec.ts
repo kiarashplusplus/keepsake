@@ -16,7 +16,10 @@ test.describe("browse", () => {
     // not be relied on to have picked the right one for this project's
     // viewport. It can now (`packages/tokens/src/breakpoints.ts`), so the
     // project says which label to expect instead of the test accepting both.
-    await expect(page.getByRole("button", { name: isMobile ? "Give" : "Give something", exact: true }).first()).toBeVisible();
+    // A link, not a button: `Button` inside `Link asChild` renders as an
+    // anchor (`ui/Button.tsx`), so the way to `/give` is a link to a crawler
+    // and to a screen reader alike.
+    await expect(page.getByRole("link", { name: isMobile ? "Give" : "Give something", exact: true }).first()).toBeVisible();
   });
 
   test("an approved listing shows up as a print on the table", async ({ page, request }) => {

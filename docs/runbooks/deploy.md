@@ -452,10 +452,11 @@ host the script is fetched from.
 ### Verifying it, which needs a browser
 
 None of this is observable from `curl` or from the test suite. jsdom cannot tell a request the
-browser refused on CSP grounds from one that succeeded, and the auto-injected beacon does not
-appear in a `curl` of `/` because a first-time visitor is redirected client-side to `/welcome`.
+browser refused on CSP grounds from one that succeeded, and the beacon is injected by a script a
+`curl` never runs. (A first-time visitor sees the explainer at `/` — since 2026-09-09 in place, no
+longer by a redirect to `/welcome` — so a clean profile lands on the explainer and stays on `/`.)
 
-Load the site in a real browser, follow the redirect, and check three things:
+Load the site in a real browser and check three things:
 
 1. **Before answering the banner** — zero requests to `static.cloudflareinsights.com`. Any request
    here means edge auto-injection is back on.

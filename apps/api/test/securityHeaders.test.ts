@@ -28,9 +28,9 @@ function expectSecurityHeaders(res: Response): void {
   expect(csp).toContain("frame-ancestors 'none'");
   // The two hashes every exported page carries: the combined pre-hydration
   // script (apps/web/app/+html.tsx's PREHYDRATION_SCRIPT — the no-flash
-  // theme read, plus, since issue #44, the new-visitor root redirect) and
+  // theme read, plus, since issue #44, the first-visit switch) and
   // Expo Router's own hydration-flag script.
-  expect(csp).toContain("'sha256-Xrcu2vG2x+FPB1xtg6DFrNGNiO3x0AQ6vK5XstpOJM8='");
+  expect(csp).toContain("'sha256-SuJXlQ1A77znxosi4f5HQtZod2ZNy/zIm6w8hGM6d7U='");
   expect(csp).toContain("'sha256-67fhrP0+BkBqmgGGXTtgiVO/9EQs3QruYNU/7fnRkI8='");
   expect(csp).toContain("https://challenges.cloudflare.com");
   // Issue #132: `connect-src` was absent entirely, so it fell back to

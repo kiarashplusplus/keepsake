@@ -49,13 +49,23 @@ test("the feed's chrome and controls are in the HTML, with no JavaScript at all"
 
   await expect(page.getByText("Give a keepsake a second life.")).toBeVisible();
   await expect(page.getByLabel("Search")).toBeVisible();
-  // The header's way to give. It is a `Button` inside a `Link asChild`, so it
-  // is a button to the accessibility tree. This used to accept
-  // `/^Give( something)?$/` "because its label depends on the width the
-  // static render assumed" — which was this file describing the bug the
+  // The header's way to give. It is a `Button` inside a `Link asChild`, and
+  // since 2026-09-09 that renders as a real `<a href="/give">` — a link to
+  // the accessibility tree and, which is the point of asserting it with
+  // scripting off, to a crawler: `/give` is in the sitemap, and this is the
+  // first time the served HTML of `/` has linked to it at all. This used to
+  // accept `/^Give( something)?$/` "because its label depends on the width
+  // the static render assumed" — which was this file describing the bug the
   // viewport switch fixes, as though it were a fact of life. The context
   // above is a desktop, so the label is now knowable.
-  await expect(page.getByRole("button", { name: "Give something" }).first()).toBeVisible();
+  const give = page.getByRole("link", { name: "Give something" }).first();
+  await expect(give).toBeVisible();
+  await expect(give).toHaveAttribute("href", "/give");
+  // The explainer is in this same HTML (`app/index.tsx` renders both
+  // screens into `/`), and with no script to mark `<html>` as a first visit
+  // the stylesheet keeps it out of the way. A crawler that runs no
+  // JavaScript therefore reads `/` as the feed, not as a second `/welcome`.
+  await expect(page.getByText("No passwords. No money.")).toBeHidden();
   // The category chips are the feed's own controls, not chrome.
   await expect(page.getByText("Books & letters")).toBeVisible();
 
@@ -90,10 +100,15 @@ test("one export lays out as a desktop and as a phone, with no JavaScript to cho
   // Wide: the full hero, the secondary nav, and the location controls open.
   await expect(desktop.page.getByText(/Some things are too full of memory/)).toBeVisible();
   await expect(desktop.page.getByRole("link", { name: "Browse" })).toBeVisible();
-  await expect(desktop.page.getByRole("link", { name: "About" })).toBeVisible();
+  // The HEADER's About — the first `/about` anchor in the document. The
+  // footer carries one too (#224), at every width, so a role-and-name query
+  // matches both and trips strict mode; that is what turned `main` red the
+  // day this test landed. A CSS locator includes hidden elements, so
+  // `.first()` is the header's on both viewports below.
+  await expect(desktop.page.locator('a[href="/about"]').first()).toBeVisible();
   await expect(desktop.page.getByRole("button", { name: "Use my location" })).toBeVisible();
   // ...and neither the phone's short label nor its collapsed summary row.
-  await expect(desktop.page.getByRole("button", { name: "Give", exact: true })).toBeHidden();
+  await expect(desktop.page.getByRole("link", { name: "Give", exact: true })).toBeHidden();
   await expect(desktop.page.getByRole("button", { name: /^Near · / })).toBeHidden();
 
   await desktop.context.close();
@@ -104,7 +119,7 @@ test("one export lays out as a desktop and as a phone, with no JavaScript to cho
   // Narrow: the hero cut to its headline, one short Give, the controls folded
   // behind the summary that stands in for them (issue #219).
   await expect(phone.page.getByText("Give a keepsake a second life.")).toBeVisible();
-  await expect(phone.page.getByRole("button", { name: "Give", exact: true })).toBeVisible();
+  await expect(phone.page.getByRole("link", { name: "Give", exact: true })).toBeVisible();
   await expect(phone.page.getByRole("button", { name: /^Near · / })).toBeVisible();
   await expect(phone.page.getByText(/Some things are too full of memory/)).toBeHidden();
   await expect(phone.page.getByRole("link", { name: "Browse" })).toBeHidden();
@@ -114,7 +129,8 @@ test("one export lays out as a desktop and as a phone, with no JavaScript to cho
 });
 
 test("the explainer is readable with no JavaScript", async ({ browser }) => {
-  // `/welcome` is where every first-time visitor lands, including from an ad.
+  // `/welcome` is the explainer as a page of its own — the same card `/`
+  // shows a first-time visitor in place (`welcome.spec.ts`).
   const { context, page } = await noScriptPage(browser);
 
   await page.goto("/welcome");

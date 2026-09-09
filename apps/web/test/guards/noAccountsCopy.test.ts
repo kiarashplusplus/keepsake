@@ -51,6 +51,9 @@ const READER_FACING: { name: string; file: string; until?: string }[] = [
     until: '<section id="changes">',
   },
   { name: "app/welcome.tsx", file: path.join(WEB_ROOT, "app/welcome.tsx") },
+  // The explainer's body copy — what `/welcome` and a first visit to `/`
+  // both show. `app/welcome.tsx` above keeps only the route's description.
+  { name: "src/features/welcome/Explainer.tsx", file: path.join(WEB_ROOT, "src/features/welcome/Explainer.tsx") },
   { name: "public/llms.txt", file: path.join(WEB_ROOT, "public/llms.txt") },
 ];
 
@@ -117,7 +120,7 @@ describe("the reader-facing pages vs. the email requirement", () => {
     // The replacement claim has to survive too: dropping "no accounts" and
     // saying nothing in its place would pass every assertion above while
     // losing the thing the phrase was there to promise.
-    expect(shipped(path.join(WEB_ROOT, "app/welcome.tsx"))).toContain("No passwords. No money.");
+    expect(shipped(path.join(WEB_ROOT, "src/features/welcome/Explainer.tsx"))).toContain("No passwords. No money.");
     expect(shipped(path.join(SITE_PUBLIC, "privacy.html"))).toContain(
       "No password, just a device key",
     );

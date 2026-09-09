@@ -143,9 +143,9 @@ test("the give flow has no serious or critical accessibility violations", async 
 });
 
 test("the new-visitor explainer has no serious or critical accessibility violations", async ({ page }) => {
-  // Direct navigation, not through `/`: the redirect in `+html.tsx` only
-  // fires for the root path, so this context's seeded "visited" flag (every
-  // other test in this suite relies on it) doesn't need to be unset here.
+  // Direct navigation, not through `/`: this context's seeded "visited" flag
+  // (every other test in this suite relies on it) would make `/` the feed,
+  // and `/welcome` is the same explainer card as a page of its own.
   await page.goto("/welcome");
   await expect(page.getByText("No passwords. No money.")).toBeVisible();
 

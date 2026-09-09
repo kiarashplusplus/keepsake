@@ -36,6 +36,24 @@ export type ButtonVariant = "primary" | "secondary" | "link" | "ghost";
 export type ButtonProps = {
   label: string;
   onPress?: () => void;
+  /**
+   * Set by `<Link asChild>` — expo-router's `Slot` merges `href`, `role`
+   * and the press handler onto whatever it wraps — and never by hand. With
+   * it, this renders as a real `<a href>` (react-native-web makes any View
+   * with an `href` an anchor) with the link role, so a "Give something" is a
+   * link a crawler can follow, a middle-click can open in a new tab and a
+   * screen reader announces as what it is. Without it (an `onPress`
+   * action) it stays a button. Until 2026-09-09 every CTA on the site was a
+   * `<div role="button">` even when it navigated, which is why nothing in
+   * the served HTML of `/` linked to `/give` — the page this product
+   * converts on was reachable only through the sitemap.
+   *
+   * Left-clicks are still routed through expo-router (`Link`'s handler
+   * calls `preventDefault` and navigates in place); the anchor's own
+   * navigation only runs for modifier-clicks and middle-clicks, which is
+   * what those are for.
+   */
+  href?: string;
   variant?: ButtonVariant;
   loading?: boolean;
   disabled?: boolean;
@@ -75,10 +93,14 @@ function rotationFor(label: string): number {
   return ((Math.abs(hash) % 23) - 11) / 10;
 }
 
-export function Button({ label, onPress, variant = "primary", loading = false, disabled = false, arrow, style }: ButtonProps): React.ReactElement {
+export function Button({ label, onPress, href, variant = "primary", loading = false, disabled = false, arrow, style }: ButtonProps): React.ReactElement {
   const colors = useColors();
   const motion = useMotion();
   const isDisabled = disabled || loading;
+  // A disabled Pressable ignores `onPress`, but a browser does not ignore an
+  // anchor's `href` — so a disabled link would still navigate, as a full
+  // page load. While disabled it is a plain button with nowhere to go.
+  const anchorHref = isDisabled ? undefined : href;
   const showArrow = variant === "link" && arrow !== false;
   const rotateDeg = motion.reduce ? 0 : rotationFor(label);
 
@@ -141,11 +163,12 @@ export function Button({ label, onPress, variant = "primary", loading = false, d
 
   return (
     <Pressable
-      accessibilityRole="button"
+      accessibilityRole={anchorHref !== undefined ? "link" : "button"}
       accessibilityLabel={label}
       accessibilityState={{ disabled: isDisabled, busy: loading }}
       disabled={isDisabled}
       onPress={onPress}
+      {...(anchorHref !== undefined ? ({ href: anchorHref } as object) : {})}
       style={(state) => {
         const { pressed, hovered = false } = state as WebPressableState;
         return [

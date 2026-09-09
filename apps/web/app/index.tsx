@@ -1,6 +1,16 @@
-// The feed: location + search + category controls over a masonry grid of
-// tag cards. URL state (`q`/`category`/`country`/`postal`/`radius_mi`) round
-// trips through expo-router so a shared feed link reproduces the same view.
+// `/`: the feed — location + search + category controls over a masonry grid
+// of tag cards. URL state (`q`/`category`/`country`/`postal`/`radius_mi`)
+// round trips through expo-router so a shared feed link reproduces the same
+// view.
+//
+// And, for a device that has never been here, the explainer (issue #44).
+// `Root` at the bottom renders BOTH into every `/`, and the shell's
+// stylesheet shows one of them, keyed on the `data-ks-first-visit` attribute
+// the pre-hydration script in `+html.tsx` sets before the first paint. Until
+// 2026-09-09 that script redirected a first-time visitor to `/welcome`
+// instead, which made `/` a redirect to every crawler that renders
+// JavaScript — `src/lib/firstVisit.ts` has the reasoning, and
+// `docs/runbooks/seo-audit.md` the measurement.
 import * as React from "react";
 import { Pressable, View, type ViewStyle } from "react-native";
 import { Link, useLocalSearchParams, useRouter } from "expo-router";
@@ -9,6 +19,7 @@ import { sectionRhythm, space } from "@keepsake/tokens/spacing";
 import { type } from "@keepsake/tokens/typography";
 import { useColors } from "@/ui/theme";
 import { Page } from "@/ui/Page";
+import { ReadableWidth } from "@/ui/ReadableWidth";
 import { Text } from "@/ui/Text";
 import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
@@ -33,6 +44,8 @@ import { DEFAULT_LOCATION_PREF, loadLocationPref, saveLocationPref, type Locatio
 import { track } from "@/lib/analytics";
 import { AnalyticsEvents } from "@/lib/analyticsEvents";
 import { useViewport } from "@/ui/viewport";
+import { endFirstVisit, firstVisitOnly, returningOnly, useFirstVisit } from "@/lib/firstVisit";
+import { Explainer } from "@/features/welcome/Explainer";
 
 type RawParams = { q?: string; category?: string; country?: string; postal?: string; radius_mi?: string };
 
@@ -155,7 +168,13 @@ function LocationDisclosure({
   );
 }
 
-export default function Feed(): React.ReactElement {
+/**
+ * The feed proper. `enabled` is `false` while the explainer is the screen on
+ * show (`Root` below): the feed is in the document but `display: none`, and
+ * a request, an analytics event and a URL rewrite for a screen nobody is
+ * looking at would be three lies about what the visitor did.
+ */
+function Feed({ enabled }: { enabled: boolean }): React.ReactElement {
   const router = useRouter();
   // Width comes from CSS, not from `useWindowDimensions()`, so the static
   // export's markup is right at every viewport instead of at whichever one
@@ -222,7 +241,7 @@ export default function Feed(): React.ReactElement {
 
   const feedQuery = React.useMemo(() => buildFeedQuery({ category, q, location }), [category, q, location]);
   const { items, loading, loadingMore, error, hasMore, loadMore } = useFeed(feedQuery, {
-    enabled: locationHydrated,
+    enabled: enabled && locationHydrated,
     reloadToken,
   });
 
@@ -247,7 +266,7 @@ export default function Feed(): React.ReactElement {
   // Reflect state back into the URL once the initial merge has happened, so
   // this effect never stomps the just-read URL params with the defaults.
   React.useEffect(() => {
-    if (!locationHydrated) return;
+    if (!enabled || !locationHydrated) return;
     const params: FeedUrlParams = urlParamsFromFeedQuery({
       ...(q.trim() !== "" ? { q: q.trim() } : {}),
       ...(category !== null ? { category } : {}),
@@ -257,7 +276,7 @@ export default function Feed(): React.ReactElement {
     });
     router.setParams(params as never);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, category, location, locationHydrated]);
+  }, [q, category, location, locationHydrated, enabled]);
 
   // Issue #220: which *kind* of empty this is, resolved in one pure place
   // (`features/feed/emptyState.ts`) so the three cases — an empty
@@ -297,9 +316,11 @@ export default function Feed(): React.ReactElement {
   }
 
   return (
-    <Page
+    // A `ReadableWidth`, not a `Page`: `Root` below owns the one `Page` —
+    // and so the one scroller and the one footer — for both of `/`'s screens.
+    <ReadableWidth
       variant="grid"
-      contentContainerStyle={{
+      style={{
         paddingTop: vp.step(sectionRhythm.normal, sectionRhythm.loose),
         paddingBottom: sectionRhythm.bookend,
         gap: sectionRhythm.tight,
@@ -420,6 +441,40 @@ export default function Feed(): React.ReactElement {
             ) : null}
           </>
         )}
+      </View>
+    </ReadableWidth>
+  );
+}
+
+/**
+ * What `/` actually renders: the explainer and the feed, both, always.
+ *
+ * Both are in the exported HTML and in the hydrated tree; which one is on
+ * screen is the stylesheet's decision (`--ks-first-visit-only` /
+ * `--ks-returning-only` in `+html.tsx`, resolved from the `<html>` attribute
+ * the pre-hydration script sets), so the first paint is already the right
+ * screen for this device and hydration changes nothing — the same
+ * construction as the theme and the viewport switch. The hidden one
+ * generates no box, is out of the tab order and out of the accessibility
+ * tree.
+ *
+ * One `Page` around both, so the document has one scroller and one legal
+ * footer whichever screen is showing — two `Page`s put two footers in the
+ * DOM, and every "About"/"Privacy choices" locator in the suite found both.
+ *
+ * "See what's out there" calls `endFirstVisit()`, which clears the attribute
+ * (the stylesheet swaps the screens) and flips `enabled` (the feed starts
+ * loading). The URL never changes: the visitor was at `/` the whole time.
+ */
+export default function Root(): React.ReactElement {
+  const firstVisit = useFirstVisit();
+  return (
+    <Page>
+      <View style={firstVisitOnly} testID="root-explainer">
+        <Explainer onBrowse={endFirstVisit} />
+      </View>
+      <View style={returningOnly} testID="root-feed">
+        <Feed enabled={!firstVisit} />
       </View>
     </Page>
   );

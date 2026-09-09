@@ -406,3 +406,103 @@ document request to change, and Google follows both.
 5. **Resubmit `/sitemap.xml` in Search Console after this deploys**, and watch the "Excluded →
    Soft 404" and "Duplicate without user-selected canonical" buckets drain. That is the field
    measurement none of these three passes has.
+
+---
+
+# Fourth pass, 2026-09-09: the redirect, measured by Google's own tool
+
+The third pass ended on the one finding it did not act on: `/` "very likely resolves to `/welcome`
+for Googlebot", reasoned from the renderer's documented statelessness and left for Kiarash, because
+every fix was a product change. Kiarash ran PageSpeed Insights against `https://keepsake.ing/`
+(2026-09-09, 12:28 AM) and got the answer without Search Console: **"Clientside Redirect! We
+encountered an additional client-side redirect when loading the page … Updated URL
+https://keepsake.ing/welcome."** SEO score 100, and the homepage a redirect. That is the
+measurement the third pass could not make, and it settles the question in the direction it
+predicted.
+
+Production served `9035bbd` — the tip of `main` — throughout this pass, so everything the third
+pass shipped (real 404s, per-route canonicals, `/welcome` and `/give` in the sitemap, one
+trailing-slash rule) was live and re-confirmed against the apex: every sitemap URL answers `200`
+with no hop; `/give/`, `/welcome/`, `/about/` and `/index.html` are one `307` each to their
+canonical; `www.` and `http://` are `301`s; `/item/<unknown>`, `/_sitemap` and any invented path
+are real `404`s. Nothing below touches the sitemap's shape.
+
+## Fixed in this pass
+
+**`/` no longer redirects anyone.** The pre-hydration script still decides, before the first
+paint, whether this load of `/` is a device's first — but instead of `location.replace("/welcome"
++ location.search)` it now puts `data-ks-first-visit="1"` on `<html>`. `app/index.tsx` renders
+**both** the explainer and the feed into `/`, inside one `Page`, and a two-line stylesheet in the
+shell (`FIRST_VISIT_CSS`) shows one of them from that attribute. It is the same construction the
+second pass used for the theme and the third for the viewport: decided in CSS from a value set
+before JavaScript, on markup that is identical for every visitor. So:
+
+- `/` answers `200` with its own content to Googlebot, to a no-JS crawler (which gets the feed —
+  no attribute, no explainer) and to a human, and there is no hop for `utm_*`/`gclid` to die on.
+- A first-time visitor still never sees a frame of the feed: the attribute is on `<html>` before
+  the body is parsed. `e2e/welcome.spec.ts` asserts the URL stays `/`, that the feed is
+  `display: none` rather than merely below the explainer, and — the assertion that matters for a
+  page carrying two screens — that the browser console logs **no error**, which is where a React
+  hydration mismatch would have shown up.
+- `/welcome` is unchanged as a page: still in the sitemap, still its own canonical, still the
+  explainer with a title and description. Nobody is sent there any more; `llms.txt` and the
+  explainer's own copy link to it.
+- The feed does not fetch, report `FeedViewed`, or rewrite the URL with `?radius_mi=25` while it is
+  hidden behind the explainer; "See what's out there" clears the attribute and flips that gate, in
+  place. `src/lib/firstVisit.ts` is the whole of the React side.
+
+This is the option the third pass said it would take. What it costs is in
+`docs/product-decisions.md`'s row: ~8 KB more HTML on `/`, and the explainer copy on two URLs.
+
+**Every CTA is now a real link.** `Button` inside `<Link asChild>` rendered as a `<div
+role="button">` that navigated on press, so the served HTML of `/` contained no `<a>` to `/give`
+at all — the page this product converts on, in the sitemap, linked from nowhere a crawler could
+see — and `/welcome` linked to neither `/` nor `/give`. `Button` now passes the `href` expo-router
+hands it through to its Pressable, which react-native-web renders as an anchor with the link role.
+Measured on the new export: `/` carries four `<a href="/give">` (both header widths, the hero, the
+explainer) where production carries none. Left-clicks still go through the router; middle-click
+and modifier-click open a tab, which they never could. Every spec that selected one of these by
+`getByRole("button")` now says `link`, because that role change *is* the fix.
+
+**Structured data and share metadata on the static pages.** `/about`, `/privacy` and `/terms`
+declared `og:image` and nothing about it — no width, height, type or alt — and two of the three had
+no `twitter:card`. They now match the shell tag for tag, and each carries the same `WebSite` and
+`Organization` nodes the shell emits plus its own `AboutPage`/`WebPage` node linked to them by
+`@id`. `test/guards/rootOpenGraph.test.ts` holds the three copies equal to `ROOT_JSON_LD` and each
+page node's `url` equal to its canonical.
+
+**The `Organization` has a `logo`**, and `/apple-touch-icon.png` exists. Both were withheld for
+the same reason: the only square mark was the 64px favicon, Google wants ≥112, and iOS's request
+for the touch icon answered `404` on production (measured). `tools/og/render-icons.mjs` renders
+`icon-512.png` and a square 180px touch icon from the favicon's own SVG through resvg; the guard
+reads the PNGs' real dimensions rather than the numbers in the markup.
+
+## One thing found on `main` on the way
+
+`main`'s CI was red at `9035bbd` (run 34316853033): `e2e/staticRender.spec.ts`'s new desktop
+assertion `getByRole("link", { name: "About" })` matches the header's link *and* the footer's
+(#224) and trips strict mode, in both projects. It is fixed here by asking for the first `/about`
+anchor in the document, which is the header's at either width.
+
+## Deliberately not done
+
+- **`/give`'s `<title>`** is still "Give a keepsake: Photos — Keepsake", and its description is the
+  site default. Same copy decision as the first and third passes left; now that `/give` is linked
+  from four places on `/`, it is the next most valuable title on the site.
+- **Dropping `/welcome` from the sitemap.** It is a near-duplicate of `/`'s first-visit state, but
+  both self-canonicalise and `/` has strictly more content, so Google should keep them apart. If
+  Search Console ever reports `/` as "Duplicate, Google chose different canonical" pointing at
+  `/welcome`, that is the trigger — it is in the decision's row.
+- **A Lighthouse run from here.** The container reaches production, but its Chromium is not the
+  pinned build and the network is a proxy; a number from it would measure the container. PageSpeed
+  Insights on `https://keepsake.ing/` after this deploys is the check, and the dialog in the
+  screenshot should simply not appear.
+
+## After this deploys
+
+1. Re-run PageSpeed Insights on `https://keepsake.ing/` — no "Clientside Redirect" dialog, and the
+   report should be for `/` itself.
+2. In Search Console, inspect `https://keepsake.ing/`: it should render as the explainer with the
+   feed in the DOM, not as a redirect.
+3. Validate `https://keepsake.ing/about` in the Rich Results test: `AboutPage` + `WebSite` +
+   `Organization` with a logo, no warnings.
