@@ -36,6 +36,8 @@ import type {
 import { OBSERVATORY_WINDOWS } from "@keepsake/contracts/observatory";
 import { Text } from "@/ui/Text";
 import { Chip } from "@/ui/Chip";
+import { Card } from "@/ui/Surface";
+import { Eyebrow } from "@/ui/Eyebrow";
 import { Stamp } from "@/ui/Stamp";
 import { EmptyState } from "@/ui/EmptyState";
 import { Skeleton } from "@/ui/Skeleton";
@@ -150,13 +152,41 @@ function BarRow({ label, value, max }: { label: string; value: number; max: numb
       <Text variant="caption" color="textSecondary" style={{ width: 84 }}>
         {label}
       </Text>
-      <View style={{ flex: 1, height: 10, borderRadius: 2, backgroundColor: colors.tableEdge, overflow: "hidden" }}>
+      {/* `rule`, not `tableEdge`, for the track: this bar now sits on a
+          `Section`'s paper, and `tableEdge` is one of the tokens that flips —
+          in dark mode it is #1C140F, all but the same near-black as the
+          `accent2` fill, so a day's bar could not be told from an empty one.
+          `rule` is constant ink at 32%, a pencil grey on the card in both
+          themes. */}
+      <View style={{ flex: 1, height: 10, borderRadius: 2, backgroundColor: colors.rule, overflow: "hidden" }}>
         <View style={{ width: `${pct}%`, height: "100%", backgroundColor: colors.accent2 } as ViewStyle} />
       </View>
       <Text variant="caption" style={{ width: 40, textAlign: "right" }}>
         {value}
       </Text>
     </View>
+  );
+}
+
+/**
+ * One section of the panel: its eyebrow and everything under it on a `Card`.
+ * Every section used to be a bare `View` on the table, eyebrow included —
+ * `NEEDS ATTENTION`, `MODERATION`, `SEARCH INDEX` drawn straight onto `bg`
+ * (#358), and with them every `AgeRow` caption and "nothing to report"
+ * sentence. All of that is constant ink, which `colors.ts`'s header says is
+ * only ever printed on paper, because on the walnut dark table it measures
+ * near 1:1. The stamped badges inside were fine (each is its own `surface`
+ * box); the words between them were not. Same idiom as `StatsStrip`, which
+ * has always been one card with eyebrows inside it.
+ */
+function Section({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement {
+  return (
+    <Card style={{ gap: space.sm }}>
+      <Text variant="eyebrow" accessibilityRole="header">
+        {title}
+      </Text>
+      {children}
+    </Card>
   );
 }
 
@@ -214,14 +244,13 @@ function NeedsAttentionSection({ alerts }: { alerts: DailyReportAlert[] }): Reac
   // reading order the doc comment above promises.
   const ordered = [...alerts].sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1));
   return (
-    <View style={{ gap: space.sm }}>
-      <Text variant="eyebrow" accessibilityRole="header">{`Needs attention · ${alerts.length}`}</Text>
+    <Section title={`Needs attention · ${alerts.length}`}>
       <View style={{ gap: space.sm }}>
         {ordered.map((alert, index) => (
           <AlertRow key={`${alert.code}-${index}`} alert={alert} />
         ))}
       </View>
-    </View>
+    </Section>
   );
 }
 
@@ -232,10 +261,7 @@ function NeedsAttentionSection({ alerts }: { alerts: DailyReportAlert[] }): Reac
 
 function ModerationSection({ moderation }: { moderation: ObservatoryModerationLatency }): React.ReactElement {
   return (
-    <View style={{ gap: space.sm }}>
-      <Text variant="eyebrow" accessibilityRole="header">
-        Moderation
-      </Text>
+    <Section title="Moderation">
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
         <StatBadge label="Pending" value={moderation.pending} />
         <StatBadge label="Needs review" value={moderation.needs_review} />
@@ -245,7 +271,7 @@ function ModerationSection({ moderation }: { moderation: ObservatoryModerationLa
         <AgeRow label="Oldest needs review" ms={moderation.oldest_needs_review_age_ms} nullLabel="Nothing needs review" />
         <AgeRow label="Median time to decision" ms={moderation.median_time_to_decision_ms} nullLabel="No decisions yet" />
       </View>
-    </View>
+    </Section>
   );
 }
 
@@ -263,10 +289,7 @@ function ModerationSection({ moderation }: { moderation: ObservatoryModerationLa
 
 function SearchIndexSection({ searchIndex }: { searchIndex: ObservatorySearchIndex }): React.ReactElement {
   return (
-    <View style={{ gap: space.sm }}>
-      <Text variant="eyebrow" accessibilityRole="header">
-        Search index
-      </Text>
+    <Section title="Search index">
       {searchIndex.enabled ? (
         <>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
@@ -284,7 +307,7 @@ function SearchIndexSection({ searchIndex }: { searchIndex: ObservatorySearchInd
       ) : (
         <Text variant="body">Semantic search is switched off, so nothing is indexed and there is nothing to report.</Text>
       )}
-    </View>
+    </Section>
   );
 }
 
@@ -296,8 +319,7 @@ function SearchIndexSection({ searchIndex }: { searchIndex: ObservatorySearchInd
 
 function FunnelSection({ funnel }: { funnel: ObservatoryFunnel }): React.ReactElement {
   return (
-    <View style={{ gap: space.sm }}>
-      <Text variant="eyebrow" accessibilityRole="header">{`Give → get funnel · last ${funnel.window_days} ${funnel.window_days === 1 ? "day" : "days"}`}</Text>
+    <Section title={`Give → get funnel · last ${funnel.window_days} ${funnel.window_days === 1 ? "day" : "days"}`}>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
         <StatBadge label="Photos uploaded" value={funnel.photos_uploaded} />
         <StatBadge label="Listings created" value={funnel.listings_created} />
@@ -305,7 +327,7 @@ function FunnelSection({ funnel }: { funnel: ObservatoryFunnel }): React.ReactEl
         <StatBadge label="Requested" value={funnel.listings_requested} />
         <StatBadge label="Chosen" value={funnel.listings_chosen} />
       </View>
-    </View>
+    </Section>
   );
 }
 
@@ -319,28 +341,22 @@ function FunnelSection({ funnel }: { funnel: ObservatoryFunnel }): React.ReactEl
 function AppSeriesSection({ byDay }: { byDay: ObservatoryAppData["by_day"] }): React.ReactElement {
   if (byDay.length === 0) {
     return (
-      <View style={{ gap: space.sm }}>
-        <Text variant="eyebrow" accessibilityRole="header">
-          Daily activity
-        </Text>
+      <Section title="Daily activity">
         <Text variant="caption" color="textSecondary">
           No days in this window yet.
         </Text>
-      </View>
+      </Section>
     );
   }
   const max = Math.max(1, ...byDay.map((day) => day.listings_created));
   return (
-    <View style={{ gap: space.sm }}>
-      <Text variant="eyebrow" accessibilityRole="header">
-        Daily activity · listings created
-      </Text>
+    <Section title="Daily activity · listings created">
       <View style={{ gap: space.xs }}>
         {byDay.map((day) => (
           <BarRow key={day.date} label={day.date} value={day.listings_created} max={max} />
         ))}
       </View>
-    </View>
+    </Section>
   );
 }
 
@@ -376,22 +392,16 @@ function SubHeading({ children }: { children: string }): React.ReactElement {
 function BulkSection({ bulk }: { bulk: ObservatoryBulk }): React.ReactElement {
   if (!bulk.enabled) {
     return (
-      <View style={{ gap: space.sm }}>
-        <Text variant="eyebrow" accessibilityRole="header">
-          Bulk upload
-        </Text>
+      <Section title="Bulk upload">
         <Text variant="body">Estate bulk upload is switched off in this environment, so there is nothing to report.</Text>
-      </View>
+      </Section>
     );
   }
 
   const { batches, drafts, operations, usage, funnel } = bulk;
 
   return (
-    <View style={{ gap: space.sm }}>
-      <Text variant="eyebrow" accessibilityRole="header">
-        Bulk upload
-      </Text>
+    <Section title="Bulk upload">
 
       <View style={{ gap: space.xs }}>
         <SubHeading>Batches</SubHeading>
@@ -464,7 +474,7 @@ function BulkSection({ bulk }: { bulk: ObservatoryBulk }): React.ReactElement {
           <AgeRow label="Moderation latency, bulk" ms={funnel.moderation_latency_bulk_median_ms} nullLabel="No decisions yet" />
         </View>
       </View>
-    </View>
+    </Section>
   );
 }
 
@@ -489,10 +499,7 @@ function SourceSection<T>({
 
   if (source.state === "unconfigured") {
     return (
-      <View style={{ gap: space.sm }}>
-        <Text variant="eyebrow" accessibilityRole="header">
-          {title}
-        </Text>
+      <Section title={title}>
         <View
           accessibilityRole="text"
           accessibilityLabel={`${title}: not configured — ${source.reason}`}
@@ -505,16 +512,13 @@ function SourceSection<T>({
             {source.reason}
           </Text>
         </View>
-      </View>
+      </Section>
     );
   }
 
   if (source.state === "error") {
     return (
-      <View style={{ gap: space.sm }}>
-        <Text variant="eyebrow" accessibilityRole="header">
-          {title}
-        </Text>
+      <Section title={title}>
         <View
           accessibilityRole="text"
           accessibilityLabel={`${title}: error — ${source.error}`}
@@ -527,17 +531,14 @@ function SourceSection<T>({
             {source.error}
           </Text>
         </View>
-      </View>
+      </Section>
     );
   }
 
   return (
-    <View style={{ gap: space.sm }}>
-      <Text variant="eyebrow" accessibilityRole="header">
-        {title}
-      </Text>
+    <Section title={title}>
       {renderOk(source.data)}
-    </View>
+    </Section>
   );
 }
 
@@ -740,20 +741,28 @@ export function Observatory({ token, onSessionExpired }: ObservatoryProps): Reac
 
   return (
     <View style={{ gap: sectionRhythm.tight }}>
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: space.md }}>
+      {/* The window selector on its own card under a "Window" eyebrow —
+          same shape as the queue's status filter in `app/admin.tsx`, and
+          for the same reason (#361): it took that row's exact slot when the
+          section switched, a third identical chip row meaning a third thing.
+          The eyebrow, the "Refreshing…" note and a load error are ink, so
+          they live on the paper too (#358). */}
+      <Card style={{ gap: space.sm }}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: space.md }}>
+          <Eyebrow>Window</Eyebrow>
+          {loading && snapshot !== null ? (
+            <Text variant="caption" color="textSecondary">
+              Refreshing…
+            </Text>
+          ) : null}
+        </View>
         <WindowSelector value={windowDays} onChange={setWindowDays} />
-        {loading && snapshot !== null ? (
-          <Text variant="caption" color="textSecondary">
-            Refreshing…
+        {error !== null ? (
+          <Text variant="body" color="dangerText">
+            {error}
           </Text>
         ) : null}
-      </View>
-
-      {error !== null ? (
-        <Text variant="body" color="dangerText">
-          {error}
-        </Text>
-      ) : null}
+      </Card>
 
       {snapshot === null ? (
         loading ? (

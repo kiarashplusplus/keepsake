@@ -30,6 +30,9 @@ import { Page } from "@/ui/Page";
 import { RouteHead } from "@/ui/RouteHead";
 import { Text } from "@/ui/Text";
 import { Chip } from "@/ui/Chip";
+import { Tab } from "@/ui/Tab";
+import { Card } from "@/ui/Surface";
+import { Eyebrow } from "@/ui/Eyebrow";
 import { Button } from "@/ui/Button";
 import { Stamp } from "@/ui/Stamp";
 import { EmptyState } from "@/ui/EmptyState";
@@ -594,43 +597,76 @@ export default function AdminPage(): React.ReactElement {
   return (
     <Page variant="grid" contentContainerStyle={{ paddingVertical: sectionRhythm.normal, gap: space.xl }}>
       <RouteHead title="Admin" />
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md }}>
-        <Text variant="displayLg">Admin</Text>
-        <Button label="Forget" variant="ghost" onPress={handleForget} />
-      </View>
+      {/* The page's own paper. The title, the Forget control and the section
+          switch used to sit in a bare `View` on the `Page`, which is ink
+          drawn straight on the table — the one thing `colors.ts`'s header
+          says no component does, because in dark mode the table is walnut
+          and constant ink measures near 1:1 against it; "Admin" all but
+          vanished in the first dark frame of this route (#358). `Card` is
+          the constant `surface` tint, so the contrast is the same number
+          under either lamp. `RouteHead` names the page for the browser tab;
+          this heading names it for the person looking at it. */}
+      <Card style={{ gap: space.md, paddingBottom: space.sm }}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md }}>
+          <Text variant="displayLg">Admin</Text>
+          <Button label="Forget" variant="ghost" onPress={handleForget} />
+        </View>
+
+        {/* Top-level section switch. "Queue" stays the default (`activeSection`'s
+            initializer above); "Observatory" only mounts `<Observatory>` once
+            picked, so the default view never pays for the extra fetch.
+
+            Underlined `Tab`s, not `Chip`s, and up here above the stats strip
+            (which belongs to both sections) rather than directly over the
+            queue's status filter: the two used to be identical chip rows one
+            under the other, and only their `aria-label`s said that one
+            changed the panel and the other the queue (#361). */}
+        {/* Both tablists on this page carry an explicit name. Two unnamed
+            `tablist`s in one document are ambiguous to a screen reader — "which
+            set of tabs?" has no answer — and they were also indistinguishable
+            to Playwright, which is how adding this one broke four e2e specs
+            that had only ever needed to find "the" tablist. */}
+        <View
+          accessibilityRole="tablist"
+          aria-label="Admin sections"
+          style={{ flexDirection: "row", flexWrap: "wrap", gap: space.lg }}
+        >
+          <Tab label="Queue" selected={activeSection === "queue"} onPress={() => setActiveSection("queue")} />
+          <Tab label="Observatory" selected={activeSection === "observatory"} onPress={() => setActiveSection("observatory")} />
+        </View>
+      </Card>
 
       <StatsStrip stats={stats} health={health} healthAsOf={healthAsOf} />
 
-      {/* Top-level section switch. "Queue" stays the default (`activeSection`'s
-          initializer above) and everything below it is unchanged from before
-          this panel existed; "Observatory" only mounts `<Observatory>` once
-          picked, so the default view never pays for the extra fetch. */}
-      {/* Both tablists on this page carry an explicit name. Two unnamed
-          `tablist`s in one document are ambiguous to a screen reader — "which
-          set of tabs?" has no answer — and they were also indistinguishable
-          to Playwright, which is how adding this one broke four e2e specs
-          that had only ever needed to find "the" tablist. */}
-      <View
-        accessibilityRole="tablist"
-        aria-label="Admin sections"
-        style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}
-      >
-        <Chip role="tab" label="Queue" selected={activeSection === "queue"} onPress={() => setActiveSection("queue")} />
-        <Chip role="tab" label="Observatory" selected={activeSection === "observatory"} onPress={() => setActiveSection("observatory")} />
-      </View>
-
       {activeSection === "queue" ? (
         <>
-          <View
-            accessibilityRole="tablist"
-            aria-label="Queue status"
-            style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}
-          >
-            {ADMIN_QUEUE_STATUSES.map((status) => (
-              <Chip key={status} role="tab" label={TAB_LABELS[status]} selected={activeTab === status} onPress={() => setActiveTab(status)} />
-            ))}
-          </View>
+          {/* The status filter on its own card under a "Queue" eyebrow, the
+              way `StatsStrip` labels its groups, so it reads as the queue's
+              own control rather than a second copy of the section switch
+              (#361). The chips themselves were legible on the table already
+              (`Chip` is opaque `surface`); the eyebrow and a load error
+              would not have been (#358), so both live on this paper. */}
+          <Card style={{ gap: space.sm }}>
+            <Eyebrow>Queue</Eyebrow>
+            <View
+              accessibilityRole="tablist"
+              aria-label="Queue status"
+              style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}
+            >
+              {ADMIN_QUEUE_STATUSES.map((status) => (
+                <Chip key={status} role="tab" label={TAB_LABELS[status]} selected={activeTab === status} onPress={() => setActiveTab(status)} />
+              ))}
+            </View>
+            {tab.error !== null ? (
+              <Text variant="body" color="dangerText">
+                {tab.error}
+              </Text>
+            ) : null}
+          </Card>
 
+          {/* A direct child of the scroller's content, not of the card above:
+              its `position: sticky` needs nothing between it and `Page`'s
+              `ScrollView` that clips overflow (see its file header). */}
           <BulkActionBar
             count={selectedIds.size}
             actions={actions}
@@ -639,12 +675,6 @@ export default function AdminPage(): React.ReactElement {
             onReject={() => openBulkSheet("reject")}
             onClear={() => setSelectedIds(new Set())}
           />
-
-          {tab.error !== null ? (
-            <Text variant="body" color="dangerText">
-              {tab.error}
-            </Text>
-          ) : null}
 
           {tab.loading && tab.items.length === 0 ? <Skeleton height={240} /> : null}
 

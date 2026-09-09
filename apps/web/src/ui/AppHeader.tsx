@@ -9,6 +9,7 @@ import { useColors, useThemeMode, type ThemeMode } from "@/ui/theme";
 import { ReadableWidth } from "@/ui/ReadableWidth";
 import { Text } from "@/ui/Text";
 import { Button } from "@/ui/Button";
+import { tabUnderlineStyle } from "@/ui/Tab";
 import { useViewport } from "@/ui/viewport";
 
 const NEXT_MODE: Record<ThemeMode, ThemeMode> = {
@@ -46,15 +47,12 @@ function ThemeToggle(): React.ReactElement {
   );
 }
 
-/** A nav item in the second voice: bottle-green, with a 2px underline when it
- * is the current page (the site's `aria-current="page"` treatment). */
+/** A nav item with a 2px underline when it is the current page (the site's
+ * `aria-current="page"` treatment). The underline itself is `Tab.tsx`'s,
+ * shared with `/admin`'s section switch so "you are here" is drawn exactly
+ * one way across the product. */
 function navStyle(active: boolean, colors: ReturnType<typeof useColors>): ViewStyle {
-  return {
-    minHeight: 44,
-    justifyContent: "center",
-    borderBottomWidth: 2,
-    borderBottomColor: active ? colors.accent : "transparent",
-  };
+  return tabUnderlineStyle(active, colors);
 }
 
 function NavLink({ href, label, active, style }: { href: Href; label: string; active: boolean; style?: ViewStyle }): React.ReactElement {
