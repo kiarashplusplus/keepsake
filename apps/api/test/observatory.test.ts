@@ -124,7 +124,11 @@ function logsResponse(body?: TelemetryRequest): Response {
  * give all four the same answer. */
 type TelemetryRequest = {
   view: "events" | "calculations";
-  parameters: { filters: { key: string; value: string }[] };
+  parameters: {
+    filters: { key: string; value: string }[];
+    limit?: number;
+    orderBy?: { value: string; order: string };
+  };
 };
 
 function stubCloudflare(handlers: {
@@ -309,6 +313,35 @@ describe("GET /api/admin/observatory", () => {
         service: "keepsake-production",
         request_id: "req-1",
       });
+    });
+
+    it("states the row cap and the ordering inside `parameters`, not only at the top level", async () => {
+      // Production honored `view: "events"` and returned an empty envelope
+      // under a count of two. An unset `parameters.limit` — declared with
+      // `minimum: 0` and no default, unlike the top-level `limit`'s
+      // `default: 50` — reaching the query as 0 is the one explanation that
+      // fits a cap the aggregate ignores and the feed obeys.
+      const bodies: TelemetryRequest[] = [];
+      stubCloudflare({
+        graphql: edgeResponse,
+        telemetry: (body) => {
+          bodies.push(body);
+          return logsResponse(body);
+        },
+      });
+      await getObservatory();
+
+      const eventQueries = bodies.filter((b) => b.view === "events");
+      expect(eventQueries).toHaveLength(2); // one per level
+      for (const query of eventQueries) {
+        expect(query.parameters.limit).toBe(50);
+        expect(query.parameters.orderBy).toEqual({ value: "timestamp", order: "desc" });
+      }
+      // The aggregate must not carry a row cap — it counts the window, not a
+      // page of it.
+      for (const query of bodies.filter((b) => b.view === "calculations")) {
+        expect(query.parameters.limit).toBeUndefined();
+      }
     });
 
     it("shows warnings, not just a count of them", async () => {

@@ -361,7 +361,7 @@ interface TelemetryQueryResponse {
     /** `view: "events"`. `count`/`fields`/`series` also ride along here and
      * are deliberately unread — the feed wants rows, and `counts` in the
      * payload already carries magnitude from its own query. */
-    events?: { events?: TelemetryEvent[] };
+    events?: { events?: TelemetryEvent[]; count?: number };
     // `view: "calculations"` fills this instead; shape kept loose because
     // only the single aggregate number is read out of it.
     calculations?: { aggregates?: { value?: number }[] }[];
@@ -385,6 +385,32 @@ async function telemetryQuery(
         view,
         parameters: {
           datasets: ["cloudflare-workers"],
+          // `limit` and `orderBy` are set *inside* `parameters` as well as at
+          // the top level, and this is the current best explanation for a
+          // feed that counted two errors and returned zero rows.
+          //
+          // Cloudflare's schema declares both: a top-level `limit` with
+          // `default: 50`, and a `parameters.limit` with `minimum: 0` and no
+          // default at all. Production showed `view: "events"` being honored
+          // — the response carried a `run, events, statistics` result, so the
+          // events envelope was built — with nothing in it, while the
+          // identical filter counted the rows fine through
+          // `view: "calculations"`. A row limit the aggregate ignores and the
+          // feed obeys is the one thing that fits every observation, and an
+          // unset `parameters.limit` reaching the query as 0 would produce
+          // exactly this.
+          //
+          // Both are defensible on their own merits regardless of whether
+          // they turn out to be the fix: a feed that renders "most recent
+          // first" should say so rather than inherit whatever the default
+          // ordering happens to be, and the cap should be stated on the same
+          // object the filters are. If this does not fix it, the diagnostic
+          // in `fetchLogTelemetry` now reports `result.events.count`, which
+          // separates "the query matched nothing" from "the query matched
+          // and returned nothing".
+          ...(view === "events"
+            ? { limit: LOG_EVENT_LIMIT, orderBy: { value: "timestamp", order: "desc" as const } }
+            : {}),
           // Both filters matter. Without `scriptName` this reads every
           // Worker on the account — the probe that established this endpoint
           // scanned 700k rows across unrelated projects — and without
@@ -530,9 +556,19 @@ export async function fetchLogTelemetry(
     if (mismatch) {
       const [level, count, , response] = mismatch;
       const shape = Object.keys(response.result ?? {}).join(", ") || "(no result object)";
+      // `result.events.count` is the question the first round of this
+      // diagnostic left open. `[run, events, statistics]` came back from
+      // production, which said the view was honored and the envelope built —
+      // but not whether the query *matched* rows and failed to return them,
+      // or matched nothing at all. `count` separates those: nonzero with an
+      // empty array is a limit or serialization problem on Cloudflare's side
+      // of the response, zero is a filter that means something different
+      // here than it does to the aggregate.
+      const matched = response.result?.events?.count;
+      const matchedNote = matched === undefined ? "no count reported" : `events.count=${matched}`;
       return {
         state: "error",
-        error: `Cloudflare observability: ${count} ${level} log(s) counted in this window but the events feed returned none — response carried [${shape}]`,
+        error: `Cloudflare observability: ${count} ${level} log(s) counted in this window but the events feed returned none — response carried [${shape}], ${matchedNote}`,
       };
     }
 
