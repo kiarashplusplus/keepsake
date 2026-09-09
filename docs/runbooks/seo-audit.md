@@ -506,3 +506,38 @@ anchor in the document, which is the header's at either width.
    feed in the DOM, not as a redirect.
 3. Validate `https://keepsake.ing/about` in the Rich Results test: `AboutPage` + `WebSite` +
    `Organization` with a logo, no warnings.
+
+## Measured after the deploy (`cbf7689`, 2026-09-09)
+
+Production serves `cbf7689`, the merge of #352, and every claim above was re-read from the live
+bytes. Chromium in the agent container cannot complete a TLS handshake to the apex through the
+egress proxy (curl can), so the browser half ran against a local reverse proxy that replays
+production's exact bytes and headers — CSP included — on a local origin. The one artifact that
+produces is a CSP `connect-src` refusal for `https://keepsake.ing/api/…`, which is the bundle
+calling its real origin from a different one; it cannot occur on the real host.
+
+| Checked | Result |
+|---|---|
+| `/` for a first visit, JS on, real browser | One document, `200`, URL stays `/`, explainer on screen, feed wrapper `display: none`, `data-ks-first-visit="1"` on `<html>`, no console error under production's CSP (the new script hash is live in both policies). "See what's out there" clears the attribute and shows the feed with no navigation. |
+| The same with Googlebot's mobile UA | Identical: one document, explainer, `<title>Keepsake</title>`. |
+| Returning device, `?q=` first visit, no-JS | Feed, feed with the query kept, feed with `<a href="/give">` in the markup and the explainer hidden. |
+| Anchors in the served HTML of `/` | `/give` ×4, `/about` ×2, `/` ×2, `/mine`, `/privacy`, `/terms` — one footer. `/welcome` links `/` ×3 and `/give` ×3. |
+| `/about`, `/privacy`, `/terms` | Full OG image details, `twitter:image`, icon links, `WebSite`+`Organization`+page node, zero HTML comments, zero placeholders. |
+| `/apple-touch-icon.png`, `/icon-512.png` | `200`, 180×180 and 512×512. |
+| Sitemap, robots, redirects, 404s | Six URLs all `200` with no hop; `/give/`, `/welcome/`, `/index.html` one `307` each; `www`/`http` `301`; `/_sitemap`, `/item/nope`, invented paths `404`; `/mine` `X-Robots-Tag: noindex, nofollow`. |
+| Lighthouse 12 (mobile), production bytes via the mirror | SEO **100** on `/`, `/welcome`, `/about`, `/give`; accessibility 100 on three, 96 on `/give`; best-practices deductions are the mirror's CSP artifact and absent source maps. |
+
+**One thing it found, fixed in the follow-up.** `/api/feed/shelves` went out under the explainer
+on every first visit. The gate on `useFeed` held only because that hook also waits on the async
+location read; `useShelves` had no gate, and — the part worth writing down — the React half of the
+switch was wrong in a way jest could not see: `useSyncExternalStore` hydrates with the *server*
+snapshot (`false`), commits and runs effects, and only then re-renders with the client value, so
+`enabled` was `true` for exactly one commit. The hydration snapshot now reads the attribute the
+pre-hydration script already put on `<html>` (safe: no markup depends on it), `useShelves` takes
+`enabled`, and `e2e/welcome.spec.ts` asserts against real requests that nothing under `/api/feed`
+is fetched until the visitor chooses the feed.
+
+**Not this pass's, left where it is.** Lighthouse's one accessibility finding on `/give`:
+the "Add photos" tile's visible text ("+ Add", "5 left") is not contained in its
+`aria-label`. `moderate` impact (the a11y spec gates `serious`/`critical`), five specs select the
+tile by that label, and it is give-flow copy, not discoverability.

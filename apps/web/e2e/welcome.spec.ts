@@ -73,6 +73,14 @@ test("a first-time visitor to / sees the explainer at /, and is not redirected",
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
+  // The feed is in this document, hidden; nothing of it should be fetched
+  // until the visitor asks for it. Both requests, not just page 1: the first
+  // version of this gate left `/api/feed/shelves` going out under the
+  // explainer on production (measured 2026-09-09 against the live bytes).
+  const feedRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/feed")) feedRequests.push(new URL(request.url()).pathname);
+  });
 
   await page.goto("/");
 
@@ -86,6 +94,14 @@ test("a first-time visitor to / sees the explainer at /, and is not redirected",
 
   await page.waitForLoadState("networkidle");
   expect(consoleErrors).toEqual([]);
+  expect(feedRequests).toEqual([]);
+
+  // And the moment the visitor chooses the feed, both go out.
+  await page.getByLabel("See what's out there").click();
+  await expect(page.getByLabel("Search")).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  expect(feedRequests).toContain("/api/feed");
+  expect(feedRequests).toContain("/api/feed/shelves");
 
   await context.close();
 });
