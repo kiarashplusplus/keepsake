@@ -83,6 +83,9 @@ Full detail — including why this looks like a corrupt seed rather than a missi
   (shadows, keyboard/`position: fixed`), most relevant the day a native target is added.
 - [`docs/product-decisions.md`](./docs/product-decisions.md) — the product decisions this
   build rests on, each with what would change the answer. Read before reopening one.
+- [`docs/market-research.md`](./docs/market-research.md) — the competitive landscape (free-gifting
+  platforms, general marketplaces with a free section, and the "objects with a story" adjacents),
+  what is Keepsake's alone, and where it is exposed. Dated; re-check before citing a number.
 - [`docs/runbooks/`](./docs/runbooks/) — deploy, restore, migrations, admin, incident, geodata,
   the UK block and its re-entry checklist, the issue workflow, the post-deploy production
   verification, and [seeding a demo catalogue](./docs/runbooks/seed-catalogue.md) (what can and
