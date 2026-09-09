@@ -10,16 +10,24 @@ jest.mock("@/api/requests", () => ({ createRequest: jest.fn() }));
 
 // See test/app/item/[id].test.tsx's header comment on why `Sheet` is mocked
 // down to "render children" — RN `Modal`'s portal isn't supported by
-// react-test-renderer. `footer` (issue #373 finding 1) renders right after
-// `children` for the same reason: this mock only needs to prove the pinned
-// Send button and its errors exist and hold the right content, not where
-// `Sheet` positions them on screen — that placement is `test/ui/Sheet.test.tsx`'s
-// job.
+// react-test-renderer. `footer` (issue #373 finding 1) renders in its own
+// `testID`-tagged wrapper, sibling to one around `children`, so a test here
+// can tell which slot a given element came from — `test/ui/Sheet.test.tsx`
+// owns proving `Sheet` itself pins that slot on screen; this file only needs
+// to prove `RequestSheet` hands the right things to the right slot.
 jest.mock("@/ui/Sheet", () => {
   const ReactActual = jest.requireActual("react");
+  const { View: RNView } = jest.requireActual("react-native");
   return {
     Sheet: ({ visible, children, footer }: { visible: boolean; children: React.ReactNode; footer?: React.ReactNode }) =>
-      visible ? ReactActual.createElement(ReactActual.Fragment, null, children, footer) : null,
+      visible
+        ? ReactActual.createElement(
+            ReactActual.Fragment,
+            null,
+            ReactActual.createElement(RNView, { testID: "sheet-body-slot" }, children),
+            ReactActual.createElement(RNView, { testID: "sheet-footer-slot" }, footer),
+          )
+        : null,
   };
 });
 
@@ -181,5 +189,28 @@ describe("RequestSheet", () => {
     const notes = instance.UNSAFE_getAllByType(SafetyNote);
     expect(notes).toHaveLength(1);
     expect(notes[0]?.props.children).toBe(SENT_COPY);
+  });
+
+  // Issue #373 finding 1's second half: `item-request-sent.jpg` showed DONE
+  // sitting on the very bottom edge of the 390×844 baseline — the same
+  // below-the-fold shape as SEND, caused the same way by the same sheet's
+  // safety copy, just one phase later. Checked against which mocked `Sheet`
+  // slot the button landed in (see the mock's header comment above) rather
+  // than a whole-tree string match, which can't distinguish "in the footer"
+  // from "in the scrolling body".
+  it("puts the sent phase's Done button in the footer, not the scrolling body", async () => {
+    jest.mocked(createRequest).mockResolvedValue({ id: "req-1", created_at: Date.now() });
+    const instance = render(<RequestSheet visible onClose={jest.fn()} listingId="listing-1" />);
+
+    await fillAndSubmit(instance, "Tell them why it should be mine, please and thank you.", "person@keepsake.ing");
+
+    const footerSlot = instance.UNSAFE_getByProps({ testID: "sheet-footer-slot" });
+    const bodySlot = instance.UNSAFE_getByProps({ testID: "sheet-body-slot" });
+    // `Button` fans one `accessibilityLabel` out across its own composite
+    // layers (the styled wrapper, the underlying `Pressable`, ...), so the
+    // count that matters is "present at all" in the footer and "absent
+    // entirely" from the body — not an exact match on how many layers carry it.
+    expect(footerSlot.findAllByProps({ accessibilityLabel: "Done" }).length).toBeGreaterThan(0);
+    expect(bodySlot.findAllByProps({ accessibilityLabel: "Done" })).toHaveLength(0);
   });
 });

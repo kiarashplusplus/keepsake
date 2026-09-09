@@ -143,8 +143,23 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
   // `footer` pins SEND (and the errors a submit attempt produces, which a
   // sender needs to see without hunting for them) below the scroll, visible
   // at whatever the note's length has scrolled the rest of the form to.
-  const formFooter =
-    phase === "sent" ? undefined : (
+  //
+  // The `sent` phase had the same shape and was missed the first time round:
+  // `item-request-sent.jpg` shows DONE sitting on the very bottom edge of the
+  // same 390×844 viewport, pushed there by its own ten-line `SafetyNote`
+  // (#224/#308 — also load-bearing, also staying put). Same sheet, same
+  // phone, same cause, so it gets the same fix: DONE moves to `footer` too,
+  // rather than growing a second mechanism for one button.
+  const sheetFooter =
+    phase === "sent" ? (
+      // Row-wrapped so `Button`'s intrinsic width holds here the same way it
+      // did as the form's last child of a `flex-start` column — `Sheet`'s
+      // footer is plain `View` (default `alignItems: "stretch"`), and
+      // without this Done would stretch edge to edge.
+      <View style={{ flexDirection: "row" }}>
+        <Button label="Done" onPress={handleClose} />
+      </View>
+    ) : (
       <View style={{ gap: space.sm }}>
         {conflict ? (
           <Text variant="body" color="dangerText">
@@ -177,7 +192,7 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
       visible={visible}
       onClose={handleClose}
       title={phase === "sent" ? "Check your email" : "I'd love this"}
-      footer={formFooter}
+      footer={sheetFooter}
     >
       {phase === "sent" ? (
         <View style={{ gap: space.lg, alignItems: "flex-start" }}>
@@ -211,7 +226,6 @@ export function RequestSheet({ visible, onClose, listingId }: RequestSheetProps)
               "fine too — just say so. And if anything feels off, you can back out — that's worth " +
               "more than any obligation you feel to a stranger you agreed to meet."}
           </SafetyNote>
-          <Button label="Done" onPress={handleClose} />
         </View>
       ) : (
         <View style={{ gap: space.lg }}>
