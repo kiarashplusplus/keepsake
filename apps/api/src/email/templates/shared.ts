@@ -63,6 +63,52 @@ export function plainLinkLine(link: string): string {
   return `<p style="font-size:13px;color:${colorsLight.textSecondary};word-break:break-all;">Or paste this link into your browser: ${escapeHtml(link)}</p>`;
 }
 
+/**
+ * CASL s.6(2) sender identification + unsubscribe instruction, appended to
+ * every template's footer regardless of whether that template's message is
+ * transactional. Issue #310 raised the question this answers: s.6(6) exempts
+ * a transactional CEM from s.6(1)(a)'s *consent* requirement only — it never
+ * touches s.6(2), so every message this product sends (all seven-plus
+ * templates below, including the admin-only ones) still needs these two
+ * things. Living here rather than in each template is the point: a template
+ * that builds its own footer independently is a template that can drift out
+ * of compliance the next time someone edits it. See
+ * `docs/design/email.md`'s "CASL: sender identification and unsubscribe"
+ * for what remains open.
+ *
+ * **Identification (s.6(2)(a)).** Keepsake is not a company —
+ * `apps/site/public/terms.html` says so plainly ("Keepsake isn't a company.
+ * It's one person: Kiarash Adl, an individual in Texas doing business as
+ * Keepsake") — so identification names that person, alongside the
+ * `hello@keepsake.ing` contact every template already uses elsewhere.
+ *
+ * **What's deliberately missing: a mailing address.** s.6(2)(b) also asks
+ * for one, valid 60+ days. `apps/site/public/privacy.html`'s "Who runs
+ * this" section documents not publishing one as a considered choice, not an
+ * omission — Kiarash operates from a home address and the reasoning there
+ * (UK GDPR Art. 13 has no UK user to attach to since the UK is geo-blocked;
+ * PIPEDA and the relevant US state laws ask for an accountable person and a
+ * way to reach them, not a literal street address) is analysis, not a
+ * decision that CASL's own address clause is satisfied. This file does not
+ * invent, guess, or borrow an address to fill that gap. It stays open —
+ * see `docs/design/email.md`.
+ *
+ * **Unsubscribe (s.6(2)(c)/6(3)).** CASL accepts a stated electronic
+ * address the recipient can write to, provided requests are given effect
+ * within 10 business days at no cost — it does not require a one-click
+ * mechanism. That's what this line offers. It is NOT the one-click flow
+ * CASL also permits (no token, no route, no storage exist for this yet),
+ * and *honouring* a request against a message like `chosen` ("you were
+ * chosen") or `confirmRequest` ("confirm your request") is a product
+ * decision nobody has made — silently dropping either message defeats the
+ * transaction it's part of. Both gaps are named in `docs/design/email.md`
+ * rather than papered over here.
+ */
+export const CASL_IDENTIFICATION_LINE = "Sent by Kiarash Adl, an individual doing business as Keepsake.";
+export const CASL_UNSUBSCRIBE_LINE =
+  "To unsubscribe from messages like this, email hello@keepsake.ing and say so — requests are honored within 10 business days.";
+export const CASL_FOOTER_LINES = [CASL_IDENTIFICATION_LINE, CASL_UNSUBSCRIBE_LINE];
+
 export function renderShell(params: { bodyHtml: string; footerReason: string }): string {
   return `<!doctype html>
 <html>
@@ -83,7 +129,8 @@ export function renderShell(params: { bodyHtml: string; footerReason: string }):
             </tr>
             <tr>
               <td style="padding-top:28px;margin-top:20px;border-top:1px solid ${colorsLight.border};font-family:${SANS};font-size:12px;line-height:18px;color:${colorsLight.textSecondary};">
-                Keepsake · keepsake.ing · ${escapeHtml(params.footerReason)}
+                Keepsake · keepsake.ing · ${escapeHtml(params.footerReason)}<br /><br />
+                ${CASL_FOOTER_LINES.map((line) => escapeHtml(line)).join("<br />")}
               </td>
             </tr>
           </table>
@@ -94,6 +141,12 @@ export function renderShell(params: { bodyHtml: string; footerReason: string }):
 </html>`;
 }
 
+/**
+ * Plain-text mirror of `renderShell`'s footer cell. Several templates build
+ * their `text:` part by hand rather than stripping the HTML, so the CASL
+ * lines have to be added here too — a footer that only existed in HTML
+ * would be half a fix (#310).
+ */
 export function footerLine(reason: string): string {
-  return `Keepsake · keepsake.ing · ${reason}`;
+  return [`Keepsake · keepsake.ing · ${reason}`, "", ...CASL_FOOTER_LINES].join("\n");
 }

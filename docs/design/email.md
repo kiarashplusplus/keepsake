@@ -181,6 +181,58 @@ on that claim is checked **before** `sendMail`, so a lost race answers 409 and s
 Rendered with `@keepsake/tokens` (colors/typography) so transactional email doesn't visually
 diverge from the app — warm, Fraunces-titled, not a generic transactional-email look.
 
+## CASL: sender identification and unsubscribe
+
+Issue #310 asked a narrower question — is a request-confirmation email a "commercial electronic
+message" under CASL, given the S.6(6) transactional exemption — and it resolved to a broader
+answer: it doesn't matter. S.6(6) exempts a transactional CEM from S.6(1)(a)'s *consent*
+requirement only. It never touches S.6(2), which independently requires (a) identification of the
+sender and (b) a mailing address valid 60+ days, plus (S.6(2)(c)/6(3)) an unsubscribe mechanism —
+and every template in `src/email/templates/` is a CEM even when it's transactional. So the fix
+applies to all of them, not to whichever one prompted the question.
+
+Both requirements now live in `templates/shared.ts`'s shared footer (`renderShell` for HTML,
+`footerLine()` for the several templates — `chosen`, `newRequest`, `recover`, `confirmRequest`,
+`requestReceived`, `verifyEmail`, `adminTest`, `dailyDigest` — that build `text:` by hand rather
+than stripping the HTML shell), rather than in each template individually, so a new template
+inherits both automatically instead of restating them:
+
+- **Identification**: "Sent by Kiarash Adl, an individual doing business as Keepsake." Keepsake
+  isn't a company — `apps/site/public/terms.html` says so plainly — so identification names the
+  person, not just the trade name, alongside the `hello@keepsake.ing` contact every template
+  already carries elsewhere.
+- **Unsubscribe**: "To unsubscribe from messages like this, email hello@keepsake.ing and say so —
+  requests are honored within 10 business days." CASL accepts a stated electronic address the
+  recipient can write to; it does not require a one-click mechanism.
+
+**Two things this does not close, both left open on purpose rather than papered over:**
+
+1. **The mailing address (S.6(2)(b))**. `apps/site/public/privacy.html`'s "Who runs this" section
+   documents not publishing one as a considered choice — Kiarash operates from a home address, and
+   the analysis there is that UK GDPR Art. 13 (the one regime that would require it) has no UK user
+   to attach to since the UK is geo-blocked, while PIPEDA and the relevant US state laws ask only
+   for an accountable person and a way to reach them. That reasoning was never checked against
+   CASL specifically, and CASL's own address clause is not obviously satisfied by it. This repo
+   does not invent, guess, or borrow an address to fill the gap — that's a decision for Kiarash,
+   with counsel, not something to default into from template code.
+2. **A real unsubscribe mechanism**. What exists today is an electronic address to write to, which
+   CASL accepts, but honoring it is an operational duty this code cannot discharge by itself:
+   nothing here reads that inbox, matches a request to a recipient, or suppresses future sends —
+   the 10-day promise in the footer is a commitment someone has to keep by hand today. A real
+   one-click flow (link + token + route + suppression list) is a materially bigger change than a
+   footer, and — separately — deciding what "unsubscribed" *means* against a message like `chosen`
+   ("you were chosen") or `confirmRequest` ("confirm your request") is a product question nobody
+   has answered: silently dropping either message defeats the transaction it's part of. Both are
+   follow-up work, not this fix.
+
+`test/emailCaslFooter.test.ts` enumerates every template (structurally, via `import.meta.glob`,
+same technique as `test/emailSubjects.test.ts`) and asserts both lines appear in *both* the HTML
+and the text part of each one — the text half exists because several templates build `text:` by
+hand, so a footer that only reached `renderShell` would leave text-preferring clients with neither
+line. `test/emailPromotionalContent.test.ts` (#33) strips exactly those two lines before its
+promotional-language scan, since that test's whole point is catching "unsubscribe"-shaped language
+drifting into a transactional email — and here it's mandated, not drift.
+
 ## Subject headers
 
 Template bodies are escaped throughout via `escapeHtml`; subject lines are not, because there is
