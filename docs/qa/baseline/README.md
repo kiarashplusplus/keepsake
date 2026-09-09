@@ -152,6 +152,54 @@ requests, the same words — so a diff between two runs is a design change and
 nothing else. That catalogue is `apps/web/e2e/support/demoCatalog.ts`; the
 capture itself is `apps/web/e2e/ux.spec.ts`.
 
+## The refresh after #384, #385 and #388, and what it showed
+
+Three of #373's ten findings landed after the previous capture, so this set
+was re-shot in one run on one host. Read as a design diff, it is small and it
+lands where those three changes are:
+
+- **Finding 7 (#388), the giver's own listing page.** Every `ux-desktop`
+  `mine-detail*` frame moved on 32–45% of its pixels — the largest change in
+  the set, and the expected one: the page went from a single column to a
+  photos column beside a card, so nothing below the title is where it was.
+  The `ux-mobile` twins moved 0.1–2.4%, which is *not* finding 7 (the split
+  is gated at `breakpoint.detailTwoColumn`, 1024px, so no phone frame can
+  see it) but the relative-timestamp and hand-drawn-rule churn described
+  above.
+- **Finding 9 (#384), the request sheet.** `item-request-sheet*` and
+  `item-request-sent` moved 4.8–20.8%. The safety copy is now split by
+  moment rather than stacked: the pre-send screen carries the paragraph
+  about keeping the details in Keepsake, and the sent sheet — the only one
+  of the two a meeting could follow — carries the one about meeting
+  somewhere public and being free to back out. Both screens still hold their
+  action above the fold, which is #377's fix, and this confirms #384 did not
+  cost it.
+- **Finding 10 (#385), the bulk photo counts.** `bulk-photos` and
+  `dark-bulk-photos` moved 0.3–0.8%, the smallest real change here, because
+  it is a line of prose: the photo count is stated once ("3 photos added so
+  far") and the ceiling now appears only beside the grouped-items counter.
+
+Eleven frames came back byte-different but **pixel-identical** — 0 pixels
+differing, not 0.00% rounded — and were reverted rather than committed:
+`consent-banner`, `feed`, `give-2-story-empty`, `give-2-story-filled`,
+`item-details` and `item` on desktop, and `give-1-photos-empty`,
+`give-2-story-empty`, `give-2-story-filled`, `give-2-story-short` and `mine`
+on mobile. Re-encoding noise is not a design change and does not belong in
+the history. Everything still in the diff differs by at least four pixels.
+
+**One thing the frames show that no issue names.** On `mine-detail` the
+photos column reserves roughly 470px and the single print in it is 168px
+(`THUMB_WIDE`), so about 300px of the column is empty table. That width is
+deliberate — the column is sized for a *row* of thumbnails, and the comment
+on `PHOTOS_COLUMN_PARTS` explains why the photos deliberately get the
+minority share here, unlike `item/[id].tsx` where one print is the whole
+point. But every `mine-detail*` frame in this set uses the single-photo
+plane, so the case the column was actually sized for has never been
+photographed. Either a giver-side fixture with several photos should join
+the catalogue, or the column should shrink when it holds one print. This is
+a design question, not a capture bug; it is written down here rather than
+fixed, because a capture PR changes no screens.
+
 ## Why JPEG
 
 Measured, not assumed: the same set is ~20 MB as PNG and ~3 MB at quality 85
@@ -220,9 +268,25 @@ real API every capture. `support/demoCatalog.ts`'s `PINNED_LISTING_IDS` now
 rewrites each minted id to a fixed one immediately after creating it
 (`support/demoDb.ts`'s `pinListingIds()`, a direct write into the same local
 D1 file `wrangler dev` is serving from), so the hash input — and therefore the
-tilt and offset — is the same on every run (#225). That is also why `item` and
-the give-flow frames were never affected: `PhotoCarousel` passes a literal
-`tiltDeg={-1.2}` rather than hashing anything.
+tilt and offset — is the same on every run (#225). That is also why `item` was never affected:
+`PhotoCarousel` passes a literal `tiltDeg={-1.2}` rather than hashing
+anything.
+
+This paragraph used to extend that clean bill to "the give-flow frames" as
+well. It does not hold, and the capture after #384/#385/#388 measured it:
+`give-1-photos-filled` moved on 2.88% of its pixels and `give-6-live` on
+2.09%, with no give-flow code in that diff at all. `app/give/index.tsx`
+tilts each photo tile from `tiltDegForId(photo.clientId)`, and
+`makeClientId()` (`features/give/giveDraft.ts`) is
+`Date.now().toString(36)` plus `Math.random()` — a fresh id per photo per
+run, which `PINNED_LISTING_IDS` cannot reach because it is minted in the
+browser and never becomes a listing id. `give-6-live` is the same story one
+step later: the listing the flow just created is not in the pinned set
+either. `app/give/review.tsx` escapes it the way `item` does, with a literal
+`tiltDeg={-1.5}`. So the give flow's photo frames belong with the two
+measured-but-unfixed causes below, not with the fixed ones — pinning them
+would mean making `makeClientId()` injectable, which is a change to the
+product for the benefit of the harness and has not been judged worth it.
 
 **Not fixed, and measured: two things in the product that differ between two
 runs on one host.** Both were seen while the reported/rejected frames above
