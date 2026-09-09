@@ -20,7 +20,7 @@
  * need them.
  */
 import * as React from "react";
-import { View } from "react-native";
+import { View, type ViewStyle } from "react-native";
 import { space } from "@keepsake/tokens/spacing";
 import { LISTING_STATUSES } from "@keepsake/contracts/listing";
 import type { AdminHealth, AdminStats } from "@keepsake/contracts/admin";
@@ -29,6 +29,7 @@ import { Eyebrow } from "@/ui/Eyebrow";
 import { Text } from "@/ui/Text";
 import { Skeleton } from "@/ui/Skeleton";
 import { useColors } from "@/ui/theme";
+import { useViewport } from "@/ui/viewport";
 
 const STATUS_LABELS: Record<(typeof LISTING_STATUSES)[number], string> = {
   pending: "Pending",
@@ -88,21 +89,36 @@ export function formatCronLastRun(lastRunMs: number | null, nowMs: number): stri
   return formatAgo(lastRunMs, nowMs);
 }
 
+/**
+ * The one stamped-tile frame all three badges below share. `minWidth` keeps
+ * a tile from collapsing around a single digit; `flexBasis` is the viewport
+ * switch's `tileBasis` — a third of the row on a phone, intrinsic above it
+ * (#363: sized by content alone, eleven tiles fell into rows of 3, 2, 3, 2
+ * and 1 at 390px, since "Needs review" and "Email failures" each pushed
+ * their row to two). The labels wrap to a second line inside the fixed
+ * third; `textAlign: "center"` on each of them is what makes that read.
+ */
+function useTileFrame(borderColor: string): ViewStyle {
+  const colors = useColors();
+  const vp = useViewport();
+  return {
+    borderWidth: 2,
+    borderColor,
+    backgroundColor: colors.surface,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+    minWidth: 92,
+    flexBasis: vp.tileBasis,
+    alignItems: "center",
+    gap: space.xxs,
+  };
+}
+
 function StatBadge({ label, value }: { label: string; value: number }): React.ReactElement {
   const colors = useColors();
+  const frame = useTileFrame(colors.ink);
   return (
-    <View
-      style={{
-        borderWidth: 2,
-        borderColor: colors.ink,
-        backgroundColor: colors.surface,
-        paddingVertical: space.sm,
-        paddingHorizontal: space.md,
-        minWidth: 92,
-        alignItems: "center",
-        gap: space.xxs,
-      }}
-    >
+    <View style={frame}>
       <Text variant="displayMd">{value}</Text>
       <Text variant="label" color="textSecondary" style={{ fontSize: 10, textAlign: "center" }}>
         {label}
@@ -115,20 +131,12 @@ function CronBadge({ name, lastRunMs, nowMs }: { name: string; lastRunMs: number
   const colors = useColors();
   const stale = isCronStale(name, lastRunMs, nowMs);
   const label = CRON_JOB_LABELS[name] ?? name;
+  const frame = useTileFrame(stale ? colors.danger : colors.ink);
   return (
     <View
       accessibilityRole="text"
       accessibilityLabel={`${label}: last run ${formatCronLastRun(lastRunMs, nowMs)}${stale ? ", needs attention" : ""}`}
-      style={{
-        borderWidth: 2,
-        borderColor: stale ? colors.danger : colors.ink,
-        backgroundColor: colors.surface,
-        paddingVertical: space.sm,
-        paddingHorizontal: space.md,
-        minWidth: 92,
-        alignItems: "center",
-        gap: space.xxs,
-      }}
+      style={frame}
     >
       <Text variant="caption" color={stale ? "dangerText" : "ink"}>
         {formatCronLastRun(lastRunMs, nowMs)}
@@ -149,20 +157,12 @@ function CronBadge({ name, lastRunMs, nowMs }: { name: string; lastRunMs: number
  */
 function AlertBadge({ label, value, attention }: { label: string; value: number; attention: boolean }): React.ReactElement {
   const colors = useColors();
+  const frame = useTileFrame(attention ? colors.danger : colors.ink);
   return (
     <View
       accessibilityRole="text"
       accessibilityLabel={`${label}: ${value}${attention ? ", needs attention" : ""}`}
-      style={{
-        borderWidth: 2,
-        borderColor: attention ? colors.danger : colors.ink,
-        backgroundColor: colors.surface,
-        paddingVertical: space.sm,
-        paddingHorizontal: space.md,
-        minWidth: 92,
-        alignItems: "center",
-        gap: space.xxs,
-      }}
+      style={frame}
     >
       <Text variant="displayMd" color={attention ? "dangerText" : "ink"}>
         {value}

@@ -43,10 +43,18 @@
  * read from the type scale rather than written out, so they cannot drift from
  * the tokens the narrow and wide headings actually use.
  *
+ * `--ks-tile-basis` is the second, for the same reason in the other
+ * direction: the admin stats strip's stamped tiles are a third of the row
+ * each below the breakpoint (#363 — sized by their labels, eleven of them
+ * fell into rows of 3, 2, 3, 2 and 1 at 390px) and their intrinsic width
+ * above it, and `auto` is a keyword no `calc()` can step to. The third is
+ * net of the two `space.md` gaps between three tiles.
+ *
  * These are `<style>` rules, not a script, so — unlike the pre-hydration
  * script above them in `+html.tsx` — they need no CSP `script-src` hash.
  * `style-src` carries `'unsafe-inline'`.
  */
+import { space } from "./spacing";
 import { type as typeScale } from "./typography";
 
 export const breakpoint = {
@@ -84,10 +92,12 @@ export function viewportCssVariables(): string {
     "  --ks-chips-fade: flex;",
     "  --ks-chips-shrink: 0;",
     `  --ks-hero-fvs: ${typeScale.displayLg.fontVariationSettings};`,
+    `  --ks-tile-basis: calc((100% - ${2 * space.md}px) / 3);`,
     "}",
     `@media (min-width: ${breakpoint.narrow}px) {`,
     "  :root { --ks-wide: 1; --ks-narrow-only: none; --ks-wide-only: flex; }",
     `  :root { --ks-hero-fvs: ${typeScale.displayXl.fontVariationSettings}; }`,
+    "  :root { --ks-tile-basis: auto; }",
     "}",
     `@media (min-width: ${breakpoint.categoryChips}px) {`,
     "  :root { --ks-chips-wrap: wrap; --ks-chips-fade: none; --ks-chips-shrink: 1; }",

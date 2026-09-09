@@ -18,6 +18,7 @@ import { Text } from "@/ui/Text";
 import { TextArea } from "@/ui/TextArea";
 import { Chip } from "@/ui/Chip";
 import { Button } from "@/ui/Button";
+import { Eyebrow } from "@/ui/Eyebrow";
 
 type BaseProps = {
   visible: boolean;
@@ -32,7 +33,15 @@ export type ReasonSheetProps =
   | (BaseProps & { mode: "text"; onConfirm: (reason: string | undefined) => void })
   | (BaseProps & {
       mode: "enum";
-      options: readonly { value: string; label: string }[];
+      /**
+       * `label` is what the chip says and has to fit one: two or three
+       * words. `detail` is the longer sentence the choice actually sends
+       * (for Reject, the giver-facing `MODERATION_REASONS` copy) and is
+       * shown under the row once that option is picked — so the moderator
+       * still reads exactly what will go out, without the chips having to
+       * carry it and run off the sheet at every width (#354).
+       */
+      options: readonly { value: string; label: string; detail?: string }[];
       onConfirm: (reason: string) => void;
     })
   | (BaseProps & { mode: "confirm"; message: string; onConfirm: () => void });
@@ -87,18 +96,21 @@ export function ReasonSheet(props: ReasonSheetProps): React.ReactElement {
             {props.message}
           </Text>
         ) : (
-          <View
-            accessibilityRole="radiogroup"
-            style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}
-          >
-            {props.options.map((option) => (
-              <Chip
-                key={option.value}
-                label={option.label}
-                selected={selected === option.value}
-                onPress={() => setSelected(option.value)}
-              />
-            ))}
+          <View style={{ gap: space.md }}>
+            <View
+              accessibilityRole="radiogroup"
+              style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}
+            >
+              {props.options.map((option) => (
+                <Chip
+                  key={option.value}
+                  label={option.label}
+                  selected={selected === option.value}
+                  onPress={() => setSelected(option.value)}
+                />
+              ))}
+            </View>
+            <SelectedDetail options={props.options} selected={selected} />
           </View>
         )}
         {props.error !== null ? (
@@ -117,5 +129,37 @@ export function ReasonSheet(props: ReasonSheetProps): React.ReactElement {
         </View>
       </View>
     </Sheet>
+  );
+}
+
+/**
+ * The sentence behind the selected chip, or — before anything is picked — a
+ * line saying one is coming, so the space it takes doesn't appear from
+ * nowhere on the first tap. Only ever rendered when at least one option
+ * carries a `detail`: a picker whose labels are the whole story (none today,
+ * but the prop is optional) shows nothing extra.
+ */
+function SelectedDetail({
+  options,
+  selected,
+}: {
+  options: readonly { value: string; label: string; detail?: string }[];
+  selected: string | null;
+}): React.ReactElement | null {
+  if (!options.some((option) => option.detail !== undefined)) return null;
+  const detail = options.find((option) => option.value === selected)?.detail;
+  return (
+    <View style={{ gap: space.xxs }}>
+      <Eyebrow>The giver will read</Eyebrow>
+      {detail !== undefined ? (
+        <Text variant="body" color="inkSoft">
+          {detail}
+        </Text>
+      ) : (
+        <Text variant="caption" color="textTertiary">
+          Pick a reason to see the sentence it sends.
+        </Text>
+      )}
+    </View>
   );
 }

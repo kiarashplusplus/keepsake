@@ -65,7 +65,27 @@ const TAB_LABELS: Record<AdminQueueStatus, string> = {
 
 const QUEUE_PAGE_SIZE = 20;
 
-const REJECT_OPTIONS = ADMIN_REJECT_REASONS.map((code) => ({ value: code, label: MODERATION_REASONS[code] }));
+/**
+ * What the reject sheet's chips say. `MODERATION_REASONS` is the sentence the
+ * *giver* receives, and a `Chip` is sized for two or three words — using the
+ * sentence as the chip label clipped four of the six against the sheet's
+ * edge at 1280px and five at 390px (#354). The sentence still shows, under
+ * the row, for whichever reason is picked (`ReasonSheet`'s `detail`).
+ */
+const REJECT_REASON_LABELS: Record<(typeof ADMIN_REJECT_REASONS)[number], string> = {
+  contact_in_story: "Contact details",
+  not_an_object: "Not an object",
+  illegal_drugs: "Illegal drugs",
+  violent_content: "Violent content",
+  sexual_content_minors: "Sexual content (minors)",
+  weapons_of_mass_harm: "Mass-harm weapons",
+};
+
+const REJECT_OPTIONS = ADMIN_REJECT_REASONS.map((code) => ({
+  value: code,
+  label: REJECT_REASON_LABELS[code],
+  detail: MODERATION_REASONS[code],
+}));
 
 /** Coalesces however many actions land in a burst (a keyboard sweep, a bulk
  * action) into one `GET /api/admin/stats` — that endpoint runs three

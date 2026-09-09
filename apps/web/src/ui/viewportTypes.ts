@@ -32,4 +32,12 @@ export type Viewport = {
    * see `CategoryChips.tsx` for why a wrapping content container needs it. */
   chipsShrink: ViewStyle["flexShrink"];
   chipsFade: ViewStyle;
+  /**
+   * A `flexBasis` that is a third of the row (net of two `space.md` gaps)
+   * below `breakpoint.narrow` and `auto` at or above it — for a wrapping row
+   * of equal stamped tiles that should read as a table on a phone and keep
+   * their intrinsic widths on a desktop (`StatsStrip.tsx`, #363). Its own
+   * field rather than a `step()` because `auto` is not a length.
+   */
+  tileBasis: ViewStyle["flexBasis"];
 };
