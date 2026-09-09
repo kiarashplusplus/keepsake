@@ -5,6 +5,7 @@
 import { ScrollViewStyleReset } from "expo-router/html";
 import * as React from "react";
 import { themeCssVariables } from "@keepsake/tokens/colors";
+import { viewportCssVariables } from "@keepsake/tokens/breakpoints";
 import { config } from "@/lib/config";
 
 // The pre-hydration script runs before React attaches, so the very first
@@ -53,14 +54,11 @@ import { config } from "@/lib/config";
 //
 // The naive fix — branch
 // on visitor state inside the Feed component itself, after mount — was
-// rejected for two reasons: (1) despite `web.output: "static"`, `expo
-// export`'s per-route HTML ships an EMPTY body (a Suspense placeholder, no
-// prerendered markup — confirmed by reading `dist/index.html` after export,
-// not assumed), so the app's real first paint is whatever `index.tsx` renders
-// once React attaches: the Feed's own loading skeleton. A `useEffect` there
-// that redirects a first-time visitor away would still show that skeleton
-// for a frame first — a visible flash of "feed" content for someone who is,
-// by definition, seeing this domain for the first time. (2) Branching
+// rejected for two reasons: (1) the app's real first paint is whatever the
+// route renders before React attaches, and a `useEffect` that redirects a
+// first-time visitor away would still show it for a frame first — a visible
+// flash of "feed" content for someone who is, by definition, seeing this
+// domain for the first time. (2) Branching
 // server-side instead (a Worker route with `Vary`) needs a cookie, and the
 // one strong signal this app has — the `ks_` owner token — deliberately
 // lives in `localStorage` only, never sent to the server on a plain page
@@ -84,6 +82,21 @@ import { config } from "@/lib/config";
 // owner token itself, both already un-gated by the consent banner.
 // `e2e/support/visited.ts` reads this same key back out of this file rather
 // than re-declaring it, for the reason that file's own comment gives.
+//
+// A correction, 2026-09-09. Point (1) above used to argue from "`expo
+// export`'s per-route HTML ships an EMPTY body (a Suspense placeholder, no
+// prerendered markup — confirmed by reading `dist/index.html` after export,
+// not assumed)". That was true when it was written and is not true now: the
+// root `ThemeProvider` no longer returns `null` while it waits on storage, so
+// every route prerenders for real — `dist/index.html`'s body is ~46KB of
+// markup, and `e2e/staticRender.spec.ts` exists precisely because it is. The
+// conclusion the paragraph reached is unaffected (a post-mount redirect still
+// flashes), so only its reasoning changed.
+//
+// It is worth naming why a stale "confirmed by reading the artifact" is worse
+// than no note at all: believing the body is empty is believing there is
+// nothing in it to get wrong, and the viewport bug the CSS below fixes lived
+// in that body, in production, in markup this comment said did not exist.
 const PREHYDRATION_SCRIPT = `
 (function () {
   try {
@@ -263,6 +276,30 @@ ${themeCssVariables()}
 :root { --ks-grain-blend: multiply; --ks-grain-opacity: 0.5; }
 [data-theme="dark"] { --ks-grain-blend: overlay; --ks-grain-opacity: 0.55; }
 `;
+
+/**
+ * The viewport switch — the same trick as THEME_CSS above, for the same
+ * reason, one axis over.
+ *
+ * The theme is set before the first paint because the markup is identical in
+ * light and dark and only the palette differs. Width was not: components
+ * branched on `useWindowDimensions()`, which is 0 in a static render, so the
+ * one exported HTML file every device receives carried the *phone* header,
+ * hero and location controls — and a desktop visitor watched them snap to the
+ * wide layout the moment React hydrated and read the real width. Measured in
+ * production's own bytes, 2026-09-09.
+ *
+ * A media query is the only thing that knows the viewport before JavaScript
+ * runs, so the decision moves here and the markup becomes identical at every
+ * width — which is what keeps `/` cacheable with no `Vary`, exactly as the
+ * pre-hydration script's comment above requires. `src/ui/viewport.web.ts`
+ * consumes these; `packages/tokens/src/breakpoints.ts` generates them and
+ * carries the full reasoning.
+ *
+ * A `<style>`, not a script, so this needs no CSP `script-src` hash the way
+ * PREHYDRATION_SCRIPT does — `style-src` carries `'unsafe-inline'`.
+ */
+const VIEWPORT_CSS = viewportCssVariables();
 
 const ROOT_CSS = `
 html, body, #root { height: 100%; }
@@ -559,6 +596,7 @@ export default function Root({ children }: { children: React.ReactNode }): React
         <ScrollViewStyleReset />
 
         <style dangerouslySetInnerHTML={{ __html: THEME_CSS }} />
+        <style dangerouslySetInnerHTML={{ __html: VIEWPORT_CSS }} />
         <style dangerouslySetInnerHTML={{ __html: ROOT_CSS }} />
         <script dangerouslySetInnerHTML={{ __html: PREHYDRATION_SCRIPT }} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: ROOT_JSON_LD }} />

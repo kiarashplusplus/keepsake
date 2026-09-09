@@ -22,10 +22,18 @@ import { test, expect, type Browser } from "@playwright/test";
 import { BASE_URL } from "./support/constants";
 import { freshClientIp } from "./support/api";
 
-async function noScriptPage(browser: Browser) {
+/** `browser.newContext()` ignores the project's `use`, so the viewport is
+ * stated here rather than inherited — these tests are about what a given
+ * width gets out of one file, so the width has to be the thing under control
+ * rather than a Playwright default that can change under us. */
+const DESKTOP = { width: 1280, height: 800 };
+const PHONE = { width: 390, height: 844 };
+
+async function noScriptPage(browser: Browser, viewport: { width: number; height: number } = DESKTOP) {
   const context = await browser.newContext({
     baseURL: BASE_URL,
     javaScriptEnabled: false,
+    viewport,
     extraHTTPHeaders: { "CF-Connecting-IP": freshClientIp() },
   });
   return { context, page: await context.newPage() };
@@ -41,11 +49,13 @@ test("the feed's chrome and controls are in the HTML, with no JavaScript at all"
 
   await expect(page.getByText("Give a keepsake a second life.")).toBeVisible();
   await expect(page.getByLabel("Search")).toBeVisible();
-  // The header's way to give. It is a `Button` inside a `Link asChild`, so
-  // it is a button to the accessibility tree, and its label depends on the
-  // width the static render assumed — hence the alternation, the same one
-  // `browse.spec.ts` uses for the same control.
-  await expect(page.getByRole("button", { name: /^Give( something)?$/ }).first()).toBeVisible();
+  // The header's way to give. It is a `Button` inside a `Link asChild`, so it
+  // is a button to the accessibility tree. This used to accept
+  // `/^Give( something)?$/` "because its label depends on the width the
+  // static render assumed" — which was this file describing the bug the
+  // viewport switch fixes, as though it were a fact of life. The context
+  // above is a desktop, so the label is now knowable.
+  await expect(page.getByRole("button", { name: "Give something" }).first()).toBeVisible();
   // The category chips are the feed's own controls, not chrome.
   await expect(page.getByText("Books & letters")).toBeVisible();
 
@@ -55,6 +65,52 @@ test("the feed's chrome and controls are in the HTML, with no JavaScript at all"
   await expect(page.getByText("Nothing here yet.")).toHaveCount(0);
 
   await context.close();
+});
+
+/**
+ * The one file, laid out two ways, by nothing but CSS.
+ *
+ * `expo export` renders `/` once with no viewport, and Cloudflare serves
+ * those exact bytes to every device — no `Vary`, one cache entry. Every
+ * width-dependent decision therefore has to be the stylesheet's, because a
+ * `useWindowDimensions()` branch resolves at build time (to 0, hence to the
+ * phone layout) and ships that to everyone. It did: production's `/` served
+ * the phone header and the collapsed location controls to desktops until
+ * hydration swapped them, which is the snap this proves is gone.
+ *
+ * Scripting is off, so nothing here can be hydration doing the work — what
+ * each viewport shows is what the shared bytes plus a media query produce.
+ * Both directions are asserted, because a fix that merely moved the baked
+ * width from narrow to wide would pass a desktop-only version of this test.
+ */
+test("one export lays out as a desktop and as a phone, with no JavaScript to choose", async ({ browser }) => {
+  const desktop = await noScriptPage(browser, DESKTOP);
+  await desktop.page.goto("/");
+
+  // Wide: the full hero, the secondary nav, and the location controls open.
+  await expect(desktop.page.getByText(/Some things are too full of memory/)).toBeVisible();
+  await expect(desktop.page.getByRole("link", { name: "Browse" })).toBeVisible();
+  await expect(desktop.page.getByRole("link", { name: "About" })).toBeVisible();
+  await expect(desktop.page.getByRole("button", { name: "Use my location" })).toBeVisible();
+  // ...and neither the phone's short label nor its collapsed summary row.
+  await expect(desktop.page.getByRole("button", { name: "Give", exact: true })).toBeHidden();
+  await expect(desktop.page.getByRole("button", { name: /^Near · / })).toBeHidden();
+
+  await desktop.context.close();
+
+  const phone = await noScriptPage(browser, PHONE);
+  await phone.page.goto("/");
+
+  // Narrow: the hero cut to its headline, one short Give, the controls folded
+  // behind the summary that stands in for them (issue #219).
+  await expect(phone.page.getByText("Give a keepsake a second life.")).toBeVisible();
+  await expect(phone.page.getByRole("button", { name: "Give", exact: true })).toBeVisible();
+  await expect(phone.page.getByRole("button", { name: /^Near · / })).toBeVisible();
+  await expect(phone.page.getByText(/Some things are too full of memory/)).toBeHidden();
+  await expect(phone.page.getByRole("link", { name: "Browse" })).toBeHidden();
+  await expect(phone.page.getByRole("button", { name: "Use my location" })).toBeHidden();
+
+  await phone.context.close();
 });
 
 test("the explainer is readable with no JavaScript", async ({ browser }) => {

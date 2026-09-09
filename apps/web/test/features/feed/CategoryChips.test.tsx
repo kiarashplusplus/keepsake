@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ScrollView } from "react-native";
+import { ScrollView, StyleSheet } from "react-native";
 import { fireEvent, render } from "@testing-library/react-native";
 import { CategoryChips } from "@/features/feed/CategoryChips";
 
@@ -66,11 +66,28 @@ describe("CategoryChips overflow affordance (issue #219)", () => {
     expect(UNSAFE_queryByProps({ testID: "category-overflow-fade" })).toBeNull();
   });
 
-  it("wraps instead of scrolling at desktop width, so there is no edge to fade", () => {
+  /**
+   * The row used to be two component trees picked by `useWindowDimensions()`
+   * — a `ScrollView` on a phone, a wrapping `View` on a desktop — so the one
+   * static export baked the phone's scroller into the HTML every desktop got
+   * (`packages/tokens/src/breakpoints.ts`). It is one `ScrollView` at both
+   * widths now, and CSS decides whether its content wraps; where it wraps
+   * there is nothing to scroll, which is what the wrapping row always was.
+   *
+   * jsdom resolves no media queries, so this asserts the switch is wired, not
+   * what it resolves to. `e2e/browse.spec.ts` runs in both projects and is
+   * where the resolved behaviour is checked.
+   */
+  it("hands the wrap/scroll decision to CSS rather than to the measured width", () => {
     setViewportWidth(DESKTOP_WIDTH);
-    const { UNSAFE_queryByType, UNSAFE_queryByProps } = render(<CategoryChips value={null} onChange={jest.fn()} />);
+    const { UNSAFE_getByType, UNSAFE_getByProps } = render(<CategoryChips value={null} onChange={jest.fn()} />);
 
-    expect(UNSAFE_queryByType(ScrollView)).toBeNull();
-    expect(UNSAFE_queryByProps({ testID: "category-overflow-fade" })).toBeNull();
+    const scroller = UNSAFE_getByType(ScrollView);
+    expect(StyleSheet.flatten(scroller.props.contentContainerStyle)).toMatchObject({ flexWrap: "var(--ks-chips-wrap, nowrap)" });
+    // And the fade carries the switch that takes it off screen once the row
+    // wraps — a gradient over an edge that no longer overflows.
+    expect(StyleSheet.flatten(UNSAFE_getByProps({ testID: "category-overflow-fade" }).props.style)).toMatchObject({
+      display: "var(--ks-chips-fade, flex)",
+    });
   });
 });

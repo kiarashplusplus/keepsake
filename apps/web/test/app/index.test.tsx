@@ -1,4 +1,5 @@
 import * as React from "react";
+import { StyleSheet } from "react-native";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import type { PublicListing } from "@keepsake/contracts/listing";
 import type { AspectShelf } from "@keepsake/contracts/shelves";
@@ -242,58 +243,85 @@ describe("Feed", () => {
     expect(JSON.stringify(toJSON())).toContain("Some things are too full of memory to sell");
   });
 
-  it("issue #219: on a phone the hero is only the eyebrow and the headline", async () => {
+  /**
+   * Issue #219's two narrow-width behaviours — a hero cut down to its
+   * headline, and location controls folded behind a summary — used to be JS
+   * branches on `useWindowDimensions()`, and these tests moved jsdom's width
+   * to drive them. They are CSS's decision now, because one static export is
+   * served to every viewport and a JS branch bakes the build's width into it
+   * (`packages/tokens/src/breakpoints.ts`).
+   *
+   * So what jsdom can still prove is what these assert: both branches are in
+   * the markup, each carrying the `display` variable that decides it, and the
+   * phone's toggle still opens the controls. **Whether the right one is
+   * actually on screen at a given width is not assertable here** — jsdom
+   * resolves no media queries and lays nothing out. That half lives in
+   * `e2e/browse.spec.ts` and `e2e/staticRender.spec.ts`, which run in a real
+   * browser in both the `mobile` and `desktop` projects, and which is where
+   * this bug would have been caught.
+   */
+  it("issue #219: the hero deck ships at every width, behind the wide-only switch", async () => {
     setViewportWidth(PHONE_WIDTH);
     jest.mocked(getFeed).mockResolvedValueOnce({ items: [], next_cursor: null });
 
-    const { toJSON } = render(<Feed />);
+    const { toJSON, UNSAFE_getByProps } = render(<Feed />);
     await act(async () => {
       await flush();
     });
 
-    const tree = JSON.stringify(toJSON());
-    expect(tree).toContain("Give a keepsake a second life.");
+    expect(JSON.stringify(toJSON())).toContain("Give a keepsake a second life.");
     // The deck restates `/welcome`, and the header already carries a `Give`
     // button at this width — between them they were most of the reason the
-    // first keepsake sat below the fold.
-    expect(tree).not.toContain("Some things are too full of memory to sell");
+    // first keepsake sat below the fold. It is in the markup either way now;
+    // below the breakpoint the stylesheet is what takes it off screen.
+    const deck = UNSAFE_getByProps({ testID: "feed-hero-deck" });
+    expect(StyleSheet.flatten(deck.props.style)).toMatchObject({ display: "var(--ks-wide-only, none)" });
   });
 
-  it("issue #219: on a phone the location controls sit behind a summary that expands", async () => {
+  it("issue #219: the phone's location summary opens the controls it stands in for", async () => {
     setViewportWidth(PHONE_WIDTH);
     jest.mocked(getFeed).mockResolvedValue({ items: [makeListing("listing-1", "Brass compass")], next_cursor: null });
 
-    const { UNSAFE_getByProps, UNSAFE_queryByProps } = render(<Feed />);
+    const { UNSAFE_getByProps } = render(<Feed />);
     await act(async () => {
       await flush();
     });
 
     // Collapsed: the summary states the choice in force, and the four rows of
-    // controls it stands in for are not on screen.
+    // controls it stands in for are behind the wide-only switch — present in
+    // the markup, off screen below the breakpoint.
     const toggle = UNSAFE_getByProps({ accessibilityLabel: "Near · anywhere. Change where you are looking" });
     expect(toggle.props.accessibilityState).toEqual({ expanded: false });
-    expect(UNSAFE_queryByProps({ accessibilityLabel: "Use my location" })).toBeNull();
+    expect(StyleSheet.flatten(UNSAFE_getByProps({ testID: "feed-location-controls" }).props.style)).toMatchObject({
+      display: "var(--ks-wide-only, none)",
+    });
 
     await act(async () => {
       fireEvent.press(toggle);
       await flush();
     });
 
-    expect(UNSAFE_queryByProps({ accessibilityLabel: "Use my location" })).not.toBeNull();
+    // Expanded drops the switch entirely, so the controls are on screen at
+    // every width rather than at one of them.
+    expect(StyleSheet.flatten(UNSAFE_getByProps({ testID: "feed-location-controls" }).props.style)).not.toHaveProperty("display");
+    expect(UNSAFE_getByProps({ accessibilityLabel: "Use my location" })).not.toBeNull();
     expect(UNSAFE_getByProps({ accessibilityLabel: "Near · anywhere. Hide the location controls" }).props.accessibilityState).toEqual({
       expanded: true,
     });
   });
 
-  it("issue #219: the location controls stay open at desktop width, with no disclosure at all", async () => {
+  it("issue #219: the summary row itself is the narrow-only half", async () => {
     jest.mocked(getFeed).mockResolvedValueOnce({ items: [], next_cursor: null });
 
-    const { UNSAFE_queryByProps } = render(<Feed />);
+    const { UNSAFE_getByProps } = render(<Feed />);
     await act(async () => {
       await flush();
     });
 
-    expect(UNSAFE_queryByProps({ accessibilityLabel: "Use my location" })).not.toBeNull();
-    expect(UNSAFE_queryByProps({ accessibilityLabel: "Near · anywhere. Change where you are looking" })).toBeNull();
+    // The disclosure button is rendered at every width and hidden above the
+    // breakpoint, where the controls below it are always open. Its style is a
+    // function of the press state, hence calling it.
+    const toggle = UNSAFE_getByProps({ accessibilityLabel: "Near · anywhere. Change where you are looking" });
+    expect(StyleSheet.flatten(toggle.props.style({ pressed: false }))).toMatchObject({ display: "var(--ks-narrow-only, flex)" });
   });
 });

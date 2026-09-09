@@ -5,18 +5,18 @@ import { test, expect } from "./support/fixtures";
 import { createApprovedListing, uniqueTitle } from "./support/api";
 
 test.describe("browse", () => {
-  test("the home page renders the invitation and the feed controls", async ({ page }) => {
+  test("the home page renders the invitation and the feed controls", async ({ page, isMobile }) => {
     await page.goto("/");
 
     await expect(page.getByText("Give a keepsake a second life.")).toBeVisible();
     await expect(page.getByLabel("Search")).toBeVisible();
-    // Width-agnostic on purpose: since #219 the phone-width feed drops the
-    // hero's own Give button (the header already carries one, and the deck
-    // plus a second button was most of why no keepsake fit on the first
-    // screenful), and the narrow header labels it "Give" rather than "Give
-    // something". What this test is actually about is that there is a way to
-    // give from the feed, not which of the two renders at this width.
-    await expect(page.getByRole("button", { name: /^Give( something)?$/ }).first()).toBeVisible();
+    // This used to accept either label, because since #219 the phone-width
+    // feed drops the hero's own Give button and the narrow header labels its
+    // own "Give" rather than "Give something" — and the static export could
+    // not be relied on to have picked the right one for this project's
+    // viewport. It can now (`packages/tokens/src/breakpoints.ts`), so the
+    // project says which label to expect instead of the test accepting both.
+    await expect(page.getByRole("button", { name: isMobile ? "Give" : "Give something", exact: true }).first()).toBeVisible();
   });
 
   test("an approved listing shows up as a print on the table", async ({ page, request }) => {

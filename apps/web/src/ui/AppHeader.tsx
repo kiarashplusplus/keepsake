@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Pressable, StyleSheet, useWindowDimensions, View, type ViewStyle } from "react-native";
+import { Pressable, StyleSheet, View, type ViewStyle } from "react-native";
 import { Link, usePathname, type Href } from "expo-router";
 import { Icon, type IconName } from "@/ui/Icon";
 import { space } from "@keepsake/tokens/spacing";
@@ -9,6 +9,7 @@ import { useColors, useThemeMode, type ThemeMode } from "@/ui/theme";
 import { ReadableWidth } from "@/ui/ReadableWidth";
 import { Text } from "@/ui/Text";
 import { Button } from "@/ui/Button";
+import { useViewport } from "@/ui/viewport";
 
 const NEXT_MODE: Record<ThemeMode, ThemeMode> = {
   light: "dark",
@@ -21,8 +22,6 @@ const MODE_ICON: Record<ThemeMode, IconName> = {
   dark: "moon",
   system: "contrast",
 };
-
-const NARROW_BREAKPOINT = 640;
 
 function ThemeToggle(): React.ReactElement {
   const colors = useColors();
@@ -58,11 +57,16 @@ function navStyle(active: boolean, colors: ReturnType<typeof useColors>): ViewSt
   };
 }
 
-function NavLink({ href, label, active }: { href: Href; label: string; active: boolean }): React.ReactElement {
+function NavLink({ href, label, active, style }: { href: Href; label: string; active: boolean; style?: ViewStyle }): React.ReactElement {
   const colors = useColors();
   return (
+    // Flattened, not an array: `Link asChild` hands this `Pressable`'s props
+    // through expo-router's slot, and in the static export an array style
+    // reached the DOM as `style="0:[object Object];1:[object Object]"` —
+    // every rule in it lost, including the `display` switch that is supposed
+    // to hide `Browse` on a phone. A single object survives the trip.
     <Link href={href} asChild>
-      <Pressable accessibilityRole="link" accessibilityState={{ selected: active }} style={navStyle(active, colors)}>
+      <Pressable accessibilityRole="link" accessibilityState={{ selected: active }} style={StyleSheet.flatten([navStyle(active, colors), style])}>
         <Text variant="label" color="ink" style={{ fontSize: 12 }}>
           {label}
         </Text>
@@ -74,10 +78,10 @@ function NavLink({ href, label, active }: { href: Href; label: string; active: b
 /** `/about` is a static page from apps/site, not an app route, so it is a
  * plain anchor (react-native-web renders a View with `href` as `<a>`) rather
  * than a typed expo-router `Link`. */
-function SiteLink({ href, label }: { href: string; label: string }): React.ReactElement {
+function SiteLink({ href, label, style }: { href: string; label: string; style?: ViewStyle }): React.ReactElement {
   const colors = useColors();
   return (
-    <View accessibilityRole="link" {...({ href } as object)} style={navStyle(false, colors)}>
+    <View accessibilityRole="link" {...({ href } as object)} style={[navStyle(false, colors), style]}>
       <Text variant="label" color="ink" style={{ fontSize: 12 }}>
         {label}
       </Text>
@@ -88,8 +92,11 @@ function SiteLink({ href, label }: { href: string; label: string }): React.React
 export function AppHeader(): React.ReactElement {
   const colors = useColors();
   const pathname = usePathname();
-  const { width } = useWindowDimensions();
-  const narrow = width < NARROW_BREAKPOINT;
+  // Width comes from CSS, not from `useWindowDimensions()` — see
+  // `packages/tokens/src/breakpoints.ts`. This header is on every route, so
+  // it was the most visible half of the snap: a desktop visitor's first paint
+  // was the 64px phone bar with a 23px wordmark and no `Browse`/`About`.
+  const vp = useViewport();
 
   return (
     <View
@@ -107,7 +114,7 @@ export function AppHeader(): React.ReactElement {
           alignItems: "center",
           justifyContent: "space-between",
           gap: space.lg,
-          minHeight: narrow ? 64 : 76,
+          minHeight: vp.step(64, 76),
         }}
       >
         <Link href="/" accessibilityLabel="Keepsake, home">
@@ -115,16 +122,16 @@ export function AppHeader(): React.ReactElement {
             testID="wordmark"
             variant="wordmark"
             fontVariationSettings={type.wordmark.fontVariationSettings}
-            style={narrow ? { fontSize: 23, lineHeight: 28 } : undefined}
+            style={{ fontSize: vp.step(23, type.wordmark.fontSize), lineHeight: vp.step(28, type.wordmark.lineHeight) }}
           >
             Keepsake
           </Text>
         </Link>
 
-        <View style={{ flexDirection: "row", alignItems: "center", gap: narrow ? space.md : space.xl }}>
-          {narrow ? null : <NavLink href="/" label="Browse" active={pathname === "/"} />}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: vp.step(space.md, space.xl) }}>
+          <NavLink href="/" label="Browse" active={pathname === "/"} style={vp.wideOnly} />
           <NavLink href="/mine" label="Mine" active={pathname.startsWith("/mine")} />
-          {narrow ? null : <SiteLink href="/about" label="About" />}
+          <SiteLink href="/about" label="About" style={vp.wideOnly} />
           {/* `dangerouslySingular`: the root stack keeps the give flow
               mounted (hidden) under whatever the giver navigated to from
               inside it, and a plain push then stacked a *second* give flow
@@ -134,9 +141,22 @@ export function AppHeader(): React.ReactElement {
               the giver back on it — same provider, same previews, same
               in-flight uploads — and only a fresh visit mounts a new one.
               Same on the feed's own Give buttons (`app/index.tsx`). */}
-          <Link href="/give" dangerouslySingular asChild>
-            <Button label={narrow ? "Give" : "Give something"} />
-          </Link>
+          {/* Two labels, one per width, rather than one label picked in JS.
+              A label is markup, and markup picked from the viewport is
+              precisely what one static export cannot get right for everyone
+              (`packages/tokens/src/breakpoints.ts`). The hidden one generates
+              no box: it is out of the tab order and the accessibility tree,
+              and contributes nothing to this row's `gap`. */}
+          <View style={vp.wideOnly}>
+            <Link href="/give" dangerouslySingular asChild>
+              <Button label="Give something" />
+            </Link>
+          </View>
+          <View style={vp.narrowOnly}>
+            <Link href="/give" dangerouslySingular asChild>
+              <Button label="Give" />
+            </Link>
+          </View>
           <ThemeToggle />
         </View>
       </ReadableWidth>

@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Design tokens for Keepsake: plain constants, no theme library. Subpath exports only.",
   "exports": {
+    "./breakpoints": "./src/breakpoints.ts",
     "./colors": "./src/colors.ts",
     "./spacing": "./src/spacing.ts",
     "./radii": "./src/radii.ts",
