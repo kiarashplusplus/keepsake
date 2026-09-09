@@ -290,6 +290,7 @@ export default function MineDetail(): React.ReactElement {
         onConfirm={(handoffNote) => void handleConfirmChoose(handoffNote)}
         busy={choosing}
         error={chooseError}
+        request={listing.requests.find((request) => request.id === chooseTarget) ?? null}
       />
     </Page>
   );
