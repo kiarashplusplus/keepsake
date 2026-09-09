@@ -97,6 +97,16 @@ export function Button({ label, onPress, href, variant = "primary", loading = fa
   const colors = useColors();
   const motion = useMotion();
   const isDisabled = disabled || loading;
+  // Issue #373 finding 6: `isDisabled` used to drive the fill colour too,
+  // so a genuinely inert button (nothing to submit yet) and one mid-submit
+  // were the same washed-out tint of the accent — indistinguishable, and
+  // low-contrast against the card either way. `isInert` is the disabled
+  // case that ISN'T loading: it fills with `colors.pencil` (the same
+  // muted grey-brown the product already uses for secondary/pencil text)
+  // instead of desaturating the accent, so "not ready" reads as pencil
+  // rather than a faded version of the one stamp-red action. `loading`
+  // keeps the full-strength fill and its spinner — busy still looks busy.
+  const isInert = isDisabled && !loading;
   // A disabled Pressable ignores `onPress`, but a browser does not ignore an
   // anchor's `href` — so a disabled link would still navigate, as a full
   // page load. While disabled it is a plain button with nowhere to go.
@@ -106,17 +116,19 @@ export function Button({ label, onPress, href, variant = "primary", loading = fa
 
   const containerFor = (pressed: boolean, hovered: boolean): ViewStyle => {
     const lifted = hovered && !isDisabled;
-    const opacity = isDisabled ? 0.5 : pressed ? 0.85 : 1;
+    const opacity = isInert ? 0.65 : pressed ? 0.85 : 1;
     const pressScale = pressed && !isDisabled ? 0.97 : 1;
     switch (variant) {
       case "primary":
         return {
-          backgroundColor: colors.accent,
+          backgroundColor: isInert ? colors.pencil : colors.accent,
           paddingHorizontal: space.xl,
           borderRadius: radii.sm,
           opacity,
           transform: [{ rotate: `${rotateDeg}deg` }, { scale: pressScale }],
-          ...({ boxShadow: lifted ? "3px 5px 0px rgba(27,24,21,0.35)" : "2px 3px 0px rgba(27,24,21,0.3)" } as ViewStyle),
+          // A flat cast rather than the pressed-down stamp shadow while
+          // inert: it hasn't been stamped, so it shouldn't look stamped.
+          ...({ boxShadow: isInert ? "none" : lifted ? "3px 5px 0px rgba(27,24,21,0.35)" : "2px 3px 0px rgba(27,24,21,0.3)" } as ViewStyle),
         };
       case "secondary":
         // Issue #134. This used to fill `colors.print` (#FFFDF8) inside a 2px
@@ -136,16 +148,21 @@ export function Button({ label, onPress, href, variant = "primary", loading = fa
         //
         // The border stays, at the fill colour: it keeps this variant's box
         // geometry identical to the outlined one it replaces.
+        //
+        // Issue #373 finding 6: inert (disabled, not loading) fills with
+        // `colors.pencil` rather than a faded `accent2`, for the same reason
+        // the primary variant does — see this function's header comment.
         return {
-          backgroundColor: colors.accent2,
+          backgroundColor: isInert ? colors.pencil : colors.accent2,
           paddingHorizontal: space.lg,
           borderRadius: radii.sm,
           borderWidth: 2,
-          borderColor: colors.accent2,
+          borderColor: isInert ? colors.pencil : colors.accent2,
           opacity,
           transform: [{ rotate: `${rotateDeg}deg` }, { scale: pressScale }],
-          // The same pressed-stamp lift the primary gets, a touch lighter.
-          ...({ boxShadow: lifted ? "3px 5px 0px rgba(27,24,21,0.28)" : "2px 3px 0px rgba(27,24,21,0.22)" } as ViewStyle),
+          // The same pressed-stamp lift the primary gets, a touch lighter —
+          // flat while inert, for the same reason as the primary variant.
+          ...({ boxShadow: isInert ? "none" : lifted ? "3px 5px 0px rgba(27,24,21,0.28)" : "2px 3px 0px rgba(27,24,21,0.22)" } as ViewStyle),
         };
       case "link":
         return {

@@ -62,7 +62,9 @@ export function DateField({ label, value, onChangeText, onBlur, helper, error, m
           borderRightWidth: 0,
           borderBottomWidth: look.borderBottomWidth,
           borderBottomColor: look.borderBottomColor,
-          // The baseline is the focus ring, as everywhere else in the app.
+          // The baseline is the focus ring (brass/gold, distinct from the
+          // red error colour — issue #373 finding 6), as everywhere else in
+          // the app.
           outline: "none",
           // The paper is the same warm cream in both themes (see colors.ts),
           // so pin the browser's own picker chrome — the calendar glyph, the

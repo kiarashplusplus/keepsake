@@ -70,6 +70,19 @@ describe("colour contrast (WCAG AA) — Polaroids on a table", () => {
     expect(contrastRatio(colorsLight.focus, colorsLight.surface)).toBeGreaterThanOrEqual(3);
     expect(contrastRatio(colorsLight.focus, colorsLight.print)).toBeGreaterThanOrEqual(3);
   });
+
+  // Issue #373 finding 6: `focus` and `dangerText` used to be the same
+  // literal (`#7A2515`), so a focused-but-valid field drew the exact same
+  // maroon rule `FieldFrame`/`TextArea` draw for an invalid one — a visitor
+  // filling in a field correctly saw the colour that means "this is wrong"
+  // everywhere else in the product. This is the guard: it fails the moment
+  // someone reunifies the two tokens again, which the generic ">=3:1 on
+  // paper" check above cannot catch (the old shared value already passed
+  // that bar).
+  it("focus is not the same colour as error (a valid, focused field must not read as invalid)", () => {
+    expect(colorsLight.focus).not.toBe(colorsLight.dangerText);
+    expect(colorsLight.focus).not.toBe(colorsLight.danger);
+  });
 });
 
 describe("motionSafe", () => {

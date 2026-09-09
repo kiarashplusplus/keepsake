@@ -59,12 +59,16 @@ export function FieldFrame({ label, helper, error, count, maxLength, style, chil
 }
 
 /** The lined-index-card look shared by every field control: kraft paper, mono
- * type, and a 2px ink baseline that thickens and turns stamp-red on focus
- * (the baseline IS the focus ring), taken over by the error colour when
- * there is one. Returned as plain values rather than a style object so both
- * a react-native `TextInput` and a DOM `<input>` can spend them — the two
- * disagree on `paddingHorizontal` vs `paddingLeft`/`paddingRight`, and on
- * nothing else that matters here. */
+ * type, and a 2px ink baseline that thickens and turns brass/gold
+ * (`colors.focus`) on focus (the baseline IS the focus ring), taken over by
+ * the red `colors.danger` when there is an error. Focus and error used to
+ * share one maroon value (issue #373 finding 6) — a valid, focused field
+ * drew the same rule as an invalid one. They are now visually distinct
+ * hues, and `hasError` still wins when both are true (mirrors an invalid
+ * field's own focus). Returned as plain values rather than a style object
+ * so both a react-native `TextInput` and a DOM `<input>` can spend them —
+ * the two disagree on `paddingHorizontal` vs `paddingLeft`/`paddingRight`,
+ * and on nothing else that matters here. */
 export const FIELD_MIN_HEIGHT = 44;
 export const FIELD_FONT_SIZE = 15;
 export const FIELD_FONT_FAMILY = "CourierPrime";
