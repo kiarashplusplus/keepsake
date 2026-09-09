@@ -190,6 +190,11 @@ test.describe("ux baseline", () => {
     const changeLocation = page.getByLabel(/^Near · 25 mi of 02144/);
     if (await changeLocation.isVisible()) await changeLocation.click();
     await expect(page.getByLabel("Postcode")).toHaveValue("02144");
+    // Framed on the last row of the controls rather than the top of the page:
+    // at 1280 the hero and the chips fill the fold, so without this the frame
+    // is `feed` again with a "Near" eyebrow at the bottom edge. A no-op at
+    // 390px, where the expanded panel is already on screen.
+    await page.getByLabel("Anywhere", { exact: true }).scrollIntoViewIfNeeded();
     await shot(page, testInfo, "feed-location");
 
     // --- Nothing near you ---------------------------------------------------
