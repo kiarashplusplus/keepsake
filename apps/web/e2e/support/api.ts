@@ -184,6 +184,29 @@ export async function sendRequest(
   return readData<{ id: string }>(response);
 }
 
+/**
+ * `POST /api/listings/:id/given` as the listing's own owner — the same call
+ * the dashboard's "Mark given" button fires.
+ *
+ * The UX baseline uses it to hold one keepsake permanently in the `given`
+ * state (`demoCatalog.ts`'s `DEMO_GIVEN_LISTING`): the item page's `Given`
+ * stamp and its missing "I'd love this" button are a real screen nobody had
+ * a frame of, and `GET /api/listings/:id` answers for `given` while the feed
+ * (`status = 'approved'`, `apps/api/src/routes/feed.ts`) does not — so the
+ * keepsake that carries it never appears on the table and no other frame
+ * moves because it exists.
+ */
+export async function markListingGiven(
+  request: APIRequestContext,
+  listingId: string,
+  ownerToken: string,
+): Promise<void> {
+  const response = await request.post(`/api/listings/${listingId}/given`, {
+    headers: ownerHeaders(ownerToken),
+  });
+  await readData(response);
+}
+
 export function adminHeaders(clientIp = freshClientIp()): Record<string, string> {
   return { Authorization: `Bearer ${ADMIN_TOKEN}`, "CF-Connecting-IP": clientIp };
 }

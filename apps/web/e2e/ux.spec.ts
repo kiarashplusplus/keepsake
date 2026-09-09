@@ -13,10 +13,22 @@
  * It does not run under `pnpm --filter @keepsake/web e2e`. The two projects
  * that own these captures only exist when `UX_SHOTS` is set — `pnpm --filter
  * @keepsake/web e2e:ux` sets it — so an ordinary suite run can never rewrite
- * 40-odd committed PNGs as a side effect, and a capture run always gets a
+ * the whole committed set as a side effect, and a capture run always gets a
  * freshly wiped database rather than one the functional specs have been
  * posting into (`playwright.config.ts` turns `reuseExistingServer` off for
  * exactly that reason).
+ *
+ * **A state that only this file can produce is not a state.** Everything
+ * photographed here is reached the way a visitor reaches it — a URL, a click,
+ * a real API call as the owner or the admin. Where a state needed a fixture
+ * that did not exist (a postcode with nothing near it, a keepsake already
+ * given away, a device with no batches) the fixture was added to
+ * `support/global-setup.mjs` / `support/demoCatalog.ts` and the screen was
+ * then reached normally, rather than a screen being rendered here that the
+ * product cannot reach. Sheets that would change the fixture — the category
+ * picker, the delete confirmation, the admin reject sheet — are opened and
+ * then dismissed: both projects share one database, so a confirmed one would
+ * leave the other project photographing a different product.
  *
  * **Every capture is preceded by an assertion that the screen is actually
  * there.** A screenshot spec with nothing in front of it passes just as
@@ -32,12 +44,20 @@
  * suite runs under — see `playwright.config.ts`'s header.
  */
 import { test, expect, onScreen, openFreshContext, seedOwnerToken } from "./support/fixtures";
-import { ADMIN_TOKEN, freshClientIp, ownerHeaders, OWNER_TOKEN_STORAGE_KEY } from "./support/api";
+import {
+  ADMIN_TOKEN,
+  freshClientIp,
+  mintOwnerToken,
+  ownerHeaders,
+  OWNER_TOKEN_STORAGE_KEY,
+} from "./support/api";
+import { MODERATION_REASONS } from "@keepsake/contracts/listing";
 import { BASE_URL } from "./support/constants";
 import { seedConsent } from "./support/consent";
 import { seedVisited } from "./support/visited";
 import { DEMO_PHOTOS, readDemoPhoto } from "./support/demoPhotos";
 import {
+  DEMO_GIVEN_LISTING,
   DEMO_HIDDEN_LISTING,
   DEMO_LISTINGS,
   DEMO_OWNER_TOKEN,
@@ -152,6 +172,42 @@ test.describe("ux baseline", () => {
     // reach — which is exactly the state this frame is supposed to show.
     await nothingHere.scrollIntoViewIfNeeded();
     await shot(page, testInfo, "feed-search-empty");
+
+    // --- The location controls, with a location actually set ----------------
+    // Every frame above is taken at the default "anywhere", where four rows
+    // of controls sit behind one summary line on a phone (issue #219) and
+    // untouched at the top of the page on a desktop — so the country chips,
+    // the postcode field and the radius chips have never been in a frame at
+    // either width. The params come from the URL rather than from typing,
+    // because that is the state a shared feed link reproduces
+    // (`features/feed/feedUrlParams.ts`) and it is the same state at both
+    // viewports.
+    await page.goto("/?country=US&postal=02144&radius_mi=25");
+    await expect(page.getByLabel(DEMO_LISTINGS[5]!.title, { exact: true })).toBeVisible();
+    // Narrow only: at 1280 the disclosure button is `display: none` and the
+    // `LocationBar` is already open, so this one frame shows the same
+    // controls at both widths instead of two different screens.
+    const changeLocation = page.getByLabel(/^Near · 25 mi of 02144/);
+    if (await changeLocation.isVisible()) await changeLocation.click();
+    await expect(page.getByLabel("Postcode")).toHaveValue("02144");
+    await shot(page, testInfo, "feed-location");
+
+    // --- Nothing near you ---------------------------------------------------
+    // The third of `features/feed/emptyState.ts`'s three empty states, and
+    // the only one with no frame: not an empty catalogue, not a search that
+    // missed, but a radius that is genuinely too tight. Every keepsake this
+    // suite seeds is in eastern Massachusetts, so it takes a postcode a long
+    // way from them — `global-setup.mjs` seeds 99501 for exactly this, and
+    // nothing is ever listed there.
+    await page.goto("/?country=US&postal=99501&radius_mi=10");
+    await expect(page.getByText(/Nothing within 10 mi of 99501/)).toBeVisible();
+    // Framed on the button rather than the heading: this state's whole
+    // argument is that it offers a way out of itself (#220), and at 390px
+    // the two actions are a screenful below the words.
+    const widen = page.getByLabel("Widen to 25 mi");
+    await expect(widen).toBeVisible();
+    await widen.scrollIntoViewIfNeeded();
+    await shot(page, testInfo, "feed-radius-empty");
   });
 
   test("an item page, and the two sheets it opens", async ({ page, request }, testInfo) => {
@@ -185,6 +241,22 @@ test.describe("ux baseline", () => {
     await page.getByLabel("Report").click();
     await expect(page.getByRole("radio", { name: "Spam" })).toBeVisible();
     await shot(page, testInfo, "item-report-sheet");
+
+    // The keepsake somebody already has. `GET /api/listings/:id` answers for
+    // `given` as well as `approved`, so this is a live page a stranger still
+    // reaches from an old link or a card that unfurled in a group chat — and
+    // it is the only item page with a `Given` stamp under the print and no
+    // way to ask for it. `demoCatalog.ts` keeps one listing permanently in
+    // that state; the feed never shows it.
+    await page.goto(`/item/${catalog.givenId}`);
+    await expect(page.getByText(DEMO_GIVEN_LISTING.title, { exact: true })).toBeVisible();
+    await expect(page.getByLabel("I'd love this")).toHaveCount(0);
+    // Stacked at 390px the stamp is below the print, which is the half of
+    // this screen the frame is for.
+    const givenStamp = page.getByText("Given", { exact: true });
+    await expect(givenStamp).toBeVisible();
+    await givenStamp.scrollIntoViewIfNeeded();
+    await shot(page, testInfo, "item-given");
   });
 
   test("the give flow, all five steps and the stamp at the end", async ({
@@ -298,6 +370,40 @@ test.describe("ux baseline", () => {
     await expect(page.getByText(DEMO_LISTINGS[0]!.title, { exact: true }).first()).toBeVisible();
     await shot(page, testInfo, "mine");
 
+    // --- A listing nobody has asked for yet ---------------------------------
+    // The frames below are the same screen with two requests on it, which is
+    // what this dashboard is *for* — but every listing starts here, and this
+    // is where the status line, the giver's category correction (#155) and
+    // the owner actions live with nothing in front of them. `plane` is used
+    // because neither project ever sends a request to it.
+    await page.goto(`/mine/${catalog.ids.plane}`);
+    await expect(page.getByText(DEMO_LISTINGS[3]!.title, { exact: true })).toBeVisible();
+    await shot(page, testInfo, "mine-detail");
+
+    // The model picked this category and the giver is allowed to disagree
+    // (#155) — a picker that has never been in a frame. Opened and then
+    // dismissed: choosing here would rewrite the fixture's category and the
+    // *other* project would photograph a different card.
+    await page.getByLabel("Change category").click();
+    await expect(page.getByText("What is it?", { exact: true })).toBeVisible();
+    await shot(page, testInfo, "mine-detail-category");
+    await page.keyboard.press("Escape");
+
+    // The one destructive confirmation in the product a giver can reach.
+    // Opened from the page's own Delete (`.first()` — the sheet renders a
+    // second button with the same label) and cancelled, never confirmed.
+    await page.getByLabel("Delete", { exact: true }).first().click();
+    await expect(page.getByText("This can't be undone.")).toBeVisible();
+    await shot(page, testInfo, "mine-detail-delete");
+    await page.getByLabel("Cancel", { exact: true }).click();
+
+    // And the end state: given away, so there is nothing left to choose, no
+    // category to correct and no withdrawing it.
+    await page.goto(`/mine/${catalog.givenId}`);
+    await expect(page.getByText(DEMO_GIVEN_LISTING.title, { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Mark given")).toHaveCount(0);
+    await shot(page, testInfo, "mine-detail-given");
+
     // The listing two strangers have asked for: the notes are on the page,
     // the addresses are masked until Choose. That masking is the screen's
     // whole design argument, so it is worth a frame of its own.
@@ -339,7 +445,7 @@ test.describe("ux baseline", () => {
     await shot(page, testInfo, "mine-email");
   });
 
-  test("the estate bulk workspace", async ({ page, context, request }, testInfo) => {
+  test("the estate bulk workspace", async ({ page, context, request, browser }, testInfo) => {
     // New with the bulk-upload pilot (PR #263) — `ensureDemoBulkBatch`
     // seeds one batch for `DEMO_OWNER_TOKEN`: two photos grouped into a
     // filled-in, ready item, and a third left unassigned in the tray, so
@@ -352,6 +458,28 @@ test.describe("ux baseline", () => {
     await expect(page.getByText("Give several items")).toBeVisible();
     await expect(page.getByText("UX baseline — estate batch", { exact: true })).toBeVisible();
     await shot(page, testInfo, "bulk-batches");
+
+    // The same screen before there is anything to list — the invitation card
+    // alone, which is what every first visit to `/bulk` looks like and is a
+    // different page from the one above at 390px. A freshly minted owner
+    // token is a device the server has never seen: `GET /api/bulk/batches`
+    // answers 401 and `app/bulk/index.tsx` renders that as the honest empty
+    // list rather than an error (see its `unauthorized` branch).
+    const newcomer = await openFreshContext(browser, CAPTURE_CONTEXT);
+    await seedOwnerToken(newcomer, mintOwnerToken());
+    const newcomerPage = await newcomer.newPage();
+    await newcomerPage.goto("/bulk");
+    await expect(newcomerPage.getByLabel("Start a new batch")).toBeVisible();
+    await expect(newcomerPage.getByText("UX baseline — estate batch")).toHaveCount(0);
+    // A context this fresh loads the route's own split chunk cold, and
+    // `useChunkRecoveryGuard` (#272) reloads the page once if that fetch
+    // loses its race — which lands inside `shot()` as "execution context
+    // destroyed" rather than as a failed assertion. Letting the network go
+    // quiet first puts that reload, if it happens at all, before the
+    // capture instead of during it.
+    await newcomerPage.waitForLoadState("networkidle");
+    await shot(newcomerPage, testInfo, "bulk-batches-empty");
+    await newcomer.close();
 
     // Started, not submitted: a filled name and postcode, one tap from
     // creating a *second* batch — which this frame deliberately never does,
@@ -413,6 +541,15 @@ test.describe("ux baseline", () => {
     await expect(page.getByText(/link didn.t work/)).toBeVisible();
     await shot(page, testInfo, "recover-bad-link");
 
+    // `/confirm/:token` is the step that makes a request real (#188), and
+    // the whole route was missing from this baseline. Same reason as the two
+    // below: there is no inbox here, so the state every stale, reused or
+    // mistyped link lands in is the one a capture can show — and it is the
+    // one whose copy has to carry the weight.
+    await page.goto("/confirm/not-a-real-token");
+    await expect(page.getByText("That link didn't work")).toBeVisible();
+    await shot(page, testInfo, "confirm-bad-link");
+
     await page.goto("/withdraw/not-a-real-token");
     await expect(page.getByText("That link didn't work")).toBeVisible();
     await shot(page, testInfo, "withdraw-bad-link");
@@ -431,15 +568,61 @@ test.describe("ux baseline", () => {
 
     await page.getByLabel("Admin token").fill(ADMIN_TOKEN);
     await page.getByLabel("Enter").click();
-    await expect(page.getByRole("tablist", { name: "Queue status" })).toBeVisible();
+    const queueTabs = page.getByRole("tablist", { name: "Queue status" });
+    await expect(queueTabs).toBeVisible();
     await shot(page, testInfo, "admin-queue");
 
-    await page
-      .getByRole("tablist", { name: "Queue status" })
-      .getByLabel("Hidden", { exact: true })
-      .click();
+    // The queue the frame above is named after is not in it: at both
+    // viewports `StatsStrip` fills the fold, so `admin-queue` is eleven
+    // counters and the crons. This is what is under them — the two tablists
+    // and the tab a moderator opens on. `MOCK_AI` approves everything this
+    // suite seeds, so "Needs review" is legitimately clear, which is also
+    // the state it is in on most real days.
+    await queueTabs.scrollIntoViewIfNeeded();
+    await expect(page.getByText("Nothing waiting.")).toBeVisible();
+    await shot(page, testInfo, "admin-queue-empty");
+
+    await queueTabs.getByLabel("Hidden", { exact: true }).click();
     await expect(page.getByText(DEMO_HIDDEN_LISTING.title, { exact: true })).toBeVisible();
     await shot(page, testInfo, "admin-hidden");
+
+    // Selection and the bulk toolbar it raises. Neither had a frame, and the
+    // bar is a band of `accentSoft` with an outlined toolbar on it that
+    // exists on no other screen in the product.
+    await page.getByLabel(`Select ${DEMO_HIDDEN_LISTING.title}`).click();
+    await expect(page.getByText("1 selected")).toBeVisible();
+    await shot(page, testInfo, "admin-hidden-selected");
+    await page.getByLabel("Clear selection").click();
+
+    // The reject sheet — the one moderation control that is a closed list of
+    // reasons rather than a free-text box, and the longest sheet in the
+    // product. Opened from the card and dismissed with Escape: confirming it
+    // would reject the fixture the Hidden tab is captured against, and the
+    // other project runs against the same database.
+    await page.getByLabel("Reject", { exact: true }).click();
+    await expect(page.getByText("Reject this listing", { exact: true })).toBeVisible();
+    await expect(page.getByText(MODERATION_REASONS.not_an_object, { exact: true })).toBeVisible();
+    await shot(page, testInfo, "admin-reject-sheet");
+    await page.keyboard.press("Escape");
+
+    // The Observatory (the other half of `/admin`, behind the section
+    // tablist) has never been photographed at all. Locally most of its
+    // sources are unconfigured — there is no Analytics Engine behind
+    // `wrangler dev` — and that is worth a frame in itself: "not configured"
+    // and "the call failed" are drawn differently on purpose
+    // (`Observatory.tsx`'s header), and this is the only place to see that
+    // distinction rendered rather than described.
+    await page.getByRole("tablist", { name: "Admin sections" }).getByLabel("Observatory").click();
+    const moderationHeading = page.getByText("Moderation", { exact: true });
+    await expect(moderationHeading).toBeVisible();
+    await shot(page, testInfo, "admin-observatory");
+
+    // The panel reads top to bottom in a deliberate order and the frame above
+    // only reaches the first section of it. This is the half made of badge
+    // grids and age rows, which is a different layout problem from the alert
+    // cards above them.
+    await moderationHeading.scrollIntoViewIfNeeded();
+    await shot(page, testInfo, "admin-observatory-app");
   });
 
   test("the dark table", async ({ browser, request }, testInfo) => {
@@ -482,6 +665,30 @@ test.describe("ux baseline", () => {
     await page.goto("/recover");
     await expect(page.getByText("Get back in.")).toBeVisible();
     await shot(page, testInfo, "dark-recover");
+
+    // The giver's own detail page in the dark: an index card, a status
+    // eyebrow in one of seven colours, and four buttons in three variants —
+    // more of the palette on one screen than anything else the dark set
+    // photographs.
+    await page.goto(`/mine/${catalog.ids.plane}`);
+    await expect(page.getByText(DEMO_LISTINGS[3]!.title, { exact: true })).toBeVisible();
+    await shot(page, testInfo, "dark-mine-detail");
+
+    // An empty state and a rubber stamp with no photograph anywhere near
+    // them — the one composition on the dark table that has nothing but ink
+    // and paper to hold it up.
+    await page.goto("/no-such-page");
+    await expect(page.getByText(/That keepsake isn.t here/)).toBeVisible();
+    await shot(page, testInfo, "dark-not-found");
+
+    // `/admin` in the dark, which is where the palette is under the most
+    // pressure: eleven outlined counters, two rows of chips and the red
+    // cron badges, none of which appear anywhere else in the product.
+    await page.goto("/admin");
+    await page.getByLabel("Admin token").fill(ADMIN_TOKEN);
+    await page.getByLabel("Enter").click();
+    await expect(page.getByRole("tablist", { name: "Queue status" })).toBeVisible();
+    await shot(page, testInfo, "dark-admin");
 
     await context.close();
   });
