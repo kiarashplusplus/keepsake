@@ -2,6 +2,7 @@ import * as React from "react";
 import { act, fireEvent, render } from "@testing-library/react-native";
 import type { OwnerListing } from "@keepsake/contracts/listing";
 import { clampCardAspectRatio } from "@/lib/masonry";
+import { storyExcerpt } from "@/lib/storyExcerpt";
 import { ToastProvider } from "@/ui/Toast";
 import { GiveDraftProvider } from "@/features/give/GiveDraftContext";
 import { GIVE_DRAFT_INITIAL, GIVE_DRAFT_STORAGE_KEY, serializeGiveDraft } from "@/features/give/giveDraft";
@@ -339,20 +340,7 @@ describe("give/review", () => {
     expect(styleOf(photoBox).width).toBe("100%");
   });
 
-  /**
-   * Issue #373 finding 3 (mobile). The review card used to show
-   * `storyExcerpt(draft.story)` clamped to `numberOfLines={2}` — the same cut
-   * the feed card makes for a teaser. On the one screen whose whole job is
-   * proofreading the words about to be published, that meant a story past
-   * two short lines was cut off mid-sentence with no way to see, or fix,
-   * what came after — the baseline caught "...Sunday of my childhood and
-   * ha…". Revert the fix (bring back `storyExcerpt`/`numberOfLines={2}`) and
-   * this fails: the rendered tree stops containing the story's back half.
-   */
-  it("shows the full story on the review card, not a truncated excerpt", () => {
-    const longStory =
-      "It sat on my mother's table every Sunday of my childhood and has traveled with our family through four house moves since. " +
-      "I finally have to let it go because there is no room for it in my new apartment, but I want it to go to someone who will love it the way we did.";
+  function seedLongStoryDraft(longStory: string): void {
     window.sessionStorage.setItem(
       GIVE_DRAFT_STORAGE_KEY,
       serializeGiveDraft({
@@ -378,17 +366,61 @@ describe("give/review", () => {
         ],
       }),
     );
+  }
 
+  const LONG_STORY =
+    "It sat on my mother's table every Sunday of my childhood and has traveled with our family through four house moves since. " +
+    "I finally have to let it go because there is no room for it in my new apartment, but I want it to go to someone who will love it the way we did.";
+
+  /**
+   * Issue #373 finding 3 (mobile), first half. The review card is a
+   * deliberate mirror of `src/features/feed/ListingCard.tsx` — same excerpt
+   * cut, same `numberOfLines={2}` — because its job is showing what a
+   * stranger scrolling the table will actually see, cut included. An
+   * earlier version of this fix removed the clamp from the card itself,
+   * which meant the giver could no longer notice *that* their story gets
+   * cut, only read a full story nowhere resembling any real card. Revert to
+   * that (drop `numberOfLines={2}`/`storyExcerpt` from the print) and this
+   * fails: no node in the print carries the 2-line clamp any more.
+   */
+  it("keeps the feed's excerpt cut on the review card itself", () => {
+    seedLongStoryDraft(LONG_STORY);
     const { toJSON } = renderReview();
-    const rendered = JSON.stringify(toJSON());
 
+    const excerptNode = flatten(toJSON() as unknown as Node).find(
+      (node) =>
+        Array.isArray(node.children) &&
+        node.children.some((child) => typeof child === "string" && child === storyExcerpt(LONG_STORY)),
+    );
+    if (excerptNode === undefined) throw new Error("no node renders the card's story excerpt");
+    // react-native-web turns `numberOfLines` into a `-webkit-line-clamp`
+    // rule on the node's own style rather than passing it through as a DOM
+    // prop — there is no `numberOfLines` attribute to read back.
+    expect(Number(styleOf(excerptNode).WebkitLineClamp)).toBe(2);
+  });
+
+  /**
+   * Issue #373 finding 3 (mobile), second half. Before this, the full story
+   * appeared nowhere on this step at all — `docs/qa/baseline/ux-mobile/
+   * give-5-review-submit.jpg` shows the date-of-birth field sitting directly
+   * under the card with nothing between them. A story past the card's two
+   * lines was simply gone until it was already live; the baseline caught
+   * one cut mid-sentence. Revert the fix (remove the full-story block below
+   * the print) and this fails: nothing in the tree carries the story's back
+   * half un-clamped.
+   */
+  it("shows the full story below the card, unclamped, for proofreading", () => {
+    seedLongStoryDraft(LONG_STORY);
+    const { toJSON } = renderReview();
+
+    const rendered = JSON.stringify(toJSON());
     expect(rendered).toContain("someone who will love it the way we did");
 
-    const storyNode = flatten(toJSON() as unknown as Node).find(
-      (node) => Array.isArray(node.children) && node.children.some((child) => typeof child === "string" && child.includes(longStory)),
+    const fullStoryNode = flatten(toJSON() as unknown as Node).find(
+      (node) => Array.isArray(node.children) && node.children.some((child) => typeof child === "string" && child === LONG_STORY),
     );
-    if (storyNode === undefined) throw new Error("no node renders the full story text");
-    expect(storyNode.props.numberOfLines).toBeUndefined();
+    if (fullStoryNode === undefined) throw new Error("no node renders the full, unclamped story");
+    expect(styleOf(fullStoryNode).WebkitLineClamp).toBeUndefined();
   });
 
   /**
@@ -399,13 +431,19 @@ describe("give/review", () => {
    * a portrait cover tall enough to push the title, the story, the age gate
    * and "Give it" below the fold entirely. Revert the fix (bring back
    * `alignSelf: "stretch"` with no `maxWidth`) and this fails.
+   *
+   * Anchored on `data-ks-print="drop"` — the attribute `Print.web.tsx`'s
+   * entrance animation selects, and the only one in this tree — rather than
+   * "the first node with a `maxWidth`": `Page`'s prose measure carries one
+   * too, and an unrelated change there would let that satisfy a looser
+   * query without ever looking at the print.
    */
   it("caps the review print's width instead of letting it stretch to the full measure", () => {
     seedDraft();
     const { toJSON } = renderReview();
 
-    const printNode = flatten(toJSON() as unknown as Node).find((node) => styleOf(node).maxWidth !== undefined);
-    if (printNode === undefined) throw new Error("no node in the review print carries a maxWidth");
+    const printNode = flatten(toJSON() as unknown as Node).find((node) => node.props["data-ks-print"] === "drop");
+    if (printNode === undefined) throw new Error("no node in the tree is the review print");
 
     // react-native-web renders resolved CSS length strings ("340px"), not
     // the raw numbers passed in — hence `parseFloat` rather than `Number`.

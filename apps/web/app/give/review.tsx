@@ -31,6 +31,7 @@ import { getMyListing } from "@/api/me";
 import { ApiError } from "@/api/client";
 import { useDraftPhotoSource } from "@/features/give/photoSource";
 import { clampCardAspectRatio } from "@/lib/masonry";
+import { storyExcerpt } from "@/lib/storyExcerpt";
 import { shareListing } from "@/lib/share";
 import { useToast } from "@/ui/Toast";
 import { track } from "@/lib/analytics";
@@ -349,8 +350,13 @@ export default function GiveReview(): React.ReactElement {
             the result. Everything below mirrors
             `src/features/feed/ListingCard.tsx`: the same 10px print padding,
             the photo filling the width at its own clamped aspect ratio, then
-            the story, the title and one caption line, in that order and at
-            the same type variants.
+            the story excerpt, the title and one caption line, in that order
+            and at the same type variants. That mirror is deliberate, not
+            incidental (see the "why not just render `ListingCard`" note
+            below) — the excerpt cut stays exactly as the card makes it,
+            because this preview's job is showing what a stranger scrolling
+            the table will actually see, cut included. The full story lives
+            below the print instead (issue #373 finding 3, below).
 
             Why not just render `ListingCard` here? It takes a
             `PublicListing` — an id, a resolved `place_name`/`admin1`, a
@@ -401,18 +407,17 @@ export default function GiveReview(): React.ReactElement {
             />
           </View>
           <View style={{ paddingTop: space.md, paddingHorizontal: space.xs, gap: space.xxs }}>
-            {/* Issue #373 finding 3: this used to be `storyExcerpt(draft.story)`
-                clamped to 2 lines — the same cut the feed card makes, on the
-                one screen whose entire point is proofreading the words about
-                to be published. A giver whose story ran past two short lines
-                could never see, let alone fix, what came after "…" here; the
-                mobile baseline caught one mid-sentence. The feed's excerpt
-                rule stays exactly as it is (`ListingCard` is untouched) —
-                this is the one place in the app that intentionally shows the
-                *whole* story rather than a preview of it, same as the item
-                page's `storyBlock` does with `listing.story`. */}
-            <Text variant="storyExcerpt" color="textSecondary" hangingPunctuation>
-              “{draft.story.trim()}”
+            {/* `storyExcerpt` rather than the `slice(0, 140)` that used to
+                be inlined here: the card and this preview have to cut the
+                story at the same place, or the preview is a preview of
+                something else. That function's own header comment has
+                pointed at this file since it was extracted. Issue #373
+                finding 3: keep this cut, on purpose — it is what a stranger
+                scrolling the table will see, and the giver should be able to
+                notice it (and only it, not a rewritten one) before
+                publishing. What it cuts off is proofread below, in full. */}
+            <Text variant="storyExcerpt" color="textSecondary" numberOfLines={2} hangingPunctuation>
+              “{storyExcerpt(draft.story)}”
             </Text>
             <Text variant="title" numberOfLines={1}>
               {draft.title || "Untitled"}
@@ -430,6 +435,25 @@ export default function GiveReview(): React.ReactElement {
             </Text>
           </View>
         </Print>
+
+        {/* Issue #373 finding 3: the card above is a preview of what a
+            stranger will see on the table — the excerpt cut and all — not a
+            place to proofread from. Before this, the full story appeared
+            nowhere on this step: `docs/qa/baseline/ux-mobile/give-5-review-
+            submit.jpg` shows the date-of-birth field sitting directly under
+            the card with nothing between them, so a story that ran past the
+            card's two lines was simply gone until it was already live. This
+            is the one place in the flow that shows the *whole* story rather
+            than a preview of it — same treatment as the item page's
+            `storyBlock` renders `listing.story` (`bodyLg`/`inkSoft`, no
+            quotes: read as the giver's own words, not a caption). "In your
+            words" names it as the thing being checked, not a second card. */}
+        <View style={{ gap: space.sm }}>
+          <Eyebrow>In your words</Eyebrow>
+          <Text variant="bodyLg" color="inkSoft">
+            {draft.story.trim()}
+          </Text>
+        </View>
 
         <AgeGateField value={dateOfBirth} onChangeText={setDateOfBirth} touched={dobTouched} onBlur={() => setDobTouched(true)} />
 
