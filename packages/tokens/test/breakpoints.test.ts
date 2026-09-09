@@ -15,6 +15,7 @@ const CONSUMED = [
   ["--ks-wide-only", "none"],
   ["--ks-chips-wrap", "nowrap"],
   ["--ks-chips-fade", "flex"],
+  ["--ks-chips-shrink", "0"],
   ["--ks-hero-fvs", type.displayLg.fontVariationSettings],
 ] as const;
 
@@ -50,6 +51,7 @@ describe("the viewport stylesheet", () => {
     const chipsBlock = css.slice(css.indexOf(`@media (min-width: ${breakpoint.categoryChips}px)`));
     expect(chipsBlock).toContain("--ks-chips-wrap: wrap;");
     expect(chipsBlock).toContain("--ks-chips-fade: none;");
+    expect(chipsBlock).toContain("--ks-chips-shrink: 1;");
   });
 
   it("takes the hero's two variation settings from the type scale, not from a copy of it", () => {

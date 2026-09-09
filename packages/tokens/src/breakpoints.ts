@@ -82,6 +82,7 @@ export function viewportCssVariables(): string {
     "  --ks-wide-only: none;",
     "  --ks-chips-wrap: nowrap;",
     "  --ks-chips-fade: flex;",
+    "  --ks-chips-shrink: 0;",
     `  --ks-hero-fvs: ${typeScale.displayLg.fontVariationSettings};`,
     "}",
     `@media (min-width: ${breakpoint.narrow}px) {`,
@@ -89,7 +90,7 @@ export function viewportCssVariables(): string {
     `  :root { --ks-hero-fvs: ${typeScale.displayXl.fontVariationSettings}; }`,
     "}",
     `@media (min-width: ${breakpoint.categoryChips}px) {`,
-    "  :root { --ks-chips-wrap: wrap; --ks-chips-fade: none; }",
+    "  :root { --ks-chips-wrap: wrap; --ks-chips-fade: none; --ks-chips-shrink: 1; }",
     "}",
   ].join("\n");
 }

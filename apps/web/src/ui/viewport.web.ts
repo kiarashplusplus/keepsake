@@ -31,6 +31,7 @@ const WEB_VIEWPORT: Viewport = {
   step: (narrow, wide) =>
     narrow === wide ? narrow : (`calc(${narrow}px + var(--ks-wide, 0) * ${wide - narrow}px)` as unknown as number),
   chipsWrap: "var(--ks-chips-wrap, nowrap)" as unknown as ViewStyle["flexWrap"],
+  chipsShrink: "var(--ks-chips-shrink, 0)" as unknown as ViewStyle["flexShrink"],
   chipsFade: { display: "var(--ks-chips-fade, flex)" } as unknown as ViewStyle,
 };
 

@@ -60,8 +60,13 @@ function navStyle(active: boolean, colors: ReturnType<typeof useColors>): ViewSt
 function NavLink({ href, label, active, style }: { href: Href; label: string; active: boolean; style?: ViewStyle }): React.ReactElement {
   const colors = useColors();
   return (
+    // Flattened, not an array: `Link asChild` hands this `Pressable`'s props
+    // through expo-router's slot, and in the static export an array style
+    // reached the DOM as `style="0:[object Object];1:[object Object]"` —
+    // every rule in it lost, including the `display` switch that is supposed
+    // to hide `Browse` on a phone. A single object survives the trip.
     <Link href={href} asChild>
-      <Pressable accessibilityRole="link" accessibilityState={{ selected: active }} style={[navStyle(active, colors), style]}>
+      <Pressable accessibilityRole="link" accessibilityState={{ selected: active }} style={StyleSheet.flatten([navStyle(active, colors), style])}>
         <Text variant="label" color="ink" style={{ fontSize: 12 }}>
           {label}
         </Text>

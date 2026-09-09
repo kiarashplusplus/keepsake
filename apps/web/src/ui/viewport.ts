@@ -27,6 +27,7 @@ export function useViewport(): Viewport {
     wideOnly: narrow ? HIDDEN : SHOWN,
     step: (narrowValue, wideValue) => (narrow ? narrowValue : wideValue),
     chipsWrap: chipsScroll ? "nowrap" : "wrap",
+    chipsShrink: chipsScroll ? 0 : 1,
     chipsFade: chipsScroll ? SHOWN : HIDDEN,
   };
 }

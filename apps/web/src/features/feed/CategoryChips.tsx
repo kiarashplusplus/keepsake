@@ -125,7 +125,15 @@ export function CategoryChips({ value, onChange }: CategoryChipsProps): React.Re
         // edge when scrolled to the end. `flexWrap` is the whole width
         // switch: `nowrap` and this scrolls, `wrap` and it is the wrapping
         // row a desktop always had, with nothing left to scroll.
-        contentContainerStyle={{ flexDirection: "row", flexWrap: vp.chipsWrap, gap: space.sm, paddingEnd: space.sm }}
+        // `flexShrink` has to step with `flexWrap`: react-native-web gives
+        // every View `flex-shrink: 0`, and this container is a flex item of a
+        // row-direction scroller, so at 0 it is sized to its unwrapped content
+        // and `wrap` never gets a narrower box to wrap into — the desktop row
+        // scrolled sideways with the fade hidden. At 1 it shrinks to the
+        // scroller's width and wraps; it stays 0 while scrolling so
+        // `onContentSizeChange` still measures the full row and the fade still
+        // knows there is more.
+        contentContainerStyle={{ flexDirection: "row", flexWrap: vp.chipsWrap, flexShrink: vp.chipsShrink, gap: space.sm, paddingEnd: space.sm }}
       >
         {chips}
       </ScrollView>

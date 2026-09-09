@@ -28,5 +28,8 @@ export type Viewport = {
    * the row still scrolls.
    */
   chipsWrap: ViewStyle["flexWrap"];
+  /** Steps with `chipsWrap`: `0` while the row scrolls, `1` once it wraps —
+   * see `CategoryChips.tsx` for why a wrapping content container needs it. */
+  chipsShrink: ViewStyle["flexShrink"];
   chipsFade: ViewStyle;
 };
