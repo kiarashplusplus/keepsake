@@ -126,8 +126,16 @@ export function CategoryChips({ value, onChange }: CategoryChipsProps): React.Re
     bottom: 0,
     right: 0,
     width: FADE_WIDTH,
-    alignItems: "center",
+    // The chevron sits at the *opaque* end of the band, not its middle. The
+    // first capture after #380 (docs/qa/baseline/ux-mobile/feed.jpg) showed
+    // why: centred, the glyph landed 24px in, where the gradient is only
+    // ~60% surface, so it printed on top of the trailing chip's own letters
+    // — "JEWELRY›&" — which reads as a rendering fault, the exact thing this
+    // affordance exists to stop the row looking like. At `flex-end` it sits
+    // over the 100% stop, on clean paper, with the chip dissolving behind it.
+    alignItems: "flex-end",
     justifyContent: "center",
+    paddingRight: space.xs,
     ...({ backgroundImage: `linear-gradient(to right, ${colors.surface}00 0%, ${colors.surface}99 60%, ${colors.surface} 100%)` } as ViewStyle),
     ...vp.chipsFade,
   };

@@ -63,6 +63,11 @@ describe("CategoryChips overflow affordance (issue #219, strengthened for #373 f
     // pointer-transparent, AT-hidden node as the fade so it carries the same
     // guarantees rather than needing its own.
     expect(fade?.props.children).toBeTruthy();
+    // ...and it sits at the opaque end of the band rather than its middle:
+    // centred, it printed over the trailing chip's letters in the baseline
+    // frame taken right after #380 landed. `flex-end` is what keeps the
+    // glyph on clean paper.
+    expect(fadeStyle.alignItems).toBe("flex-end");
 
     const scroller = UNSAFE_getByType(ScrollView);
     fireEvent.scroll(scroller, scrollEvent(0, 350, 900));
