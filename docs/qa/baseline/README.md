@@ -48,16 +48,17 @@ set (one look at the palette is evidence; two are bytes):
 
 | Prefix | Screens |
 | --- | --- |
-| `welcome`, `consent-banner` | The two things a stranger sees before the feed |
-| `feed*` | The table, a category chip, a search with no answer, the location controls in force, and a radius with nothing inside it |
-| `item*` | An item page, the request sheet empty / filled / sent, the report sheet, and one keepsake that has already been given |
-| `give-1`…`give-6` | Every step of the give wizard, including the autofilled title and the live stamp |
-| `mine*` | The giver's own listings, one nobody has asked for (with its category picker and its delete confirmation), one already given, a request they can choose, the choose sheet, the chosen state, the email screen |
+| `welcome`, `consent-banner`, `consent-choices` | The two things a stranger sees before the feed, and the per-category privacy panel behind "Choose what to allow" |
+| `feed*` | The table, a category chip, a search that finds one keepsake and a search with no answer, the location controls in force, and a radius with nothing inside it |
+| `item*` | An item page (with a real carousel and the vision model's annotation under the story), the request sheet empty / filled / sent, the report sheet, one keepsake that has already been given, and the not-found page a link to a keepsake that is no longer public lands on |
+| `give-1`…`give-6` | Every step of the give wizard, including the autofilled title, the wizard refusing a story that is too short, and the live stamp |
+| `mine*` | The giver's own listings, one nobody has asked for (with its category picker and its delete confirmation), one already given, one a moderator rejected and one reports took down, a request they can choose, the choose sheet, the chosen state, the email screen |
 | `bulk*` | The estate workspace: an empty batch list, a started batch, photos, review, submit |
 | `recover*`, `confirm-bad-link`, `withdraw-bad-link`, `not-found` | The screens on the end of a link |
-| `admin*` | The token gate, the stats strip, the queue and its tabs, the Hidden tab, a selection and its bulk toolbar, the reject sheet, and both halves of the Observatory |
+| `about`, `privacy`, `terms` | The three pages linked from every footer — plain HTML on their own stylesheet, not the app |
+| `admin*` | The token gate, the stats strip and its report-pressure section, the queue and its tabs, the Hidden tab (including the card three reports took down, with their rows on it), the Rejected tab, a selection and its bulk toolbar, the reject sheet, and both halves of the Observatory |
 
-Three of those states exist only because the fixture goes out of its way to
+Six of those states exist only because the fixture goes out of its way to
 reach them, and each is still reached through the product's own routes rather
 than by rendering a screen the product cannot produce:
 
@@ -76,11 +77,69 @@ than by rendering a screen the product cannot produce:
 - **An empty estate batch list.** A freshly minted owner token is a device
   the server has never seen, which `app/bulk/index.tsx` renders as an empty
   list rather than an error — the ordinary first visit to `/bulk`.
+- **A keepsake three strangers reported.** Every hidden listing this fixture
+  had was hidden by an admin, so `QueueItemCard`'s `Reports (n)` section — the
+  rows a moderator reads before deciding anything — had only ever been
+  photographed saying "None.", and `StatsStrip`'s report-pressure section
+  (#89) only ever at zero. `demoCatalog.ts`'s `DEMO_REPORTED_LISTING` is
+  created and approved like any other and then reported three times from three
+  addresses through `POST /api/listings/:id/reports`, which is the public
+  route the item page's report sheet fires; the third crosses
+  `REPORT_AUTOHIDE_THRESHOLD` and the product hides the listing itself, with
+  no admin involved. It is `hidden`, so it never reaches the feed. Two more
+  reports go on `Twelve jazz records`, which stays live and one short of the
+  same fate — the "One report away" half of that section, and the reason the
+  keepsake it names is still on the table in every feed frame.
+- **A keepsake a moderator rejected.** The reject sheet was in the baseline
+  and its consequence was not: `mine/[id].tsx` shows the giver
+  `MODERATION_REASONS[reason]` — the giver-facing sentence, not the sheet's
+  short chip label — and #362 kept that Status section for exactly this case.
+  `DEMO_REJECTED_LISTING` is rejected through `POST
+  /api/admin/listings/:id/reject`, the same call the sheet makes, with a story
+  that really does carry a phone number so `contact_in_story` is the honest
+  reason. It is also the only thing the queue's Rejected tab has ever had in
+  it.
+- **A keepsake with more than one photograph, and an annotation.**
+  `PhotoCarousel` draws no dots for a single photo, so the control a visitor
+  meets on most real listings had never been in a frame; and every keepsake
+  here was seeded with no aspects, so `AspectList` (#135) — the mono
+  annotation the vision model leaves under the story — rendered nothing on
+  every item frame ever taken. `letters` now carries three photographs and
+  three aspects. The three photographs are deliberately the same file: this
+  fixture holds one photograph per keepsake, a second view of that shoebox
+  does not exist, and borrowing another object's photograph would put a
+  kettle inside a listing about postcards. What the frame is evidence about
+  is the carousel's chrome, not three views of anything.
+- **A link to a keepsake that is no longer public.** `GET /api/listings/:id`
+  answers only for `approved` and `given`, so the reported listing above is a
+  404 to a stranger holding a share link that worked last week — which
+  `app/item/[id].tsx` draws as an idle stamp and a way back, not an error.
+  Taking `item-not-found` against a real hidden listing rather than an invented
+  id is what makes it the product's answer to a stale link.
 
 Sheets that would change the fixture are opened and then dismissed: the
 category picker, the delete confirmation, the admin reject sheet. Both
 projects run against one database, so a capture that confirmed any of them
 would leave the other project photographing a different product.
+
+`about`, `privacy` and `terms` need no fixture at all and are the only
+frames here that are not the Expo app: they are `apps/site/public/*.html`,
+plain markup on their own `site.css`, copied into the export by
+`scripts/copy-site.mjs` and served through the Worker's `[assets]` binding.
+Every screen in the product links to them from its footer, and no test in
+this repository renders them — so they are the one place the design can
+drift away from the product's type and palette with nothing noticing.
+
+What still has no frame, and why: the queue's **Needs review** and
+**Pending** tabs are photographed empty, because `MOCK_AI=1` decides every
+listing this suite seeds in milliseconds and always approves it. Both states
+are the moderation pipeline holding a listing back — `held_for_review`, or a
+retry budget running out — and neither is reachable through any route a
+visitor or an admin can call, so producing one would mean writing a status
+into D1 that the product did not put there. That is the line this directory
+does not cross (see the spec's header). An empty **Needs review** is also the
+state a real day is usually in, which is why `admin-queue-empty` is worth its
+own frame.
 
 This supersedes `apps/web/scripts/screenshots-v{2,3,4}.mjs` for new work — those
 drive Chrome over CDP from a hardcoded macOS path and write to an untracked
@@ -164,6 +223,20 @@ D1 file `wrangler dev` is serving from), so the hash input — and therefore the
 tilt and offset — is the same on every run (#225). That is also why `item` and
 the give-flow frames were never affected: `PhotoCarousel` passes a literal
 `tiltDeg={-1.2}` rather than hashing anything.
+
+**Not fixed, and measured: two things in the product that differ between two
+runs on one host.** Both were seen while the reported/rejected frames above
+were being added — the same commit captured twice, minutes apart, against
+frames the change could not reach. The admin cards and the giver's dashboard
+print relative times (`posted 2 min ago`, `[2 min ago] Spam`), and the second
+capture project runs minutes after the first against one database, so those
+lines are a function of when the run happened rather than of the design. And
+`/mine`'s hand-drawn rule is redrawn per run: on two consecutive captures the
+only pixels that moved in `mine` and `dark-mine` were that squiggle. Neither
+is worth pinning today — a frozen clock would have to be threaded through the
+Worker, and the rule is decoration — but they are why `git status` after a
+re-capture can list a frame nothing in the diff touched. Read the images, not
+the file list.
 
 **Fixed — the four giver-request frames.** `mine-detail-requests`,
 `-choose`, `-chosen` and `mine-email` used to be permanently stale: #188 holds

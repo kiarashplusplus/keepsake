@@ -24,7 +24,15 @@
  * spec would not think to look.
  */
 import type { APIRequestContext } from "@playwright/test";
-import { createApprovedListing, hideListingAsAdmin, markListingGiven, ownerHeaders, sendRequest } from "./api";
+import {
+  createApprovedListing,
+  hideListingAsAdmin,
+  markListingGiven,
+  ownerHeaders,
+  rejectListingAsAdmin,
+  reportListing,
+  sendRequest,
+} from "./api";
 import { confirmDemoRequests, pinListingIds } from "./demoDb";
 import { DEMO_PHOTOS, type DemoPhoto } from "./demoPhotos";
 
@@ -43,6 +51,14 @@ export interface DemoListing {
   story: string;
   category: string;
   postalCode: string;
+  /** More photographs, for the one keepsake that carries a real carousel.
+   * See `letters` below for why they are copies of the same file. */
+  extraPhotos?: DemoPhoto[];
+  /** What the vision model read off the cover photo (#36/#135). Set on one
+   * listing only: most listings genuinely have none, and the item page's
+   * `AspectList` renders nothing for those — so a fixture where every
+   * keepsake had aspects would photograph the uncommon case as the norm. */
+  aspects?: { name: string; value: string }[];
 }
 
 /**
@@ -77,6 +93,27 @@ export const DEMO_LISTINGS: DemoListing[] = [
   {
     key: "letters",
     photo: DEMO_PHOTOS.letters,
+    // The one keepsake with more than one photograph, so `PhotoCarousel`'s
+    // dots and its paging exist on the page `item*` is captured against —
+    // with a single photo the carousel draws no dots at all, and the control
+    // a visitor meets on most real listings had never been in a frame.
+    //
+    // Three copies of the same file, said plainly rather than dressed up:
+    // `e2e/fixtures/photos` holds one photograph per keepsake, and a second
+    // view of this shoebox does not exist. Using another object's photograph
+    // would put a kettle inside a listing about postcards, which is worse
+    // than a repeat — this frame is evidence about the carousel's chrome
+    // (are the dots visible, does the print still read as an object), not
+    // about three views of anything.
+    extraPhotos: [DEMO_PHOTOS.letters, DEMO_PHOTOS.letters],
+    // And the annotation the vision model leaves (#135), which nothing in
+    // the baseline had ever shown: stored on every listing since #36,
+    // rendered on the item page, photographed for the first time here.
+    aspects: [
+      { name: "material", value: "card and paper" },
+      { name: "era", value: "1970s" },
+      { name: "condition", value: "handled, soft corners, all legible" },
+    ],
     title: "A shoebox of postcards from the 1970s",
     story:
       "Two hundred or so, most of them to the same address in Worcester, most of them from people telling my aunt the weather was better where they were. The handwriting alone is worth an afternoon. I kept four and would like the rest to go to someone who reads them.",
@@ -162,6 +199,91 @@ export const DEMO_GIVEN_LISTING: DemoListing = {
   postalCode: "02139",
 };
 
+/**
+ * The keepsake three strangers reported, which the threshold then took off
+ * the table by itself.
+ *
+ * Everything hidden in this fixture until now was hidden by an admin
+ * (`DEMO_HIDDEN_LISTING`), so `report_count` was 0 on every card the queue
+ * has ever been photographed with and `QueueItemCard`'s `Reports (n)` section
+ * — the rows a moderator actually reads before deciding — has only ever been
+ * in a frame saying "None.". This one is reported through the product's own
+ * public route, three times from three addresses, so it carries three real
+ * `reports` rows, the `report_autohide` moderation event, and the status the
+ * threshold gave it rather than one an admin chose.
+ *
+ * Kept out of `DEMO_LISTINGS` for the same reason the other two are: it ends
+ * up `hidden`, so it is never on the feed, and no existing frame changes
+ * because it exists.
+ */
+export const DEMO_REPORTED_LISTING: DemoListing = {
+  key: "reported",
+  // Reuses the quilt photograph. Nothing about the picture is what got this
+  // one reported — the point of the frame is the report rows and the
+  // giver's side of a takedown, not a doctored photo — and an eighth file in
+  // `e2e/fixtures/photos` would cost 200 KB of repository for one card.
+  photo: DEMO_PHOTOS.quilt,
+  title: "Bundle of woollen blankets",
+  story:
+    "Seeded by the UX baseline capture so the admin queue has one listing that reported itself off the table. Three strangers flagged it, which is what the threshold is counted in.",
+  category: "home_kitchen",
+  postalCode: "02139",
+};
+
+/**
+ * The three reports that take `DEMO_REPORTED_LISTING` down — fixed reasons,
+ * fixed words, one of them with no details at all, because a moderator's card
+ * shows both shapes and the frame should too.
+ *
+ * `REPORT_AUTOHIDE_THRESHOLD` is three (`apps/api/src/env.ts`'s
+ * `DEFAULT_REPORT_AUTOHIDE_THRESHOLD`, and nothing in this suite overrides
+ * it), so this list being three long is the whole mechanism: two of these
+ * would leave the listing live.
+ */
+export const DEMO_REPORTS = [
+  { reason: "not_a_keepsake", details: "This looks like stock from a shop, not one household's own things." },
+  { reason: "spam", details: "The same bundle is listed three times with different postcodes." },
+  { reason: "other" },
+] as const satisfies readonly { reason: string; details?: string }[];
+
+/**
+ * The keepsake a moderator rejected, and the only way to photograph what a
+ * giver is told about it.
+ *
+ * `mine/[id].tsx`'s `statusDetailFor()` has exactly two branches that say
+ * more than the eyebrow does, and a rejection is one of them: the sentence
+ * under the status is `MODERATION_REASONS[reason]` — the giver-facing copy
+ * #354 rewrote, which until now existed in the baseline only as chips in the
+ * admin's own reject sheet. The story below carries a phone number so the
+ * reason it is rejected for is the reason it would really be rejected for.
+ */
+export const DEMO_REJECTED_LISTING: DemoListing = {
+  key: "rejected",
+  photo: DEMO_PHOTOS.kettle,
+  title: "Pair of enamel bread bins",
+  story:
+    "Both from my mother's pantry and both still sound. Ring me on 555-0134 and I will keep them by the door for you, or text the same number any evening this week.",
+  category: "home_kitchen",
+  postalCode: "02144",
+};
+
+/** The reason `DEMO_REJECTED_LISTING` is rejected with — an
+ * `ADMIN_REJECT_REASONS` code, and the key into `MODERATION_REASONS` for the
+ * sentence the giver reads. Matches the phone number in the story above. */
+export const DEMO_REJECT_REASON = "contact_in_story";
+
+/**
+ * The live keepsake carrying one report short of the threshold.
+ *
+ * `StatsStrip`'s report-pressure section (issue #89) has two badges, and a
+ * baseline where nothing has ever been reported photographs both at zero. The
+ * red one is `DEMO_REPORTED_LISTING` above; this is the ink one — "One report
+ * away" is a heads-up about a listing that is still on the table, so the
+ * keepsake this names stays approved, stays on the feed, and no frame of the
+ * feed changes because of it.
+ */
+export const NEAR_THRESHOLD_KEY = "records";
+
 /** The two strangers whose notes sit under `/mine/:id`. Fixed addresses:
  * the giver's screen shows them masked until Choose, and a random address
  * would change the width of the masked line from one capture to the next. */
@@ -214,6 +336,8 @@ export const PINNED_LISTING_IDS: Record<string, string> = {
   quilt: "SEEDCARD060000000000000000",
   hidden: "SEEDCARD070000000000000000",
   given: "SEEDCARD080000000000000000",
+  reported: "SEEDCARD090000000000000000",
+  rejected: "SEEDCARD100000000000000000",
 };
 
 export interface DemoCatalog {
@@ -226,6 +350,10 @@ export interface DemoCatalog {
   hiddenId: string;
   /** The keepsake that has already been given away (`DEMO_GIVEN_LISTING`). */
   givenId: string;
+  /** The keepsake three reports took off the table (`DEMO_REPORTED_LISTING`). */
+  reportedId: string;
+  /** The keepsake a moderator rejected (`DEMO_REJECTED_LISTING`). */
+  rejectedId: string;
 }
 
 interface OwnerListing {
@@ -250,7 +378,7 @@ async function existingCatalog(request: APIRequestContext): Promise<Map<string, 
  * either way.
  */
 export async function ensureDemoCatalog(request: APIRequestContext): Promise<DemoCatalog> {
-  const all = [...DEMO_LISTINGS, DEMO_HIDDEN_LISTING, DEMO_GIVEN_LISTING];
+  const all = [...DEMO_LISTINGS, DEMO_HIDDEN_LISTING, DEMO_GIVEN_LISTING, DEMO_REPORTED_LISTING, DEMO_REJECTED_LISTING];
   const existing = await existingCatalog(request);
   const complete = existing !== null && all.every((listing) => existing.has(listing.title));
 
@@ -267,6 +395,8 @@ export async function ensureDemoCatalog(request: APIRequestContext): Promise<Dem
         category: listing.category,
         postalCode: listing.postalCode,
         photo: listing.photo,
+        ...(listing.extraPhotos ? { extraPhotos: listing.extraPhotos } : {}),
+        ...(listing.aspects ? { aspects: listing.aspects } : {}),
         ownerToken: DEMO_OWNER_TOKEN,
       });
       mintedToPinned[created.id] = PINNED_LISTING_IDS[listing.key] as string;
@@ -296,6 +426,21 @@ export async function ensureDemoCatalog(request: APIRequestContext): Promise<Dem
 
     await hideListingAsAdmin(request, ids.hidden as string, "ux baseline fixture");
     await markListingGiven(request, ids.given as string, DEMO_OWNER_TOKEN);
+    await rejectListingAsAdmin(request, ids.rejected as string, DEMO_REJECT_REASON);
+
+    // The two report states, both produced by the public route rather than
+    // by an admin: three reports take `reported` down on their own (the
+    // threshold is three, so the third of these is the one that hides it),
+    // and two leave `records` live and one away from the same fate. Only
+    // this branch runs them — `ensureDemoCatalog()` is idempotent, and a
+    // second project reporting `records` again would auto-hide the keepsake
+    // the first project photographed on the feed.
+    for (const report of DEMO_REPORTS) {
+      await reportListing(request, ids.reported as string, report);
+    }
+    for (const report of DEMO_REPORTS.slice(0, 2)) {
+      await reportListing(request, ids[NEAR_THRESHOLD_KEY] as string, report);
+    }
   }
 
   return {
@@ -311,5 +456,7 @@ export async function ensureDemoCatalog(request: APIRequestContext): Promise<Dem
     },
     hiddenId: ids.hidden as string,
     givenId: ids.given as string,
+    reportedId: ids.reported as string,
+    rejectedId: ids.rejected as string,
   };
 }
