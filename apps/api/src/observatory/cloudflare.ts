@@ -56,13 +56,24 @@ const CLOUDFLARE_API = "https://api.cloudflare.com/client/v4";
 
 /**
  * The call is made while an admin sits watching a spinner, and it is strictly
- * optional garnish on a page that has already rendered its D1 half.
- * 8 seconds is long enough for a cold GraphQL aggregation over 30 days
- * (measured: ~0.8s for a week, and it grows sub-linearly) and short enough
- * that a Cloudflare-side stall shows up as a named timeout on the page
- * rather than as a page that never finishes loading.
+ * optional garnish on a page that has already rendered its D1 half. Long
+ * enough to cover a cold query, short enough that a Cloudflare-side stall
+ * shows up as a named timeout on the page rather than as a page that never
+ * finishes loading.
+ *
+ * 12s rather than the 8s this started at, raised on `459b95e` against real
+ * `/observatory` loads landing at 5.9s, 7.2s, 7.5s, 7.6s, 8.3s and one real
+ * `timed out after 8000ms`. Kept at 12s here even though the call those
+ * numbers describe — the Workers Logs telemetry scan, whose cost was set by
+ * how much the whole account logged rather than by our window — no longer
+ * exists on this path: the log panel reads D1 now, and the only caller left
+ * is the GraphQL half, which is the fast one (~0.8s for a week, growing
+ * sub-linearly). So this is slack rather than a tight ceiling, which is the
+ * right direction for a number whose only job is to turn a stall into a
+ * legible timeout. Lowering it would be trading a measured margin for
+ * nothing.
  */
-const TELEMETRY_TIMEOUT_MS = 8_000;
+const TELEMETRY_TIMEOUT_MS = 12_000;
 
 /**
  * Widest window the GraphQL Analytics API will accept for this account,
