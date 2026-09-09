@@ -15,11 +15,24 @@ export type UseShelvesResult = {
   loading: boolean;
 };
 
-export function useShelves(): UseShelvesResult {
+export type UseShelvesOptions = {
+  /** Skips the request entirely while `false`. `app/index.tsx` passes this
+   * for the same reason it gates `useFeed`: on a first visit the feed is in
+   * the document but hidden behind the explainer (`src/lib/firstVisit.ts`),
+   * and a request for shelves nobody is looking at is a request the visitor
+   * did not ask for. Measured on production's own bytes on 2026-09-09: the
+   * page-1 fetch was gated, this one was not, and `/api/feed/shelves` went
+   * out under the explainer on every first visit. */
+  enabled?: boolean;
+};
+
+export function useShelves(options: UseShelvesOptions = {}): UseShelvesResult {
+  const { enabled = true } = options;
   const [shelves, setShelves] = React.useState<AspectShelf[]>([]);
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
+    if (!enabled) return undefined;
     let cancelled = false;
     getShelves()
       .then((response) => {
@@ -37,7 +50,7 @@ export function useShelves(): UseShelvesResult {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [enabled]);
 
   return { shelves, loading };
 }

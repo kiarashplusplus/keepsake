@@ -8,6 +8,7 @@ import { getFeed } from "@/api/feed";
 import { getShelves } from "@/api/shelves";
 import { LOCATION_PREF_STORAGE_KEY } from "@/lib/geo";
 import Feed from "../../app/index";
+import { endFirstVisit } from "@/lib/firstVisit";
 
 // `jest.mock` calls are hoisted above these imports by babel-plugin-jest-hoist,
 // so writing the mocked modules' imports in normal top-of-file order still
@@ -323,5 +324,65 @@ describe("Feed", () => {
     // function of the press state, hence calling it.
     const toggle = UNSAFE_getByProps({ accessibilityLabel: "Near · anywhere. Change where you are looking" });
     expect(StyleSheet.flatten(toggle.props.style({ pressed: false }))).toMatchObject({ display: "var(--ks-narrow-only, flex)" });
+  });
+});
+
+describe("Root: the explainer at / (first visit)", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    clearFeedCache();
+    for (const key of Object.keys(mockUrlParams)) delete mockUrlParams[key];
+    setViewportWidth(DESKTOP_WIDTH);
+    jest.mocked(getFeed).mockReset().mockResolvedValue({ items: [], next_cursor: null });
+    jest.mocked(getShelves).mockReset().mockResolvedValue({ shelves: [], min_items: 3 });
+  });
+
+  afterEach(() => {
+    delete document.documentElement.dataset.ksFirstVisit;
+  });
+
+  it("fetches nothing for the hidden feed until the visitor chooses it, then fetches both", async () => {
+    // What the pre-hydration script leaves on <html> for a device that has
+    // never been here (`app/+html.tsx`). The stylesheet hides the feed from
+    // it; this is the half React owns — no request for a screen nobody is
+    // looking at. Both requests, because the first version of this gate
+    // covered page 1 and not shelves, and `/api/feed/shelves` went out under
+    // the explainer on production.
+    //
+    // What this cannot prove: hydration order. This is a fresh render, where
+    // the hook reads the attribute on its first pass; a real hydration
+    // renders with the *server* snapshot first and runs effects before
+    // re-rendering, which is exactly how the shelves request escaped while
+    // this test was green. `src/lib/firstVisit.ts`'s `DURING_HYDRATION`
+    // closes that, and `e2e/welcome.spec.ts` asserts it against real
+    // requests in a real browser.
+    document.documentElement.dataset.ksFirstVisit = "1";
+
+    render(<Feed />);
+    await act(async () => {
+      await flush();
+    });
+
+    expect(jest.mocked(getFeed)).not.toHaveBeenCalled();
+    expect(jest.mocked(getShelves)).not.toHaveBeenCalled();
+
+    // "See what's out there".
+    await act(async () => {
+      endFirstVisit();
+      await flush();
+    });
+
+    expect(document.documentElement.dataset.ksFirstVisit).toBeUndefined();
+    expect(jest.mocked(getFeed)).toHaveBeenCalledTimes(1);
+    expect(jest.mocked(getShelves)).toHaveBeenCalledTimes(1);
+  });
+
+  it("fetches straight away for a returning visitor", async () => {
+    render(<Feed />);
+    await act(async () => {
+      await flush();
+    });
+    expect(jest.mocked(getFeed)).toHaveBeenCalledTimes(1);
+    expect(jest.mocked(getShelves)).toHaveBeenCalledTimes(1);
   });
 });

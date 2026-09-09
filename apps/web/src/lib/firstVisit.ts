@@ -62,9 +62,25 @@ export function isFirstVisit(): boolean {
   return document.documentElement.dataset[DATASET_KEY] === "1";
 }
 
-/** A static render has no document, and must not guess. */
-function NEVER_ON_SERVER(): boolean {
-  return false;
+/**
+ * The snapshot React uses while hydrating. It is `isFirstVisit` itself, on
+ * purpose, and not a constant `false`:
+ *
+ * React hydrates with the server snapshot, COMMITS, runs effects, and only
+ * then re-renders if the client snapshot differs. With a constant `false`
+ * that first commit had `enabled: true`, and `useShelves`'s effect sent
+ * `/api/feed/shelves` for the hidden feed before the re-render could switch
+ * it off — measured going out under the explainer on production's own bytes,
+ * 2026-09-09. (`useFeed` only looked gated because it also waits on the
+ * async location read.)
+ *
+ * Reading the attribute here is safe because it never reaches the markup:
+ * both screens render identically whatever this returns, so there is
+ * nothing for hydration to mismatch on — which is the whole design. In the
+ * static export there is no `document`, and this is `false`, as it must be.
+ */
+function DURING_HYDRATION(): boolean {
+  return isFirstVisit();
 }
 
 /**
@@ -80,7 +96,7 @@ export function endFirstVisit(): void {
 }
 
 export function useFirstVisit(): boolean {
-  return React.useSyncExternalStore(subscribe, isFirstVisit, NEVER_ON_SERVER);
+  return React.useSyncExternalStore(subscribe, isFirstVisit, DURING_HYDRATION);
 }
 
 /**

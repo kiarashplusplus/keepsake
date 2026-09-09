@@ -171,8 +171,10 @@ function LocationDisclosure({
 /**
  * The feed proper. `enabled` is `false` while the explainer is the screen on
  * show (`Root` below): the feed is in the document but `display: none`, and
- * a request, an analytics event and a URL rewrite for a screen nobody is
- * looking at would be three lies about what the visitor did.
+ * a request (page 1 AND shelves — the shelves one was missed the first time,
+ * and measured going out under the explainer on production), an analytics
+ * event and a URL rewrite for a screen nobody is looking at would be lies
+ * about what the visitor did.
  */
 function Feed({ enabled }: { enabled: boolean }): React.ReactElement {
   const router = useRouter();
@@ -254,7 +256,7 @@ function Feed({ enabled }: { enabled: boolean }): React.ReactElement {
   // intent shelves serve, and hiding them behind a postcode would make them
   // invisible for most real visits at today's catalogue size.
   const shelvesEligible = q.trim() === "" && category === null;
-  const { shelves } = useShelves();
+  const { shelves } = useShelves({ enabled });
   const visibleShelves = shelvesEligible ? shelves : [];
 
   React.useEffect(() => {
