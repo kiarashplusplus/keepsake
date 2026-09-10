@@ -328,6 +328,9 @@ instead of before it.
 - [Design system](./design-system.md)
 - [Ops](./ops.md)
 - [Estate bulk upload](./bulk-upload.md) — API and schema only; no web UI exists yet
+- [Microsoft Advertising plan](../microsoft-ads-plan.md) — a plan, not a change: the order in
+  which the consent framework, the CSP, the legal copy and the Microsoft account have to move
+  for a consent-gated UET tag to ship without repeating #175
 
 Runbooks: [deploy](../runbooks/deploy.md) · [incident](../runbooks/incident.md) ·
 [admin](../runbooks/admin.md) · [geodata](../runbooks/geodata.md).
