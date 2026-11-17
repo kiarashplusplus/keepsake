@@ -19,23 +19,30 @@ export const historyUrl = (title) =>
   `https://en.wikipedia.org/w/index.php?title=${encodeURIComponent(title.replace(/ /g, "_"))}&action=history`;
 
 /**
- * Resolve candidate titles in batches of 50. Returns a Map from each
- * requested title to the page it lands on (after normalisation and
- * redirects), or nothing if it does not exist or is a disambiguation page.
+ * Resolve up to 50 titles per request to the page each lands on (after
+ * normalisation and redirects) **and its current revision**. Missing and
+ * disambiguation pages are left out of the result.
+ *
+ * Deliberately uncached: this is the cheap call that tells `fetchArticle`
+ * whether its cached text is still the current revision, so a re-run of a
+ * thousand cities costs one request per 50 articles plus one per article
+ * that was actually edited.
  */
-export async function resolveTitles(client, titles) {
-  const resolved = new Map();
-  const unique = [...new Set(titles)];
+export async function lookupPages(client, titles) {
+  const found = new Map();
+  const unique = [...new Set(titles.filter(Boolean))];
   for (let i = 0; i < unique.length; i += 50) {
     const batch = unique.slice(i, i + 50);
     const body = await client.getJson(
       api({
         action: "query",
         redirects: "1",
-        prop: "pageprops",
-        ppprop: "disambiguation",
+        prop: "revisions|pageprops",
+        rvprop: "ids|timestamp",
+        ppprop: "disambiguation|wikibase_item",
         titles: batch.join("|"),
       }),
+      { cache: false },
     );
     const q = body.query ?? {};
     const follow = new Map();
@@ -48,38 +55,59 @@ export async function resolveTitles(client, titles) {
       const page = pages.get(title);
       if (!page || page.missing || page.invalid || page.pageprops?.disambiguation !== undefined)
         continue;
-      resolved.set(requested, page.title);
+      found.set(requested, {
+        title: page.title,
+        pageId: page.pageid,
+        revisionId: page.revisions?.[0]?.revid ?? null,
+        revisionTimestamp: page.revisions?.[0]?.timestamp ?? null,
+        wikidataId: page.pageprops?.wikibase_item ?? null,
+      });
     }
   }
-  return resolved;
+  return found;
 }
 
-/** Plain text plus the revision it came from. */
-export async function fetchArticle(client, title) {
+const extractKey = (pageId, revisionId) => `enwiki:extract:${pageId}:${revisionId}`;
+
+/**
+ * Plain text of a page at its current revision. `page` comes from
+ * `lookupPages`. When the cache already holds that revision's text, no
+ * request is made. TextExtracts can only return one full article per
+ * request, which makes this the expensive call that the revision check
+ * exists to avoid.
+ */
+export async function fetchArticle(client, page) {
+  const wanted = extractKey(page.pageId, page.revisionId);
+  const cached = page.revisionId ? client.peek(wanted) : undefined;
+  if (cached) return cached;
+
   const body = await client.getJson(
     api({
       action: "query",
-      redirects: "1",
       prop: "extracts|revisions|pageprops",
       explaintext: "1",
       exsectionformat: "wiki",
       rvprop: "ids|timestamp",
       ppprop: "wikibase_item|disambiguation",
-      titles: title,
+      pageids: String(page.pageId),
     }),
+    { cache: false },
   );
-  const page = body.query?.pages?.[0];
-  if (!page || page.missing || page.pageprops?.disambiguation !== undefined || !page.extract)
-    return null;
-  const revision = page.revisions?.[0] ?? {};
-  return {
-    title: page.title,
-    pageId: page.pageid,
+  const p = body.query?.pages?.[0];
+  if (!p || p.missing || p.pageprops?.disambiguation !== undefined || !p.extract) return null;
+  const revision = p.revisions?.[0] ?? {};
+  const article = {
+    title: p.title,
+    pageId: p.pageid,
     revisionId: revision.revid ?? null,
     revisionTimestamp: revision.timestamp ?? null,
-    wikidataId: page.pageprops?.wikibase_item ?? null,
-    text: page.extract,
+    wikidataId: p.pageprops?.wikibase_item ?? null,
+    text: p.extract,
   };
+  // Filed under the revision actually returned: if the page was edited
+  // between lookup and fetch, the text and its revision id still agree.
+  if (article.revisionId) client.remember(extractKey(article.pageId, article.revisionId), article);
+  return article;
 }
 
 const SEARCH_SKIP =

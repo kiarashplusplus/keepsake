@@ -14,7 +14,8 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync } from 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { createClient, DEFAULT_USER_AGENT } from "./lib/http.mjs";
+import { createClient, DEFAULT_USER_AGENT, isCompliantUserAgent } from "./lib/http.mjs";
+import { authFromEnv } from "./lib/oauth.mjs";
 import {
   citiesByQidQuery,
   citiesQuery,
@@ -43,7 +44,14 @@ collect     Wikipedia passages for each city in locations.json → <out>/cities/
 common
   --out DIR                default tools/gifting-culture/out
   --refresh                ignore the HTTP cache (responses are re-cached)
-  --min-interval-ms N      gap between requests (default 500)
+  --rpm N                  requests/minute to Wikimedia APIs (default: from your tier, see below)
+
+identity (environment)
+  WIKIMEDIA_USER_AGENT     "name/version (https://your.site; you@example.org)". Without a
+                           URL or email you are "unidentified": 10 req/min, shared per IP.
+  WIKIMEDIA_CLIENT_ID      OAuth 2 client-credentials consumer (meta.wikimedia.org);
+  WIKIMEDIA_CLIENT_SECRET  requests then count against that account's tier.
+  WIKIMEDIA_ACCESS_TOKEN   owner-only token, as an alternative (needs cookies; handled).
 `;
 
 function parse(argv) {
@@ -59,7 +67,7 @@ function parse(argv) {
       "search-limit": { type: "string", default: "8" },
       out: { type: "string", default: path.join(HERE, "out") },
       refresh: { type: "boolean", default: false },
-      "min-interval-ms": { type: "string", default: "500" },
+      rpm: { type: "string" },
       help: { type: "boolean", default: false },
     },
   });
@@ -81,7 +89,7 @@ function parse(argv) {
     searchLimit: Number(values["search-limit"]),
     out: path.resolve(values.out),
     refresh: values.refresh,
-    minIntervalMs: Number(values["min-interval-ms"]),
+    rpm: values.rpm ? Number(values.rpm) : undefined,
   };
 }
 
@@ -237,7 +245,8 @@ async function stageCollect(client, opts) {
 
   writeIndex(opts.out, failures);
   log(
-    `HTTP: ${client.stats.requests} requests, ${client.stats.cacheHits} cache hits, ${client.stats.retries} retries`,
+    `HTTP: ${client.stats.requests} requests, ${client.stats.cacheHits} cache hits, ` +
+      `${client.stats.retries} retries (${client.stats.rateLimited} rate-limited); pace ended at ${Math.round(client.pace.currentRpm)}/min`,
   );
   if (failures.length)
     throw new Error(`${failures.length} of ${cities.length} cities failed; see index.json`);
@@ -278,18 +287,25 @@ async function main() {
     process.exit(opts.help ? 0 : 2);
   }
   const userAgent = process.env.WIKIMEDIA_USER_AGENT || DEFAULT_USER_AGENT;
-  if (!process.env.WIKIMEDIA_USER_AGENT) {
+  const auth = authFromEnv(process.env, { userAgent });
+  if (!isCompliantUserAgent(userAgent)) {
     log(
-      "note: WIKIMEDIA_USER_AGENT is not set; Wikimedia asks automated clients to identify themselves with contact details.",
+      "warning: WIKIMEDIA_USER_AGENT has no URL or email, so Wikimedia treats this client as " +
+        'unidentified (10 requests/minute, shared with everyone on this IP). See README.md, "Rate limits".',
     );
   }
   const client = createClient({
     userAgent,
+    auth,
+    requestsPerMinute: opts.rpm,
     cacheDir: path.join(opts.out, ".cache", "http"),
-    minIntervalMs: opts.minIntervalMs,
     refresh: opts.refresh,
     log,
   });
+  log(
+    `identity: ${auth ? auth.kind : "unauthenticated"}, user agent ${isCompliantUserAgent(userAgent) ? "compliant" : "NOT compliant"}, ` +
+      `pacing ${client.pace.ceilingRpm} requests/minute`,
+  );
   if (opts.stage === "locations" || opts.stage === "all") {
     log("locations:");
     await stageLocations(client, opts);

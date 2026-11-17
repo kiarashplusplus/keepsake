@@ -40,9 +40,21 @@ async function getObservatory(query = ""): Promise<Observatory> {
   return readOk<Observatory>(res);
 }
 
+/**
+ * The fixture's two days, relative to the real clock. The endpoint builds its
+ * window back from today, so fixed dates (this fixture used 2026-09-06/07, the
+ * day the body was captured) fall out of a 7-day window a week later and the
+ * test fails on unchanged code. That happened: it went red on 2026-11-17 on a
+ * PR that touched nothing under apps/api. Two and one days ago sit inside any
+ * window of 3+ days and stay clear of a UTC midnight rollover mid-test.
+ */
+const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+const EARLIER_DAY = daysAgo(2);
+const LATER_DAY = daysAgo(1);
+
 /** A `workersInvocationsAdaptive` body in the shape the live API returned on
  * 2026-09-07 — two aliased selections, `date`-dimensioned rows, and
- * quantiles only on the ungrouped one. */
+ * quantiles only on the ungrouped one. Only the dates are moved. */
 function edgeResponse(): Response {
   return Response.json({
     data: {
@@ -50,8 +62,8 @@ function edgeResponse(): Response {
         accounts: [
           {
             byDay: [
-              { dimensions: { date: "2026-09-06" }, sum: { requests: 76, errors: 0, subrequests: 1 } },
-              { dimensions: { date: "2026-09-07" }, sum: { requests: 320, errors: 2, subrequests: 13 } },
+              { dimensions: { date: EARLIER_DAY }, sum: { requests: 76, errors: 0, subrequests: 1 } },
+              { dimensions: { date: LATER_DAY }, sum: { requests: 320, errors: 2, subrequests: 13 } },
             ],
             overall: [
               { sum: { requests: 396, errors: 2, subrequests: 14 }, quantiles: { cpuTimeP50: 2261, cpuTimeP99: 17812 } },
@@ -153,7 +165,7 @@ describe("GET /api/admin/observatory", () => {
       // window (covered on its own below), so this assertion is about the
       // window, never about how many rows Cloudflare happened to return.
       expect(observatory.edge.data.by_day).toHaveLength(7);
-      expect(observatory.edge.data.by_day.find((day) => day.date === "2026-09-07")?.requests).toBe(320);
+      expect(observatory.edge.data.by_day.find((day) => day.date === LATER_DAY)?.requests).toBe(320);
       // Not an average of the two per-day groups — a window-level quantile
       // can only come from a window-level query.
       expect(observatory.edge.data.cpu_time_p99_us).toBe(17812);
@@ -175,7 +187,7 @@ describe("GET /api/admin/observatory", () => {
       expect([...dates].sort()).toEqual(dates);
 
       // The filled days are real zeroes, not undefined leaking through.
-      const filled = observatory.edge.data.by_day.filter((day) => !["2026-09-06", "2026-09-07"].includes(day.date));
+      const filled = observatory.edge.data.by_day.filter((day) => ![EARLIER_DAY, LATER_DAY].includes(day.date));
       expect(filled.length).toBeGreaterThan(0);
       for (const day of filled) {
         expect(day).toMatchObject({ requests: 0, errors: 0, subrequests: 0 });

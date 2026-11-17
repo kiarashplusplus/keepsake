@@ -14,7 +14,7 @@
  *                     subject itself (`requiresMention`)
  */
 import { extractPassages } from "./extract.mjs";
-import { fetchArticle, resolveTitles, search } from "./wikipedia.mjs";
+import { fetchArticle, lookupPages, search } from "./wikipedia.mjs";
 
 const COUNTRY_TEMPLATES = [
   "Culture of {}",
@@ -71,56 +71,66 @@ export function searchQueries(subject) {
  * turns search off for this subject.
  */
 export async function collectSubject(client, subject, { searchLimit = 8, log = () => {} } = {}) {
-  /** resolved title → { discoveredBy, requiresMention } — first (strongest) discovery wins. */
-  const candidates = new Map();
+  /** Requested title → how it was found. First (strongest) discovery wins. */
+  const requested = [];
   const add = (title, discoveredBy, requiresMention) => {
-    if (title && !candidates.has(title)) candidates.set(title, { discoveredBy, requiresMention });
+    if (title) requested.push({ title, discoveredBy, requiresMention });
   };
-
   add(subject.title, "place-article", false);
   for (const title of subject.cultureTitles ?? []) add(title, "culture-article", false);
-  const probed = await resolveTitles(client, templateTitles(subject));
-  for (const title of probed.values()) add(title, "culture-article", false);
-
+  for (const title of templateTitles(subject)) add(title, "culture-article", false);
   if (searchLimit > 0) {
     for (const query of searchQueries(subject)) {
       for (const title of await search(client, query, searchLimit)) add(title, "search", true);
     }
   }
 
+  // One request per 50 titles: existence, redirects, disambiguation and the
+  // current revision of every candidate at once.
+  const pages = await lookupPages(
+    client,
+    requested.map((r) => r.title),
+  );
+  /** pageId → { page, discoveredBy, requiresMention } */
+  const candidates = new Map();
+  for (const r of requested) {
+    const page = pages.get(r.title);
+    if (!page || candidates.has(page.pageId)) continue;
+    // This subject's own article reached under another title (a "Culture of
+    // Osaka" redirect into "Osaka") is not a second source.
+    if (r.discoveredBy !== "place-article" && page.wikidataId && page.wikidataId === subject.qid)
+      continue;
+    candidates.set(page.pageId, {
+      page,
+      discoveredBy: r.discoveredBy,
+      requiresMention: r.requiresMention,
+    });
+  }
+
   const names = subjectNames(subject);
   const sources = [];
   const passages = [];
-  for (const [title, how] of candidates) {
-    const article = await fetchArticle(client, title);
+  for (const { page, discoveredBy, requiresMention } of candidates.values()) {
+    const article = await fetchArticle(client, page);
     if (!article) continue;
-    // A search hit that *is* another place's own article ("Kyoto" turning up
-    // for Osaka) is still searched for mentions; one that is this subject's
-    // own article under a redirect is not a second source.
-    if (
-      how.discoveredBy !== "place-article" &&
-      article.wikidataId &&
-      article.wikidataId === subject.qid
-    )
-      continue;
     const found = extractPassages({
       title: article.title,
       text: article.text,
       subjectNames: names,
-      requiresMention: how.requiresMention,
+      requiresMention,
     });
     const source = {
       title: article.title,
       pageId: article.pageId,
       revisionId: article.revisionId,
       revisionTimestamp: article.revisionTimestamp,
-      discoveredBy: how.discoveredBy,
+      discoveredBy,
     };
     sources.push({ ...source, passages: found.length });
     for (const p of found) passages.push({ ...p, source });
   }
   log(
-    `    ${subject.kind} ${subject.title}: ${candidates.size} candidates, ${passages.length} passages`,
+    `    ${subject.kind} ${subject.title}: ${candidates.size} articles, ${passages.length} passages`,
   );
   return { subject, sources, passages };
 }

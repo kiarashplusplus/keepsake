@@ -21,10 +21,10 @@ NODE_USE_ENV_PROXY=1 node tools/gifting-culture/pipeline.mjs all --countries JP 
 ```
 
 `NODE_USE_ENV_PROXY=1` is only needed behind an HTTPS proxy, as in agent containers; Node's
-`fetch` ignores `HTTPS_PROXY` otherwise. There are no npm dependencies. Set
-`WIKIMEDIA_USER_AGENT` to something that identifies you and includes a contact, as
+`fetch` ignores `HTTPS_PROXY` otherwise. There are no npm dependencies. The default User-Agent
+identifies the tool and names `https://keepsake.ing` as its contact, as
 [Wikimedia's policy](https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy)
-asks. The default is generic and prints a reminder.
+asks. Read [Rate limits](#rate-limits) before a large run.
 
 Output goes to `tools/gifting-culture/out/` (gitignored; `--out` moves it):
 
@@ -148,15 +148,47 @@ These points are the brief for the story layer.
 - **English only.** The Japanese Wikipedia says far more about 中元 than the English one does.
   Adding another language means a lexicon per language, which is a separate decision.
 
-## Cost
+## Rate limits
 
-Requests are serial, at least 500 ms apart (`--min-interval-ms`). Each one retries on 429/5xx,
-`maxlag` and timeouts with exponential backoff, and treats `Retry-After` as a floor. A city
-typically needs about 15–25 requests, and its country's ~30 are made once per run. Wikimedia
-rate-limits shared IPs hard: from an agent container, most requests in the first live run got a
-429 before succeeding, and a single city took several minutes. From an ordinary IP, budget about
-one city per 15–30 s. The on-disk cache makes re-runs and resumed runs nearly free. `--refresh`
-re-fetches everything.
+Wikimedia rate-limits its Action and REST APIs **per client identity, per minute**
+([policy](https://www.mediawiki.org/wiki/Wikimedia_APIs/Rate_limits), 2026):
+
+| Identity                                     | Limit                     |
+| -------------------------------------------- | ------------------------- |
+| No contact in the User-Agent                 | 10 req/min, shared per IP |
+| User-Agent with a URL or email               | 200 req/min               |
+| Authenticated, new account                   | 200 req/min               |
+| Authenticated, established editor            | 2,000 req/min             |
+| Bot-flagged account, or running on Toolforge | exempt                    |
+
+The client (`lib/http.mjs`) handles this as follows:
+
+- It sends a compliant User-Agent.
+- It authenticates when credentials are in the environment:
+  - `WIKIMEDIA_CLIENT_ID` + `WIKIMEDIA_CLIENT_SECRET` for an OAuth 2 client-credentials
+    consumer, or
+  - `WIKIMEDIA_ACCESS_TOKEN` for an owner-only token. The client keeps the cookies Wikimedia sets,
+    which the policy requires before it treats such a token as authenticated.
+- It **paces** requests below the tier's budget (`--rpm` overrides), halves the pace on each 429
+  and earns it back on success.
+- It resolves titles and current revisions **50 per request**, and fetches an article's text only
+  when the cache lacks that exact revision, so a re-run costs one request per 50 articles plus one
+  per edited article.
+
+**What was measured from an agent container (2026-11-17):** every API request was refused with
+429, even with the compliant User-Agent. Each was refused with the same `Retry-After` across three
+different egress IPs, on a User-Agent string never sent before. The limiter is aggregating that
+cloud provider's address range, not keying on the User-Agent. From there, **unauthenticated API
+access does not work at any pace**: only authentication ("enforced per user") or running somewhere
+else gets a budget of its own. The Wikidata Query Service is outside these limits and worked
+throughout.
+
+To authenticate, propose an OAuth 2.0 consumer at
+`https://meta.wikimedia.org/wiki/Special:OAuthConsumerRegistration/propose/oauth2` with the
+**client credentials** grant and only the basic rights (read access needs nothing more). Check the
+form's current wording there rather than trusting this paragraph's memory of it.
+Then put the id and secret in the environment. A bot-flagged account (the plan of record for large
+recurring runs) authenticates the same way, with the consumer registered under the bot account.
 
 ## Tests
 
