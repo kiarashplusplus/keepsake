@@ -144,9 +144,11 @@ calibrated, and calibrating the voice is the job of the later stage.
   "schemaVersion": 1,
   "location": { "qid": "Q35765", "name": "Osaka", "regions": [...], "countries": [{ "iso2": "JP", ... }], ... },
   "coverage": {
-    "level": "country",                          // narrowest scope with a non-weak passage
+    "level": "country",                          // narrowest scope with a strong passage from a *documented* source
+    "levelWithMentions": "city",                 // the same, counting mentions too (lower confidence; see below)
     "passages":       { "city": 2, "region": 0, "country": 31 },
-    "strongPassages": { "city": 0, "region": 0, "country": 29 }
+    "strongPassages": { "city": 0, "region": 0, "country": 29 },
+    "omittedWeakCountryPassages": 640            // counted, not stored: identical in every city of the country
   },
   "passages": [{
     "id": "…",                                    // sha256(title + text), stable across runs
@@ -161,6 +163,7 @@ calibrated, and calibrating the voice is the job of the later stage.
     "subjectMentions": [],
     "tags": { "occasions": { "seasonal": ["chūgen", "seibo"] }, "practices": { … } },  // from giftSentences only
     "weak": false,
+    "weakReason": null,                           // or "no habitual language", "civic or institutional gift", …
     "rendering": {                                // what the source text says about its own reliability
       "renderer": "dump-wikitext",                // or "textextracts" (API path)
       "refs": 2,                                  // footnotes in the paragraph; null on the API path (stripped)
@@ -176,13 +179,62 @@ calibrated, and calibrating the voice is the job of the later stage.
 A paragraph that turns up at several scopes is kept once, at the narrowest. That happens when a
 city search lands in _Etiquette in Japan_ on a paragraph that names the city.
 
-**Weak passages** are kept but never set `coverage.level`. A passage is weak when its gift
-sentences name no occasion and their only practice tags are `civic-or-diplomatic` (a statue from
-France, cherry trees "from the citizens of Tokyo"), `institutional` (a bequest to a library) or
-`commercial` (a shop's souvenirs). These rules and the name rule (a capitalised "Gift" mid-sentence
-is a record label, a show or "GIFT City", not a gift) come from reading the first corpus sample.
-Before them, Tokyo, Yokohama and Kawasaki all claimed city-level gifting culture on the strength of
-a garden, a cherry tree and a song title. Each such sentence is now a test case.
+**Strong and weak.** A passage counts towards coverage only if it is _strong_, and every weak one
+says why in `weakReason`. A passage is strong when its gift sentences:
+
+- describe a recurring practice in **habitual or normative language**: "traditionally", "every
+  year", "it is customary", "gifts are exchanged", "children receive lai see", "need to prepare
+  12 gifts", "should not be opened". An event is narrated ("they exchanged gifts", Cortés and
+  Moctezuma) and is weak;
+- are not only a **civic or institutional gift** (a planetarium from East Germany, a bequest to a
+  library), even if they name an occasion;
+- are not only **commerce** (a shop's souvenirs, souvenirs sold to tourists).
+
+Name rules come before any of that. A capitalised gift word mid-sentence is a name (Gift Records,
+GIFT City, "Souvenirs from Tokyo", _The Wedding Present_). A place name inside a longer proper noun
+is not a mention of the place: El Salvador is not Salvador, _Adelaide D. Thayer_ is a person,
+Tokyo Dome is a stadium. Demonyms are adjectives, so "Chinese New Year" still names China. A
+city's demonym never anchors a mention, because Wikidata gives Guangzhou "Cantonese".
+
+**`level` counts documented sources only.** These are the place's own article, its culture article
+(only if that title names the place; Rome's Wikidata culture link is _Christian culture_), and
+articles titled as being about it (_Christmas in Italy_, _Chinese New Year_, _Marriage in
+Myanmar_). Mentions found anywhere else in Wikipedia count only towards `levelWithMentions`. The
+split is measured, not assumed; see the next section.
+
+## Measured precision (full dump, 2026-11-07 snapshot)
+
+The full scan read **7,259,919 articles in 48 minutes** and kept **106,455 gifting paragraphs from
+81,363 articles** (86 MB). `collect` then compiled **657 cities** (every Wikidata city ≥ 1 M people,
+103 countries, 0 failed country queries) in **23 s, with no network**.
+
+Each rule above was added after reading random samples of what the previous rules let through,
+and judging every passage by hand. The final rules on the full corpus:
+
+| What sets it                        | Judged           | About a gifting custom of that place              |
+| ----------------------------------- | ---------------- | ------------------------------------------------- |
+| `level`, city scope (documented)    | all 9            | ~8.5 of 9 (one is historical almsgiving)          |
+| `level`, country scope (documented) | 25 random of 119 | ~23–24 of 25 (one is market stalls selling gifts) |
+| `levelWithMentions`, city scope     | 25 random of 159 | 5 of 25                                           |
+| `levelWithMentions`, country scope  | 25 random of 678 | 11 of 25                                          |
+
+Before the habitual-language and name rules, a sample of city-level evidence was about 3 in 30.
+Those passages were French titles where _souvenir_ means "memory", a murder case, university
+donations and a band.
+
+Resulting coverage: **`level`** is none 122, country 520, region 8, city 7. **`levelWithMentions`**
+is none 38, country 507, region 42, city 70. Two readings:
+
+- `level` is the field to publish from. Very few cities have a documented city-specific custom in
+  English Wikipedia (Hong Kong, Kolkata, Tainan, Wenzhou, Nanjing, Bhopal, Prayagraj), and the data
+  says so rather than inventing more.
+- The mention layer holds real finds that no title-based route reaches: Kyoto's yatsuhashi,
+  Palembang's pempek as visitors' gifts, Singapore's red packets for service staff, Hong Kong's
+  Lunar New Year butter cookies. It also holds four wrong passages for every right one. It is a
+  queue for a person to review, not a source to publish from.
+
+Wikidata quirks pass through as they are. China has 295 of the 657 "cities" because prefecture-level
+areas are classed as cities, and _El Paso–Juárez_ is a metropolitan area.
 
 ## What the data can and cannot support
 

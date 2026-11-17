@@ -104,6 +104,7 @@ test("search hits must name the subject in the paragraph or its heading", () => 
     title: "Red envelope",
     text,
     subjectNames: ["China", "Chinese"],
+    subjectDemonyms: ["Chinese"],
     requiresMention: true,
   });
   assert.equal(passages.length, 1, "the lead and the Vietnam section say nothing about China");
@@ -243,5 +244,146 @@ test("an heirloom handed to an institution is institutional, not a family custom
     "The Hōsa Library houses historic editions of The Tale of Genji that are an heirloom of the Owari Tokugawa and were bequeathed to the city.",
   );
   assert.equal(isWeak(tags), true);
-  assert.equal(isWeak(tagPassage("The quilt is an heirloom passed down from mother to daughter.")), false);
+  assert.equal(
+    isWeak(tagPassage("The quilt is an heirloom passed down from mother to daughter.")),
+    false,
+  );
+});
+
+// From a random sample of city-level corpus mentions in the full dump: one-off
+// events, titles and foreign words that set a city's coverage before this rule.
+test("a corpus mention counts only when it describes a recurring practice", () => {
+  const strong = (title, text, names) =>
+    extractPassages({
+      title,
+      text,
+      subjectNames: names,
+      requiresMention: true,
+      mentionScope: "sentence",
+      requireCustomLanguage: true,
+    }).map((p) => [p.weak, p.weakReason]);
+  assert.deepEqual(
+    strong(
+      "Rolex",
+      "In Singapore in 1998 a man murdered a beautician to steal her Rolex and give it to his girlfriend as a birthday present.",
+      ["Singapore"],
+    ),
+    [[true, "no habitual language"]],
+  );
+  assert.deepEqual(
+    strong(
+      "Boys' Brigade in Singapore",
+      "Share-a-Gift is a major annual event held in Singapore during the Christmas period, collecting gifts for the needy.",
+      ["Singapore"],
+    ),
+    [[false, null]],
+  );
+  assert.deepEqual(
+    strong(
+      "Wagashi",
+      "Nama yatsuhashi is a very popular souvenir of Kyoto, bought by most tourists.",
+      ["Kyoto"],
+    ),
+    [[false, null]],
+  );
+});
+
+test("French souvenir (memory) and romanised names are not gift words", () => {
+  assert.deepEqual(giftTerms("Nocturne: Souvenir de Milan, Op. 70"), []);
+  assert.deepEqual(giftTerms("group exhibition Fais un effort pour te souvenir."), []);
+  assert.deepEqual(
+    giftTerms("Assumption Junior College (Seibo Hishōten Gakuin) was a college in Osaka."),
+    [],
+  );
+  assert.deepEqual(giftTerms("At year end, oseibo gifts are sent to superiors."), [
+    "oseibo",
+    "gifts",
+  ]);
+});
+
+// Name collisions from a random sample of city-level mentions in the full dump.
+test("a place name inside a longer proper noun is not a mention of the place", () => {
+  const match = mentionMatcher(["Salvador", "Adelaide", "Manila", "Tokyo"]);
+  assert.deepEqual(
+    match("Some countries, in particular El Salvador, have a tradition called Amigo secreto."),
+    [],
+  );
+  assert.deepEqual(match("Adelaide D. Thayer recalled making gifts each year."), []);
+  assert.deepEqual(match("I Gusti Kompyang Manila accepted the gift."), []);
+  assert.deepEqual(match("She held an ice show at Tokyo Dome."), []);
+  assert.deepEqual(
+    match("In Tokyo, gifts are exchanged."),
+    ["Tokyo"],
+    "a leading preposition is not part of the name",
+  );
+  assert.deepEqual(
+    match("Visitors to Salvador, Bahia buy souvenirs."),
+    ["Salvador"],
+    "a comma ends the name",
+  );
+});
+
+test("a Title Case gift phrase mid-sentence is a name", () => {
+  assert.deepEqual(giftTerms("In April, the Wedding Present toured Australia."), []);
+  assert.deepEqual(giftTerms("Couples exchange Christmas presents."), ["christmas presents"]);
+});
+
+test("selling souvenirs is commerce", () => {
+  assert.equal(
+    isWeak(tagPassage("The work was shipped to Egypt to be sold as souvenirs to tourists.")),
+    true,
+  );
+});
+
+test("a demonym is an adjective: a capital after it does not make it a longer name", () => {
+  const match = mentionMatcher(["Japan", "Japanese"], { adjectives: ["Japanese"] });
+  assert.deepEqual(match("The Japanese Valentine custom spread in the 1970s."), ["Japanese"]);
+  assert.deepEqual(match("Japan Airlines sells gifts."), []);
+});
+
+// Judged by hand: every city-level passage from a place's own article in the
+// full dump. Events and objects on the left; customs on the right.
+test("habitual language separates customs from events, everywhere", () => {
+  const strong = (text) =>
+    extractPassages({ title: "Place", text, subjectNames: [], requiresMention: false }).map(
+      (p) => p.weak === false,
+    );
+  assert.deepEqual(
+    strong(
+      "Cortés and Moctezuma II met on the causeway; they exchanged gifts, but the camaraderie did not last.",
+    ),
+    [false],
+  );
+  assert.deepEqual(
+    strong("Thousands came to gawk at the scene, collecting keepsakes and posing for photographs."),
+    [false],
+  );
+  assert.deepEqual(
+    strong(
+      "The Volgograd Planetarium was a gift from East Germany in honor of Stalin's 70th birthday.",
+    ),
+    [false],
+  );
+  assert.deepEqual(
+    strong(
+      "Communities still practise traditional crafts, including the production of masks and alms bowls.",
+    ),
+    [],
+  );
+  assert.deepEqual(
+    strong(
+      "Gifts and visits are exchanged among friends and relatives and children receive lai see, lucky money.",
+    ),
+    [true],
+  );
+  assert.deepEqual(
+    strong("Winter customs include staying up on New Year's Eve and giving lucky money."),
+    [true],
+  );
+  assert.deepEqual(
+    strong(
+      "Both groom and bride need to prepare 12 specific gifts representing different meanings during their engagement ceremony, with more to come in the wedding.",
+    ),
+    [true],
+  );
 });

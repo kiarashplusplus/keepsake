@@ -29,7 +29,7 @@ const ABOUT_PREFIX =
   "Culture|Etiquette|Cuisine|Customs|Traditions|Public holidays|Holidays|Festivals|Christmas|New Year|Weddings?|Wedding customs|Marriage|Funerals?|Gift[- ]giving|Hospitality|Religion";
 const ABOUT_OF = new RegExp(`^(?:${ABOUT_PREFIX}) (?:in|of) (?:the )?(.+)$`);
 const ABOUT_DEMONYM =
-  /^(.+?) (?:wedding customs|weddings?|marriage|funerals?|etiquette|customs|culture|holidays|festivals|cuisine|gift[- ]giving|hospitality)$/i;
+  /^(.+?) (?:wedding customs|weddings?|marriage|funerals?|etiquette|customs|culture|holidays|festivals?|cuisine|gift[- ]giving|hospitality|new year|traditions|folklore|folk religion|tea culture|calendar)$/i;
 
 const MAX_NGRAM = 5;
 
@@ -115,19 +115,30 @@ export function collectFromCorpus({ byTitle, index, subject, log = () => {} }) {
       candidates.set(title, { discoveredBy, requiresMention });
   };
   add(subject.title, "place-article", false);
-  for (const t of subject.cultureTitles ?? []) add(t, "culture-article", false);
+  // Wikidata's "culture" link is only documentation of the place when its
+  // title names the place: Rome's P2596 is "Christian culture".
+  const names = subjectNames(subject);
+  for (const t of subject.cultureTitles ?? []) {
+    if (names.some((n) => t.includes(n))) add(t, "culture-article", false);
+    else add(t, "corpus-mention", true);
+  }
   for (const t of index.aboutTitles.get(subject.qid) ?? []) add(t, "about-title", false);
   for (const t of index.mentionTitles.get(subject.qid) ?? []) add(t, "corpus-mention", true);
 
-  const names = subjectNames(subject);
   const sources = [];
   const passages = [];
   for (const [title, how] of candidates) {
     const article = byTitle.get(title);
+    // A city's demonym is too broad to anchor a mention ("Cantonese" for
+    // Guangzhou); a country's ("Japanese") is the usual way it is named.
+    const names = subjectNames(subject, {
+      demonyms: subject.kind === "country" || !how.requiresMention,
+    });
     const found = extractPassages({
       title,
       paragraphs: article.paragraphs,
       subjectNames: names,
+      subjectDemonyms: subject.demonyms ?? [],
       requiresMention: how.requiresMention,
       mentionScope: how.requiresMention ? "sentence" : "paragraph",
       renderer: "dump-wikitext",

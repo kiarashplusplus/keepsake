@@ -79,6 +79,10 @@ export const EXCLUDED_PHRASES = [
   "gift aid",
   "gift wrap(?:ping)? (?:paper|department)",
   "souvenir shops?",
+  // French: "Souvenir de Milan", "Souvenirs de Casablanca", "te souvenir" (memory, remember).
+  "souvenirs? (?:de|d'|du|des|di|d’)",
+  "alms[- ](?:bowls?|box(?:es)?|houses?)",
+  "(?:te|se|me|vous|nous) souvenir",
   "souvenir (?:mail|covers?|sheets?|editions?|programm?e?s?|books?|stamps?|issues?|coins?|medals?|albums?|singles?)",
   "souvenir stands?",
   "souvenir stores?",
@@ -209,7 +213,7 @@ export const PRACTICES = {
     "bequeath\\w*",
     "bequests?",
     "donat\\w+ (?:to|by) (?:the )?(?:city|town|museum|university|library|park|zoo|collection|state|nation|school|college|hospital|church)",
-    "gifts? to the (?:museum|university|library|collection|nation|state|school|college|hospital)",
+    "gifts? to the (?:museum|university|library|collection|nation|state|school|college|hospital|art gallery|gallery)",
     "endow\\w*",
   ],
   commercial: [
@@ -221,6 +225,11 @@ export const PRACTICES = {
     "market\\w*",
     "brands?",
     "advertis\\w*",
+    "sold",
+    "sells?",
+    "selling",
+    "vendors?",
+    "merchandise",
   ],
 };
 
@@ -228,6 +237,50 @@ export const PRACTICES = {
  * Section headings that are never about the subject's culture. Paragraphs
  * under them are skipped wholesale.
  */
+/**
+ * Language that describes a recurring practice rather than one event. A
+ * paragraph found only because it names a city in the same sentence as a
+ * gift ("corpus-mention") counts as evidence of a custom only if its gift
+ * sentences use one of these. Measured need: in a random sample of 30
+ * city-level corpus mentions from the full 2026-11-07 dump, about 3 were
+ * about a custom; the rest were one-off events (a murder, a donation, a
+ * 1998 birthday present), titles and anecdotes.
+ */
+export const CUSTOM_MARKERS = [
+  "traditions?",
+  "traditional(?:ly)?",
+  "customs?",
+  "customar(?:y|ily)",
+  "usually",
+  "commonly",
+  "typical(?:ly)?",
+  "often",
+  "popular(?:ly)?",
+  "annual(?:ly)?",
+  "every year",
+  "each year",
+  "yearly",
+  "rituals?",
+  "etiquette",
+  "it is (?:considered|expected|common|customary|traditional)",
+  "(?:are|is) (?:expected|supposed) to",
+  "(?:the )?practice of",
+  "widely",
+  "generally",
+  "(?:people|families|households|locals|children|guests|visitors) (?:usually |traditionally |often )?(?:give|gives|bring|brings|exchange|exchanges|send|sends|receive|receives|offer|offers)",
+  // Generic present tense is how a custom is described; events are narrated
+  // in the past ("they exchanged gifts" — Cortés and Moctezuma).
+  "(?:are|is) (?:\\w+ )?(?:exchanged|given|offered|presented|sent|brought|distributed|handed out|wrapped|opened)",
+  "(?:give|bring|exchange|send|offer|present) (?:\\w+ )?(?:gifts|presents|money|sweets|red packets|red envelopes|envelopes)",
+  "receive (?:\\w+ )?(?:gifts|presents|money|red packets|red envelopes|lucky money|lai see|hongbao|eidi|otoshidama)",
+  // Normative language is how etiquette is described: "need to prepare 12 gifts", "should not be opened".
+  "(?:need|needs|have|has|ought) to (?:prepare|give|bring|offer|send|present|wrap|return)",
+  "(?:should|must)(?: not)? (?:be )?(?:given|opened|wrapped|offered|brought|returned|accepted|refused|give|bring|offer|open|wrap|return|accept|refuse)",
+  "folk(?:lore| customs?)",
+  "festivals?",
+  "celebrations?",
+];
+
 export const SKIPPED_SECTIONS = [
   "see also",
   "references",
@@ -255,6 +308,7 @@ export function compile(patterns, { caseSensitive = false } = {}) {
 }
 
 export const GIFT_RE = compile(GIFT_TERMS);
+export const CUSTOM_RE = compile(CUSTOM_MARKERS);
 export const EXCLUDED_RE = compile(EXCLUDED_PHRASES);
 
 const compileTags = (table) =>

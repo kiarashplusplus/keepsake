@@ -114,21 +114,51 @@ test("compileCity: narrowest scope wins a duplicate; weak passages never set the
       ["c", "country"],
     ],
   );
-  assert.equal(record.coverage.level, "city");
+  // The fixture's passages are search hits (a mention, not a documented
+  // source): they set levelWithMentions, never level.
+  assert.equal(record.coverage.level, "none");
+  assert.equal(record.coverage.levelWithMentions, "city");
   assert.deepEqual(record.coverage.strongPassages, { city: 1, region: 0, country: 1 });
   assert.equal(record.sources[0].revisionUrl, "https://en.wikipedia.org/w/index.php?oldid=1");
   assert.equal(record.sources[0].license.name, "CC BY-SA 4.0");
   assert.equal(record.location.countries[0].iso2, "JP");
 });
 
-test("coverageLevel: only weak city passages means country-level coverage", () => {
-  assert.equal(
-    coverageLevel([
-      { scope: "city", weak: true },
-      { scope: "country", weak: false },
-    ]),
-    "country",
-  );
-  assert.equal(coverageLevel([{ scope: "city", weak: true }]), "none");
+test("coverageLevel: weak passages never count; mentions count only for levelWithMentions", () => {
+  const p = (scope, weak, discoveredBy = "place-article") => ({
+    scope,
+    weak,
+    source: { discoveredBy },
+  });
+  assert.equal(coverageLevel([p("city", true), p("country", false)]), "country");
+  assert.equal(coverageLevel([p("city", true)]), "none");
   assert.equal(coverageLevel([]), "none");
+  const mixed = [p("city", false, "corpus-mention"), p("country", false, "culture-article")];
+  assert.equal(coverageLevel(mixed), "country");
+  assert.equal(coverageLevel(mixed, { includeMentions: true }), "city");
+  assert.equal(coverageLevel([p("city", false, "about-title")]), "city");
+});
+
+test("weak country passages are counted, not copied into every city", () => {
+  const city = subject("Q35765", "city", "Osaka");
+  const japan = { ...subject("Q17", "country", "Japan"), iso2: "JP" };
+  const record = compileCity({
+    city: { ...city, label: "Osaka", population: 1, coordinates: null, demonyms: [] },
+    regions: [],
+    countries: [japan],
+    generatedAt: "t",
+    collections: {
+      city: { subject: city, passages: [passage("cw", { weak: true })] },
+      regions: [],
+      countries: [
+        { subject: japan, passages: [passage("weak1", { weak: true }), passage("strong1")] },
+      ],
+    },
+  });
+  assert.deepEqual(
+    record.passages.map((p) => p.id),
+    ["cw", "strong1"],
+    "a weak city passage is kept; a weak country one is not",
+  );
+  assert.equal(record.coverage.omittedWeakCountryPassages, 1);
 });

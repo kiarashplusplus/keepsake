@@ -38,9 +38,17 @@ export function shortName(title) {
     .trim();
 }
 
-/** Every string a passage could use to name the subject. */
-export function subjectNames(subject) {
-  const names = [subject.title, subject.label, ...(subject.demonyms ?? [])].filter(Boolean);
+/**
+ * Every string a passage could use to name the subject. `demonyms: false`
+ * leaves out "Japanese"/"Cantonese": a city's demonym is often a language or
+ * a people far larger than the city (Wikidata gives Guangzhou "Cantonese").
+ */
+export function subjectNames(subject, { demonyms = true } = {}) {
+  const names = [
+    subject.title,
+    subject.label,
+    ...(demonyms ? (subject.demonyms ?? []) : []),
+  ].filter(Boolean);
   if (subject.title) names.push(shortName(subject.title));
   return [...new Set(names)];
 }
@@ -77,7 +85,13 @@ export async function collectSubject(client, subject, { searchLimit = 8, log = (
     if (title) requested.push({ title, discoveredBy, requiresMention });
   };
   add(subject.title, "place-article", false);
-  for (const title of subject.cultureTitles ?? []) add(title, "culture-article", false);
+  // Wikidata's "culture" link documents the place only when its title names
+  // it (Rome's P2596 is "Christian culture"); otherwise it is a search-like hit.
+  const placeNames = subjectNames(subject);
+  for (const title of subject.cultureTitles ?? []) {
+    if (placeNames.some((n) => title.includes(n))) add(title, "culture-article", false);
+    else add(title, "search", true);
+  }
   for (const title of templateTitles(subject)) add(title, "culture-article", false);
   if (searchLimit > 0) {
     for (const query of searchQueries(subject)) {
@@ -117,6 +131,7 @@ export async function collectSubject(client, subject, { searchLimit = 8, log = (
       title: article.title,
       text: article.text,
       subjectNames: names,
+      subjectDemonyms: subject.demonyms ?? [],
       requiresMention,
     });
     const source = {

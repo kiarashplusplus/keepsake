@@ -33,10 +33,31 @@ export function cityFileName(city) {
  * The narrowest scope with at least one non-weak passage, or "none".
  * Weak passages ("a gift from France") are counted but never set the level.
  */
-export function coverageLevel(passages) {
-  for (const scope of SCOPES) if (passages.some((p) => p.scope === scope && !p.weak)) return scope;
+export function coverageLevel(passages, { includeMentions = false } = {}) {
+  for (const scope of SCOPES) {
+    if (
+      passages.some(
+        (p) =>
+          p.scope === scope &&
+          !p.weak &&
+          (includeMentions || DOCUMENTED.has(p.source.discoveredBy)),
+      )
+    ) {
+      return scope;
+    }
+  }
   return "none";
 }
+
+/**
+ * Discovery routes where the *article* is about the place, so a gifting
+ * paragraph in it is evidence about that place. The others (a search hit, a
+ * same-sentence mention anywhere in Wikipedia) found the place in one
+ * sentence; measured on a random sample of city-level corpus mentions, a
+ * minority of those describe a custom of that city. They set
+ * `levelWithMentions`, never `level`.
+ */
+export const DOCUMENTED = new Set(["place-article", "culture-article", "about-title"]);
 
 const subjectRef = (s) => ({ qid: s.qid, name: shortName(s.title), wikipediaTitle: s.title });
 
@@ -54,6 +75,7 @@ export function compileCity({ city, regions, countries, collections, generatedAt
 
   const passages = [];
   const seen = new Set();
+  let omittedWeakCountry = 0;
   const sourceUse = new Map();
   for (const [scope, list] of ordered) {
     for (const collection of list) {
@@ -62,6 +84,13 @@ export function compileCity({ city, regions, countries, collections, generatedAt
         // landing in "Etiquette in Japan"); the narrowest scope keeps it.
         if (seen.has(p.id)) continue;
         seen.add(p.id);
+        // A weak country-scope passage never sets coverage, and the same few
+        // hundred of them were copied into every city of that country: 818 MB
+        // for 657 cities on the full dump. Counted, not stored.
+        if (scope === "country" && p.weak) {
+          omittedWeakCountry++;
+          continue;
+        }
         const { source, ...rest } = p;
         passages.push({
           id: p.id,
@@ -114,7 +143,9 @@ export function compileCity({ city, regions, countries, collections, generatedAt
     },
     coverage: {
       level: coverageLevel(passages),
+      levelWithMentions: coverageLevel(passages, { includeMentions: true }),
       passages: count(() => true),
+      omittedWeakCountryPassages: omittedWeakCountry,
       strongPassages: count((p) => !p.weak),
     },
     passages,

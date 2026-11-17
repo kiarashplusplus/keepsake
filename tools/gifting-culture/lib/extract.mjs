@@ -12,7 +12,14 @@
  * README.md "Known gaps".
  */
 import { createHash } from "node:crypto";
-import { EXCLUDED_RE, GIFT_RE, OCCASION_RES, PRACTICE_RES, SKIPPED_SECTIONS } from "./lexicon.mjs";
+import {
+  CUSTOM_RE,
+  EXCLUDED_RE,
+  GIFT_RE,
+  OCCASION_RES,
+  PRACTICE_RES,
+  SKIPPED_SECTIONS,
+} from "./lexicon.mjs";
 
 /** Paragraphs shorter than this are captions, table cells or list stubs. */
 export const MIN_PARAGRAPH_CHARS = 40;
@@ -126,7 +133,8 @@ export function giftTerms(text) {
 }
 
 /** Single-word terms that are also common in names: "Gift Records", "Souvenirs from Tokyo". */
-const NAMEABLE = /^(?:gifts?|gifting|souvenirs?|keepsakes?|heirlooms?|omiyage|alms)$/i;
+const NAMEABLE =
+  /^(?:gifts?|gifting|souvenirs?|keepsakes?|heirlooms?|omiyage|alms|(?:o)?seibo|(?:o)?ch[uū]gen|potlatch|zakat|sadaqah|eidi)$/i;
 
 /**
  * A capitalised gift word in the middle of a sentence is a name: a record
@@ -136,7 +144,9 @@ const NAMEABLE = /^(?:gifts?|gifting|souvenirs?|keepsakes?|heirlooms?|omiyage|al
  * of the city-level false positives.
  */
 function looksLikeAName(text, hit) {
-  if (!NAMEABLE.test(hit.term) || !/^\p{Lu}/u.test(hit.term)) return false;
+  // A Title Case multi-word phrase mid-sentence is a name too: "The Wedding Present" (a band).
+  const titleCase = /\s/.test(hit.term) && hit.term.split(/\s+/).every((w) => /^\p{Lu}/u.test(w));
+  if (!titleCase && (!NAMEABLE.test(hit.term) || !/^\p{Lu}/u.test(hit.term))) return false;
   const before = text.slice(0, hit.start).trimEnd();
   if (!before) return false; // start of text or heading
   // After an opening quote, it depends on where the quote sits: a quotation
@@ -184,6 +194,34 @@ export function isWeak(tags) {
   );
 }
 
+/** Does this text describe a recurring practice ("traditionally", "every year")? */
+export function describesCustom(text) {
+  CUSTOM_RE.lastIndex = 0;
+  return CUSTOM_RE.test(text);
+}
+
+/**
+ * `weak` plus the reason, so a reviewer can see why a passage does not count
+ * towards coverage. A custom is described in habitual language ("gifts are
+ * exchanged", "children receive lai see", "traditionally"); an event is
+ * narrated ("they exchanged gifts", "collecting keepsakes"). Judging every
+ * city-level passage from documented sources in the full dump by hand, about
+ * half were events, tourism or objects; `requireCustomLanguage` (on by
+ * default) is the rule that separates them.
+ */
+function strength(tags, giftSentences, requireCustomLanguage) {
+  if (isWeak(tags)) return { weak: true, weakReason: "civic, institutional or commercial only" };
+  const habitual = describesCustom(giftSentences.join(" "));
+  // An occasion does not rescue a civic gift: a planetarium given by East
+  // Germany for Stalin's birthday is still a gift between states.
+  const practices = Object.keys(tags.practices);
+  if (!habitual && practices.some((p) => p === "civic-or-diplomatic" || p === "institutional")) {
+    return { weak: true, weakReason: "civic or institutional gift" };
+  }
+  if (requireCustomLanguage && !habitual) return { weak: true, weakReason: "no habitual language" };
+  return { weak: false, weakReason: null };
+}
+
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -194,7 +232,8 @@ function escapeRegExp(s) {
  * "Split", "Mobile") and a capital letter is the only cheap signal that
  * the place is meant.
  */
-export function mentionMatcher(names) {
+export function mentionMatcher(names, { adjectives = [] } = {}) {
+  const adjective = new Set(adjectives);
   const unique = [...new Set(names.map((n) => n.trim()).filter((n) => n.length >= 3))];
   if (!unique.length) return () => [];
   unique.sort((a, b) => b.length - a.length);
@@ -202,7 +241,35 @@ export function mentionMatcher(names) {
     `(?<![\\p{L}\\p{N}])(?:${unique.map(escapeRegExp).join("|")})(?![\\p{L}\\p{N}])`,
     "gu",
   );
-  return (text) => [...new Set([...text.matchAll(re)].map((m) => m[0]))];
+  return (text) => [
+    ...new Set(
+      [...text.matchAll(re)]
+        .filter((m) => !insideLongerName(text, m.index, m[0].length, adjective.has(m[0])))
+        .map((m) => m[0]),
+    ),
+  ];
+}
+
+/** Capitalised words that can sit before a place name without being part of it. */
+const LEADING_WORDS = new Set(
+  "In At On The From To Of For By And Or But With Near Outside Inside Across Around Throughout During Since As Like Unlike Both While When Where Whereas Although Many Some Most All Modern Central Northern Southern Eastern Western Greater Downtown Old Medieval Contemporary Today Both Across Unlike Visitors Residents People".split(
+    " ",
+  ),
+);
+
+/**
+ * Is this match part of a longer proper noun? "El Salvador" is not Salvador,
+ * "Adelaide D. Thayer" is a person, "Tokyo Dome" is a stadium. Measured on
+ * the full dump: these collisions were the largest class of wrong
+ * city-level mentions after the custom-language rule.
+ */
+function insideLongerName(text, start, length, isAdjective) {
+  const before = text.slice(0, start).match(/(\p{Lu}[\p{L}'’.-]*)\s+$/u);
+  if (before && !LEADING_WORDS.has(before[1])) return true;
+  // A demonym is an adjective: "Chinese New Year" names China, "Tokyo Dome" does not name Tokyo.
+  if (isAdjective) return false;
+  const after = text.slice(start + length).match(/^\s+(\p{Lu}[\p{L}'’.-]*)/u);
+  return Boolean(after);
 }
 
 export function passageId(title, text) {
@@ -254,8 +321,10 @@ export function extractPassages({
   requiresMention,
   mentionScope = "paragraph",
   renderer = "textextracts",
+  requireCustomLanguage = true,
+  subjectDemonyms = [],
 }) {
-  const mentions = mentionMatcher(subjectNames);
+  const mentions = mentionMatcher(subjectNames, { adjectives: subjectDemonyms });
   const out = [];
   const seen = new Set();
   for (const para of paragraphs ?? parseSections(text)) {
@@ -297,7 +366,7 @@ export function extractPassages({
       giftTerms: [...new Set(why.terms)],
       subjectMentions: [...new Set(named)],
       tags,
-      weak: isWeak(tags),
+      ...strength(tags, giftSentences, requireCustomLanguage),
       // What the source text can tell a reviewer about its own reliability.
       // TextExtracts strips footnotes and maintenance templates, so the API
       // path cannot know either: null, never a misleading 0.
