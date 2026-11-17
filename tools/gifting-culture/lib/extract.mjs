@@ -139,8 +139,16 @@ function looksLikeAName(text, hit) {
   if (!NAMEABLE.test(hit.term) || !/^\p{Lu}/u.test(hit.term)) return false;
   const before = text.slice(0, hit.start).trimEnd();
   if (!before) return false; // start of text or heading
+  // After an opening quote, it depends on where the quote sits: a quotation
+  // opening a sentence ('"Gifts are…," he said') is the word; one in the
+  // middle of a sentence ('recordings including "Souvenirs from Tokyo"') is
+  // a title.
+  if (/["“‘']$/.test(before)) {
+    const outside = before.slice(0, -1).trimEnd();
+    return Boolean(outside) && !/[.!?:;\u2022—–-]$/.test(outside);
+  }
   // Not "(": "(Gift Records 1995)" is the usual shape of a name in a list.
-  return !/[.!?:;"“‘'\u2022—–-]$/.test(before);
+  return !/[.!?:;\u2022—–-]$/.test(before);
 }
 
 function tagWith(table, text) {
@@ -169,6 +177,8 @@ export function isWeak(tags) {
   if (Object.keys(tags.occasions).length) return false;
   // Selling souvenirs is commerce; buying one to bring home is a custom.
   if (practices.has("commercial")) practices.delete("souvenir");
+  // Likewise an heirloom bequeathed to a library is a collection, not a family custom.
+  if (practices.has("institutional")) practices.delete("heirloom");
   return [...practices].every(
     (p) => p === "civic-or-diplomatic" || p === "commercial" || p === "institutional",
   );
@@ -274,7 +284,10 @@ export function extractPassages({
     if (seen.has(id)) continue;
     seen.add(id);
 
-    const tags = tagPassage(paragraph);
+    // Tags describe the sentences that talk about gifts, not their
+    // neighbours: "the gallery hosts an annual prize" two sentences after a
+    // civic gift made it look like a host-gift custom.
+    const tags = tagPassage(why.matchedBy === "paragraph" ? giftSentences.join(" ") : paragraph);
     out.push({
       id,
       headingPath,

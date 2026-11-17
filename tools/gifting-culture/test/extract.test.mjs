@@ -166,9 +166,15 @@ test("a capitalised gift word mid-sentence is a name, not a gift", () => {
   assert.deepEqual(giftTerms("held a solo ice show titled Gift at Tokyo Dome."), []);
   assert.deepEqual(
     giftTerms('recordings including "Souvenirs from Tokyo".'),
-    ["souvenirs"],
-    "a quoted title opening with the word is ambiguous; it stays",
+    [],
+    "a quoted title mid-sentence",
   );
+  assert.deepEqual(
+    giftTerms('"Gifts are opened at home," she said.'),
+    ["gifts"],
+    "a quotation opening a sentence",
+  );
+  assert.deepEqual(giftTerms("the carriage of souvenir mail between Lakehurst and Tokyo"), []);
   assert.deepEqual(
     giftTerms("Gifts are opened later."),
     ["gifts"],
@@ -219,4 +225,23 @@ test("civic, institutional and commercial gifts are weak; customs are not", () =
     ),
     false,
   );
+});
+
+test("tags describe the gift sentences, not their neighbours", () => {
+  const [passage] = extractPassages({
+    title: "Gosford",
+    text: "The garden was built as a gift to residents of the City of Gosford by the Ward of Edogawa, Tokyo. The gallery hosts the annual Gosford Art Prize.",
+    subjectNames: ["Tokyo"],
+    requiresMention: true,
+  });
+  assert.deepEqual(Object.keys(passage.tags.practices), ["civic-or-diplomatic"]);
+  assert.equal(passage.weak, true);
+});
+
+test("an heirloom handed to an institution is institutional, not a family custom", () => {
+  const tags = tagPassage(
+    "The Hōsa Library houses historic editions of The Tale of Genji that are an heirloom of the Owari Tokugawa and were bequeathed to the city.",
+  );
+  assert.equal(isWeak(tags), true);
+  assert.equal(isWeak(tagPassage("The quilt is an heirloom passed down from mother to daughter.")), false);
 });

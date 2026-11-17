@@ -79,6 +79,7 @@ export const EXCLUDED_PHRASES = [
   "gift aid",
   "gift wrap(?:ping)? (?:paper|department)",
   "souvenir shops?",
+  "souvenir (?:mail|covers?|sheets?|editions?|programm?e?s?|books?|stamps?|issues?|coins?|medals?|albums?|singles?)",
   "souvenir stands?",
   "souvenir stores?",
   "heirloom (?:tomato(?:es)?|varieties|variety|seeds?|vegetables?|plants?)",
