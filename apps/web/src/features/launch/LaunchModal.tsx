@@ -130,7 +130,11 @@ export function LaunchModal({ now }: LaunchModalProps): React.ReactElement | nul
       <Sheet
         visible
         centered
-        blurBackdrop
+        // Not while the consent bar is up: a first-time visitor already has
+        // that bar across the bottom of the screen, and blurring everything
+        // behind it as well is more than the moment needs. Once they answer
+        // it the inset drops to 0 and the blur comes in.
+        blurBackdrop={consentInset === 0}
         bottomInset={consentInset}
         onClose={close}
         accessibilityLabel={live ? "Keepsake is open" : `Keepsake launches ${LAUNCH_DATE_LABEL}`}
