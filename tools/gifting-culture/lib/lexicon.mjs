@@ -107,8 +107,9 @@ export const OCCASIONS = {
   funeral: ["funerals?", "mourning", "condolences?", "wakes?", "k[oō]den"],
   housewarming: ["housewarming", "new homes?", "newly opened"],
   seasonal: ["(?:o)?ch[uū]gen", "(?:o)?seibo", "mid-year", "year-end"],
+  // A souvenir alone is a practice (PRACTICES.souvenir), not evidence of a
+  // trip: tagging it as an occasion let a shop's stock read as a custom.
   travel: [
-    "souvenirs?",
     "omiyage",
     "pasalubong",
     "trips?",
@@ -188,12 +189,27 @@ export const PRACTICES = {
     "donat\\w*",
   ],
   heirloom: ["heirlooms?", "keepsakes?", "hand-me-downs?", "passed down", "inherit\\w*"],
+  // A gift *between institutions* — a statue from France, cherry trees from
+  // Tokyo's citizens to a park in Toronto. Real, and not a gifting custom.
+  // Every pattern here came from a passage the corpus scan filed under a city.
   "civic-or-diplomatic": [
-    "gift from the (?:people|government|city|nation|king|queen|emperor)",
-    "(?:was|were) (?:a )?gifts? (?:from|to) (?:the )?\\p{Lu}\\p{L}*",
+    "gifts? (?:from|to|of) (?:the )?(?:people|citizens|residents|inhabitants|government|city|town|ward|municipality|prefecture|province|state|nation|king|queen|emperor|empress|president|mayor|council)",
+    "(?:was|were) (?:a |an )?(?:\\d{4} )?gifts? (?:from|to|of) (?:the )?\\p{Lu}\\p{L}*",
+    "(?:as|was|were) (?:a |an )?gifts? to (?:the )?(?:people|citizens|residents|city|town|nation|university|museum|library|park|zoo|garden|school|college|church|cathedral)",
     "sister cit(?:y|ies)",
+    "twin(?:ned)? (?:city|cities|town|towns)",
     "diplomatic gifts?",
-    "presented to the city",
+    "(?:gift|token) of friendship",
+    "friendship gifts?",
+    "presented to the (?:city|town|people|university|museum|nation)",
+  ],
+  // A gift to an institution: a museum's collection, a library's bequest.
+  institutional: [
+    "bequeath\\w*",
+    "bequests?",
+    "donat\\w+ (?:to|by) (?:the )?(?:city|town|museum|university|library|park|zoo|collection|state|nation|school|college|hospital|church)",
+    "gifts? to the (?:museum|university|library|collection|nation|state|school|college|hospital)",
+    "endow\\w*",
   ],
   commercial: [
     "shops?",

@@ -11,7 +11,6 @@
  */
 
 export const SPARQL_ENDPOINT = "https://query.wikidata.org/sparql";
-export const WIKIDATA_API = "https://www.wikidata.org/w/api.php";
 
 /** Q515 "city" and everything that subclasses it ("big city", "city of Japan", …). */
 const CITY_CLASS = "wd:Q515";
@@ -126,55 +125,61 @@ export async function listCountries(client) {
     .map(([iso2, qid]) => ({ iso2, qid }));
 }
 
-function englishMonolingual(claims, property) {
-  return (claims?.[property] ?? [])
-    .filter((c) => c.rank !== "deprecated")
-    .map((c) => c.mainsnak?.datavalue?.value)
-    .filter((v) => v?.language === "en" && v.text)
-    .map((v) => v.text);
-}
-
-function itemValues(claims, property) {
-  return (claims?.[property] ?? [])
-    .filter((c) => c.rank !== "deprecated")
-    .map((c) => c.mainsnak?.datavalue?.value?.id)
-    .filter(Boolean);
-}
-
-function stringValues(claims, property) {
-  return (claims?.[property] ?? [])
-    .filter((c) => c.rank !== "deprecated")
-    .map((c) => c.mainsnak?.datavalue?.value)
-    .filter((v) => typeof v === "string");
-}
-
 /**
  * Labels, English Wikipedia titles, demonyms (P1549), ISO codes (P297) and
- * "culture of" items (P2596) for a set of items, 50 per API call.
+ * the English article of each "culture of" item (P2596), 200 items per
+ * SPARQL query.
+ *
+ * SPARQL rather than `wbgetentities`: the Query Service sits outside the API
+ * gateway's per-identity rate limits, which refused every Action API request
+ * from an agent container on 2026-11-17, and one query here replaces four
+ * wbgetentities calls plus a second round trip for the culture titles.
+ * `wdt:` only ever yields best-rank statements, so deprecated values are out.
  */
-export async function entityDetails(client, qids) {
+export function entityDetailsQuery(qids) {
+  const values = qids.map((q) => {
+    if (!/^Q\d+$/.test(q)) throw new Error(`not a Wikidata item id: ${q}`);
+    return `wd:${q}`;
+  });
+  return `SELECT ?item ?label ?article ?iso ?demonym ?cultureArticle WHERE {
+  VALUES ?item { ${values.join(" ")} }
+  OPTIONAL { ?item rdfs:label ?label . FILTER(LANG(?label) = "en") }
+  OPTIONAL { ?article schema:about ?item ; schema:isPartOf <https://en.wikipedia.org/> . }
+  OPTIONAL { ?item wdt:P297 ?iso }
+  OPTIONAL { ?item wdt:P1549 ?demonym . FILTER(LANG(?demonym) = "en") }
+  OPTIONAL { ?item wdt:P2596 ?culture . ?cultureArticle schema:about ?culture ; schema:isPartOf <https://en.wikipedia.org/> . }
+}`;
+}
+
+export function mergeEntityRows(bindings) {
   const details = new Map();
+  for (const row of bindings) {
+    const qid = qidOf(row.item.value);
+    const d = details.get(qid) ?? {
+      qid,
+      label: null,
+      title: null,
+      demonyms: [],
+      iso2: null,
+      cultureTitles: [],
+    };
+    d.label ??= row.label?.value ?? null;
+    d.title ??= row.article ? titleFromArticleUrl(row.article.value) : null;
+    d.iso2 ??= row.iso?.value ?? null;
+    if (row.demonym && !d.demonyms.includes(row.demonym.value)) d.demonyms.push(row.demonym.value);
+    const culture = row.cultureArticle ? titleFromArticleUrl(row.cultureArticle.value) : null;
+    if (culture && !d.cultureTitles.includes(culture)) d.cultureTitles.push(culture);
+    details.set(qid, d);
+  }
+  return details;
+}
+
+export async function entityDetails(client, qids) {
   const unique = [...new Set(qids)];
-  for (let i = 0; i < unique.length; i += 50) {
-    const batch = unique.slice(i, i + 50);
-    // No `maxlag`: it exists to slow down *edits*, and Wikidata's lag figure
-    // folds in query-service lag that can sit above 5 s for hours. With it,
-    // the first real run of this tool failed nine read attempts in a row.
-    const url =
-      `${WIKIDATA_API}?action=wbgetentities&format=json&formatversion=2` +
-      `&props=labels|sitelinks|claims&languages=en&sitefilter=enwiki&ids=${batch.join("|")}`;
-    const body = await client.getJson(url);
-    for (const [qid, entity] of Object.entries(body.entities ?? {})) {
-      if (entity.missing !== undefined) continue;
-      details.set(qid, {
-        qid,
-        label: entity.labels?.en?.value ?? null,
-        title: entity.sitelinks?.enwiki?.title ?? null,
-        demonyms: englishMonolingual(entity.claims, "P1549"),
-        iso2: stringValues(entity.claims, "P297")[0] ?? null,
-        cultureItems: itemValues(entity.claims, "P2596"),
-      });
-    }
+  const details = new Map();
+  for (let i = 0; i < unique.length; i += 200) {
+    const rows = await sparql(client, entityDetailsQuery(unique.slice(i, i + 200)));
+    for (const [qid, d] of mergeEntityRows(rows)) details.set(qid, d);
   }
   return details;
 }

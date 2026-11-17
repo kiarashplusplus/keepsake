@@ -121,7 +121,26 @@ export function giftTerms(text) {
   const excluded = spans(EXCLUDED_RE, text);
   return spans(GIFT_RE, text)
     .filter((hit) => !excluded.some((ex) => hit.start >= ex.start && hit.end <= ex.end))
+    .filter((hit) => !looksLikeAName(text, hit))
     .map((hit) => hit.term.toLowerCase());
+}
+
+/** Single-word terms that are also common in names: "Gift Records", "Souvenirs from Tokyo". */
+const NAMEABLE = /^(?:gifts?|gifting|souvenirs?|keepsakes?|heirlooms?|omiyage|alms)$/i;
+
+/**
+ * A capitalised gift word in the middle of a sentence is a name: a record
+ * label, a song, a show, a special economic zone ("GIFT City"). Lower case,
+ * or capitalised at the start of a sentence, heading or quotation, it is the
+ * word itself. Found in the first corpus sample, where these names were most
+ * of the city-level false positives.
+ */
+function looksLikeAName(text, hit) {
+  if (!NAMEABLE.test(hit.term) || !/^\p{Lu}/u.test(hit.term)) return false;
+  const before = text.slice(0, hit.start).trimEnd();
+  if (!before) return false; // start of text or heading
+  // Not "(": "(Gift Records 1995)" is the usual shape of a name in a list.
+  return !/[.!?:;"“‘'\u2022—–-]$/.test(before);
 }
 
 function tagWith(table, text) {
@@ -139,15 +158,20 @@ export function tagPassage(text) {
 }
 
 /**
- * A passage is "weak" when nothing about it speaks to a custom: its only
- * practice labels are civic/diplomatic ("a gift from France") or commercial,
- * and it names no occasion. Weak passages are kept — the data stays complete
+ * A passage is "weak" when nothing about it speaks to a custom: it names no
+ * occasion, and its only practice labels are civic/diplomatic ("a gift from
+ * France"), institutional (a bequest to a museum) or commercial (a shop's
+ * souvenirs). Weak passages are kept — the data stays complete
  * — but they do not count towards a location's coverage level.
  */
 export function isWeak(tags) {
-  const practices = Object.keys(tags.practices);
+  const practices = new Set(Object.keys(tags.practices));
   if (Object.keys(tags.occasions).length) return false;
-  return practices.every((p) => p === "civic-or-diplomatic" || p === "commercial");
+  // Selling souvenirs is commerce; buying one to bring home is a custom.
+  if (practices.has("commercial")) practices.delete("souvenir");
+  return [...practices].every(
+    (p) => p === "civic-or-diplomatic" || p === "commercial" || p === "institutional",
+  );
 }
 
 function escapeRegExp(s) {
@@ -176,7 +200,27 @@ export function passageId(title, text) {
 }
 
 /**
+ * Why a paragraph is about gifting, or null if it is not: its own words, a
+ * heading above it, or the article's title. The single definition of
+ * relevance, shared by the API path and the dump scan.
+ */
+export function relevance(title, headingPath, paragraph) {
+  if (paragraph.length < MIN_PARAGRAPH_CHARS || isSkippedSection(headingPath)) return null;
+  const paragraphTerms = giftTerms(paragraph);
+  if (paragraphTerms.length) return { matchedBy: "paragraph", terms: paragraphTerms };
+  const headingTerms = giftTerms(headingPath.join(" \u2022 "));
+  if (headingTerms.length) return { matchedBy: "heading", terms: headingTerms };
+  const titleTerms = giftTerms(title);
+  if (titleTerms.length) return { matchedBy: "article-title", terms: titleTerms };
+  return null;
+}
+
+/**
  * Pull gifting passages out of one article for one subject.
+ *
+ * Input is either `text` (TextExtracts plain text, the API path) or
+ * `paragraphs` (from `wikitextParagraphs`, the dump path, which also carry
+ * `refs`, `flags` and `unknownTemplates`).
  *
  * `requiresMention` is the line between an article that is *about* the
  * subject (its own article, "Etiquette in Japan") and one that merely
@@ -185,51 +229,71 @@ export function passageId(title, text) {
  * that does — or it is not evidence about this place. The article's lead
  * mentioning the subject is deliberately not enough: that is how a
  * Vietnamese lì xì paragraph would end up filed under China.
+ *
+ * `mentionScope: "sentence"` tightens that to the same *sentence* as the
+ * gift vocabulary (or a gift-bearing heading that names the subject). The
+ * dump path uses it for paragraphs from anywhere in Wikipedia, where a
+ * paragraph about a Japanese company that also mentions a gift is common
+ * and is not evidence about Japanese gift-giving.
  */
-export function extractPassages({ title, text, subjectNames, requiresMention }) {
-  const titleTerms = giftTerms(title);
-  const titleIsAboutGifts = titleTerms.length > 0;
+export function extractPassages({
+  title,
+  text,
+  paragraphs,
+  subjectNames,
+  requiresMention,
+  mentionScope = "paragraph",
+  renderer = "textextracts",
+}) {
   const mentions = mentionMatcher(subjectNames);
   const out = [];
   const seen = new Set();
-  for (const { headingPath, text: paragraph } of parseSections(text)) {
-    if (paragraph.length < MIN_PARAGRAPH_CHARS || isSkippedSection(headingPath)) continue;
+  for (const para of paragraphs ?? parseSections(text)) {
+    const { headingPath, text: paragraph } = para;
+    const why = relevance(title, headingPath, paragraph);
+    if (!why) continue;
 
-    const paragraphTerms = giftTerms(paragraph);
-    const headingTerms = giftTerms(headingPath.join(" • "));
-    let matchedBy;
-    if (paragraphTerms.length) matchedBy = "paragraph";
-    else if (headingTerms.length) matchedBy = "heading";
-    else if (titleIsAboutGifts) matchedBy = "article-title";
-    else continue;
+    const sentences = splitSentences(paragraph);
+    const giftSentences =
+      why.matchedBy === "paragraph" ? sentences.filter((s) => giftTerms(s).length) : sentences;
+    const headingText = headingPath.join(" \u2022 ");
 
-    const named = [...mentions(paragraph), ...mentions(headingPath.join(" • "))];
+    let named;
+    if (mentionScope === "sentence") {
+      const inHeading = why.matchedBy === "heading" ? mentions(headingText) : [];
+      named = [
+        ...inHeading,
+        ...(why.matchedBy === "paragraph" ? giftSentences.flatMap(mentions) : []),
+      ];
+    } else {
+      named = [...mentions(paragraph), ...mentions(headingText)];
+    }
     if (requiresMention && !named.length) continue;
 
     const id = passageId(title, paragraph);
     if (seen.has(id)) continue;
     seen.add(id);
 
-    const sentences = splitSentences(paragraph);
-    const giftSentences =
-      matchedBy === "paragraph" ? sentences.filter((s) => giftTerms(s).length) : sentences;
     const tags = tagPassage(paragraph);
     out.push({
       id,
       headingPath,
       text: paragraph,
       giftSentences,
-      matchedBy,
-      giftTerms: [
-        ...new Set(
-          { paragraph: paragraphTerms, heading: headingTerms, "article-title": titleTerms }[
-            matchedBy
-          ],
-        ),
-      ],
+      matchedBy: why.matchedBy,
+      giftTerms: [...new Set(why.terms)],
       subjectMentions: [...new Set(named)],
       tags,
       weak: isWeak(tags),
+      // What the source text can tell a reviewer about its own reliability.
+      // TextExtracts strips footnotes and maintenance templates, so the API
+      // path cannot know either: null, never a misleading 0.
+      rendering: {
+        renderer,
+        refs: para.refs ?? null,
+        flags: para.flags ?? null,
+        unknownTemplates: para.unknownTemplates ?? null,
+      },
     });
   }
   return out;

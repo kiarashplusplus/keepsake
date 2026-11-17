@@ -10,30 +10,64 @@ deliberately **not** here. Nothing in this tool writes prose. The records are bu
 layer can't overclaim by accident; see [what the data can support](#what-the-data-can-and-cannot-support).
 
 ```sh
-# 1. Which cities: Wikidata, sharded per country
+# 1. Which cities: Wikidata, sharded per country (SPARQL, not rate-limited)
 NODE_USE_ENV_PROXY=1 node tools/gifting-culture/pipeline.mjs locations --countries JP,US --min-population 500000
 
-# 2. What Wikipedia says about each one
-NODE_USE_ENV_PROXY=1 node tools/gifting-culture/pipeline.mjs collect
+# 2. Every gifting paragraph in English Wikipedia, from the dump (~27 GB streamed, resumable)
+node tools/gifting-culture/pipeline.mjs corpus
 
-# or both
-NODE_USE_ENV_PROXY=1 node tools/gifting-culture/pipeline.mjs all --countries JP --min-population 1000000
+# 3. Assign those paragraphs to each city, offline
+node tools/gifting-culture/pipeline.mjs collect
 ```
 
 `NODE_USE_ENV_PROXY=1` is only needed behind an HTTPS proxy, as in agent containers; Node's
-`fetch` ignores `HTTPS_PROXY` otherwise. There are no npm dependencies. The default User-Agent
-identifies the tool and names `https://keepsake.ing` as its contact, as
+`fetch` ignores `HTTPS_PROXY` otherwise. There are no npm dependencies; the dump stage shells out
+to `curl` and `bzcat`. The default User-Agent identifies the tool and names
+`https://keepsake.ing` as its contact, as
 [Wikimedia's policy](https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy)
-asks. Read [Rate limits](#rate-limits) before a large run.
+asks.
 
 Output goes to `tools/gifting-culture/out/` (gitignored; `--out` moves it):
 
 ```
 out/
   locations.json            cities + their regions and countries, from Wikidata
+  dump/                     the multistream index (~290 MB), downloaded once per snapshot
+  corpus/manifest.json      which dump snapshot the corpus came from
+  corpus/parts/NNNN.jsonl   gifting paragraphs, one chunk of the dump per file
   cities/<ISO2>/<slug>--<QID>.json   one record per city
   index.json                every city record present, with its coverage level
-  .cache/http/              every successful response, keyed by URL
+  .cache/http/              API-path responses, keyed by URL / revision
+```
+
+## Two ways to read Wikipedia, and why the dump is the default
+
+Wikimedia rate-limits its APIs per client identity (see [Rate limits](#rate-limits)), and from an
+agent container every unauthenticated API request was refused. Getting "a lot of Wikipedia" through
+the API means authenticating and then waiting. The **dump** has neither problem:
+
+|                    | dump (`corpus` + `collect`)                                             | API (`collect --source api`)                                   |
+| ------------------ | ----------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Rate limits        | none (dumps.wikimedia.org; two connections, as it asks)                 | per identity: 200/min with this User-Agent, more authenticated |
+| What it reads      | **every** article in English Wikipedia                                  | what a search ranks in its top 8, plus probed titles           |
+| Freshness          | the snapshot (refreshed ~twice a month); revision ids say which         | current revisions                                              |
+| Text               | wikitext rendered by `lib/wikitext.mjs` (fidelity measured below)       | MediaWiki's own plain text (TextExtracts)                      |
+| Citation signals   | **yes**: footnote count and "citation needed"-style flags per paragraph | no: TextExtracts strips both                                   |
+| Cost of a full run | one scan (measured below), then any number of offline `collect` runs    | ~20 requests per city, ~30 per country                         |
+
+The API path stays for quick, current, small runs and as the reference the dump's rendering is
+checked against.
+
+**Rendering fidelity.** `fidelity.mjs` renders articles from the dump and compares every gifting
+passage with MediaWiki's own plain text for the same article. Measured 2026-11-17 on 28 articles
+(18 at the same revision, 150 passages): **96.7 %** match at ≥ 0.95 word overlap, 98.0 % at ≥ 0.90,
+98.7 % at ≥ 0.80. The rest are MediaWiki splitting one paragraph in two (the dump's version is the
+whole paragraph) and IPA transcriptions, which are dropped on purpose. 0.7 % of passages carry
+`unknownTemplates > 0`, the renderer's own admission that something inline was not reproduced. Re-run
+it after changing `lib/wikitext.mjs`:
+
+```sh
+node tools/gifting-culture/fidelity.mjs --cache out/.cache/http --index out/dump/enwiki-latest-pages-articles-multistream-index.txt.bz2
 ```
 
 ## How it works
@@ -44,13 +78,37 @@ their first-level administrative region (`P131*` → Q10864048). A single worldw
 out well before the threshold gets interesting; per country it takes a few seconds. A country
 whose query fails is written to `failedShards` **and fails the run**, because a city list that is
 quietly missing a country is worse than none. `--qids Q60,Q1490` picks exact cities instead.
-Then `wbgetentities` adds labels, English demonyms (P1549, e.g. "Osakan", "Japanese") and
-"culture of" items (P2596, e.g. Japan → _Culture of Japan_).
+A second SPARQL query adds labels, English demonyms (P1549, e.g. "Osakan", "Japanese") and the
+English article of each "culture of" item (P2596, e.g. Japan → _Culture of Japan_). Both run on
+the Query Service, which is outside the API gateway's rate limits.
 
 A city claimed by two countries keeps both. Choosing one would be a political statement, and the
 record would then carry it.
 
-**Sources** (`lib/sources.mjs`). For each city, and once per run for each of its regions and
+**Corpus** (`lib/dump.mjs`, `lib/corpus.mjs`). The dump is cut into 128 chunks on bzip2 stream
+boundaries. Each chunk is fetched with one HTTP Range request, decompressed by `bzcat` and parsed
+on its own worker thread, two at a time. A page is rendered only if it passes two cheap
+pre-filters: a plain substring test, then the precise lexicon on its text with references
+stripped ("Gift" in a citation title is the usual false start). A test proves the pre-filter
+accepts every phrase the lexicon does; before that test it silently dropped "birthday present".
+Each paragraph that passes the same relevance rule as the API path is written with its `refs`,
+`flags` and `unknownTemplates`. A chunk is renamed into place only after its range has been read
+to the end, so an interrupted scan resumes at the first unfinished chunk. A corpus from an older
+snapshot refuses to be extended by a newer one.
+
+**Sources, dump path** (`lib/corpus-sources.mjs`). For each city, region and country:
+
+| `discoveredBy`    | What                                                                                                 | Must the paragraph name the place?                   |
+| ----------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `place-article`   | the place's own article                                                                              | no                                                   |
+| `culture-article` | Wikidata's P2596 article                                                                             | no                                                   |
+| `about-title`     | any article whose title says it is about the place: _Christmas in Japan_, _Japanese wedding customs_ | no                                                   |
+| `corpus-mention`  | any other article in Wikipedia                                                                       | **yes, in the same sentence** as the gift vocabulary |
+
+A name shared by several places in the run ("Valencia", "Hyderabad") only counts for a place
+whose country or region the same article also names; otherwise it counts for none of them.
+
+**Sources, API path** (`lib/sources.mjs`). For each city, and once per run for each of its regions and
 countries, the candidate articles are:
 
 | `discoveredBy`    | What                                                                                                                                                                                                         | Must the paragraph name the place?                                              |

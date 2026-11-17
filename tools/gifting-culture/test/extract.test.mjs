@@ -157,3 +157,66 @@ test("a diplomatic gift with no occasion is weak; a custom is not", () => {
   assert.equal(isWeak(tagPassage("Guests bring a small gift when visiting a home.")), false);
   assert.equal(isWeak(tagPassage("Many gifts were given at weddings.")), false);
 });
+
+// Real sentences the first corpus sample filed under Japanese cities, each a
+// false claim of city-level gifting culture before the rule beside it existed.
+test("a capitalised gift word mid-sentence is a name, not a gift", () => {
+  assert.deepEqual(giftTerms("Scraping Tokyo '95 CD (Gift Records 1995; Live)"), []);
+  assert.deepEqual(giftTerms("offices at key centres including GIFT City Gandhinagar."), []);
+  assert.deepEqual(giftTerms("held a solo ice show titled Gift at Tokyo Dome."), []);
+  assert.deepEqual(
+    giftTerms('recordings including "Souvenirs from Tokyo".'),
+    ["souvenirs"],
+    "a quoted title opening with the word is ambiguous; it stays",
+  );
+  assert.deepEqual(
+    giftTerms("Gifts are opened later."),
+    ["gifts"],
+    "sentence start is the word itself",
+  );
+  assert.deepEqual(giftTerms("Christmas presents and gifts"), ["christmas presents", "gifts"]);
+});
+
+test("civic, institutional and commercial gifts are weak; customs are not", () => {
+  const weak = (s) => isWeak(tagPassage(s));
+  assert.equal(
+    weak(
+      "In 1959, the first Japanese Somei-Yoshino Cherry Tree was planted in High Park, a gift from the citizens of Tokyo.",
+    ),
+    true,
+  );
+  assert.equal(
+    weak(
+      "The Commemorative Garden is a Japanese garden that was built as a gift to residents of the City of Gosford by the Ward of Edogawa, Tokyo, Japan.",
+    ),
+    true,
+  );
+  assert.equal(
+    weak(
+      '"Seien", a Japanese garden designed by Kenzo Ogata of Tokyo, was a 1963 gift of Japanese business leaders.',
+    ),
+    true,
+  );
+  assert.equal(
+    weak(
+      "Shopping Plaza HAYAMA STATION is a shopping plaza featuring local produce, foods, souvenirs, and small retailers.",
+    ),
+    true,
+  );
+  assert.equal(
+    weak("The library houses editions of The Tale of Genji that were bequeathed to the city."),
+    true,
+  );
+  assert.equal(
+    weak(
+      "Nama yatsuhashi is a very popular souvenir of Kyoto; 89.2% of tourists who visited Kyoto bought souvenirs.",
+    ),
+    false,
+  );
+  assert.equal(
+    weak(
+      "In Japan, Valentine's Day gift giving was introduced by Morozoff Ltd. in 1936, near Kobe.",
+    ),
+    false,
+  );
+});

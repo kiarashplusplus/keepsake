@@ -24,22 +24,33 @@ import {
   mergeCityRows,
   sparql,
 } from "./lib/wikidata.mjs";
-import { collectSubject } from "./lib/sources.mjs";
+import { collectSubject, subjectNames } from "./lib/sources.mjs";
 import { compileCity, cityFileName } from "./lib/compile.mjs";
+import { buildCorpus, corpusStatus, loadCorpus } from "./lib/corpus.mjs";
+import { collectFromCorpus, indexCorpus } from "./lib/corpus-sources.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-const USAGE = `usage: pipeline.mjs <locations|collect|all> [options]
+const USAGE = `usage: pipeline.mjs <locations|corpus|collect|all> [options]
 
 locations   cities from Wikidata → <out>/locations.json
   --countries JP,US        ISO 3166-1 alpha-2 codes (default: every country)
   --min-population N       default 1000000
   --qids Q60,Q1490         exact cities instead of a population query
 
-collect     Wikipedia passages for each city in locations.json → <out>/cities/
+corpus      every gifting paragraph in English Wikipedia, from the dump → <out>/corpus/
+            (no API rate limits; ~27 GB streamed, resumable by chunk)
+  --chunks N               how the dump is cut (default 128; fixed for the life of a corpus)
+  --max-chunks N           scan at most N more chunks this run (sampling, or a time box)
+  --index FILE             a multistream index already on disk
+
+collect     passages for each city in locations.json → <out>/cities/
+  --source dump|api        dump (default when <out>/corpus exists): the corpus, no network;
+                           api: Wikipedia search + TextExtracts, rate-limited
   --only Q60,Q1490         just these cities
   --limit N                the N most populous cities only
-  --search-limit N         search results per query (default 8, 0 = no search)
+  --search-limit N         api source: search results per query (default 8, 0 = no search)
+  --allow-partial-corpus   collect from a corpus whose scan has not finished
 
 common
   --out DIR                default tools/gifting-culture/out
@@ -65,6 +76,11 @@ function parse(argv) {
       only: { type: "string" },
       limit: { type: "string" },
       "search-limit": { type: "string", default: "8" },
+      source: { type: "string" },
+      chunks: { type: "string", default: "128" },
+      "max-chunks": { type: "string" },
+      index: { type: "string" },
+      "allow-partial-corpus": { type: "boolean", default: false },
       out: { type: "string", default: path.join(HERE, "out") },
       refresh: { type: "boolean", default: false },
       rpm: { type: "string" },
@@ -90,6 +106,11 @@ function parse(argv) {
     out: path.resolve(values.out),
     refresh: values.refresh,
     rpm: values.rpm ? Number(values.rpm) : undefined,
+    source: values.source ?? null,
+    chunks: Number(values.chunks),
+    maxChunks: values["max-chunks"] ? Number(values["max-chunks"]) : Infinity,
+    index: values.index ? path.resolve(values.index) : undefined,
+    allowPartialCorpus: values["allow-partial-corpus"],
   };
 }
 
@@ -137,8 +158,6 @@ async function stageLocations(client, opts) {
     `  ${cities.length} cities, ${parentQids.length} regions/countries — fetching labels and demonyms`,
   );
   const details = await entityDetails(client, [...cities.map((c) => c.qid), ...parentQids]);
-  const cultureQids = [...new Set([...details.values()].flatMap((d) => d.cultureItems))];
-  const cultureDetails = await entityDetails(client, cultureQids);
 
   const node = (qid, kind) => {
     const d = details.get(qid) ?? {
@@ -147,7 +166,7 @@ async function stageLocations(client, opts) {
       title: null,
       demonyms: [],
       iso2: null,
-      cultureItems: [],
+      cultureTitles: [],
     };
     return {
       qid,
@@ -156,7 +175,7 @@ async function stageLocations(client, opts) {
       label: d.label,
       demonyms: d.demonyms,
       iso2: d.iso2,
-      cultureTitles: d.cultureItems.map((q) => cultureDetails.get(q)?.title).filter(Boolean),
+      cultureTitles: d.cultureTitles,
     };
   };
 
@@ -208,12 +227,49 @@ async function stageCollect(client, opts) {
   }
   if (opts.limit) cities = cities.slice(0, opts.limit);
 
+  const source =
+    opts.source ?? (existsSync(path.join(opts.out, "corpus", "manifest.json")) ? "dump" : "api");
+  if (!["dump", "api"].includes(source))
+    throw new Error(`--source must be dump or api, not ${source}`);
+  log(`  source: ${source}`);
+
   const memo = new Map();
-  const collect = (subject, searchLimit) => {
-    if (!memo.has(subject.qid))
-      memo.set(subject.qid, collectSubject(client, subject, { searchLimit, log }));
-    return memo.get(subject.qid);
-  };
+  let collect;
+  if (source === "dump") {
+    const status = corpusStatus(opts.out);
+    if (!status.complete && !opts.allowPartialCorpus) {
+      throw new Error(
+        `the corpus scan is ${status.chunksDone}/${status.manifest.chunkCount} chunks done; finish it (pipeline.mjs corpus) ` +
+          `or pass --allow-partial-corpus, and know that every coverage level is then an undercount`,
+      );
+    }
+    log(
+      `  loading the corpus (${status.rows} paragraphs from ${status.chunksDone}/${status.manifest.chunkCount} chunks)`,
+    );
+    const { byTitle } = loadCorpus(opts.out);
+    const subjects = [...allCities, ...Object.values(nodes)];
+    const contextNames = new Map(
+      allCities.map((c) => [
+        c.qid,
+        [...c.regions, ...c.countries].flatMap((q) =>
+          nodes[q]?.title ? subjectNames(nodes[q]) : [],
+        ),
+      ]),
+    );
+    log("  indexing mentions");
+    const index = indexCorpus(byTitle, subjects, contextNames);
+    collect = (subject) => {
+      if (!memo.has(subject.qid))
+        memo.set(subject.qid, Promise.resolve(collectFromCorpus({ byTitle, index, subject, log })));
+      return memo.get(subject.qid);
+    };
+  } else {
+    collect = (subject, searchLimit) => {
+      if (!memo.has(subject.qid))
+        memo.set(subject.qid, collectSubject(client, subject, { searchLimit, log }));
+      return memo.get(subject.qid);
+    };
+  }
   // Regions are numerous and rarely have gifting content of their own that
   // search would find but their own and "Culture of" articles would not.
   const searchFor = { city: opts.searchLimit, region: 0, country: opts.searchLimit };
@@ -282,7 +338,7 @@ function writeIndex(out, failures) {
 
 async function main() {
   const opts = parse(process.argv.slice(2));
-  if (opts.help || !["locations", "collect", "all"].includes(opts.stage)) {
+  if (opts.help || !["locations", "corpus", "collect", "all"].includes(opts.stage)) {
     process.stdout.write(USAGE);
     process.exit(opts.help ? 0 : 2);
   }
@@ -309,6 +365,21 @@ async function main() {
   if (opts.stage === "locations" || opts.stage === "all") {
     log("locations:");
     await stageLocations(client, opts);
+  }
+  if (opts.stage === "corpus") {
+    log("corpus:");
+    const status = await buildCorpus({
+      out: opts.out,
+      userAgent,
+      chunkCount: opts.chunks,
+      maxChunks: opts.maxChunks,
+      indexPath: opts.index,
+      log,
+    });
+    log(
+      `  corpus: ${status.chunksDone}/${status.manifest.chunkCount} chunks, ${status.articles} articles read, ` +
+        `${status.rows} gifting paragraphs in ${status.articlesWithRows} articles${status.complete ? "" : " (incomplete; run again to resume)"}`,
+    );
   }
   if (opts.stage === "collect" || opts.stage === "all") {
     log("collect:");
