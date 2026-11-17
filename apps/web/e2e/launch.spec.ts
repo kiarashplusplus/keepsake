@@ -54,6 +54,7 @@ test("before launch: the dialog opens over the feed, throws confetti, and one pr
   await expect(dialog(page)).toContainText("10 days to go");
   await expect(dialog(page)).toContainText("Saturday, November 28");
   await expect(page.getByTestId("launch-confetti")).toBeAttached();
+  await expect(dialog(page).getByRole("button", { name: "Join us on Meetup" })).toBeVisible();
 
   await dialog(page).getByRole("button", { name: "Come on in" }).click();
   await expect(dialog(page)).toHaveCount(0);

@@ -141,15 +141,6 @@ export function LaunchModal({ now }: LaunchModalProps): React.ReactElement | nul
         footer={
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.lg, paddingHorizontal: space.xs }}>
             <Button label={live ? "Start looking" : "Come on in"} onPress={close} />
-            {MEETUP_URL !== null ? (
-              <Button
-                variant="link"
-                label="RSVP on Meetup"
-                onPress={() => {
-                  void Linking.openURL(MEETUP_URL as string);
-                }}
-              />
-            ) : null}
           </View>
         }
       >
@@ -185,9 +176,24 @@ export function LaunchModal({ now }: LaunchModalProps): React.ReactElement | nul
           <Text variant="title" color="ink">
             {MEETUP_DATE_LABEL}
           </Text>
-          <Text variant="caption" color="textSecondary">
-            {MEETUP_URL !== null ? "Free" : "Free · RSVP soon on Meetup"}
-          </Text>
+          {/* The link sits with the meetup it is about, not beside the
+              dismiss button — on a phone it wrapped under that button and
+              read as an afterthought. */}
+          {MEETUP_URL !== null ? (
+            <View style={{ alignItems: "flex-start" }}>
+              <Button
+                variant="link"
+                label="Join us on Meetup"
+                onPress={() => {
+                  void Linking.openURL(MEETUP_URL as string);
+                }}
+              />
+            </View>
+          ) : (
+            <Text variant="caption" color="textSecondary">
+              Free · RSVP soon on Meetup
+            </Text>
+          )}
         </View>
       </Sheet>
       {motion.reduce ? null : <Confetti colors={confettiColors} />}
