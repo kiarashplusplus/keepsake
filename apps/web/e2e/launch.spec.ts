@@ -58,11 +58,13 @@ test("before launch: the dialog opens over the feed, throws confetti, and one pr
 
   await dialog(page).getByRole("button", { name: "Come on in" }).click();
   await expect(dialog(page)).toHaveCount(0);
-  // The site underneath is the real one and is now usable.
-  await expect(page.getByRole("link", { name: "Give something" }).first()).toBeVisible();
+  // The site underneath is the real one and is now usable. The home link,
+  // because it is the one piece of chrome labelled the same at every width
+  // (the header's give link is "Give" on a phone).
+  await expect(page.getByRole("link", { name: "Keepsake, home" })).toBeVisible();
 
   await page.reload();
-  await expect(page.getByRole("link", { name: "Give something" }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "Keepsake, home" })).toBeVisible();
   await expect(dialog(page)).toHaveCount(0);
 
   // …and comes back exactly once, with the other message, on the day.
@@ -71,7 +73,7 @@ test("before launch: the dialog opens over the feed, throws confetti, and one pr
   await expect(dialog(page)).toContainText("Keepsake is open.");
   await dialog(page).getByRole("button", { name: "Start looking" }).click();
   await page.reload();
-  await expect(page.getByRole("link", { name: "Give something" }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "Keepsake, home" })).toBeVisible();
   await expect(dialog(page)).toHaveCount(0);
 
   await context.close();
@@ -99,7 +101,7 @@ test("it stays off the routes an email link lands on, and off the calendar after
 
   const late = await open(browser, AFTER);
   await late.page.goto("/");
-  await expect(late.page.getByRole("link", { name: "Give something" }).first()).toBeVisible();
+  await expect(late.page.getByRole("link", { name: "Keepsake, home" })).toBeVisible();
   await late.page.waitForLoadState("networkidle");
   await expect(dialog(late.page)).toHaveCount(0);
   await late.context.close();
