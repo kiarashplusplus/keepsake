@@ -25,12 +25,18 @@ export const LAUNCH_DATE_LABEL = "Friday, November 27";
 export const MEETUP_DATE_LABEL = "Saturday, November 28";
 
 /**
- * The Meetup event page. `null` until the event is posted — the modal then
- * says the RSVP link is coming instead of rendering a button that goes
- * nowhere. Paste the event URL here once it exists
- * (`docs/launch/meetup-posting.md` has the posting itself).
+ * The Keepsake Meetup GROUP (Houston) — not the event, which is not posted
+ * yet. The dialog's button therefore says "Join us on Meetup", not "RSVP":
+ * joining the group is what gets someone told when the event goes up. Swap
+ * in the event URL once it exists (`docs/launch/meetup-posting.md` has the
+ * posting) and the label in `LaunchModal.tsx` with it.
+ *
+ * No locale segment and no query string on purpose: Meetup sends a
+ * locale-free URL to the visitor's own language, where the `/en-AU/` in the
+ * link this came from would have pinned everyone to Australian English.
+ * `null` hides the button.
  */
-export const MEETUP_URL: string | null = null;
+export const MEETUP_URL: string | null = "https://www.meetup.com/keepsake-ing-houston-to-give-donations-meetup-group/";
 
 /**
  * `countdown` — before launch day. `live` — launch day and meetup day.

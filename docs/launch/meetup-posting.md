@@ -7,10 +7,10 @@ Copy for the Meetup event page, written 2026-11-17. The site's launch dialog
 
 | Blank | Where it appears | Notes |
 | --- | --- | --- |
-| **City** | title, description | Written as `[CITY]` below. |
+| **City** | title, description | Houston — the Meetup group is "Keepsake.ing Houston". |
 | **Venue** | Meetup's location field | Posting it as "Location TBD" is fine; Meetup lets you publish without one and notifies RSVPs when you add it. A café with a big table, a library community room or a park pavilion all suit it — somewhere public, free to enter, with a surface to lay things out on. |
 | **Time** | Meetup's time field | Suggested: **2:00–4:00 PM**. Saturday afternoon after Thanksgiving catches people who are still in town and already out. |
-| **Event URL** | the site | After publishing, paste the event link into `MEETUP_URL` in `apps/web/src/features/launch/launchPlan.ts`. The dialog then shows an **RSVP on Meetup** button instead of "RSVP soon on Meetup". The dialog does not show the venue; the Meetup page does. |
+| **Event URL** | the site | The dialog already links to the Meetup *group* with a **Join us on Meetup** button. After publishing the event, swap its link into `MEETUP_URL` in `apps/web/src/features/launch/launchPlan.ts` (drop any `/en-AU/`-style locale segment and query string) and change the button label in `LaunchModal.tsx` to **RSVP on Meetup**. The dialog does not show the venue; the Meetup page does. |
 
 ## Event title
 
@@ -24,7 +24,7 @@ Shorter alternative, if the title field truncates:
 
 - **Date:** Saturday, November 28, 2026
 - **Time:** `[TIME — suggested 2:00–4:00 PM]`
-- **Location:** TBD — `[CITY]`. We'll update this page and message everyone who has RSVP'd as soon as
+- **Location:** TBD — Houston. We'll update this page and message everyone who has RSVP'd as soon as
   it's set.
 - **Cost:** Free. Nothing is for sale, including by us.
 
