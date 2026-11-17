@@ -43,6 +43,7 @@ import { AxeBuilder } from "@axe-core/playwright";
 import { test, expect, seedOwnerToken } from "./support/fixtures";
 import { ADMIN_TOKEN, createApprovedListing, freshClientIp, hideListingAsAdmin, mintOwnerToken, uniqueTitle } from "./support/api";
 import { seedVisited } from "./support/visited";
+import { seedLaunchDismissed } from "./support/launch";
 import { BASE_URL } from "./support/constants";
 import type { APIRequestContext, Browser, BrowserContext, Page } from "@playwright/test";
 
@@ -235,6 +236,7 @@ async function openWithBanner(browser: Browser, colorScheme: "light" | "dark") {
     extraHTTPHeaders: { "CF-Connecting-IP": freshClientIp() },
   });
   await seedVisited(context);
+  await seedLaunchDismissed(context);
   const page = await context.newPage();
   await page.goto("/");
   await expect(page.locator("#ks-consent")).toBeVisible();

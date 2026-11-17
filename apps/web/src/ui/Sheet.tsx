@@ -33,6 +33,22 @@ export type SheetProps = {
    * off a 390×844 viewport in both its empty and filled states).
    */
   footer?: React.ReactNode;
+  /**
+   * Drop the panel onto the middle of the table at every width, instead of
+   * sliding it up as a bottom sheet below the breakpoint. For an
+   * announcement rather than a form: `LaunchModal` is the one caller. Off by
+   * default, so every existing sheet lays out exactly as before.
+   */
+  centered?: boolean;
+  /**
+   * Pixels at the bottom of the viewport something else is already covering
+   * — in practice the consent bar (`useConsentInset`). The panel is laid out
+   * in, and bounded by, what is left above it, so its action is never under
+   * that bar. 0 by default.
+   */
+  bottomInset?: number;
+  /** Names the dialog for a screen reader when there is no `title`. */
+  accessibilityLabel?: string;
 };
 
 /**
@@ -48,10 +64,13 @@ export function Sheet({
   title,
   children,
   footer,
+  centered = false,
+  bottomInset = 0,
+  accessibilityLabel,
 }: SheetProps): React.ReactElement | null {
   const colors = useColors();
   const { width } = useWindowDimensions();
-  const isBottomSheet = width < BOTTOM_SHEET_BREAKPOINT;
+  const isBottomSheet = !centered && width < BOTTOM_SHEET_BREAKPOINT;
   const panelRef = React.useRef<View>(null);
   // Callers routinely pass an inline `onClose` (a fresh function every
   // render), and typing into any field inside the sheet re-renders it. A ref
@@ -117,7 +136,7 @@ export function Sheet({
   // In particular, do not derive this bound from `visualViewport`: iOS 26
   // can leave both its height and offsetTop stale after keyboard/scroll
   // interactions (WebKit #297779).
-  const maxHeight = `calc(100dvh - ${space.xxl * 2}px)`;
+  const maxHeight = `calc(100dvh - ${space.xxl * 2 + bottomInset}px)`;
 
   const panelStyle: ViewStyle = {
     backgroundColor: colors.surface,
@@ -166,6 +185,7 @@ export function Sheet({
         right: 0,
         height: "100dvh" as unknown as number,
         zIndex: 100,
+        paddingBottom: bottomInset,
         justifyContent: isBottomSheet ? "flex-end" : "center",
         alignItems: "center",
       }}
@@ -208,6 +228,10 @@ export function Sheet({
         ref={panelRef}
         tabIndex={-1}
         accessibilityViewIsModal
+        // A label on a role-less `<div>` is an ARIA error, so the two travel
+        // together; a sheet with a visible `title` keeps its old markup.
+        role={accessibilityLabel !== undefined ? "dialog" : undefined}
+        accessibilityLabel={accessibilityLabel}
         style={panelStyle}
       >
         {title !== undefined ? (
