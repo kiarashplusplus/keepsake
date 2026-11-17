@@ -133,7 +133,7 @@ export function LaunchModal({ now }: LaunchModalProps): React.ReactElement | nul
         centered
         bottomInset={consentInset}
         onClose={close}
-        accessibilityLabel={live ? "Keepsake is open" : "Keepsake launches Friday, November 27"}
+        accessibilityLabel={live ? "Keepsake is open" : `Keepsake launches ${LAUNCH_DATE_LABEL}`}
         footer={
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.lg }}>
             <Button label={live ? "Start looking" : "Come on in"} onPress={close} />
@@ -159,32 +159,26 @@ export function LaunchModal({ now }: LaunchModalProps): React.ReactElement | nul
             )}
           </View>
 
-          <Text variant="displayMd" color="ink" accessibilityRole="header">
-            {live ? "Keepsake is open. Come see what's on the table." : `Keepsake launches ${LAUNCH_DATE_LABEL}.`}
+          <Text variant="displayLg" color="ink" accessibilityRole="header">
+            {live ? "We're open." : "We launch Nov 27."}
           </Text>
 
           <Text variant="body" color="inkSoft">
             {live
-              ? "Today's the day. While everyone else is out buying new things, your neighbors are laying out the old ones — each with its story, each free to whoever will love it next."
-              : "The day after Thanksgiving, while everyone else is out buying new things, we're opening a table for the old ones. Photograph something you love, tell its story, and hand it to a neighbor. No money. No accounts. You're early — have a look around."}
+              ? "Come see what's on the table."
+              : "Give something you love a second life. Free, always."}
           </Text>
 
           <PencilRule />
 
           <Text variant="label" color="stampText">
-            Then come meet us
+            Meet us in person
           </Text>
           <Text variant="title" color="ink">
-            {`The first Keepsake meetup — ${MEETUP_DATE_LABEL}`}
-          </Text>
-          <Text variant="body" color="inkSoft">
-            Bring one thing with a story. Tell it out loud. Go home with someone else&apos;s. In person, the way
-            every Keepsake handoff happens.
+            {MEETUP_DATE_LABEL}
           </Text>
           <Text variant="caption" color="textSecondary">
-            {MEETUP_URL !== null
-              ? `${MEETUP_LOCATION_LABEL} · Free · RSVP on Meetup`
-              : `${MEETUP_LOCATION_LABEL} · Free · RSVP link coming soon on Meetup`}
+            {MEETUP_URL !== null ? `${MEETUP_LOCATION_LABEL} · Free` : `${MEETUP_LOCATION_LABEL} · Free · RSVP soon on Meetup`}
           </Text>
         </View>
       </Sheet>

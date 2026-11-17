@@ -50,7 +50,7 @@ test("before launch: the dialog opens over the feed, throws confetti, and one pr
   await page.goto("/");
 
   await expect(dialog(page)).toBeVisible();
-  await expect(dialog(page)).toContainText("Keepsake launches Friday, November 27.");
+  await expect(dialog(page)).toContainText("We launch Nov 27.");
   await expect(dialog(page)).toContainText("10 days to go");
   await expect(dialog(page)).toContainText("Saturday, November 28");
   await expect(dialog(page)).toContainText("Location TBD");
@@ -70,7 +70,7 @@ test("before launch: the dialog opens over the feed, throws confetti, and one pr
   // …and comes back exactly once, with the other message, on the day.
   await page.clock.setFixedTime(LAUNCH_DAY);
   await page.reload();
-  await expect(dialog(page)).toContainText("Keepsake is open.");
+  await expect(dialog(page)).toContainText("We're open.");
   await dialog(page).getByRole("button", { name: "Start looking" }).click();
   await page.reload();
   await expect(page.getByRole("link", { name: "Keepsake, home" })).toBeVisible();
