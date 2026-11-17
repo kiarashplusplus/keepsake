@@ -478,7 +478,7 @@ cannot pass by having scanned the light palette twice.
   what it costs and what would change the answer. Read it before reopening one, and add a row when
   you make one.
 - `docs/launch/meetup-posting.md` — the copy for the 28 November 2026 launch meetup's Meetup page,
-  and the two constants to fill in (`MEETUP_URL`, `MEETUP_LOCATION_LABEL`) once it is posted. The
+  and the one constant to fill in (`MEETUP_URL`) once it is posted. The
   launch dialog in `apps/web/src/features/launch/` expires by itself on the 29th; delete it then.
 - `docs/runbooks/` — deploy, restore, migrations, admin (incl. the Observatory and the daily
   digest), incident, geodata, uk-block, uk-reentry-checklist, issue-workflow, launch-audit,

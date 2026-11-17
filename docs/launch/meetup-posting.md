@@ -10,7 +10,7 @@ Copy for the Meetup event page, written 2026-11-17. The site's launch dialog
 | **City** | title, description | Written as `[CITY]` below. |
 | **Venue** | Meetup's location field | Posting it as "Location TBD" is fine; Meetup lets you publish without one and notifies RSVPs when you add it. A café with a big table, a library community room or a park pavilion all suit it — somewhere public, free to enter, with a surface to lay things out on. |
 | **Time** | Meetup's time field | Suggested: **2:00–4:00 PM**. Saturday afternoon after Thanksgiving catches people who are still in town and already out. |
-| **Event URL** | the site | After publishing, paste the event link into `MEETUP_URL` in `apps/web/src/features/launch/launchPlan.ts` (and the venue into `MEETUP_LOCATION_LABEL`). The dialog then shows an **RSVP on Meetup** button instead of "RSVP link coming soon". |
+| **Event URL** | the site | After publishing, paste the event link into `MEETUP_URL` in `apps/web/src/features/launch/launchPlan.ts`. The dialog then shows an **RSVP on Meetup** button instead of "RSVP soon on Meetup". The dialog does not show the venue; the Meetup page does. |
 
 ## Event title
 
