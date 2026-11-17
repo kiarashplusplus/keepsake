@@ -1,0 +1,10 @@
+{
+  "name": "@keepsake/gifting-culture",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Compiles neutral, per-city gifting-culture data from Wikipedia and Wikidata. See README.md.",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}
