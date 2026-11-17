@@ -8,6 +8,7 @@ import { ToastProvider } from "@/ui/Toast";
 import { KraftTable } from "@/ui/KraftTable";
 import { AppHeader } from "@/ui/AppHeader";
 import { VersionSkewBanner } from "@/features/versionSkew/VersionSkewBanner";
+import { LaunchModal } from "@/features/launch/LaunchModal";
 import { useChunkRecoveryGuard } from "@/features/chunkRecovery/useChunkRecoveryGuard";
 
 // expo-router's Stack renders each screen inside a React Navigation `Screen`
@@ -47,6 +48,9 @@ function Shell(): React.ReactElement {
             }}
           />
         </RouterThemeProvider>
+        {/* The November 2026 launch announcement — self-expiring; see
+            `features/launch/launchPlan.ts`. Remove after the 28th. */}
+        <LaunchModal />
       </View>
     </SafeAreaProvider>
   );

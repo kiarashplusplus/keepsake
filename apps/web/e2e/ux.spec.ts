@@ -55,6 +55,7 @@ import { MODERATION_REASONS } from "@keepsake/contracts/listing";
 import { BASE_URL } from "./support/constants";
 import { seedConsent } from "./support/consent";
 import { seedVisited } from "./support/visited";
+import { seedLaunchDismissed } from "./support/launch";
 import { DEMO_PHOTOS, readDemoPhoto } from "./support/demoPhotos";
 import {
   DEMO_GIVEN_LISTING,
@@ -104,11 +105,16 @@ const CAPTURE_CONTEXT = { reducedMotion: "reduce" } as const;
  * `openFreshContext()` seeds both of those away, which is the right default
  * everywhere else in this suite. */
 async function openUnseededContext(browser: Browser): Promise<BrowserContext> {
-  return browser.newContext({
+  const context = await browser.newContext({
     baseURL: BASE_URL,
     extraHTTPHeaders: { "CF-Connecting-IP": freshClientIp() },
     ...CAPTURE_CONTEXT,
   });
+  // "Nothing seeded" means consent and first-visit. The launch announcement
+  // is a one-week dialog, not a screen of the product, and it would cover
+  // both frames this context exists to capture.
+  await seedLaunchDismissed(context);
+  return context;
 }
 
 test.describe("ux baseline", () => {

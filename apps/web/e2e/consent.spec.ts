@@ -23,6 +23,7 @@ import { freshClientIp } from "./support/api";
 import { BASE_URL } from "./support/constants";
 import { CONSENT_STORAGE_KEY, CONSENT_VERSION, consentRecord } from "./support/consent";
 import { seedVisited } from "./support/visited";
+import { seedLaunchDismissed } from "./support/launch";
 
 const ADS_HOST = "www.googletagmanager.com";
 const ANALYTICS_HOST = "static.cloudflareinsights.com";
@@ -52,6 +53,8 @@ async function openHarness(
   // below would show the explainer instead of the feed these assertions are
   // actually about.
   await seedVisited(context);
+  // Same again for the launch announcement, which would sit over the page.
+  await seedLaunchDismissed(context);
 
   if (options.gpc === true) {
     await context.addInitScript(() => {

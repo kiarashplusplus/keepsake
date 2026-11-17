@@ -19,6 +19,9 @@
  *  - a "has visited before" flag already on file (issue #44), so `/` is the
  *    feed and not the new-visitor explainer. `welcome.spec.ts` builds its
  *    own context precisely so it sees the explainer.
+ *  - the November 2026 launch announcement already dismissed
+ *    (`support/launch.ts`), so it is not a dialog over every page.
+ *    `launch.spec.ts` builds its own contexts to see it.
  */
 /* eslint-disable react-hooks/rules-of-hooks --
  * `eslint-config-expo`'s React rules see Playwright's fixture callback
@@ -28,6 +31,7 @@ import { test as base, expect, type Browser, type BrowserContext, type Locator, 
 import { freshClientIp, OWNER_TOKEN_STORAGE_KEY } from "./api";
 import { seedConsent } from "./consent";
 import { seedVisited } from "./visited";
+import { seedLaunchDismissed } from "./launch";
 import { BASE_URL } from "./constants";
 
 export const test = base.extend<{ clientIp: string }>({
@@ -40,6 +44,7 @@ export const test = base.extend<{ clientIp: string }>({
     await context.setExtraHTTPHeaders({ "CF-Connecting-IP": clientIp });
     await seedConsent(context);
     await seedVisited(context);
+    await seedLaunchDismissed(context);
     await use(context);
   },
 });
@@ -81,6 +86,7 @@ export async function openFreshContext(
   // browser that has never answered the banner, or seen the site before.
   await seedConsent(context);
   await seedVisited(context);
+  await seedLaunchDismissed(context);
   return context;
 }
 

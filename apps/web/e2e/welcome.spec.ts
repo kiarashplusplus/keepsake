@@ -28,6 +28,7 @@ import { freshClientIp, mintOwnerToken, OWNER_TOKEN_STORAGE_KEY } from "./suppor
 import { BASE_URL } from "./support/constants";
 import { seedConsent } from "./support/consent";
 import { seedVisited } from "./support/visited";
+import { seedLaunchDismissed } from "./support/launch";
 
 async function freshContext(browser: Browser): Promise<BrowserContext> {
   const context = await browser.newContext({
@@ -38,6 +39,8 @@ async function freshContext(browser: Browser): Promise<BrowserContext> {
   // a decision so the banner doesn't sit over the explainer's one button,
   // same as every non-consent spec in this suite.
   await seedConsent(context);
+  // Nor is the launch announcement what this spec is about.
+  await seedLaunchDismissed(context);
   return context;
 }
 
