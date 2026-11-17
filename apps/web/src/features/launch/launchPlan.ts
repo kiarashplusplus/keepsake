@@ -32,9 +32,6 @@ export const MEETUP_DATE_LABEL = "Saturday, November 28";
  */
 export const MEETUP_URL: string | null = null;
 
-/** Where the meetup happens. Shown verbatim; replace when the venue is set. */
-export const MEETUP_LOCATION_LABEL = "Location TBD";
-
 /**
  * `countdown` — before launch day. `live` — launch day and meetup day.
  * `over` — after the meetup; the modal never shows again.

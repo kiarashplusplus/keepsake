@@ -47,6 +47,14 @@ export type SheetProps = {
    * that bar. 0 by default.
    */
   bottomInset?: number;
+  /**
+   * Blur the page behind the backdrop as well as dimming it. For a dialog
+   * that sits over a page the visitor has not read yet, where half-legible
+   * fragments of it showing round the panel ("EMPTY", "NOTHING YET") read as
+   * part of the announcement. Off by default: a sheet opened from a page is
+   * about that page, and should leave it recognisable.
+   */
+  blurBackdrop?: boolean;
   /** Names the dialog for a screen reader when there is no `title`. */
   accessibilityLabel?: string;
 };
@@ -66,6 +74,7 @@ export function Sheet({
   footer,
   centered = false,
   bottomInset = 0,
+  blurBackdrop = false,
   accessibilityLabel,
 }: SheetProps): React.ReactElement | null {
   const colors = useColors();
@@ -217,6 +226,10 @@ export function Sheet({
           right: 0,
           bottom: 0,
           backgroundColor: colors.overlay,
+          // Both spellings: iOS Safari only took the unprefixed one from 18.
+          ...(blurBackdrop
+            ? ({ backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)" } as object)
+            : null),
         }}
       />
       {/* `tabIndex={-1}`: the focus trap above focuses this node when the

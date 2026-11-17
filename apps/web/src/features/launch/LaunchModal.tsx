@@ -37,7 +37,6 @@ import {
   LAUNCH_DATE_LABEL,
   LAUNCH_DISMISSED_KEY,
   MEETUP_DATE_LABEL,
-  MEETUP_LOCATION_LABEL,
   MEETUP_URL,
   type LaunchPhase,
 } from "@/features/launch/launchPlan";
@@ -131,11 +130,16 @@ export function LaunchModal({ now }: LaunchModalProps): React.ReactElement | nul
       <Sheet
         visible
         centered
+        // Not while the consent bar is up: a first-time visitor already has
+        // that bar across the bottom of the screen, and blurring everything
+        // behind it as well is more than the moment needs. Once they answer
+        // it the inset drops to 0 and the blur comes in.
+        blurBackdrop={consentInset === 0}
         bottomInset={consentInset}
         onClose={close}
         accessibilityLabel={live ? "Keepsake is open" : `Keepsake launches ${LAUNCH_DATE_LABEL}`}
         footer={
-          <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.lg }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.lg, paddingHorizontal: space.xs }}>
             <Button label={live ? "Start looking" : "Come on in"} onPress={close} />
             {MEETUP_URL !== null ? (
               <Button
@@ -149,7 +153,11 @@ export function LaunchModal({ now }: LaunchModalProps): React.ReactElement | nul
           </View>
         }
       >
-        <View style={{ gap: space.md, paddingBottom: space.sm }}>
+        {/* The top and side padding is room for the stamp: it is rotated, so
+            its corners swing a few pixels outside its own box, and the
+            sheet's scrolling body clips anything outside itself — which cut
+            the stamp's top border off on a real phone. */}
+        <View style={{ gap: space.md, paddingTop: space.sm, paddingHorizontal: space.xs, paddingBottom: space.sm }}>
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.md }}>
             <LaunchStamp label={live ? "We're open" : "Save the date"} />
             {live ? null : (
@@ -178,7 +186,7 @@ export function LaunchModal({ now }: LaunchModalProps): React.ReactElement | nul
             {MEETUP_DATE_LABEL}
           </Text>
           <Text variant="caption" color="textSecondary">
-            {MEETUP_URL !== null ? `${MEETUP_LOCATION_LABEL} · Free` : `${MEETUP_LOCATION_LABEL} · Free · RSVP soon on Meetup`}
+            {MEETUP_URL !== null ? "Free" : "Free · RSVP soon on Meetup"}
           </Text>
         </View>
       </Sheet>

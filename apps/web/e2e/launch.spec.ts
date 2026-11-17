@@ -53,7 +53,6 @@ test("before launch: the dialog opens over the feed, throws confetti, and one pr
   await expect(dialog(page)).toContainText("We launch Nov 27.");
   await expect(dialog(page)).toContainText("10 days to go");
   await expect(dialog(page)).toContainText("Saturday, November 28");
-  await expect(dialog(page)).toContainText("Location TBD");
   await expect(page.getByTestId("launch-confetti")).toBeAttached();
 
   await dialog(page).getByRole("button", { name: "Come on in" }).click();
