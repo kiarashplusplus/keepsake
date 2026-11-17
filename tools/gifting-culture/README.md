@@ -159,8 +159,14 @@ calibrated, and calibrating the voice is the job of the later stage.
     "matchedBy": "heading",
     "giftTerms": ["gifts"],
     "subjectMentions": [],
-    "tags": { "occasions": { "seasonal": ["chūgen", "seibo"] }, "practices": { … } },
-    "weak": false
+    "tags": { "occasions": { "seasonal": ["chūgen", "seibo"] }, "practices": { … } },  // from giftSentences only
+    "weak": false,
+    "rendering": {                                // what the source text says about its own reliability
+      "renderer": "dump-wikitext",                // or "textextracts" (API path)
+      "refs": 2,                                  // footnotes in the paragraph; null on the API path (stripped)
+      "flags": ["citation-needed"],               // maintenance tags; null on the API path (stripped)
+      "unknownTemplates": 0                       // inline templates the renderer could not reproduce
+    }
   }],
   "sources": [{ "title": "…", "revisionId": …, "authorsUrl": "…&action=history", "license": { "name": "CC BY-SA 4.0" }, "passages": 12 }],
   "attribution": "…"
@@ -169,6 +175,14 @@ calibrated, and calibrating the voice is the job of the later stage.
 
 A paragraph that turns up at several scopes is kept once, at the narrowest. That happens when a
 city search lands in _Etiquette in Japan_ on a paragraph that names the city.
+
+**Weak passages** are kept but never set `coverage.level`. A passage is weak when its gift
+sentences name no occasion and their only practice tags are `civic-or-diplomatic` (a statue from
+France, cherry trees "from the citizens of Tokyo"), `institutional` (a bequest to a library) or
+`commercial` (a shop's souvenirs). These rules and the name rule (a capitalised "Gift" mid-sentence
+is a record label, a show or "GIFT City", not a gift) come from reading the first corpus sample.
+Before them, Tokyo, Yokohama and Kawasaki all claimed city-level gifting culture on the strength of
+a garden, a cherry tree and a song title. Each such sentence is now a test case.
 
 ## What the data can and cannot support
 
@@ -195,14 +209,20 @@ These points are the brief for the story layer.
 
 ## Known gaps
 
-- **"[citation needed]" is invisible.** TextExtracts strips templates, so an unsourced sentence
-  looks the same as a sourced one. Every passage has `revisionUrl`, so a reviewer can check.
-  Flagging it automatically would mean mapping plain-text paragraphs back to wikitext.
+- **On the API path, "[citation needed]" is invisible.** TextExtracts strips templates, so
+  `rendering.refs` and `rendering.flags` are `null` there. The dump path has both. A story layer
+  that wants only sourced claims should use dump-path records and `refs > 0`.
+- **The dump is a snapshot.** It is refreshed about twice a month; each passage's `revisionId`
+  says which revision it reflects. A corpus is pinned to one snapshot and refuses to mix in another.
 - **City = Wikidata's Q515 class tree.** A place that Wikidata only calls a "town" or
   "municipality" is missed by the population query. Use `--qids` to add it. Wikidata also has some
   overlapping entities (_Tokyo_ and _Tokyo Proper_ are both cities over 1M).
 - **Case-sensitive name matching** avoids "nice" ≠ Nice but misses lower-case mentions. Demonyms
   over-match a little: "American" also matches inside "Latin American".
+- **Corpus mentions are recall-first.** Same-sentence co-occurrence plus the weak rules remove
+  most noise, but not all. A sentence that names a city and a gift for an unrelated reason can
+  still read as strong. `discoveredBy: "corpus-mention"` marks these passages so a reviewer or the
+  story layer can weigh them below `place-article` and `about-title`.
 - **English only.** The Japanese Wikipedia says far more about 中元 than the English one does.
   Adding another language means a lexicon per language, which is a separate decision.
 
